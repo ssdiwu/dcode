@@ -1,0 +1,3479 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>D Code 版本界面演进</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<script>
+(function () {
+  var storageKey = 'dcode-version-evolution-drafts-v1';
+  window.addEventListener('message', function (event) {
+    var frame = document.querySelector('iframe');
+    var data = event.data;
+    if (!frame || event.source !== frame.contentWindow || !data || data.key !== storageKey) return;
+    if (data.type === 'dcode-draft-load') {
+      let storedValue = null;
+      try {
+        storedValue = window.localStorage.getItem(storageKey);
+      } catch (_error) {
+        storedValue = null;
+      }
+      event.source.postMessage({ type: 'dcode-draft-loaded', key: storageKey, value: storedValue }, '*');
+      return;
+    }
+    if (data.type !== 'dcode-draft-save' || typeof data.value !== 'string' || data.value.length > 200000) return;
+    try {
+      const parsed = JSON.parse(data.value);
+      if (!parsed || typeof parsed !== 'object' || !parsed.sessions || typeof parsed.sessions !== 'object') return;
+      window.localStorage.setItem(storageKey, data.value);
+    } catch (_error) {
+      // 本地原型无法持久化时保持 iframe 内的当前草稿，不扩大权限。
+    }
+  });
+})();
+</script>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="D Code 版本界面演进" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;self&#x27; data:; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;D Code 版本界面演进&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;dcode-version-evolution&quot;&gt;
+  &lt;div class=&quot;viz-controls&quot; aria-label=&quot;选择要预览的版本&quot;&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.1&quot; aria-pressed=&quot;true&quot;&gt;0.0.1&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.2&quot; aria-pressed=&quot;false&quot;&gt;0.0.2&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.3&quot; aria-pressed=&quot;false&quot;&gt;0.0.3&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.4&quot; aria-pressed=&quot;false&quot;&gt;0.0.4&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.5&quot; aria-pressed=&quot;false&quot;&gt;0.0.5&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.6&quot; aria-pressed=&quot;false&quot;&gt;0.0.6&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.7&quot; aria-pressed=&quot;false&quot;&gt;0.0.7&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.8&quot; aria-pressed=&quot;false&quot;&gt;0.0.8&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.9&quot; aria-pressed=&quot;false&quot;&gt;0.0.9&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;1.0.0&quot; aria-pressed=&quot;false&quot;&gt;1.0.0&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;de-version-copy&quot; aria-live=&quot;polite&quot;&gt;
+    &lt;strong id=&quot;de-version-title&quot;&gt;0.0.1 · 用户首页与项目&lt;/strong&gt;
+    &lt;span id=&quot;de-version-summary&quot;&gt;项目可直接选中并查看全部文件；项目会话跨源文件夹平铺。&lt;/span&gt;
+  &lt;/div&gt;
+
+  &lt;section class=&quot;de-window&quot; aria-label=&quot;D Code 各版本界面演进预览&quot;&gt;
+    &lt;header class=&quot;de-toolbar&quot;&gt;
+      &lt;div class=&quot;de-toolbar-left&quot;&gt;
+        &lt;span class=&quot;de-traffic&quot; aria-hidden=&quot;true&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;i&gt;&lt;/i&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;
+        &lt;button class=&quot;de-icon-button&quot; id=&quot;de-sidebar-button&quot; type=&quot;button&quot; aria-label=&quot;隐藏左栏&quot; aria-expanded=&quot;true&quot;&gt;&lt;i data-lucide=&quot;panel-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+        &lt;span class=&quot;de-brand&quot;&gt;D Code&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;de-breadcrumb&quot; aria-label=&quot;当前位置&quot;&gt;
+        &lt;i data-lucide=&quot;folder&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+        &lt;span&gt;D Code&lt;/span&gt;
+        &lt;i data-lucide=&quot;chevron-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+        &lt;strong id=&quot;de-breadcrumb-title&quot;&gt;定义 D Code 完整形态&lt;/strong&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;de-toolbar-right&quot;&gt;
+        &lt;span class=&quot;de-build&quot; id=&quot;de-build-label&quot;&gt;0.0.1&lt;/span&gt;
+        &lt;button class=&quot;de-icon-button&quot; id=&quot;de-inspector-button&quot; type=&quot;button&quot; aria-label=&quot;隐藏工作检查器&quot; aria-expanded=&quot;true&quot; hidden&gt;&lt;i data-lucide=&quot;panel-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+      &lt;/div&gt;
+    &lt;/header&gt;
+
+    &lt;div class=&quot;de-layout&quot; id=&quot;de-layout&quot;&gt;
+      &lt;aside class=&quot;de-sidebar&quot; aria-label=&quot;主导航&quot;&gt;
+        &lt;div class=&quot;de-sidebar-actions&quot;&gt;
+          &lt;button class=&quot;de-primary-button&quot; type=&quot;button&quot;&gt;&lt;i data-lucide=&quot;square-pen&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;新建会话&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;de-icon-button&quot; id=&quot;de-search-button&quot; type=&quot;button&quot; aria-label=&quot;搜索全部会话&quot; aria-expanded=&quot;false&quot; hidden&gt;&lt;i data-lucide=&quot;search&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+        &lt;/div&gt;
+
+        &lt;div class=&quot;de-section-heading&quot;&gt;&lt;span&gt;最近会话&lt;/span&gt;&lt;small&gt;首批 10 条&lt;/small&gt;&lt;/div&gt;
+        &lt;button class=&quot;de-session-row is-selected&quot; type=&quot;button&quot; data-sidebar-session data-session-id=&quot;session-dcode-complete&quot; data-session-title=&quot;定义 D Code 完整形态&quot; data-source-folder=&quot;dcode&quot; data-path-label=&quot;智能体团队方案&quot;&gt;
+          &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+          &lt;span&gt;&lt;strong&gt;定义 D Code 完整形态&lt;/strong&gt;&lt;small&gt;D Code · dcode · 11:21&lt;/small&gt;&lt;/span&gt;
+        &lt;/button&gt;
+        &lt;button class=&quot;de-session-row&quot; type=&quot;button&quot; data-sidebar-session data-session-id=&quot;session-goal-worklist&quot; data-session-title=&quot;梳理目标工作清单&quot; data-source-folder=&quot;pi-dgoal&quot; data-path-label=&quot;工作清单方案&quot;&gt;
+          &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+          &lt;span&gt;&lt;strong&gt;梳理目标工作清单&lt;/strong&gt;&lt;small&gt;Pi 生态 · pi-dgoal · 10:48&lt;/small&gt;&lt;/span&gt;
+        &lt;/button&gt;
+        &lt;button class=&quot;de-more-button&quot; type=&quot;button&quot;&gt;&lt;i data-lucide=&quot;chevron-down&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;查看更多会话&lt;/span&gt;&lt;/button&gt;
+
+        &lt;div class=&quot;de-section-heading&quot;&gt;&lt;span&gt;项目&lt;/span&gt;&lt;button class=&quot;de-icon-button&quot; type=&quot;button&quot; aria-label=&quot;新建项目&quot;&gt;&lt;i data-lucide=&quot;plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+        &lt;div class=&quot;de-project-navigation&quot;&gt;
+          &lt;button class=&quot;de-project-row&quot; type=&quot;button&quot; data-project-select=&quot;project-dcode&quot; aria-pressed=&quot;false&quot;&gt;
+            &lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;D Code&lt;/strong&gt;&lt;small&gt;20 个会话 · 2 个源文件夹&lt;/small&gt;&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;button class=&quot;de-icon-button de-project-toggle&quot; type=&quot;button&quot; data-project-toggle=&quot;project-dcode&quot; aria-label=&quot;收起 D Code 会话&quot; aria-expanded=&quot;true&quot;&gt;&lt;i data-lucide=&quot;chevron-down&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;de-project-sessions&quot; data-project-sessions=&quot;project-dcode&quot;&gt;
+          &lt;button class=&quot;de-session-row de-project-session&quot; type=&quot;button&quot; data-sidebar-session data-project-session data-session-id=&quot;session-dcode-complete&quot; data-source-folder=&quot;dcode&quot; data-session-title=&quot;定义 D Code 完整形态&quot; data-path-label=&quot;智能体团队方案&quot;&gt;
+            &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;定义 D Code 完整形态&lt;/strong&gt;&lt;small&gt;源文件夹：dcode · 11:21&lt;/small&gt;&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;button class=&quot;de-session-row de-project-session&quot; type=&quot;button&quot; data-sidebar-session data-project-session data-session-id=&quot;session-goal-worklist&quot; data-source-folder=&quot;pi-dgoal&quot; data-session-title=&quot;梳理目标工作清单&quot; data-path-label=&quot;工作清单方案&quot;&gt;
+            &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;梳理目标工作清单&lt;/strong&gt;&lt;small&gt;源文件夹：pi-dgoal · 10:48&lt;/small&gt;&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;button class=&quot;de-session-row de-project-session&quot; type=&quot;button&quot; data-sidebar-session data-project-session data-session-id=&quot;session-project-map&quot; data-source-folder=&quot;dcode&quot; data-session-title=&quot;检查当前项目地图&quot; data-path-label=&quot;项目地图&quot;&gt;
+            &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;检查当前项目地图&lt;/strong&gt;&lt;small&gt;源文件夹：dcode · 8 月 8 日&lt;/small&gt;&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;button class=&quot;de-more-button de-project-more&quot; type=&quot;button&quot;&gt;&lt;i data-lucide=&quot;chevron-down&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;查看项目更早会话&lt;/span&gt;&lt;/button&gt;
+        &lt;/div&gt;
+      &lt;/aside&gt;
+
+      &lt;main class=&quot;de-main&quot;&gt;
+        &lt;header class=&quot;de-session-header&quot;&gt;
+          &lt;div&gt;
+            &lt;small id=&quot;de-session-context&quot;&gt;当前会话 · 当前路径：智能体团队方案&lt;/small&gt;
+            &lt;h2 id=&quot;de-session-title&quot;&gt;定义 D Code 完整形态&lt;/h2&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;de-session-actions&quot;&gt;
+            &lt;button class=&quot;de-icon-button&quot; id=&quot;de-lineage-button&quot; type=&quot;button&quot; aria-label=&quot;查看会话谱系&quot; hidden&gt;&lt;i data-lucide=&quot;history&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;button class=&quot;de-icon-button&quot; type=&quot;button&quot; aria-label=&quot;更多会话操作&quot;&gt;&lt;i data-lucide=&quot;ellipsis&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+          &lt;/div&gt;
+        &lt;/header&gt;
+
+        &lt;div class=&quot;de-runtime-strip&quot; id=&quot;de-runtime-strip&quot; hidden&gt;
+          &lt;span&gt;配额：充足&lt;/span&gt;
+          &lt;span&gt;分支：main&lt;/span&gt;
+          &lt;span&gt;MCP：已连接&lt;/span&gt;
+        &lt;/div&gt;
+
+        &lt;nav class=&quot;de-workspace-tabs&quot; id=&quot;de-workspace-tabs&quot; aria-label=&quot;中央工作区标签页&quot; role=&quot;tablist&quot; hidden&gt;
+          &lt;button class=&quot;de-workspace-tab is-active&quot; type=&quot;button&quot; role=&quot;tab&quot; aria-selected=&quot;true&quot; data-workspace-tab=&quot;conversation&quot;&gt;&lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;对话&lt;/span&gt;&lt;/button&gt;
+          &lt;div class=&quot;de-open-workspace-tabs&quot; id=&quot;de-open-workspace-tabs&quot;&gt;&lt;/div&gt;
+        &lt;/nav&gt;
+
+        &lt;section class=&quot;de-search-view&quot; id=&quot;de-search-view&quot; hidden aria-label=&quot;全部历史搜索&quot; role=&quot;dialog&quot; aria-modal=&quot;false&quot;&gt;
+          &lt;div class=&quot;de-search-panel&quot;&gt;
+            &lt;label class=&quot;de-search-field&quot; for=&quot;de-search-input&quot;&gt;&lt;i data-lucide=&quot;search&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;input id=&quot;de-search-input&quot; type=&quot;search&quot; placeholder=&quot;搜索会话&quot; autocomplete=&quot;off&quot;&gt;&lt;kbd&gt;esc&lt;/kbd&gt;&lt;/label&gt;
+            &lt;div class=&quot;de-search-filters&quot;&gt;
+              &lt;select id=&quot;de-project-filter&quot; aria-label=&quot;按项目过滤&quot;&gt;&lt;option value=&quot;&quot;&gt;全部项目&lt;/option&gt;&lt;option value=&quot;D Code&quot;&gt;D Code&lt;/option&gt;&lt;option value=&quot;Curio&quot;&gt;Curio&lt;/option&gt;&lt;/select&gt;
+              &lt;select id=&quot;de-source-filter&quot; aria-label=&quot;按源文件夹过滤&quot;&gt;&lt;option value=&quot;&quot;&gt;全部源文件夹&lt;/option&gt;&lt;option value=&quot;dcode&quot;&gt;dcode&lt;/option&gt;&lt;option value=&quot;pi-dgoal&quot;&gt;pi-dgoal&lt;/option&gt;&lt;option value=&quot;curio&quot;&gt;curio&lt;/option&gt;&lt;/select&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;de-search-results&quot;&gt;
+              &lt;div class=&quot;de-search-section&quot; data-search-group&gt;
+                &lt;small&gt;最近会话&lt;/small&gt;
+                &lt;button class=&quot;de-result-row is-selected&quot; type=&quot;button&quot; aria-selected=&quot;true&quot; data-search-item data-session-id=&quot;session-dcode-complete&quot; data-shortcut=&quot;1&quot; data-project=&quot;D Code&quot; data-source=&quot;dcode&quot; data-search-text=&quot;定义 D Code 完整形态 项目是 D Code 定义出来的 不等于 Pi 会话目录 D Code dcode&quot; data-session-title=&quot;定义 D Code 完整形态&quot; data-session-context=&quot;搜索命中 · D Code · dcode&quot; data-match-heading=&quot;已定位到用户消息&quot; data-match-body=&quot;项目是 D Code 定义出来的，不等于 Pi 会话目录。&quot; data-detail=&quot;今天 11:21 · /Users/diwu/Workspace/Codes/Apps/dcode&quot;&gt;
+                  &lt;i class=&quot;de-result-dot&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                  &lt;span&gt;&lt;strong&gt;定义 D Code 完整形态&lt;/strong&gt;&lt;small&gt;“项目是 D Code 定义出来的，不等于 Pi 会话目录……”&lt;/small&gt;&lt;/span&gt;
+                  &lt;em&gt;D Code · dcode · 11:21&lt;/em&gt;&lt;kbd&gt;⌘1&lt;/kbd&gt;
+                &lt;/button&gt;
+                &lt;button class=&quot;de-result-row&quot; type=&quot;button&quot; aria-selected=&quot;false&quot; data-search-item data-session-id=&quot;session-goal-worklist&quot; data-shortcut=&quot;2&quot; data-project=&quot;D Code&quot; data-source=&quot;pi-dgoal&quot; data-search-text=&quot;梳理目标工作清单 工作清单保留状态 活动计划继续贴近输入区 D Code pi-dgoal&quot; data-session-title=&quot;梳理目标工作清单&quot; data-session-context=&quot;搜索命中 · D Code · pi-dgoal&quot; data-match-heading=&quot;已定位到智能体回复&quot; data-match-body=&quot;工作清单保留状态，活动计划继续贴近输入区。&quot; data-detail=&quot;今天 10:48 · /Users/diwu/Workspace/Codes/Githubs/pi-dgoal&quot;&gt;
+                  &lt;i class=&quot;de-result-dot&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                  &lt;span&gt;&lt;strong&gt;梳理目标工作清单&lt;/strong&gt;&lt;small&gt;“工作清单保留状态，活动计划靠近输入区……”&lt;/small&gt;&lt;/span&gt;
+                  &lt;em&gt;D Code · pi-dgoal · 10:48&lt;/em&gt;&lt;kbd&gt;⌘2&lt;/kbd&gt;
+                &lt;/button&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;de-search-section&quot; data-search-group&gt;
+                &lt;small&gt;更早会话&lt;/small&gt;
+                &lt;button class=&quot;de-result-row&quot; type=&quot;button&quot; aria-selected=&quot;false&quot; data-search-item data-session-id=&quot;session-curio-migration&quot; data-shortcut=&quot;3&quot; data-project=&quot;Curio&quot; data-source=&quot;curio&quot; data-search-text=&quot;讨论 Curio macOS 版本迁移 macOS 原生工作台需要保留现有数据边界 Curio curio&quot; data-session-title=&quot;讨论 Curio macOS 版本迁移&quot; data-session-context=&quot;搜索命中 · Curio · curio&quot; data-match-heading=&quot;已定位到用户消息&quot; data-match-body=&quot;macOS 原生工作台需要保留现有数据边界。&quot; data-detail=&quot;昨天 18:32 · /Users/diwu/Workspace/Codes/Apps/Curio&quot;&gt;
+                  &lt;i class=&quot;de-result-dot is-muted&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                  &lt;span&gt;&lt;strong&gt;讨论 Curio macOS 版本迁移&lt;/strong&gt;&lt;small&gt;“macOS 原生工作台需要保留现有数据边界……”&lt;/small&gt;&lt;/span&gt;
+                  &lt;em&gt;Curio · curio · 昨天&lt;/em&gt;&lt;kbd&gt;⌘3&lt;/kbd&gt;
+                &lt;/button&gt;
+                &lt;button class=&quot;de-result-row&quot; type=&quot;button&quot; aria-selected=&quot;false&quot; data-search-item data-session-id=&quot;session-project-map&quot; data-shortcut=&quot;4&quot; data-project=&quot;D Code&quot; data-source=&quot;dcode&quot; data-search-text=&quot;检查当前项目地图 先核对 README 文档入口与当前实现是否一致 D Code dcode&quot; data-session-title=&quot;检查当前项目地图&quot; data-session-context=&quot;搜索命中 · D Code · dcode&quot; data-match-heading=&quot;已定位到智能体回复&quot; data-match-body=&quot;先核对 README、文档入口与当前实现是否一致。&quot; data-detail=&quot;8 月 8 日 · /Users/diwu/Workspace/Codes/Apps/dcode&quot;&gt;
+                  &lt;i class=&quot;de-result-dot is-muted&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                  &lt;span&gt;&lt;strong&gt;检查当前项目地图&lt;/strong&gt;&lt;small&gt;“先核对 README、文档入口与当前实现是否一致……”&lt;/small&gt;&lt;/span&gt;
+                  &lt;em&gt;D Code · dcode · 8 月 8 日&lt;/em&gt;&lt;kbd&gt;⌘4&lt;/kbd&gt;
+                &lt;/button&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;de-search-empty&quot; id=&quot;de-search-empty&quot; hidden&gt;没有找到匹配会话&lt;/div&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;de-search-detail&quot; id=&quot;de-search-detail&quot;&gt;今天 11:21 · /Users/diwu/Workspace/Codes/Apps/dcode&lt;/div&gt;
+            &lt;footer class=&quot;de-search-footer&quot;&gt;&lt;span&gt;↑↓ 选择&lt;/span&gt;&lt;span&gt;↵ 打开&lt;/span&gt;&lt;span&gt;⌘1–4 快速打开&lt;/span&gt;&lt;span&gt;esc 关闭&lt;/span&gt;&lt;/footer&gt;
+          &lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;section class=&quot;de-conversation&quot; id=&quot;de-conversation&quot;&gt;
+          &lt;div class=&quot;de-message de-message-user&quot; id=&quot;de-user-message&quot;&gt;
+            &lt;div&gt;&lt;span&gt;507&lt;/span&gt;&lt;time&gt;10:58&lt;/time&gt;&lt;small class=&quot;de-path-origin-label&quot; hidden&gt;路径起点&lt;/small&gt;&lt;/div&gt;
+            &lt;p&gt;我希望 D Code 保留 Pi 的全部能力，但用真正适合 macOS 的中文界面呈现。&lt;/p&gt;
+            &lt;div class=&quot;de-message-actions&quot; id=&quot;de-user-message-actions&quot; hidden&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;复制&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;编辑并重走&quot; data-path-action=&quot;edit&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+
+          &lt;div class=&quot;de-message de-message-assistant&quot; id=&quot;de-assistant-message&quot;&gt;
+            &lt;div&gt;&lt;span&gt;D Code&lt;/span&gt;&lt;time&gt;11:21&lt;/time&gt;&lt;small class=&quot;de-path-origin-label&quot; hidden&gt;路径起点&lt;/small&gt;&lt;/div&gt;
+            &lt;h3 id=&quot;de-message-heading&quot;&gt;项目与会话各自保持真实边界&lt;/h3&gt;
+            &lt;p id=&quot;de-message-body&quot;&gt;项目负责组织多个源文件夹；Pi 会话继续拥有自己的历史、上下文和稳定标识。&lt;/p&gt;
+            &lt;div class=&quot;de-message-actions&quot; id=&quot;de-message-actions&quot; hidden&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;复制&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;从这里继续&quot; data-path-action=&quot;continue&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+              &lt;button type=&quot;button&quot; aria-label=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+
+          &lt;div class=&quot;de-path-created&quot; id=&quot;de-path-created&quot; hidden aria-live=&quot;polite&quot;&gt;
+            &lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;新会话路径已创建&lt;/strong&gt;&lt;small id=&quot;de-path-created-detail&quot;&gt;原路径及其未发送草稿仍然保留；项目文件与 Git 状态没有改变。&lt;/small&gt;&lt;/span&gt;
+            &lt;button id=&quot;de-return-origin-path&quot; type=&quot;button&quot;&gt;切回原路径&lt;/button&gt;
+          &lt;/div&gt;
+
+          &lt;div class=&quot;de-communication&quot; id=&quot;de-communication&quot; hidden&gt;
+            &lt;i data-lucide=&quot;radio&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;来自“扩展协议研究”会话&lt;/strong&gt;&lt;small&gt;已送达 · 11:34 · D Code 通信&lt;/small&gt;&lt;/span&gt;
+            &lt;p&gt;已确认通信需要持久来源、送达状态与恢复能力。&lt;/p&gt;
+          &lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;section class=&quot;de-file-preview&quot; id=&quot;de-file-preview&quot; aria-label=&quot;文件与产物工作区&quot; hidden&gt;
+          &lt;header&gt;
+            &lt;div&gt;
+              &lt;small id=&quot;de-file-preview-source&quot;&gt;源文件夹 · dcode&lt;/small&gt;
+              &lt;strong id=&quot;de-file-preview-path&quot;&gt;app/Sources/PiDCode/State/AppModel.swift&lt;/strong&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;de-file-preview-actions&quot;&gt;
+              &lt;span id=&quot;de-file-preview-status&quot;&gt;只读&lt;/span&gt;
+              &lt;span&gt;未加入上下文&lt;/span&gt;
+            &lt;/div&gt;
+          &lt;/header&gt;
+          &lt;div class=&quot;de-file-preview-toolbar&quot;&gt;
+            &lt;span class=&quot;de-file-preview-language&quot; id=&quot;de-file-preview-language&quot;&gt;Swift&lt;/span&gt;
+            &lt;div class=&quot;de-file-view-modes&quot; id=&quot;de-file-view-modes&quot; hidden&gt;
+              &lt;button type=&quot;button&quot; data-file-view-mode=&quot;preview&quot; aria-pressed=&quot;true&quot;&gt;预览&lt;/button&gt;
+              &lt;button type=&quot;button&quot; data-file-view-mode=&quot;source&quot; aria-pressed=&quot;false&quot;&gt;编辑&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+          &lt;pre class=&quot;de-code-preview&quot; id=&quot;de-code-preview&quot;&gt;&lt;code id=&quot;de-file-preview-code&quot;&gt;&lt;/code&gt;&lt;/pre&gt;
+          &lt;div class=&quot;de-markdown-workspace&quot; id=&quot;de-markdown-workspace&quot; hidden&gt;
+            &lt;section class=&quot;de-markdown-editor-pane&quot; id=&quot;de-markdown-editor-pane&quot; hidden&gt;
+              &lt;header&gt;&lt;strong&gt;编辑缓冲区&lt;/strong&gt;&lt;small id=&quot;de-markdown-source-state&quot;&gt;与磁盘一致&lt;/small&gt;&lt;/header&gt;
+              &lt;label class=&quot;de-sr-only&quot; for=&quot;de-markdown-source-input&quot;&gt;Markdown 源码&lt;/label&gt;
+              &lt;textarea class=&quot;de-preview-source-input&quot; id=&quot;de-markdown-source-input&quot; spellcheck=&quot;false&quot;&gt;&lt;/textarea&gt;
+            &lt;/section&gt;
+            &lt;article class=&quot;de-markdown-preview&quot; id=&quot;de-markdown-preview&quot;&gt;&lt;/article&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;de-html-preview&quot; id=&quot;de-html-preview&quot; hidden&gt;
+            &lt;section&gt;
+              &lt;header&gt;&lt;strong&gt;编辑缓冲区&lt;/strong&gt;&lt;small id=&quot;de-html-source-state&quot;&gt;与磁盘一致&lt;/small&gt;&lt;/header&gt;
+              &lt;label class=&quot;de-sr-only&quot; for=&quot;de-html-source-input&quot;&gt;HTML 源码&lt;/label&gt;
+              &lt;textarea class=&quot;de-preview-source-input&quot; id=&quot;de-html-source-input&quot; spellcheck=&quot;false&quot;&gt;&lt;/textarea&gt;
+            &lt;/section&gt;
+            &lt;section&gt;
+              &lt;header&gt;&lt;strong&gt;即时预览&lt;/strong&gt;&lt;small&gt;跟随未保存缓冲区 · 未开放脚本权限&lt;/small&gt;&lt;/header&gt;
+              &lt;iframe id=&quot;de-html-preview-frame&quot; title=&quot;隔离 HTML 即时预览&quot; sandbox=&quot;&quot; referrerpolicy=&quot;no-referrer&quot;&gt;&lt;/iframe&gt;
+            &lt;/section&gt;
+          &lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;div class=&quot;de-plan-strip&quot; id=&quot;de-plan-strip&quot; hidden&gt;
+          &lt;i data-lucide=&quot;list-checks&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+          &lt;span&gt;&lt;strong&gt;活动计划：完成能力边界收口&lt;/strong&gt;&lt;small&gt;当前步骤 3 / 5 · 正在核对目标工作清单&lt;/small&gt;&lt;/span&gt;
+          &lt;button type=&quot;button&quot;&gt;展开&lt;/button&gt;
+        &lt;/div&gt;
+
+        &lt;div class=&quot;de-composer&quot; id=&quot;de-composer&quot;&gt;
+          &lt;div class=&quot;de-path-draft&quot; id=&quot;de-path-draft&quot; hidden&gt;
+            &lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;新会话路径草稿&lt;/strong&gt;&lt;small id=&quot;de-path-draft-origin&quot;&gt;从 11:21 的回复继续 · 尚未创建 · 原路径保留&lt;/small&gt;&lt;/span&gt;
+            &lt;button class=&quot;de-draft-cancel&quot; id=&quot;de-draft-cancel&quot; type=&quot;button&quot;&gt;取消&lt;/button&gt;
+          &lt;/div&gt;
+          &lt;label class=&quot;de-sr-only&quot; for=&quot;de-composer-input&quot;&gt;消息&lt;/label&gt;
+          &lt;textarea id=&quot;de-composer-input&quot; placeholder=&quot;继续当前会话……&quot;&gt;&lt;/textarea&gt;
+          &lt;div class=&quot;de-clear-notice&quot; id=&quot;de-clear-notice&quot; hidden aria-live=&quot;polite&quot;&gt;&lt;span&gt;当前路径草稿已清空&lt;/span&gt;&lt;button id=&quot;de-undo-clear-draft&quot; type=&quot;button&quot;&gt;撤销&lt;/button&gt;&lt;/div&gt;
+          &lt;div class=&quot;de-composer-footer&quot;&gt;
+            &lt;div class=&quot;de-composer-state&quot;&gt;&lt;small id=&quot;de-composer-meta&quot;&gt;当前路径 · 智能体团队方案&lt;/small&gt;&lt;button class=&quot;de-clear-draft&quot; id=&quot;de-clear-draft&quot; type=&quot;button&quot; hidden&gt;清空草稿&lt;/button&gt;&lt;/div&gt;
+            &lt;div class=&quot;de-composer-actions&quot;&gt;
+              &lt;div class=&quot;de-context-control&quot;&gt;
+                &lt;button class=&quot;de-context-button&quot; id=&quot;de-context-button&quot; type=&quot;button&quot; aria-label=&quot;上下文占用 50%，128k / 256k&quot; aria-controls=&quot;de-context-popover&quot; aria-expanded=&quot;false&quot;&gt;&lt;span class=&quot;de-context-ring&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;&lt;span class=&quot;de-context-percent&quot;&gt;50%&lt;/span&gt;&lt;/button&gt;
+                &lt;div class=&quot;de-context-popover&quot; id=&quot;de-context-popover&quot; hidden&gt;&lt;strong&gt;上下文占用 50%&lt;/strong&gt;&lt;small&gt;128k / 256k · 当前会话路径&lt;/small&gt;&lt;/div&gt;
+              &lt;/div&gt;
+              &lt;button class=&quot;de-fast-button&quot; id=&quot;de-fast-button&quot; type=&quot;button&quot; aria-pressed=&quot;true&quot; aria-label=&quot;极速：开&quot;&gt;&lt;i data-lucide=&quot;zap&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;极速&lt;/span&gt;&lt;small class=&quot;de-fast-state&quot; id=&quot;de-fast-state&quot;&gt;开&lt;/small&gt;&lt;/button&gt;
+              &lt;div class=&quot;de-model-control&quot;&gt;
+                &lt;button class=&quot;de-model-button&quot; id=&quot;de-model-button&quot; type=&quot;button&quot; aria-haspopup=&quot;menu&quot; aria-controls=&quot;de-model-menu&quot; aria-expanded=&quot;false&quot;&gt;&lt;span id=&quot;de-model-name&quot;&gt;GPT-5.6 Sol&lt;/span&gt;&lt;em id=&quot;de-thinking-level&quot;&gt;极高&lt;/em&gt;&lt;i data-lucide=&quot;chevron-down&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+                &lt;div class=&quot;de-model-menu&quot; id=&quot;de-model-menu&quot; role=&quot;menu&quot; hidden&gt;
+                  &lt;button type=&quot;button&quot; role=&quot;menuitem&quot; data-model-option data-model=&quot;GPT-5.6 Sol&quot; data-thinking=&quot;极高&quot;&gt;&lt;span&gt;GPT-5.6 Sol&lt;/span&gt;&lt;small&gt;极高&lt;/small&gt;&lt;/button&gt;
+                  &lt;button type=&quot;button&quot; role=&quot;menuitem&quot; data-model-option data-model=&quot;GLM-5&quot; data-thinking=&quot;高&quot;&gt;&lt;span&gt;GLM-5&lt;/span&gt;&lt;small&gt;高&lt;/small&gt;&lt;/button&gt;
+                &lt;/div&gt;
+              &lt;/div&gt;
+              &lt;button id=&quot;de-send-button&quot; type=&quot;button&quot; aria-label=&quot;发送&quot;&gt;&lt;span id=&quot;de-send-label&quot;&gt;发送&lt;/span&gt; &lt;i data-lucide=&quot;arrow-up&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/main&gt;
+
+      &lt;aside class=&quot;de-inspector&quot; id=&quot;de-inspector&quot; aria-label=&quot;工作检查器&quot; hidden&gt;
+        &lt;header&gt;&lt;strong&gt;工作检查器&lt;/strong&gt;&lt;small id=&quot;de-inspector-subtitle&quot;&gt;当前项目 · D Code&lt;/small&gt;&lt;/header&gt;
+        &lt;div class=&quot;de-inspector-content&quot; id=&quot;de-inspector-content&quot;&gt;&lt;/div&gt;
+      &lt;/aside&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;style&gt;
+    #dcode-version-evolution {
+      --de-window: light-dark(rgb(247 247 248), rgb(24 24 26));
+      --de-toolbar: light-dark(rgb(238 238 240), rgb(35 35 38));
+      --de-sidebar: light-dark(rgb(241 241 243), rgb(29 29 31));
+      --de-surface: light-dark(rgb(255 255 255), rgb(30 30 32));
+      --de-surface-raised: light-dark(rgb(246 246 248), rgb(48 48 52));
+      --de-hover: light-dark(rgb(229 229 233), rgb(57 57 61));
+      --de-text: light-dark(rgb(35 35 39), rgb(240 240 244));
+      --de-secondary: light-dark(rgb(105 105 113), rgb(160 160 170));
+      --de-border: light-dark(rgb(210 210 216), rgb(69 69 74));
+      --de-accent: light-dark(rgb(31 112 230), rgb(92 160 255));
+      --de-accent-soft: light-dark(rgb(223 237 255), rgb(31 61 102));
+      --de-green: light-dark(rgb(36 138 77), rgb(75 205 122));
+      --de-shadow: light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 38%));
+      display: grid;
+      gap: 10px;
+      width: 100%;
+      color: var(--de-text);
+    }
+
+    #dcode-version-evolution .de-version-copy {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 5px 10px;
+      min-width: 0;
+    }
+
+    #dcode-version-evolution .de-version-copy strong { font-weight: 500; }
+    #dcode-version-evolution .de-version-copy span { color: var(--de-secondary); }
+    #dcode-version-evolution .de-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+
+    #dcode-version-evolution .de-window {
+      overflow: hidden;
+      min-width: 0;
+      background: var(--de-window);
+      border: 1px solid var(--de-border);
+      border-radius: 12px;
+      box-shadow: 0 18px 48px var(--de-shadow);
+    }
+
+    #dcode-version-evolution .de-toolbar {
+      display: grid;
+      grid-template-columns: minmax(145px, auto) minmax(180px, 1fr) minmax(94px, auto);
+      align-items: center;
+      min-height: 48px;
+      padding: 0 10px;
+      background: var(--de-toolbar);
+      border-bottom: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-toolbar-left,
+    #dcode-version-evolution .de-toolbar-right,
+    #dcode-version-evolution .de-breadcrumb,
+    #dcode-version-evolution .de-sidebar-actions,
+    #dcode-version-evolution .de-session-actions,
+    #dcode-version-evolution .de-runtime-strip,
+    #dcode-version-evolution .de-plan-strip {
+      display: flex;
+      align-items: center;
+    }
+
+    #dcode-version-evolution .de-toolbar-left,
+    #dcode-version-evolution .de-toolbar-right { gap: 7px; }
+    #dcode-version-evolution .de-toolbar-right { justify-content: flex-end; }
+
+    #dcode-version-evolution .de-traffic { display: flex; gap: 5px; margin-right: 4px; }
+    #dcode-version-evolution .de-traffic i { width: 9px; height: 9px; border-radius: 50%; }
+    #dcode-version-evolution .de-traffic i:nth-child(1) { background: light-dark(rgb(255 92 87), rgb(255 95 87)); }
+    #dcode-version-evolution .de-traffic i:nth-child(2) { background: light-dark(rgb(255 189 46), rgb(255 189 46)); }
+    #dcode-version-evolution .de-traffic i:nth-child(3) { background: light-dark(rgb(40 201 64), rgb(39 201 63)); }
+
+    #dcode-version-evolution .de-brand,
+    #dcode-version-evolution .de-breadcrumb strong,
+    #dcode-version-evolution .de-session-row strong,
+    #dcode-version-evolution .de-project-row strong,
+    #dcode-version-evolution .de-message h3,
+    #dcode-version-evolution .de-inspector strong { font-weight: 500; }
+
+    #dcode-version-evolution .de-breadcrumb {
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      color: var(--de-secondary);
+    }
+
+    #dcode-version-evolution .de-breadcrumb span,
+    #dcode-version-evolution .de-breadcrumb strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #dcode-version-evolution .de-breadcrumb strong { color: var(--de-text); }
+
+    #dcode-version-evolution .de-build {
+      padding: 3px 7px;
+      color: var(--de-accent);
+      background: var(--de-accent-soft);
+      border-radius: 999px;
+    }
+
+    #dcode-version-evolution .de-icon-button,
+    #dcode-version-evolution .de-primary-button,
+    #dcode-version-evolution .de-more-button,
+    #dcode-version-evolution .de-session-row,
+    #dcode-version-evolution .de-project-row,
+    #dcode-version-evolution .de-message-actions button,
+    #dcode-version-evolution .de-path-created button,
+    #dcode-version-evolution .de-plan-strip button,
+    #dcode-version-evolution .de-composer button,
+    #dcode-version-evolution .de-scope-switch button,
+    #dcode-version-evolution .de-result-row,
+    #dcode-version-evolution .de-tree-file,
+    #dcode-version-evolution .de-workspace-tabs button {
+      color: inherit;
+      font: inherit;
+      border: 0;
+      cursor: pointer;
+    }
+
+    #dcode-version-evolution .de-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      background: transparent;
+      border-radius: 6px;
+    }
+
+    #dcode-version-evolution .de-icon-button:hover,
+    #dcode-version-evolution .de-icon-button[aria-expanded=&quot;true&quot;],
+    #dcode-version-evolution .de-more-button:hover,
+    #dcode-version-evolution .de-session-row:hover,
+    #dcode-version-evolution .de-project-row:hover { background: var(--de-hover); }
+
+    #dcode-version-evolution .de-layout {
+      position: relative;
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      height: clamp(520px, calc(100vh - 145px), 720px);
+      min-height: 520px;
+    }
+
+    #dcode-version-evolution .de-layout.has-inspector { grid-template-columns: 190px minmax(0, 1fr) 215px; }
+    #dcode-version-evolution .de-layout.is-sidebar-closed { grid-template-columns: minmax(0, 1fr); }
+    #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed { grid-template-columns: minmax(0, 1fr) 215px; }
+    #dcode-version-evolution .de-layout.has-inspector.is-inspector-closed { grid-template-columns: 190px minmax(0, 1fr); }
+    #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed.is-inspector-closed { grid-template-columns: minmax(0, 1fr); }
+    #dcode-version-evolution .de-layout.is-sidebar-closed .de-sidebar,
+    #dcode-version-evolution .de-layout.is-inspector-closed .de-inspector { display: none; }
+
+    #dcode-version-evolution .de-sidebar {
+      min-width: 0;
+      padding: 10px 8px;
+      overflow-y: auto;
+      background: var(--de-sidebar);
+      border-right: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-sidebar-actions { gap: 6px; margin-bottom: 14px; }
+
+    #dcode-version-evolution .de-primary-button {
+      display: flex;
+      flex: 1;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 32px;
+      background: var(--de-surface-raised);
+      border: 1px solid var(--de-border);
+      border-radius: 7px;
+    }
+
+    #dcode-version-evolution .de-section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 28px;
+      margin-top: 8px;
+      padding: 0 5px;
+      color: var(--de-secondary);
+    }
+
+    #dcode-version-evolution .de-section-heading small,
+    #dcode-version-evolution .de-session-row small,
+    #dcode-version-evolution .de-project-row small,
+    #dcode-version-evolution .de-session-header small,
+    #dcode-version-evolution .de-inspector header small,
+    #dcode-version-evolution .de-plan-strip small,
+    #dcode-version-evolution .de-communication small,
+    #dcode-version-evolution .de-result-row small,
+    #dcode-version-evolution .de-result-row em { color: var(--de-secondary); }
+
+    #dcode-version-evolution .de-session-row,
+    #dcode-version-evolution .de-project-row,
+    #dcode-version-evolution .de-more-button {
+      display: grid;
+      grid-template-columns: 17px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      min-height: 38px;
+      padding: 5px 7px;
+      text-align: left;
+      background: transparent;
+      border-radius: 7px;
+    }
+
+    #dcode-version-evolution .de-session-row &gt; span,
+    #dcode-version-evolution .de-project-row &gt; span { display: grid; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-session-row strong,
+    #dcode-version-evolution .de-session-row small,
+    #dcode-version-evolution .de-project-row strong,
+    #dcode-version-evolution .de-project-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-session-row.is-selected { background: var(--de-hover); }
+    #dcode-version-evolution .de-project-navigation { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 2px; }
+    #dcode-version-evolution .de-project-row.is-inspected { color: var(--de-accent); background: var(--de-accent-soft); }
+    #dcode-version-evolution .de-project-sessions { display: grid; }
+    #dcode-version-evolution .de-project-session { padding-left: 22px; }
+    #dcode-version-evolution .de-project-more { padding-left: 22px; }
+    #dcode-version-evolution .de-more-button { grid-template-columns: 17px minmax(0, 1fr); color: var(--de-secondary); }
+
+    #dcode-version-evolution .de-main {
+      display: flex;
+      min-height: 0;
+      min-width: 0;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--de-window);
+    }
+
+    #dcode-version-evolution .de-session-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 66px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-session-header h2 { margin: 4px 0 0; font-weight: 500; }
+
+    #dcode-version-evolution .de-runtime-strip {
+      flex-wrap: wrap;
+      gap: 5px 12px;
+      padding: 6px 14px;
+      color: var(--de-secondary);
+      background: var(--de-toolbar);
+      border-bottom: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-runtime-strip span { display: inline-flex; align-items: center; gap: 4px; }
+
+    #dcode-version-evolution .de-workspace-tabs {
+      display: flex;
+      align-items: stretch;
+      min-height: 37px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: var(--de-toolbar);
+      border-bottom: 1px solid var(--de-border);
+      scrollbar-width: thin;
+    }
+
+    #dcode-version-evolution .de-open-workspace-tabs { display: flex; align-items: stretch; }
+    #dcode-version-evolution .de-workspace-tab-shell { display: flex; align-items: stretch; border-left: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-workspace-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 92px;
+      max-width: 190px;
+      padding: 7px 10px;
+      color: var(--de-secondary);
+      text-align: left;
+      background: transparent;
+      border-radius: 0;
+      white-space: nowrap;
+    }
+
+    #dcode-version-evolution .de-workspace-tab span { overflow: hidden; text-overflow: ellipsis; }
+    #dcode-version-evolution .de-workspace-tab:hover { color: var(--de-text); background: var(--de-hover); }
+    #dcode-version-evolution .de-workspace-tab.is-active { color: var(--de-text); background: var(--de-window); box-shadow: inset 0 -2px 0 var(--de-accent); }
+    #dcode-version-evolution .de-workspace-tab-close { display: grid; place-items: center; width: 26px; padding: 0; color: var(--de-secondary); background: transparent; }
+    #dcode-version-evolution .de-workspace-tab-close:hover { color: var(--de-text); background: var(--de-hover); }
+
+    #dcode-version-evolution .de-conversation {
+      display: grid;
+      align-content: start;
+      gap: 18px;
+      min-height: 0;
+      padding: 20px 18px;
+      overflow-y: auto;
+    }
+
+    #dcode-version-evolution .de-conversation { flex: 1; }
+
+    #dcode-version-evolution .de-message { display: grid; gap: 7px; max-width: 92%; }
+    #dcode-version-evolution .de-message-user { justify-self: end; }
+    #dcode-version-evolution .de-message &gt; div:first-child { display: flex; gap: 7px; color: var(--de-secondary); }
+    #dcode-version-evolution .de-message-user p {
+      margin: 0;
+      padding: 10px 12px;
+      background: var(--de-surface-raised);
+      border-radius: 10px;
+    }
+
+    #dcode-version-evolution .de-message-assistant p,
+    #dcode-version-evolution .de-message-assistant h3 { margin: 0; }
+
+    #dcode-version-evolution .de-message-actions { display: flex; gap: 4px; margin-top: 3px; }
+    #dcode-version-evolution .de-message-user .de-message-actions { justify-content: flex-end; }
+    #dcode-version-evolution .de-message-actions button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; color: var(--de-secondary); background: transparent; border-radius: 6px; }
+    #dcode-version-evolution .de-message-actions button:hover { color: var(--de-accent); background: var(--de-hover); }
+    #dcode-version-evolution .de-message-actions button:disabled { cursor: default; opacity: 0.45; }
+    #dcode-version-evolution .de-message.is-path-origin { position: relative; }
+    #dcode-version-evolution .de-message.is-path-origin::before { position: absolute; top: 0; bottom: 0; left: -10px; width: 3px; content: &quot;&quot;; background: var(--de-accent); border-radius: 99px; }
+    #dcode-version-evolution .de-message-user.is-path-origin::before { right: -10px; left: auto; }
+    #dcode-version-evolution .de-path-origin-label { padding: 1px 5px; color: var(--de-accent); background: var(--de-accent-soft); border-radius: 99px; }
+
+    #dcode-version-evolution .de-path-created {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 8px;
+      padding: 9px 10px;
+      color: var(--de-accent);
+      background: var(--de-accent-soft);
+      border: 1px solid var(--de-border);
+      border-radius: 8px;
+    }
+
+    #dcode-version-evolution .de-path-created span { display: grid; gap: 2px; }
+    #dcode-version-evolution .de-path-created small { color: var(--de-secondary); }
+    #dcode-version-evolution .de-path-created button { padding: 4px 6px; color: var(--de-accent); background: transparent; border-radius: 6px; }
+    #dcode-version-evolution .de-path-created button:hover { background: var(--de-hover); }
+
+    #dcode-version-evolution .de-communication {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 5px 8px;
+      padding: 10px;
+      background: var(--de-accent-soft);
+      border: 1px solid var(--de-border);
+      border-radius: 8px;
+    }
+
+    #dcode-version-evolution .de-communication span { display: grid; gap: 2px; }
+    #dcode-version-evolution .de-communication p { grid-column: 2; margin: 0; }
+
+    #dcode-version-evolution .de-file-preview {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      margin: 12px 12px 8px;
+      overflow: hidden;
+      background: var(--de-surface);
+      border: 1px solid var(--de-border);
+      border-radius: 9px;
+    }
+
+    #dcode-version-evolution .de-file-preview &gt; header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--de-toolbar);
+      border-bottom: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-file-preview &gt; header &gt; div:first-child { display: grid; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-file-preview &gt; header strong,
+    #dcode-version-evolution .de-file-preview &gt; header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-file-preview &gt; header small,
+    #dcode-version-evolution .de-file-preview-language { color: var(--de-secondary); }
+    #dcode-version-evolution .de-file-preview-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+    #dcode-version-evolution .de-file-preview-actions span { padding: 3px 6px; color: var(--de-secondary); background: var(--de-surface-raised); border-radius: 999px; white-space: nowrap; }
+    #dcode-version-evolution .de-file-preview-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 5px 9px 5px 12px; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-file-view-modes { display: flex; gap: 3px; padding: 2px; background: var(--de-surface-raised); border-radius: 6px; }
+    #dcode-version-evolution .de-file-view-modes button { padding: 3px 7px; color: var(--de-secondary); font: inherit; background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+    #dcode-version-evolution .de-file-view-modes button[aria-pressed=&quot;true&quot;] { color: var(--de-text); background: var(--de-surface); box-shadow: 0 1px 3px var(--de-shadow); }
+    #dcode-version-evolution .de-file-preview pre { min-height: 0; margin: 0; padding: 13px 14px; overflow: auto; color: var(--de-text); background: var(--de-surface); }
+    #dcode-version-evolution .de-code-preview { flex: 1; }
+    #dcode-version-evolution .de-file-preview code { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #dcode-version-evolution .de-markdown-workspace { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); }
+    #dcode-version-evolution .de-markdown-workspace.is-editing { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+    #dcode-version-evolution .de-markdown-editor-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-right: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-markdown-editor-pane &gt; header,
+    #dcode-version-evolution .de-html-preview section &gt; header { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 6px 9px; background: var(--de-toolbar); border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-markdown-editor-pane &gt; header small,
+    #dcode-version-evolution .de-html-preview section &gt; header small { color: var(--de-secondary); }
+    #dcode-version-evolution .de-preview-source-input { flex: 1; min-width: 0; min-height: 0; padding: 13px 14px; overflow: auto; color: var(--de-text); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; resize: none; background: var(--de-surface); border: 0; outline: 0; tab-size: 2; }
+    #dcode-version-evolution .de-preview-source-input:focus { box-shadow: inset 0 0 0 1px var(--de-accent); }
+    #dcode-version-evolution .de-markdown-preview { flex: 1; min-height: 0; padding: 20px clamp(18px, 6vw, 56px); overflow-y: auto; color: var(--de-text); background: var(--de-surface); }
+    #dcode-version-evolution .de-markdown-preview h1,
+    #dcode-version-evolution .de-markdown-preview h2 { margin: 0 0 12px; font-weight: 600; }
+    #dcode-version-evolution .de-markdown-preview h1 { padding-bottom: 9px; font-size: 22px; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-markdown-preview h2 { margin-top: 22px; font-size: 17px; }
+    #dcode-version-evolution .de-markdown-preview p,
+    #dcode-version-evolution .de-markdown-preview ul { margin: 8px 0; line-height: 1.65; }
+    #dcode-version-evolution .de-markdown-preview pre { padding: 11px; background: var(--de-surface-raised); border-radius: 7px; }
+    #dcode-version-evolution .de-html-preview { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+    #dcode-version-evolution .de-html-preview &gt; section { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
+    #dcode-version-evolution .de-html-preview &gt; section + section { border-left: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-html-preview iframe { flex: 1; width: 100%; min-height: 210px; background: white; border: 0; }
+
+    #dcode-version-evolution .de-plan-strip {
+      gap: 8px;
+      margin: 0 12px 8px;
+      padding: 8px 10px;
+      background: var(--de-surface-raised);
+      border: 1px solid var(--de-border);
+      border-radius: 8px;
+    }
+
+    #dcode-version-evolution .de-plan-strip &gt; span { display: grid; flex: 1; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-plan-strip button { padding: 4px 7px; background: transparent; border-radius: 6px; }
+
+    #dcode-version-evolution .de-composer {
+      display: grid;
+      gap: 10px;
+      min-height: 86px;
+      margin: 0 12px 12px;
+      padding: 11px;
+      color: var(--de-secondary);
+      background: var(--de-surface-raised);
+      border: 1px solid var(--de-border);
+      border-radius: 10px;
+    }
+
+    #dcode-version-evolution .de-composer textarea { min-height: 42px; padding: 0; color: var(--de-text); font: inherit; resize: none; background: transparent; border: 0; }
+    #dcode-version-evolution .de-composer textarea::placeholder { color: var(--de-secondary); }
+    #dcode-version-evolution .de-composer textarea[aria-invalid=&quot;true&quot;] { box-shadow: inset 0 -1px 0 var(--de-accent); }
+    #dcode-version-evolution .de-path-draft { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; color: var(--de-accent); background: var(--de-accent-soft); border: 1px solid var(--de-border); border-radius: 8px; }
+    #dcode-version-evolution .de-path-draft &gt; span { display: grid; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-path-draft small { overflow: hidden; color: var(--de-secondary); text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #dcode-version-evolution .de-composer-state,
+    #dcode-version-evolution .de-composer-actions,
+    #dcode-version-evolution .de-clear-notice { display: flex; align-items: center; gap: 6px; }
+    #dcode-version-evolution .de-composer-state { min-width: 0; }
+    #dcode-version-evolution .de-composer-state small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-clear-notice { justify-content: space-between; padding: 7px 8px; color: var(--de-secondary); background: var(--de-accent-soft); border-radius: 7px; }
+    #dcode-version-evolution .de-composer #de-send-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 40px; min-height: 40px; padding: 6px 9px; color: var(--de-surface); background: var(--de-accent); border-radius: 7px; }
+    #dcode-version-evolution .de-composer .de-draft-cancel,
+    #dcode-version-evolution .de-composer .de-clear-draft,
+    #dcode-version-evolution .de-composer .de-clear-notice button { padding: 4px 6px; color: var(--de-secondary); background: transparent; }
+    #dcode-version-evolution .de-composer .de-draft-cancel:hover,
+    #dcode-version-evolution .de-composer .de-clear-draft:hover,
+    #dcode-version-evolution .de-composer .de-clear-notice button:hover { color: var(--de-text); background: var(--de-hover); }
+    #dcode-version-evolution .de-context-control,
+    #dcode-version-evolution .de-model-control { position: relative; }
+    #dcode-version-evolution .de-context-button,
+    #dcode-version-evolution .de-fast-button,
+    #dcode-version-evolution .de-model-button { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 4px 6px; color: var(--de-secondary); background: transparent; border-radius: 7px; white-space: nowrap; }
+    #dcode-version-evolution .de-context-button,
+    #dcode-version-evolution .de-fast-button { min-width: 40px; }
+    #dcode-version-evolution .de-context-button:hover,
+    #dcode-version-evolution .de-fast-button:hover,
+    #dcode-version-evolution .de-model-button:hover { color: var(--de-text); background: var(--de-hover); }
+    #dcode-version-evolution .de-fast-button[aria-pressed=&quot;true&quot;] { color: var(--de-accent); }
+    #dcode-version-evolution .de-fast-state { min-width: 1.4em; color: var(--de-text); font-size: 11px; text-align: center; }
+    #dcode-version-evolution .de-model-button em { color: var(--de-accent); font-style: normal; }
+    #dcode-version-evolution .de-context-ring { position: relative; width: 17px; height: 17px; flex: 0 0 17px; background: conic-gradient(var(--de-accent) 0 50%, var(--de-border) 50% 100%); border-radius: 50%; }
+    #dcode-version-evolution .de-context-ring::after { content: &quot;&quot;; position: absolute; inset: 4px; background: var(--de-surface-raised); border-radius: inherit; }
+    #dcode-version-evolution .de-context-percent { font-size: 11px; }
+    #dcode-version-evolution .de-context-popover,
+    #dcode-version-evolution .de-model-menu { position: absolute; z-index: 12; right: 0; bottom: calc(100% + 7px); display: grid; min-width: 190px; padding: 7px; color: var(--de-text); background: var(--de-window); border: 1px solid var(--de-border); border-radius: 9px; box-shadow: 0 12px 30px var(--de-shadow); }
+    #dcode-version-evolution .de-context-popover[hidden],
+    #dcode-version-evolution .de-model-menu[hidden] { display: none; }
+    #dcode-version-evolution .de-context-popover { gap: 3px; }
+    #dcode-version-evolution .de-context-popover small { color: var(--de-secondary); }
+    #dcode-version-evolution .de-model-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; padding: 7px 8px; color: var(--de-text); background: transparent; border-radius: 6px; text-align: left; }
+    #dcode-version-evolution .de-model-menu button:hover { background: var(--de-hover); }
+    #dcode-version-evolution .de-model-menu small { color: var(--de-accent); }
+
+    #dcode-version-evolution .de-search-view {
+      position: absolute;
+      z-index: 8;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: transparent;
+    }
+
+    #dcode-version-evolution .de-search-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      width: min(520px, calc(100% - 12px));
+      max-height: calc(100% - 20px);
+      overflow: hidden;
+      background: var(--de-surface-raised);
+      border: 1px solid var(--de-border);
+      border-radius: 12px;
+      box-shadow: 0 20px 46px var(--de-shadow);
+    }
+
+    #dcode-version-evolution .de-search-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+      padding: 0 12px;
+      color: var(--de-secondary);
+      border-bottom: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-search-field:focus-within { box-shadow: inset 0 0 0 1px var(--de-accent); }
+    #dcode-version-evolution .de-search-field input { flex: 1; min-width: 0; color: var(--de-text); font: inherit; background: transparent; border: 0; }
+    #dcode-version-evolution .de-search-field input::placeholder { color: var(--de-secondary); }
+    #dcode-version-evolution .de-search-field kbd,
+    #dcode-version-evolution .de-result-row kbd { color: var(--de-secondary); font: inherit; }
+    #dcode-version-evolution .de-search-filters { display: flex; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-search-filters select { min-width: 0; padding: 4px 22px 4px 7px; color: var(--de-secondary); font: inherit; background: var(--de-surface); border: 1px solid var(--de-border); border-radius: 6px; }
+    #dcode-version-evolution .de-search-results { min-height: 0; overflow-y: auto; }
+    #dcode-version-evolution .de-search-section { display: grid; padding: 5px 7px 2px; }
+    #dcode-version-evolution .de-search-section &gt; small { padding: 5px 7px; color: var(--de-secondary); }
+
+    #dcode-version-evolution .de-result-row {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 48px;
+      padding: 6px 7px;
+      text-align: left;
+      background: transparent;
+      border-radius: 7px;
+    }
+
+    #dcode-version-evolution .de-result-row:hover,
+    #dcode-version-evolution .de-result-row.is-selected { background: var(--de-hover); }
+    #dcode-version-evolution .de-result-row span { display: grid; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-result-row strong,
+    #dcode-version-evolution .de-result-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-result-row em { color: var(--de-secondary); font-style: normal; white-space: nowrap; }
+    #dcode-version-evolution .de-result-dot { width: 7px; height: 7px; background: var(--de-accent); border-radius: 50%; }
+    #dcode-version-evolution .de-result-dot.is-muted { background: transparent; border: 1px solid var(--de-secondary); }
+    #dcode-version-evolution .de-search-empty { padding: 30px 12px; color: var(--de-secondary); text-align: center; }
+    #dcode-version-evolution .de-search-detail { overflow: hidden; padding: 7px 12px; color: var(--de-secondary); text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-search-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 8px 12px; color: var(--de-secondary); border-top: 1px solid var(--de-border); }
+
+    #dcode-version-evolution .de-inspector {
+      min-width: 0;
+      background: var(--de-sidebar);
+      border-left: 1px solid var(--de-border);
+    }
+
+    #dcode-version-evolution .de-inspector &gt; header { display: grid; gap: 3px; min-height: 54px; padding: 10px; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-inspector-content { display: grid; gap: 10px; padding: 10px; }
+    #dcode-version-evolution .de-scope-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 3px; background: var(--de-surface-raised); border-radius: 7px; }
+    #dcode-version-evolution .de-scope-switch button { min-height: 27px; padding: 3px 6px; background: transparent; border-radius: 5px; }
+    #dcode-version-evolution .de-scope-switch button.is-active { color: var(--de-accent); background: var(--de-accent-soft); }
+    #dcode-version-evolution .de-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-tabs span { padding: 7px 3px; color: var(--de-secondary); text-align: center; }
+    #dcode-version-evolution .de-tabs span.is-active { color: var(--de-text); border-bottom: 2px solid var(--de-accent); }
+    #dcode-version-evolution .de-inspector-section { display: grid; gap: 7px; padding-bottom: 9px; border-bottom: 1px solid var(--de-border); }
+    #dcode-version-evolution .de-inspector-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 27px; }
+    #dcode-version-evolution .de-inspector-row i.de-dot { width: 7px; height: 7px; background: var(--de-green); border-radius: 50%; }
+    #dcode-version-evolution .de-inspector-row small { color: var(--de-secondary); }
+    #dcode-version-evolution .de-tree-row { display: flex; align-items: center; gap: 6px; min-height: 26px; color: var(--de-secondary); }
+    #dcode-version-evolution .de-tree-row.is-root { color: var(--de-text); }
+    #dcode-version-evolution .de-tree-row.is-child { padding-left: 17px; }
+    #dcode-version-evolution .de-tree-row.is-grandchild { padding-left: 34px; }
+    #dcode-version-evolution .de-tree-file { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 27px; padding-block: 3px; color: var(--de-secondary); text-align: left; background: transparent; border-radius: 5px; }
+    #dcode-version-evolution .de-tree-file:hover,
+    #dcode-version-evolution .de-tree-file[aria-pressed=&quot;true&quot;] { color: var(--de-text); background: var(--de-hover); }
+    #dcode-version-evolution .de-tree-file.is-active-file { color: var(--de-accent); box-shadow: inset 2px 0 0 var(--de-accent); }
+    #dcode-version-evolution .de-tree-file:disabled { cursor: default; opacity: 0.68; }
+    #dcode-version-evolution .de-progress { height: 5px; overflow: hidden; background: var(--de-hover); border-radius: 999px; }
+    #dcode-version-evolution .de-progress i { display: block; width: 62%; height: 100%; background: var(--de-accent); }
+
+    #dcode-version-evolution [hidden] { display: none !important; }
+
+    @media (max-width: 1279px) {
+      #dcode-version-evolution .de-layout.has-inspector,
+      #dcode-version-evolution .de-layout.has-inspector.is-inspector-closed { grid-template-columns: 190px minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed { grid-template-columns: minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.has-inspector .de-inspector {
+        position: absolute;
+        z-index: 5;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        display: none;
+        width: min(280px, calc(100% - 20px));
+        overflow: auto;
+        border-left: 1px solid var(--de-border);
+        box-shadow: -12px 0 28px var(--de-shadow);
+      }
+      #dcode-version-evolution .de-layout.has-inspector.is-inspector-open .de-inspector { display: block; }
+    }
+
+    @media (max-width: 879px) {
+      #dcode-version-evolution .de-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+      #dcode-version-evolution .de-brand,
+      #dcode-version-evolution .de-breadcrumb &gt; span,
+      #dcode-version-evolution .de-breadcrumb &gt; svg:first-child,
+      #dcode-version-evolution .de-breadcrumb &gt; svg:nth-of-type(2) { display: none; }
+      #dcode-version-evolution .de-breadcrumb::before { content: &quot;…&quot;; color: var(--de-secondary); }
+      #dcode-version-evolution .de-sidebar { display: none; }
+      #dcode-version-evolution .de-layout,
+      #dcode-version-evolution .de-layout.has-inspector { grid-template-columns: minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.is-sidebar-open .de-sidebar {
+        position: absolute;
+        z-index: 6;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        display: block;
+        width: min(260px, calc(100% - 20px));
+        overflow: auto;
+        box-shadow: 12px 0 28px var(--de-shadow);
+      }
+      #dcode-version-evolution .de-session-header { min-height: 58px; }
+      #dcode-version-evolution .de-conversation { min-height: 0; gap: 12px; padding: 14px 12px; }
+      #dcode-version-evolution .de-search-view { padding: 10px; }
+      #dcode-version-evolution .de-search-filters { flex-wrap: wrap; }
+      #dcode-version-evolution .de-search-filters select { flex: 1; }
+      #dcode-version-evolution .de-result-row { grid-template-columns: 10px minmax(0, 1fr) auto; }
+      #dcode-version-evolution .de-result-row em { display: none; }
+      #dcode-version-evolution .de-search-footer span:nth-child(3) { display: none; }
+      #dcode-version-evolution .de-runtime-strip { padding-inline: 12px; }
+      #dcode-version-evolution .de-path-created { grid-template-columns: 18px minmax(0, 1fr); }
+      #dcode-version-evolution .de-path-created button { grid-column: 2; justify-self: start; }
+      #dcode-version-evolution .de-file-preview &gt; header { align-items: flex-start; flex-direction: column; }
+      #dcode-version-evolution .de-file-preview-actions { justify-content: flex-start; }
+      #dcode-version-evolution .de-markdown-workspace.is-editing,
+      #dcode-version-evolution .de-html-preview { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+      #dcode-version-evolution .de-markdown-editor-pane { min-height: 240px; border-right: 0; border-bottom: 1px solid var(--de-border); }
+      #dcode-version-evolution .de-html-preview &gt; section { min-height: 240px; }
+      #dcode-version-evolution .de-html-preview &gt; section + section { border-top: 1px solid var(--de-border); border-left: 0; }
+    }
+
+    @media (max-width: 560px) {
+      #dcode-version-evolution .de-composer-footer { align-items: stretch; flex-direction: column; }
+      #dcode-version-evolution .de-composer-state { justify-content: space-between; }
+      #dcode-version-evolution .de-composer-actions { align-self: stretch; justify-content: flex-end; }
+      #dcode-version-evolution .de-context-popover { right: auto; left: 0; }
+    }
+
+    @media (max-width: 420px) {
+      #dcode-version-evolution .de-composer-actions { display: grid; grid-template-columns: 40px 40px minmax(0, 1fr) 40px; width: 100%; }
+      #dcode-version-evolution .de-context-percent,
+      #dcode-version-evolution .de-fast-button span,
+      #dcode-version-evolution #de-send-label { display: none; }
+      #dcode-version-evolution .de-context-button,
+      #dcode-version-evolution .de-fast-button,
+      #dcode-version-evolution .de-composer #de-send-button { justify-content: center; min-width: 40px; padding-inline: 6px; }
+      #dcode-version-evolution .de-fast-button { gap: 3px; padding-inline: 3px; }
+      #dcode-version-evolution .de-model-control { min-width: 0; }
+      #dcode-version-evolution .de-model-button { width: 100%; max-width: none; }
+      #dcode-version-evolution .de-model-button &gt; span { overflow: hidden; text-overflow: ellipsis; }
+    }
+
+    @media (max-width: 339px) {
+      #dcode-version-evolution .de-path-draft { grid-template-columns: 18px minmax(0, 1fr); }
+      #dcode-version-evolution .de-path-draft .de-draft-cancel { grid-column: 2; justify-self: start; }
+      #dcode-version-evolution #de-thinking-level { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #dcode-version-evolution * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
+  &lt;/style&gt;
+
+  &lt;script&gt;
+    (function () {
+      var root = document.getElementById(&#x27;dcode-version-evolution&#x27;);
+      if (!root || root.dataset.ready === &#x27;true&#x27;) return;
+      root.dataset.ready = &#x27;true&#x27;;
+
+      var versions = {
+        &#x27;0.0.1&#x27;: {
+          title: &#x27;用户首页与项目&#x27;,
+          summary: &#x27;项目可直接选中并查看全部文件；项目会话跨源文件夹平铺。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;overview&#x27;,
+          projectFiles: true,
+          messageHeading: &#x27;项目是可直接进入的工作范围&#x27;,
+          messageBody: &#x27;点击项目即可查看其全部文件；会话按时间平铺，源文件夹只作为来源说明。&#x27;
+        },
+        &#x27;0.0.2&#x27;: {
+          title: &#x27;全部历史搜索&#x27;,
+          summary: &#x27;参考 Codex，以浮层搜索全部历史；当前对话、左栏和会话概览保持原位。&#x27;,
+          mode: &#x27;search-popover&#x27;,
+          right: &#x27;overview&#x27;,
+          projectFiles: true,
+          messageHeading: &#x27;项目与会话各自保持真实边界&#x27;,
+          messageBody: &#x27;项目负责组织多个源文件夹；Pi 会话继续拥有自己的历史、上下文和稳定标识。&#x27;
+        },
+        &#x27;0.0.3&#x27;: {
+          title: &#x27;会话路径与复制&#x27;,
+          summary: &#x27;草稿不自动过期；仅发送、明确清空或删除会话时清除，移除项目关联仍然保留。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;overview&#x27;,
+          projectFiles: true,
+          paths: true,
+          pathDraft: &#x27;continue&#x27;,
+          preservedDraft: &#x27;补充当前方案的验收标准与异常边界。&#x27;,
+          messageHeading: &#x27;从任意消息继续，但项目文件保持当前状态&#x27;,
+          messageBody: &#x27;新的会话路径只改变对话历史与模型上下文，不创建或还原代码分支。&#x27;
+        },
+        &#x27;0.0.4&#x27;: {
+          title: &#x27;工作区标签与只读文件&#x27;,
+          summary: &#x27;从项目文件树打开中央内容标签；首次只读查看，不改变文件与上下文。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;files&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;overview&#x27;,
+          paths: true,
+          messageHeading: &#x27;对话与文件共用中央标签页&#x27;,
+          messageBody: &#x27;对话始终是第一个标签；文件从第二个标签开始只读打开。&#x27;
+        },
+        &#x27;0.0.5&#x27;: {
+          title: &#x27;Markdown 与 HTML 即时预览&#x27;,
+          summary: &#x27;两种预览都跟随未保存编辑内容；刷新阈值由实作验证决定。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;files&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;overview&#x27;,
+          paths: true,
+          livePreview: true,
+          messageHeading: &#x27;文件编辑与预览进入同一工作台&#x27;,
+          messageBody: &#x27;Markdown 与 HTML 同时完成才算交付；打开与编辑仍不会自动加入模型上下文。&#x27;
+        },
+        &#x27;0.0.6&#x27;: {
+          title: &#x27;目标与工作清单&#x27;,
+          summary: &#x27;目标进入右栏，活动计划继续贴近输入区；两处使用同一份结构化状态。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;goal&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;goal&#x27;,
+          paths: true,
+          livePreview: true,
+          goal: true,
+          messageHeading: &#x27;目标成为可恢复的工作面&#x27;,
+          messageBody: &#x27;右栏查看工作清单、检查与阶段结论；输入区只保留当前活动计划的紧凑状态。&#x27;
+        },
+        &#x27;0.0.7&#x27;: {
+          title: &#x27;智能体团队与团队通信&#x27;,
+          summary: &#x27;右栏汇总成员、职责、状态和通信；中央按需查看成员的可见工作轨迹。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;agents&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;agents&#x27;,
+          paths: true,
+          livePreview: true,
+          goal: true,
+          messageHeading: &#x27;智能体团队属于当前会话&#x27;,
+          messageBody: &#x27;主对话保留协调结论，成员之间的通信和阶段结果进入智能体视图。&#x27;
+        },
+        &#x27;0.0.8&#x27;: {
+          title: &#x27;跨会话通信&#x27;,
+          summary: &#x27;加入持久来源、送达状态和未读状态，让其它会话可以定向协作。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;communication&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;communication&#x27;,
+          paths: true,
+          livePreview: true,
+          goal: true,
+          communication: true,
+          messageHeading: &#x27;跨会话消息保留来源与送达状态&#x27;,
+          messageBody: &#x27;D Code 的跨会话消息不会伪装成普通用户回复，也不会丢失目标会话和恢复信息。&#x27;
+        },
+        &#x27;0.0.9&#x27;: {
+          title: &#x27;原生能力收口候选&#x27;,
+          summary: &#x27;自有原生能力与不支持边界逐项验收，不再增加新的主导航。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;abilities&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;abilities&#x27;,
+          paths: true,
+          livePreview: true,
+          goal: true,
+          communication: true,
+          runtime: true,
+          messageHeading: &#x27;产品能力进入统一的中文工作台&#x27;,
+          messageBody: &#x27;高价值状态拥有专属呈现，相似能力共用原生界面；依赖 TUI 的特殊交互明确不支持，不再建立兼容呈现路径。&#x27;
+        },
+        &#x27;1.0.0&#x27;: {
+          title: &#x27;完整版本&#x27;,
+          summary: &#x27;界面不再突然变化；候选版通过会话、恢复、原生能力边界与日常工作流验收后晋升。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;abilities&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;abilities&#x27;,
+          paths: true,
+          livePreview: true,
+          goal: true,
+          communication: true,
+          runtime: true,
+          complete: true,
+          messageHeading: &#x27;D Code 已承接完整日常工作流&#x27;,
+          messageBody: &#x27;会话、项目、搜索、路径、目标、智能体、跨会话通信、文件与预览在同一套中文界面中协作。&#x27;
+        }
+      };
+
+      function scopeSwitchMarkup(kind, state) {
+        if (!state.projectFiles) return &#x27;&#x27;;
+        var sessionKind = state.sessionRight || &#x27;overview&#x27;;
+        var sessionActive = kind !== &#x27;files&#x27;;
+        return &#x27;&lt;div class=&quot;de-scope-switch&quot; aria-label=&quot;工作检查器范围&quot;&gt;&lt;button type=&quot;button&quot; data-inspector-kind=&quot;&#x27; + sessionKind + &#x27;&quot; class=&quot;&#x27; + (sessionActive ? &#x27;is-active&#x27; : &#x27;&#x27;) + &#x27;&quot;&gt;会话&lt;/button&gt;&lt;button type=&quot;button&quot; data-inspector-kind=&quot;files&quot; class=&quot;&#x27; + (!sessionActive ? &#x27;is-active&#x27; : &#x27;&#x27;) + &#x27;&quot;&gt;项目&lt;/button&gt;&lt;/div&gt;&#x27;;
+      }
+
+      function inspectorMarkup(kind, state) {
+        var scopeSwitch = scopeSwitchMarkup(kind, state);
+        if (kind === &#x27;overview&#x27;) {
+          return scopeSwitch + &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;会话概览&lt;/strong&gt;&lt;small&gt;当前会话的真实运行状态&lt;/small&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;写入状态&lt;/span&gt;&lt;small&gt;已取得写入权&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;当前路径&lt;/span&gt;&lt;small&gt;智能体团队方案&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;草稿恢复&lt;/span&gt;&lt;small&gt;本机&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;活动计划&lt;/strong&gt;&lt;small&gt;梳理 D Code 版本界面 · 进行中&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;能力边界&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;标准结构化交互&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+        }
+        if (kind === &#x27;files&#x27;) {
+          var fileButtonState = state.projectInspector ? &#x27;&#x27; : &#x27; disabled aria-disabled=&quot;true&quot;&#x27;;
+          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;文件&lt;/span&gt;&lt;span&gt;变更&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;项目文件&lt;/strong&gt;&lt;small&gt;2 个源文件夹 · 完整文件树&lt;/small&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-tree-row is-root&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;dcode&lt;/div&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-tree-row is-child&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;app&lt;/div&gt;&#x27; +
+            &#x27;&lt;button class=&quot;de-tree-row is-grandchild de-tree-file&quot; type=&quot;button&quot; data-file-preview=&quot;app-model&quot; aria-pressed=&quot;false&quot;&#x27; + fileButtonState + &#x27;&gt;&lt;i data-lucide=&quot;file-code-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;AppModel.swift&lt;/button&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-tree-row is-child&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;doc&lt;/div&gt;&#x27; +
+            &#x27;&lt;button class=&quot;de-tree-row is-grandchild de-tree-file&quot; type=&quot;button&quot; data-file-preview=&quot;dcode-readme&quot; aria-pressed=&quot;false&quot;&#x27; + fileButtonState + &#x27;&gt;&lt;i data-lucide=&quot;file-text&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;README.md&lt;/button&gt;&#x27; +
+            &#x27;&lt;button class=&quot;de-tree-row is-grandchild de-tree-file&quot; type=&quot;button&quot; data-file-preview=&quot;workbench-html&quot; aria-pressed=&quot;false&quot;&#x27; + fileButtonState + &#x27;&gt;&lt;i data-lucide=&quot;panels-top-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;dcode-workbench.html&lt;/button&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-tree-row is-root&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;pi-dgoal&lt;/div&gt;&#x27; +
+            &#x27;&lt;div class=&quot;de-tree-row is-child&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;src&lt;/div&gt;&#x27; +
+            &#x27;&lt;button class=&quot;de-tree-row is-grandchild de-tree-file&quot; type=&quot;button&quot; data-file-preview=&quot;dgoal-index&quot; aria-pressed=&quot;false&quot;&#x27; + fileButtonState + &#x27;&gt;&lt;i data-lucide=&quot;file-code-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;index.ts&lt;/button&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;版本变化&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;app/Sources&lt;/span&gt;&lt;small&gt;3 项&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;host/src&lt;/span&gt;&lt;small&gt;2 项&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+        }
+        if (kind === &#x27;goal&#x27;) {
+          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;目标&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;定义 D Code 1.0&lt;/strong&gt;&lt;small&gt;完成原生能力与不支持边界收口&lt;/small&gt;&lt;div class=&quot;de-progress&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;工作清单&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;确定版本规则&lt;/span&gt;&lt;small&gt;完成&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;核对能力矩阵&lt;/span&gt;&lt;small&gt;进行中&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;逐版确认界面&lt;/span&gt;&lt;small&gt;等待&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+        }
+        if (kind === &#x27;agents&#x27;) {
+          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;智能体&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;智能体团队 · 4 位成员&lt;/strong&gt;&lt;small&gt;本轮围绕同一目标协作&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;产品结构&lt;/span&gt;&lt;small&gt;已汇总&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;Pi 语义&lt;/span&gt;&lt;small&gt;工作中&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展审计&lt;/span&gt;&lt;small&gt;已汇总&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面评审&lt;/span&gt;&lt;small&gt;等待&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;最近通信&lt;/strong&gt;&lt;small&gt;Pi 语义 → 产品结构：会话复制必须保留稳定来源。&lt;/small&gt;&lt;/section&gt;&#x27;;
+        }
+        if (kind === &#x27;communication&#x27;) {
+          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;通信&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;跨会话通信&lt;/strong&gt;&lt;small&gt;来源、目标与送达状态均可恢复&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展协议研究&lt;/span&gt;&lt;small&gt;1 条未读&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标工作清单&lt;/span&gt;&lt;small&gt;已送达&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面版本演进&lt;/span&gt;&lt;small&gt;等待回复&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+        }
+        return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span&gt;通信&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
+          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;能力状态&lt;/strong&gt;&lt;small&gt;按产品语义汇总，不按扩展逐个堆入口&lt;/small&gt;&lt;/section&gt;&#x27; +
+          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标与工作清单&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;智能体团队与通信&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;图片与结构化产物&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;标准工具与命令&lt;/span&gt;&lt;small&gt;统一呈现&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+      }
+
+      var currentVersion = &#x27;0.0.1&#x27;;
+      var layout = root.querySelector(&#x27;#de-layout&#x27;);
+      var sidebar = root.querySelector(&#x27;.de-sidebar&#x27;);
+      var inspector = root.querySelector(&#x27;#de-inspector&#x27;);
+      var sidebarButton = root.querySelector(&#x27;#de-sidebar-button&#x27;);
+      var inspectorButton = root.querySelector(&#x27;#de-inspector-button&#x27;);
+      var searchButton = root.querySelector(&#x27;#de-search-button&#x27;);
+      var searchView = root.querySelector(&#x27;#de-search-view&#x27;);
+      var searchInput = root.querySelector(&#x27;#de-search-input&#x27;);
+      var projectFilter = root.querySelector(&#x27;#de-project-filter&#x27;);
+      var sourceFilter = root.querySelector(&#x27;#de-source-filter&#x27;);
+      var searchDetail = root.querySelector(&#x27;#de-search-detail&#x27;);
+      var searchItems = Array.from(root.querySelectorAll(&#x27;[data-search-item]&#x27;));
+      var projectSelectButton = root.querySelector(&#x27;[data-project-select=&quot;project-dcode&quot;]&#x27;);
+      var projectToggleButton = root.querySelector(&#x27;[data-project-toggle=&quot;project-dcode&quot;]&#x27;);
+      var projectSessions = root.querySelector(&#x27;[data-project-sessions=&quot;project-dcode&quot;]&#x27;);
+      var sidebarSessionRows = Array.from(root.querySelectorAll(&#x27;[data-sidebar-session]&#x27;));
+      var userMessage = root.querySelector(&#x27;#de-user-message&#x27;);
+      var assistantMessage = root.querySelector(&#x27;#de-assistant-message&#x27;);
+      var pathDraft = root.querySelector(&#x27;#de-path-draft&#x27;);
+      var pathDraftOrigin = root.querySelector(&#x27;#de-path-draft-origin&#x27;);
+      var pathCreated = root.querySelector(&#x27;#de-path-created&#x27;);
+      var pathCreatedDetail = root.querySelector(&#x27;#de-path-created-detail&#x27;);
+      var composerInput = root.querySelector(&#x27;#de-composer-input&#x27;);
+      var composerMeta = root.querySelector(&#x27;#de-composer-meta&#x27;);
+      var contextButton = root.querySelector(&#x27;#de-context-button&#x27;);
+      var contextPopover = root.querySelector(&#x27;#de-context-popover&#x27;);
+      var fastButton = root.querySelector(&#x27;#de-fast-button&#x27;);
+      var fastState = root.querySelector(&#x27;#de-fast-state&#x27;);
+      var modelButton = root.querySelector(&#x27;#de-model-button&#x27;);
+      var modelMenu = root.querySelector(&#x27;#de-model-menu&#x27;);
+      var modelName = root.querySelector(&#x27;#de-model-name&#x27;);
+      var thinkingLevel = root.querySelector(&#x27;#de-thinking-level&#x27;);
+      var workspaceTabs = root.querySelector(&#x27;#de-workspace-tabs&#x27;);
+      var openWorkspaceTabs = root.querySelector(&#x27;#de-open-workspace-tabs&#x27;);
+      var conversation = root.querySelector(&#x27;#de-conversation&#x27;);
+      var planStrip = root.querySelector(&#x27;#de-plan-strip&#x27;);
+      var composer = root.querySelector(&#x27;#de-composer&#x27;);
+      var filePreview = root.querySelector(&#x27;#de-file-preview&#x27;);
+      var filePreviewSource = root.querySelector(&#x27;#de-file-preview-source&#x27;);
+      var filePreviewPath = root.querySelector(&#x27;#de-file-preview-path&#x27;);
+      var filePreviewStatus = root.querySelector(&#x27;#de-file-preview-status&#x27;);
+      var filePreviewLanguage = root.querySelector(&#x27;#de-file-preview-language&#x27;);
+      var fileViewModes = root.querySelector(&#x27;#de-file-view-modes&#x27;);
+      var codePreview = root.querySelector(&#x27;#de-code-preview&#x27;);
+      var filePreviewCode = root.querySelector(&#x27;#de-file-preview-code&#x27;);
+      var markdownWorkspace = root.querySelector(&#x27;#de-markdown-workspace&#x27;);
+      var markdownPreview = root.querySelector(&#x27;#de-markdown-preview&#x27;);
+      var markdownEditorPane = root.querySelector(&#x27;#de-markdown-editor-pane&#x27;);
+      var markdownSourceInput = root.querySelector(&#x27;#de-markdown-source-input&#x27;);
+      var markdownSourceState = root.querySelector(&#x27;#de-markdown-source-state&#x27;);
+      var htmlPreview = root.querySelector(&#x27;#de-html-preview&#x27;);
+      var htmlSourceInput = root.querySelector(&#x27;#de-html-source-input&#x27;);
+      var htmlSourceState = root.querySelector(&#x27;#de-html-source-state&#x27;);
+      var htmlPreviewFrame = root.querySelector(&#x27;#de-html-preview-frame&#x27;);
+      var clearDraftButton = root.querySelector(&#x27;#de-clear-draft&#x27;);
+      var clearNotice = root.querySelector(&#x27;#de-clear-notice&#x27;);
+      var sendLabel = root.querySelector(&#x27;#de-send-label&#x27;);
+      var defaultSessionId = &#x27;session-dcode-complete&#x27;;
+      var draftStorageKey = &#x27;dcode-version-evolution-drafts-v1&#x27;;
+      var activePathDraft = null;
+      var currentSessionId = defaultSessionId;
+      var currentPathId = &#x27;path-main&#x27;;
+      var currentPathLabel = &#x27;智能体团队方案&#x27;;
+      var lastOriginPath = null;
+      var lastClearedDraft = null;
+      var draftState = { version: 1, sessions: {} };
+      var draftStorageReady = false;
+      var originalUserMessage = &#x27;我希望 D Code 保留 Pi 的全部能力，但用真正适合 macOS 的中文界面呈现。&#x27;;
+      var openWorkspaceFileIds = [];
+      var activeWorkspaceTab = &#x27;conversation&#x27;;
+      var activeFileViewMode = &#x27;preview&#x27;;
+      var conversationScrollTop = 0;
+      var workspaceFileBuffers = {};
+      var markdownRenderFrame = null;
+      var htmlRenderTimer = null;
+      var lastHtmlRenderAt = 0;
+      var workspaceFiles = {
+        &#x27;app-model&#x27;: {
+          name: &#x27;AppModel.swift&#x27;,
+          source: &#x27;dcode&#x27;,
+          path: &#x27;app/Sources/PiDCode/State/AppModel.swift&#x27;,
+          language: &#x27;Swift&#x27;,
+          kind: &#x27;code&#x27;,
+          content: [
+            &#x27;import Foundation&#x27;,
+            &#x27;import Observation&#x27;,
+            &#x27;&#x27;,
+            &#x27;@Observable&#x27;,
+            &#x27;final class AppModel {&#x27;,
+            &#x27;    private(set) var activeSessionID: String?&#x27;,
+            &#x27;    private(set) var activePlan: ActivePlan?&#x27;,
+            &#x27;&#x27;,
+            &#x27;    func openSession(_ id: String) async throws {&#x27;,
+            &#x27;        activeSessionID = id&#x27;,
+            &#x27;    }&#x27;,
+            &#x27;}&#x27;
+          ].join(&#x27;\n&#x27;)
+        },
+        &#x27;dcode-readme&#x27;: {
+          name: &#x27;README.md&#x27;,
+          source: &#x27;dcode&#x27;,
+          path: &#x27;doc/README.md&#x27;,
+          language: &#x27;Markdown&#x27;,
+          kind: &#x27;markdown&#x27;,
+          content: [
+            &#x27;# D Code 工作台&#x27;,
+            &#x27;&#x27;,
+            &#x27;D Code 复用真实 Pi 会话与 Pi SDK 运行能力，并用原生中文界面组织工作。&#x27;,
+            &#x27;&#x27;,
+            &#x27;## 首版即时预览&#x27;,
+            &#x27;&#x27;,
+            &#x27;- Markdown 默认打开富预览&#x27;,
+            &#x27;- HTML 在隔离区域即时呈现&#x27;,
+            &#x27;- 打开文件不会自动加入模型上下文&#x27;,
+            &#x27;&#x27;,
+            &#x27;```text&#x27;,
+            &#x27;对话 → 文件 / 产物 / 编辑器标签&#x27;,
+            &#x27;```&#x27;
+          ].join(&#x27;\n&#x27;)
+        },
+        &#x27;workbench-html&#x27;: {
+          name: &#x27;dcode-workbench.html&#x27;,
+          source: &#x27;dcode&#x27;,
+          path: &#x27;doc/20-产品与交互/原型/dcode-workbench.html&#x27;,
+          language: &#x27;HTML&#x27;,
+          kind: &#x27;html&#x27;,
+          content: [
+            &#x27;&lt;!doctype html&gt;&#x27;,
+            &#x27;&lt;html lang=&quot;zh-CN&quot;&gt;&#x27;,
+            &#x27;&lt;head&gt;&#x27;,
+            &#x27;  &lt;meta charset=&quot;utf-8&quot;&gt;&#x27;,
+            &#x27;  &lt;style&gt;&#x27;,
+            &#x27;    body { margin: 0; padding: 28px; font: 15px/1.6 system-ui; color: #1f2937; background: #f7f8fa; }&#x27;,
+            &#x27;    main { max-width: 520px; margin: auto; padding: 24px; background: white; border: 1px solid #dde1e7; border-radius: 14px; }&#x27;,
+            &#x27;    span { display: inline-block; padding: 4px 8px; color: #1769d2; background: #e8f1ff; border-radius: 999px; }&#x27;,
+            &#x27;  &lt;/style&gt;&#x27;,
+            &#x27;&lt;/head&gt;&#x27;,
+            &#x27;&lt;body&gt;&#x27;,
+            &#x27;  &lt;main&gt;&#x27;,
+            &#x27;    &lt;span&gt;D Code 即时预览&lt;/span&gt;&#x27;,
+            &#x27;    &lt;h1&gt;对话之外，也能直接看见产物&lt;/h1&gt;&#x27;,
+            &#x27;    &lt;p&gt;HTML 在隔离预览区呈现，不进入宿主页面，也不会自动加入模型上下文。&lt;/p&gt;&#x27;,
+            &#x27;  &lt;/main&gt;&#x27;,
+            &#x27;&lt;/body&gt;&#x27;,
+            &#x27;&lt;/html&gt;&#x27;
+          ].join(&#x27;\n&#x27;)
+        },
+        &#x27;dgoal-index&#x27;: {
+          name: &#x27;index.ts&#x27;,
+          source: &#x27;pi-dgoal&#x27;,
+          path: &#x27;src/index.ts&#x27;,
+          language: &#x27;TypeScript&#x27;,
+          kind: &#x27;code&#x27;,
+          content: [
+            &quot;import type { ExtensionAPI } from &#x27;@mariozechner/pi-coding-agent&#x27;&quot;,
+            &#x27;&#x27;,
+            &#x27;export default function dgoal(pi: ExtensionAPI) {&#x27;,
+            &quot;  pi.registerCommand(&#x27;goal&#x27;, {&quot;,
+            &quot;    description: &#x27;打开当前目标与工作清单&#x27;&quot;,
+            &#x27;  })&#x27;,
+            &#x27;}&#x27;
+          ].join(&#x27;\n&#x27;)
+        }
+      };
+
+      function normalizeDraftState(value) {
+        if (!value || typeof value !== &#x27;object&#x27; || !value.sessions || typeof value.sessions !== &#x27;object&#x27;) {
+          return { version: 1, sessions: {} };
+        }
+        return { version: 1, sessions: value.sessions };
+      }
+
+      function loadDraftState(serialized, storageMode) {
+        try {
+          draftState = normalizeDraftState(serialized ? JSON.parse(serialized) : null);
+        } catch (_error) {
+          draftState = { version: 1, sessions: {} };
+        }
+        draftStorageReady = true;
+        root.dataset.draftStorageReady = &#x27;true&#x27;;
+        root.dataset.draftStorage = storageMode;
+      }
+
+      function initializeDraftStorage() {
+        try {
+          loadDraftState(window.localStorage.getItem(draftStorageKey), &#x27;local&#x27;);
+          return;
+        } catch (_error) {
+          root.dataset.draftStorage = &#x27;bridge&#x27;;
+        }
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: &#x27;dcode-draft-load&#x27;, key: draftStorageKey }, &#x27;*&#x27;);
+        }
+        window.setTimeout(function () {
+          if (!draftStorageReady) loadDraftState(null, &#x27;memory-fallback&#x27;);
+        }, 500);
+      }
+
+      function persistDraftState() {
+        var serialized = JSON.stringify(draftState);
+        try {
+          window.localStorage.setItem(draftStorageKey, serialized);
+          root.dataset.draftStorage = &#x27;local&#x27;;
+          return;
+        } catch (_error) {
+          root.dataset.draftStorage = &#x27;bridge&#x27;;
+        }
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: &#x27;dcode-draft-save&#x27;, key: draftStorageKey, value: serialized }, &#x27;*&#x27;);
+        }
+      }
+
+      function getSessionDrafts(sessionId, createIfMissing) {
+        var session = draftState.sessions[sessionId];
+        if (!session &amp;&amp; createIfMissing) {
+          session = { paths: {}, pending: {} };
+          draftState.sessions[sessionId] = session;
+        }
+        if (session) {
+          if (!session.paths || typeof session.paths !== &#x27;object&#x27;) session.paths = {};
+          if (!session.pending || typeof session.pending !== &#x27;object&#x27;) session.pending = {};
+        }
+        return session || null;
+      }
+
+      function getPathDraft(sessionId, pathId) {
+        var session = getSessionDrafts(sessionId, false);
+        var record = session &amp;&amp; session.paths[pathId];
+        return record &amp;&amp; typeof record.draft === &#x27;string&#x27; ? record.draft : &#x27;&#x27;;
+      }
+
+      function hasPathDraft(sessionId, pathId) {
+        var session = getSessionDrafts(sessionId, false);
+        return Boolean(session &amp;&amp; session.paths[pathId] &amp;&amp; typeof session.paths[pathId].draft === &#x27;string&#x27;);
+      }
+
+      function setPathDraft(sessionId, pathId, pathLabel, draft) {
+        var session = getSessionDrafts(sessionId, true);
+        session.paths[pathId] = { label: pathLabel, draft: draft };
+        persistDraftState();
+      }
+
+      function deleteSessionDrafts(sessionId) {
+        delete draftState.sessions[sessionId];
+        persistDraftState();
+        if (currentSessionId !== sessionId) return;
+        activePathDraft = null;
+        lastOriginPath = null;
+        lastClearedDraft = null;
+        pathDraft.hidden = true;
+        pathCreated.hidden = true;
+        clearNotice.hidden = true;
+        composerInput.value = &#x27;&#x27;;
+        composerMeta.textContent = &#x27;对应 Pi 会话已删除 · 本机草稿已清除&#x27;;
+        clearDraftButton.hidden = true;
+      }
+
+      function pendingDraftId(kind) {
+        return (kind === &#x27;edit&#x27; ? &#x27;entry-user-1058&#x27; : &#x27;entry-assistant-1121&#x27;) + &#x27;:&#x27; + kind;
+      }
+
+      function getPendingDraft(sessionId, pendingId) {
+        var session = getSessionDrafts(sessionId, false);
+        var record = session &amp;&amp; session.pending[pendingId];
+        return record &amp;&amp; typeof record.draft === &#x27;string&#x27; ? record : null;
+      }
+
+      function setPendingDraft(pathDraftState, draft) {
+        var session = getSessionDrafts(pathDraftState.sessionId, true);
+        session.pending[pathDraftState.pendingId] = {
+          kind: pathDraftState.kind,
+          originPathId: pathDraftState.originPathId,
+          originPathLabel: pathDraftState.originPathLabel,
+          draft: draft
+        };
+        persistDraftState();
+      }
+
+      function deletePendingDraft(pathDraftState) {
+        var session = getSessionDrafts(pathDraftState.sessionId, false);
+        if (!session) return;
+        delete session.pending[pathDraftState.pendingId];
+        persistDraftState();
+      }
+
+      window.addEventListener(&#x27;message&#x27;, function (event) {
+        if (event.source !== window.parent || !event.data || event.data.type !== &#x27;dcode-draft-loaded&#x27; || event.data.key !== draftStorageKey) return;
+        loadDraftState(typeof event.data.value === &#x27;string&#x27; ? event.data.value : null, &#x27;bridge&#x27;);
+      });
+
+      function syncPanelControls() {
+        var sidebarVisible = window.getComputedStyle(sidebar).display !== &#x27;none&#x27;;
+        var inspectorVisible = !inspector.hidden &amp;&amp; window.getComputedStyle(inspector).display !== &#x27;none&#x27;;
+        sidebarButton.setAttribute(&#x27;aria-expanded&#x27;, sidebarVisible ? &#x27;true&#x27; : &#x27;false&#x27;);
+        sidebarButton.setAttribute(&#x27;aria-label&#x27;, sidebarVisible ? &#x27;隐藏左栏&#x27; : &#x27;显示左栏&#x27;);
+        inspectorButton.setAttribute(&#x27;aria-expanded&#x27;, inspectorVisible ? &#x27;true&#x27; : &#x27;false&#x27;);
+        inspectorButton.setAttribute(&#x27;aria-label&#x27;, inspectorVisible ? &#x27;隐藏工作检查器&#x27; : &#x27;显示工作检查器&#x27;);
+      }
+
+      function syncSidebarInspectorScope(kind) {
+        var isProjectScope = kind === &#x27;files&#x27;;
+        projectSelectButton.classList.toggle(&#x27;is-inspected&#x27;, isProjectScope);
+        projectSelectButton.setAttribute(&#x27;aria-pressed&#x27;, isProjectScope ? &#x27;true&#x27; : &#x27;false&#x27;);
+      }
+
+      function showInspector(kind, state) {
+        var sessionTitle = root.querySelector(&#x27;#de-session-title&#x27;).textContent;
+        root.querySelector(&#x27;#de-inspector-subtitle&#x27;).textContent = kind === &#x27;files&#x27; ? &#x27;当前项目 · D Code&#x27; : &#x27;当前会话 · &#x27; + sessionTitle;
+        root.querySelector(&#x27;#de-inspector-content&#x27;).innerHTML = inspectorMarkup(kind, state);
+        syncSidebarInspectorScope(kind);
+        syncFileTreeSelection();
+        if (window.lucide) window.lucide.createIcons({ attrs: { width: 16, height: 16 } });
+      }
+
+      function selectProjectScope() {
+        var state = versions[currentVersion];
+        if (!state || !state.projectFiles) return;
+        inspector.hidden = false;
+        inspectorButton.hidden = false;
+        layout.classList.add(&#x27;has-inspector&#x27;);
+        layout.classList.remove(&#x27;is-inspector-closed&#x27;);
+        showInspector(&#x27;files&#x27;, state);
+        if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) {
+          layout.classList.add(&#x27;is-inspector-open&#x27;);
+          layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+        }
+        window.requestAnimationFrame(syncPanelControls);
+      }
+
+      function toggleProjectSessions() {
+        var expanded = projectToggleButton.getAttribute(&#x27;aria-expanded&#x27;) === &#x27;true&#x27;;
+        projectToggleButton.setAttribute(&#x27;aria-expanded&#x27;, expanded ? &#x27;false&#x27; : &#x27;true&#x27;);
+        projectToggleButton.setAttribute(&#x27;aria-label&#x27;, expanded ? &#x27;展开 D Code 会话&#x27; : &#x27;收起 D Code 会话&#x27;);
+        projectSessions.hidden = expanded;
+        projectToggleButton.innerHTML = &#x27;&lt;i data-lucide=&quot;&#x27; + (expanded ? &#x27;chevron-right&#x27; : &#x27;chevron-down&#x27;) + &#x27;&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&#x27;;
+        if (window.lucide) window.lucide.createIcons({ attrs: { width: 16, height: 16 } });
+      }
+
+      function selectSidebarSession(row) {
+        var state = versions[currentVersion];
+        if (!state) return;
+        activePathDraft = null;
+        pathDraft.hidden = true;
+        pathCreated.hidden = true;
+        clearPathOrigin();
+        setPathActionsDisabled(false);
+        currentSessionId = row.dataset.sessionId;
+        currentPathId = &#x27;path-main&#x27;;
+        currentPathLabel = row.dataset.pathLabel || &#x27;主路径&#x27;;
+        sidebarSessionRows.forEach(function (item) { item.classList.toggle(&#x27;is-selected&#x27;, item === row); });
+        root.querySelector(&#x27;#de-session-title&#x27;).textContent = row.dataset.sessionTitle;
+        root.querySelector(&#x27;#de-breadcrumb-title&#x27;).textContent = row.dataset.sessionTitle;
+        root.querySelector(&#x27;#de-session-context&#x27;).textContent = &#x27;当前会话 · 源文件夹：&#x27; + row.dataset.sourceFolder + &#x27; · 当前路径：&#x27; + currentPathLabel;
+        resetPathDraft();
+        showConversationWorkspace();
+        if (state.right) showInspector(state.sessionRight || (state.right === &#x27;files&#x27; ? &#x27;overview&#x27; : state.right), state);
+        layout.classList.remove(&#x27;is-sidebar-open&#x27;, &#x27;is-inspector-open&#x27;);
+        window.requestAnimationFrame(syncPanelControls);
+      }
+
+      function syncFileTreeSelection() {
+        root.querySelectorAll(&#x27;[data-file-preview]&#x27;).forEach(function (button) {
+          var fileId = button.dataset.filePreview;
+          var isOpen = openWorkspaceFileIds.includes(fileId);
+          var isActive = activeWorkspaceTab === fileId;
+          button.setAttribute(&#x27;aria-pressed&#x27;, isOpen ? &#x27;true&#x27; : &#x27;false&#x27;);
+          button.classList.toggle(&#x27;is-active-file&#x27;, isActive);
+        });
+      }
+
+      function getWorkspaceFileBuffer(fileId) {
+        if (!Object.prototype.hasOwnProperty.call(workspaceFileBuffers, fileId)) {
+          workspaceFileBuffers[fileId] = workspaceFiles[fileId].content;
+        }
+        return workspaceFileBuffers[fileId];
+      }
+
+      function isWorkspaceFileDirty(fileId) {
+        return Object.prototype.hasOwnProperty.call(workspaceFileBuffers, fileId)
+          &amp;&amp; workspaceFileBuffers[fileId] !== workspaceFiles[fileId].content;
+      }
+
+      function syncWorkspaceEditState(fileId) {
+        var file = workspaceFiles[fileId];
+        if (!file) return;
+        var dirty = isWorkspaceFileDirty(fileId);
+        if (file.kind === &#x27;markdown&#x27;) {
+          markdownSourceState.textContent = dirty ? &#x27;未保存 · 跟随草稿&#x27; : &#x27;与磁盘一致 · 跟随草稿&#x27;;
+          filePreviewStatus.textContent = dirty ? &#x27;未保存 · Markdown 即时预览&#x27; : &#x27;Markdown 即时预览&#x27;;
+        } else if (file.kind === &#x27;html&#x27;) {
+          htmlSourceState.textContent = dirty ? &#x27;未保存 · 持续同步&#x27; : &#x27;与磁盘一致 · 持续同步&#x27;;
+          filePreviewStatus.textContent = dirty ? &#x27;未保存 · 隔离即时预览&#x27; : &#x27;隔离即时预览&#x27;;
+        }
+        renderWorkspaceTabs();
+      }
+
+      function appendMarkdownElement(tagName, text) {
+        var element = document.createElement(tagName);
+        element.textContent = text;
+        markdownPreview.appendChild(element);
+        return element;
+      }
+
+      function renderMarkdown(content) {
+        markdownPreview.replaceChildren();
+        var list = null;
+        var codeLines = [];
+        var inCode = false;
+        function flushCode() {
+          if (!codeLines.length) return;
+          var pre = document.createElement(&#x27;pre&#x27;);
+          var code = document.createElement(&#x27;code&#x27;);
+          code.textContent = codeLines.join(&#x27;\n&#x27;);
+          pre.appendChild(code);
+          markdownPreview.appendChild(pre);
+          codeLines = [];
+        }
+        content.split(&#x27;\n&#x27;).forEach(function (line) {
+          if (line.startsWith(&#x27;```&#x27;)) {
+            if (inCode) flushCode();
+            inCode = !inCode;
+            list = null;
+            return;
+          }
+          if (inCode) {
+            codeLines.push(line);
+            return;
+          }
+          if (line.startsWith(&#x27;# &#x27;)) {
+            list = null;
+            appendMarkdownElement(&#x27;h1&#x27;, line.slice(2));
+            return;
+          }
+          if (line.startsWith(&#x27;## &#x27;)) {
+            list = null;
+            appendMarkdownElement(&#x27;h2&#x27;, line.slice(3));
+            return;
+          }
+          if (line.startsWith(&#x27;- &#x27;)) {
+            if (!list) {
+              list = document.createElement(&#x27;ul&#x27;);
+              markdownPreview.appendChild(list);
+            }
+            const item = document.createElement(&#x27;li&#x27;);
+            item.textContent = line.slice(2);
+            list.appendChild(item);
+            return;
+          }
+          list = null;
+          if (line.trim()) appendMarkdownElement(&#x27;p&#x27;, line);
+        });
+        if (inCode) flushCode();
+      }
+
+      function renderWorkspaceTabs() {
+        openWorkspaceTabs.replaceChildren();
+        var conversationTab = root.querySelector(&#x27;[data-workspace-tab=&quot;conversation&quot;]&#x27;);
+        var conversationActive = activeWorkspaceTab === &#x27;conversation&#x27;;
+        conversationTab.classList.toggle(&#x27;is-active&#x27;, conversationActive);
+        conversationTab.setAttribute(&#x27;aria-selected&#x27;, conversationActive ? &#x27;true&#x27; : &#x27;false&#x27;);
+        openWorkspaceFileIds.forEach(function (fileId) {
+          var file = workspaceFiles[fileId];
+          if (!file) return;
+          var shell = document.createElement(&#x27;div&#x27;);
+          shell.className = &#x27;de-workspace-tab-shell&#x27;;
+          var tab = document.createElement(&#x27;button&#x27;);
+          tab.type = &#x27;button&#x27;;
+          tab.className = &#x27;de-workspace-tab&#x27; + (activeWorkspaceTab === fileId ? &#x27; is-active&#x27; : &#x27;&#x27;);
+          tab.setAttribute(&#x27;role&#x27;, &#x27;tab&#x27;);
+          tab.setAttribute(&#x27;aria-selected&#x27;, activeWorkspaceTab === fileId ? &#x27;true&#x27; : &#x27;false&#x27;);
+          tab.dataset.workspaceFileTab = fileId;
+          tab.title = file.source + &#x27; · &#x27; + file.path;
+          var icon = document.createElement(&#x27;i&#x27;);
+          icon.dataset.lucide = file.kind === &#x27;html&#x27; ? &#x27;panels-top-left&#x27; : (file.kind === &#x27;markdown&#x27; ? &#x27;file-text&#x27; : &#x27;file-code-2&#x27;);
+          icon.setAttribute(&#x27;aria-hidden&#x27;, &#x27;true&#x27;);
+          var label = document.createElement(&#x27;span&#x27;);
+          label.textContent = file.name + (isWorkspaceFileDirty(fileId) ? &#x27; •&#x27; : &#x27;&#x27;);
+          tab.append(icon, label);
+          var close = document.createElement(&#x27;button&#x27;);
+          close.type = &#x27;button&#x27;;
+          close.className = &#x27;de-workspace-tab-close&#x27;;
+          close.dataset.closeWorkspaceFile = fileId;
+          close.setAttribute(&#x27;aria-label&#x27;, &#x27;关闭 &#x27; + file.name);
+          var closeIcon = document.createElement(&#x27;i&#x27;);
+          closeIcon.dataset.lucide = &#x27;x&#x27;;
+          closeIcon.setAttribute(&#x27;aria-hidden&#x27;, &#x27;true&#x27;);
+          close.appendChild(closeIcon);
+          shell.append(tab, close);
+          openWorkspaceTabs.appendChild(shell);
+        });
+        syncFileTreeSelection();
+        if (window.lucide) window.lucide.createIcons({ attrs: { width: 15, height: 15 } });
+      }
+
+      function setMarkdownViewMode(mode) {
+        if (![&#x27;preview&#x27;, &#x27;source&#x27;].includes(mode)) return;
+        activeFileViewMode = mode;
+        fileViewModes.querySelectorAll(&#x27;[data-file-view-mode]&#x27;).forEach(function (button) {
+          button.setAttribute(&#x27;aria-pressed&#x27;, button.dataset.fileViewMode === mode ? &#x27;true&#x27; : &#x27;false&#x27;);
+        });
+        markdownEditorPane.hidden = mode !== &#x27;source&#x27;;
+        markdownWorkspace.classList.toggle(&#x27;is-editing&#x27;, mode === &#x27;source&#x27;);
+      }
+
+      function scheduleMarkdownPreview(fileId) {
+        if (markdownRenderFrame !== null) return;
+        markdownRenderFrame = window.requestAnimationFrame(function () {
+          markdownRenderFrame = null;
+          if (activeWorkspaceTab !== fileId) return;
+          renderMarkdown(getWorkspaceFileBuffer(fileId));
+          syncWorkspaceEditState(fileId);
+        });
+      }
+
+      function scheduleHtmlPreview(fileId) {
+        if (htmlRenderTimer !== null) return;
+        var delay = Math.max(0, 50 - (window.performance.now() - lastHtmlRenderAt));
+        htmlRenderTimer = window.setTimeout(function () {
+          htmlRenderTimer = null;
+          if (activeWorkspaceTab !== fileId) return;
+          htmlPreviewFrame.srcdoc = getWorkspaceFileBuffer(fileId);
+          lastHtmlRenderAt = window.performance.now();
+          syncWorkspaceEditState(fileId);
+        }, delay);
+      }
+
+      function showConversationWorkspace() {
+        activeWorkspaceTab = &#x27;conversation&#x27;;
+        conversation.hidden = false;
+        planStrip.hidden = false;
+        composer.hidden = false;
+        filePreview.hidden = true;
+        renderWorkspaceTabs();
+        window.requestAnimationFrame(function () {
+          conversation.scrollTop = conversationScrollTop;
+        });
+      }
+
+      function showFileWorkspace(fileId) {
+        var file = workspaceFiles[fileId];
+        if (!file) return;
+        if (activeWorkspaceTab === &#x27;conversation&#x27;) conversationScrollTop = conversation.scrollTop;
+        activeWorkspaceTab = fileId;
+        conversation.hidden = true;
+        planStrip.hidden = true;
+        composer.hidden = true;
+        filePreview.hidden = false;
+        filePreviewSource.textContent = &#x27;源文件夹 · &#x27; + file.source;
+        filePreviewPath.textContent = file.path;
+        filePreviewLanguage.textContent = file.language;
+        filePreviewStatus.textContent = file.kind === &#x27;html&#x27; ? &#x27;隔离即时预览&#x27; : (file.kind === &#x27;markdown&#x27; ? &#x27;Markdown 即时预览&#x27; : &#x27;只读文件&#x27;);
+        codePreview.hidden = true;
+        markdownWorkspace.hidden = true;
+        htmlPreview.hidden = true;
+        fileViewModes.hidden = true;
+        if (!versions[currentVersion].livePreview) {
+          filePreviewStatus.textContent = &#x27;只读文件&#x27;;
+          filePreviewCode.textContent = getWorkspaceFileBuffer(fileId);
+          codePreview.hidden = false;
+        } else if (file.kind === &#x27;markdown&#x27;) {
+          markdownSourceInput.value = getWorkspaceFileBuffer(fileId);
+          renderMarkdown(getWorkspaceFileBuffer(fileId));
+          markdownWorkspace.hidden = false;
+          fileViewModes.hidden = false;
+          setMarkdownViewMode(activeFileViewMode);
+          syncWorkspaceEditState(fileId);
+        } else if (file.kind === &#x27;html&#x27;) {
+          htmlSourceInput.value = getWorkspaceFileBuffer(fileId);
+          htmlPreviewFrame.srcdoc = getWorkspaceFileBuffer(fileId);
+          lastHtmlRenderAt = window.performance.now();
+          htmlPreview.hidden = false;
+          syncWorkspaceEditState(fileId);
+        } else {
+          filePreviewCode.textContent = file.content;
+          codePreview.hidden = false;
+        }
+        renderWorkspaceTabs();
+      }
+
+      function openWorkspaceFile(fileId) {
+        if (!versions[currentVersion].projectInspector || !workspaceFiles[fileId]) return;
+        if (!openWorkspaceFileIds.includes(fileId)) openWorkspaceFileIds.push(fileId);
+        activeFileViewMode = &#x27;preview&#x27;;
+        showFileWorkspace(fileId);
+      }
+
+      function closeWorkspaceFile(fileId) {
+        var closedIndex = openWorkspaceFileIds.indexOf(fileId);
+        if (closedIndex &lt; 0) return;
+        var wasActive = activeWorkspaceTab === fileId;
+        openWorkspaceFileIds.splice(closedIndex, 1);
+        if (!wasActive) {
+          renderWorkspaceTabs();
+          return;
+        }
+        var adjacentFileId = openWorkspaceFileIds[Math.max(0, closedIndex - 1)];
+        if (adjacentFileId) showFileWorkspace(adjacentFileId);
+        else showConversationWorkspace();
+      }
+
+      function resetWorkspaceTabs() {
+        openWorkspaceFileIds = [];
+        activeFileViewMode = &#x27;preview&#x27;;
+        htmlPreviewFrame.srcdoc = &#x27;&#x27;;
+        showConversationWorkspace();
+      }
+
+      function visibleSearchItems() {
+        return searchItems.filter(function (row) { return !row.hidden; });
+      }
+
+      function selectSearchResult(row) {
+        if (!row) return;
+        searchItems.forEach(function (item) {
+          var selected = item === row;
+          item.classList.toggle(&#x27;is-selected&#x27;, selected);
+          item.setAttribute(&#x27;aria-selected&#x27;, selected ? &#x27;true&#x27; : &#x27;false&#x27;);
+        });
+        searchDetail.textContent = row.dataset.detail;
+        row.scrollIntoView({ block: &#x27;nearest&#x27; });
+      }
+
+      function applySearchFilters() {
+        var query = searchInput.value.trim().toLocaleLowerCase(&#x27;zh-CN&#x27;);
+        var project = projectFilter.value;
+        var source = sourceFilter.value;
+        searchItems.forEach(function (row) {
+          var matchesText = !query || row.dataset.searchText.toLocaleLowerCase(&#x27;zh-CN&#x27;).includes(query);
+          var matchesProject = !project || row.dataset.project === project;
+          var matchesSource = !source || row.dataset.source === source;
+          row.hidden = !(matchesText &amp;&amp; matchesProject &amp;&amp; matchesSource);
+        });
+        root.querySelectorAll(&#x27;[data-search-group]&#x27;).forEach(function (group) {
+          group.hidden = !Array.from(group.querySelectorAll(&#x27;[data-search-item]&#x27;)).some(function (row) { return !row.hidden; });
+        });
+        var visible = visibleSearchItems();
+        root.querySelector(&#x27;#de-search-empty&#x27;).hidden = visible.length !== 0;
+        var selected = visible.find(function (row) { return row.getAttribute(&#x27;aria-selected&#x27;) === &#x27;true&#x27;; });
+        if (selected) {
+          searchDetail.textContent = selected.dataset.detail;
+        } else if (visible.length) {
+          selectSearchResult(visible[0]);
+        } else {
+          searchDetail.textContent = &#x27;调整关键词或筛选范围&#x27;;
+        }
+      }
+
+      function closeSearch(returnFocus) {
+        searchView.hidden = true;
+        searchButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+        if (returnFocus) searchButton.focus();
+      }
+
+      function openSearch() {
+        searchView.hidden = false;
+        searchButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;true&#x27;);
+        window.requestAnimationFrame(function () { searchInput.focus(); });
+      }
+
+      function openSearchResult(row) {
+        if (!row) return;
+        selectSearchResult(row);
+        root.querySelector(&#x27;#de-breadcrumb-title&#x27;).textContent = row.dataset.sessionTitle;
+        root.querySelector(&#x27;#de-session-title&#x27;).textContent = row.dataset.sessionTitle;
+        root.querySelector(&#x27;#de-session-context&#x27;).textContent = row.dataset.sessionContext;
+        root.querySelector(&#x27;#de-message-heading&#x27;).textContent = row.dataset.matchHeading;
+        root.querySelector(&#x27;#de-message-body&#x27;).textContent = row.dataset.matchBody;
+        root.querySelector(&#x27;#de-inspector-subtitle&#x27;).textContent = &#x27;当前会话 · &#x27; + row.dataset.sessionTitle;
+        root.querySelectorAll(&#x27;[data-sidebar-session-title]&#x27;).forEach(function (sessionRow) {
+          sessionRow.classList.toggle(&#x27;is-selected&#x27;, sessionRow.dataset.sidebarSessionTitle === row.dataset.sessionTitle);
+        });
+        switchSession(row.dataset.sessionId || defaultSessionId);
+        closeSearch(true);
+      }
+
+      function clearPathOrigin() {
+        [userMessage, assistantMessage].forEach(function (message) {
+          message.classList.remove(&#x27;is-path-origin&#x27;);
+          message.querySelector(&#x27;.de-path-origin-label&#x27;).hidden = true;
+        });
+      }
+
+      function setPathActionsDisabled(disabled) {
+        root.querySelectorAll(&#x27;[data-path-action]&#x27;).forEach(function (button) { button.disabled = disabled; });
+      }
+
+      function dismissClearNotice() {
+        clearNotice.hidden = true;
+        lastClearedDraft = null;
+      }
+
+      function syncClearDraftButton() {
+        clearDraftButton.hidden = !versions[currentVersion].paths || Boolean(activePathDraft) || composerInput.value === &#x27;&#x27;;
+      }
+
+      function clearCurrentDraft() {
+        if (activePathDraft || composerInput.value === &#x27;&#x27;) return;
+        lastClearedDraft = {
+          sessionId: currentSessionId,
+          pathId: currentPathId,
+          pathLabel: currentPathLabel,
+          draft: composerInput.value
+        };
+        setPathDraft(currentSessionId, currentPathId, currentPathLabel, &#x27;&#x27;);
+        composerInput.value = &#x27;&#x27;;
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        composerMeta.textContent = &#x27;当前路径 · &#x27; + currentPathLabel + &#x27; · 草稿已明确清空&#x27;;
+        clearNotice.hidden = false;
+        syncClearDraftButton();
+        composerInput.focus();
+      }
+
+      function undoClearDraft() {
+        if (!lastClearedDraft || lastClearedDraft.sessionId !== currentSessionId || lastClearedDraft.pathId !== currentPathId) return;
+        var restored = lastClearedDraft;
+        setPathDraft(restored.sessionId, restored.pathId, restored.pathLabel, restored.draft);
+        composerInput.value = restored.draft;
+        composerMeta.textContent = &#x27;当前路径 · &#x27; + restored.pathLabel + &#x27; · 已撤销清空，本机草稿仍保留&#x27;;
+        dismissClearNotice();
+        syncClearDraftButton();
+        composerInput.focus();
+      }
+
+      function resetPathDraft() {
+        activePathDraft = null;
+        lastOriginPath = null;
+        dismissClearNotice();
+        pathDraft.hidden = true;
+        pathCreated.hidden = true;
+        clearPathOrigin();
+        setPathActionsDisabled(false);
+        var restoredDraft = getPathDraft(currentSessionId, currentPathId);
+        composerInput.value = restoredDraft;
+        composerInput.placeholder = &#x27;继续当前会话……&#x27;;
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        composerMeta.textContent = &#x27;当前路径 · &#x27; + currentPathLabel + (restoredDraft ? &#x27; · 已恢复本机草稿，重启后仍保留&#x27; : &#x27;&#x27;);
+        sendLabel.textContent = &#x27;发送&#x27;;
+        root.dataset.currentSessionId = currentSessionId;
+        syncClearDraftButton();
+      }
+
+      function startPathDraft(kind, shouldFocus) {
+        if (!versions[currentVersion].paths || activePathDraft) return;
+        dismissClearNotice();
+        setPathDraft(currentSessionId, currentPathId, currentPathLabel, composerInput.value);
+        var preservedDraft = getPathDraft(currentSessionId, currentPathId);
+        var pendingId = pendingDraftId(kind);
+        var savedPendingDraft = getPendingDraft(currentSessionId, pendingId);
+        activePathDraft = {
+          kind: kind,
+          sessionId: currentSessionId,
+          pendingId: pendingId,
+          originPathId: currentPathId,
+          originPathLabel: currentPathLabel
+        };
+        pathCreated.hidden = true;
+        clearPathOrigin();
+        setPathActionsDisabled(true);
+        var originMessage = kind === &#x27;edit&#x27; ? userMessage : assistantMessage;
+        originMessage.classList.add(&#x27;is-path-origin&#x27;);
+        originMessage.querySelector(&#x27;.de-path-origin-label&#x27;).hidden = false;
+        pathDraft.hidden = false;
+        var originCopy = kind === &#x27;edit&#x27; ? &#x27;编辑 10:58 的用户消息&#x27; : &#x27;从 11:21 的回复继续&#x27;;
+        var newPathDraft = savedPendingDraft ? savedPendingDraft.draft : (kind === &#x27;edit&#x27; ? originalUserMessage : &#x27;&#x27;);
+        if (!savedPendingDraft) setPendingDraft(activePathDraft, newPathDraft);
+        pathDraftOrigin.textContent = originCopy + &#x27; · 尚未创建 · &#x27; + (savedPendingDraft ? &#x27;已恢复本机新路径草稿&#x27; : (preservedDraft ? &#x27;原路径草稿已保存到本机&#x27; : &#x27;原路径保留&#x27;));
+        composerInput.value = newPathDraft;
+        composerInput.placeholder = kind === &#x27;edit&#x27; ? &#x27;修改这条消息后发送……&#x27; : &#x27;输入下一条消息……&#x27;;
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        composerMeta.textContent = (preservedDraft ? &#x27;原路径草稿已保存到本机 · &#x27; : &#x27;&#x27;) + (savedPendingDraft ? &#x27;新路径草稿已恢复 · &#x27; : &#x27;&#x27;) + &#x27;发送成功后才创建会话路径&#x27;;
+        sendLabel.textContent = &#x27;发送并创建新路径&#x27;;
+        syncClearDraftButton();
+        if (shouldFocus !== false) window.requestAnimationFrame(function () { composerInput.focus(); });
+      }
+
+      function restorePath(sessionId, pathId, pathLabel) {
+        dismissClearNotice();
+        currentSessionId = sessionId;
+        currentPathId = pathId;
+        currentPathLabel = pathLabel;
+        var restoredDraft = getPathDraft(sessionId, pathId);
+        composerInput.value = restoredDraft;
+        composerInput.placeholder = &#x27;继续当前会话……&#x27;;
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        composerMeta.textContent = &#x27;当前路径 · &#x27; + pathLabel + (restoredDraft ? &#x27; · 已恢复本机草稿，重启后仍保留&#x27; : &#x27;&#x27;);
+        root.querySelector(&#x27;#de-session-context&#x27;).textContent = &#x27;当前会话 · 当前路径：&#x27; + pathLabel;
+        sendLabel.textContent = &#x27;发送&#x27;;
+        root.dataset.currentSessionId = currentSessionId;
+        syncClearDraftButton();
+      }
+
+      function cancelPathDraft() {
+        if (!activePathDraft) return;
+        var cancelledDraft = activePathDraft;
+        deletePendingDraft(cancelledDraft);
+        activePathDraft = null;
+        pathDraft.hidden = true;
+        pathCreated.hidden = true;
+        clearPathOrigin();
+        setPathActionsDisabled(false);
+        restorePath(cancelledDraft.sessionId, cancelledDraft.originPathId, cancelledDraft.originPathLabel);
+        composerInput.focus();
+      }
+
+      function returnToOriginPath() {
+        if (!lastOriginPath) return;
+        setPathDraft(currentSessionId, currentPathId, currentPathLabel, composerInput.value);
+        var origin = lastOriginPath;
+        lastOriginPath = null;
+        pathCreated.hidden = true;
+        restorePath(origin.sessionId, origin.pathId, origin.pathLabel);
+        composerInput.focus();
+      }
+
+      function switchSession(sessionId) {
+        if (activePathDraft) {
+          setPendingDraft(activePathDraft, composerInput.value);
+          activePathDraft = null;
+        } else {
+          setPathDraft(currentSessionId, currentPathId, currentPathLabel, composerInput.value);
+        }
+        lastOriginPath = null;
+        pathDraft.hidden = true;
+        pathCreated.hidden = true;
+        clearPathOrigin();
+        setPathActionsDisabled(false);
+        resetWorkspaceTabs();
+        restorePath(sessionId, &#x27;path-main&#x27;, &#x27;智能体团队方案&#x27;);
+      }
+
+      function sendComposer() {
+        var message = composerInput.value.trim();
+        if (!message) {
+          composerInput.setAttribute(&#x27;aria-invalid&#x27;, &#x27;true&#x27;);
+          composerMeta.textContent = activePathDraft ? &#x27;请输入内容；尚未创建新路径&#x27; : &#x27;请输入内容后发送&#x27;;
+          composerInput.focus();
+          return;
+        }
+        if (activePathDraft) {
+          const pathLabel = activePathDraft.kind === &#x27;edit&#x27; ? &#x27;10:58 编辑路径&#x27; : &#x27;11:21 继续路径&#x27;;
+          const pathId = activePathDraft.kind === &#x27;edit&#x27; ? &#x27;path-entry-user-1058-edit&#x27; : &#x27;path-entry-assistant-1121-continue&#x27;;
+          const origin = {
+            sessionId: activePathDraft.sessionId,
+            pathId: activePathDraft.originPathId,
+            pathLabel: activePathDraft.originPathLabel
+          };
+          const hasPreservedDraft = Boolean(getPathDraft(origin.sessionId, origin.pathId));
+          deletePendingDraft(activePathDraft);
+          activePathDraft = null;
+          lastOriginPath = origin;
+          currentPathId = pathId;
+          currentPathLabel = pathLabel;
+          setPathDraft(currentSessionId, currentPathId, currentPathLabel, &#x27;&#x27;);
+          pathDraft.hidden = true;
+          clearPathOrigin();
+          setPathActionsDisabled(false);
+          pathCreated.hidden = false;
+          pathCreatedDetail.textContent = hasPreservedDraft
+            ? &#x27;原路径及其未发送草稿仍然保留；项目文件与 Git 状态没有改变。&#x27;
+            : &#x27;原路径仍然保留；项目文件与 Git 状态没有改变。&#x27;;
+          composerInput.value = &#x27;&#x27;;
+          composerInput.placeholder = &#x27;继续当前会话……&#x27;;
+          composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+          composerMeta.textContent = &#x27;当前路径 · &#x27; + pathLabel;
+          root.querySelector(&#x27;#de-session-context&#x27;).textContent = &#x27;当前会话 · 当前路径：&#x27; + pathLabel;
+          sendLabel.textContent = &#x27;发送&#x27;;
+          dismissClearNotice();
+          syncClearDraftButton();
+          return;
+        }
+        setPathDraft(currentSessionId, currentPathId, currentPathLabel, &#x27;&#x27;);
+        composerInput.value = &#x27;&#x27;;
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        dismissClearNotice();
+        syncClearDraftButton();
+      }
+
+      function render(version) {
+        var state = versions[version];
+        if (!state) return;
+        currentVersion = version;
+        resetPathDraft();
+        resetWorkspaceTabs();
+        var isSearch = state.mode === &#x27;search-popover&#x27;;
+
+        root.querySelectorAll(&#x27;[data-version]&#x27;).forEach(function (button) {
+          button.setAttribute(&#x27;aria-pressed&#x27;, button.dataset.version === version ? &#x27;true&#x27; : &#x27;false&#x27;);
+        });
+
+        root.querySelector(&#x27;#de-version-title&#x27;).textContent = version + &#x27; · &#x27; + state.title;
+        root.querySelector(&#x27;#de-version-summary&#x27;).textContent = state.summary;
+        root.querySelector(&#x27;#de-build-label&#x27;).textContent = version;
+        root.querySelector(&#x27;#de-breadcrumb-title&#x27;).textContent = isSearch ? &#x27;定义 D Code 完整形态&#x27; : state.title;
+        root.querySelector(&#x27;#de-session-title&#x27;).textContent = isSearch ? &#x27;定义 D Code 完整形态&#x27; : state.title;
+
+        workspaceTabs.hidden = !state.projectInspector;
+        root.querySelector(&#x27;#de-conversation&#x27;).hidden = false;
+        searchButton.hidden = version === &#x27;0.0.1&#x27;;
+        root.querySelector(&#x27;#de-user-message-actions&#x27;).hidden = !state.paths;
+        root.querySelector(&#x27;#de-message-actions&#x27;).hidden = !state.paths;
+        root.querySelector(&#x27;#de-lineage-button&#x27;).hidden = !state.paths;
+        root.querySelector(&#x27;#de-plan-strip&#x27;).hidden = false;
+        root.querySelector(&#x27;#de-communication&#x27;).hidden = !state.communication;
+        root.querySelector(&#x27;#de-runtime-strip&#x27;).hidden = !state.runtime;
+        root.querySelector(&#x27;#de-inspector-button&#x27;).hidden = !state.right;
+
+        if (state.messageHeading) {
+          root.querySelector(&#x27;#de-message-heading&#x27;).textContent = state.messageHeading;
+          root.querySelector(&#x27;#de-message-body&#x27;).textContent = state.messageBody;
+        }
+
+        inspector.hidden = !state.right;
+        layout.classList.toggle(&#x27;has-inspector&#x27;, Boolean(state.right));
+        if (state.right) {
+          showInspector(state.right, state);
+        }
+
+        root.querySelector(&#x27;#de-session-context&#x27;).textContent = state.complete ? &#x27;完整版本 · 原生能力边界已通过验收&#x27; : &#x27;当前会话 · 当前路径：智能体团队方案&#x27;;
+        composerMeta.textContent = state.complete ? &#x27;中文界面 · 原生能力收口&#x27; : &#x27;当前路径 · 智能体团队方案&#x27;;
+
+        if (window.lucide) window.lucide.createIcons({ attrs: { width: 16, height: 16 } });
+        if (isSearch) {
+          searchInput.value = &#x27;&#x27;;
+          projectFilter.value = &#x27;&#x27;;
+          sourceFilter.value = &#x27;&#x27;;
+          applySearchFilters();
+          openSearch();
+        } else {
+          closeSearch(false);
+        }
+        if (state.preservedDraft &amp;&amp; currentSessionId === defaultSessionId &amp;&amp; !hasPathDraft(currentSessionId, currentPathId)) {
+          setPathDraft(currentSessionId, currentPathId, currentPathLabel, state.preservedDraft);
+          restorePath(currentSessionId, currentPathId, currentPathLabel);
+        }
+        if (state.pathDraft) startPathDraft(state.pathDraft, false);
+        window.requestAnimationFrame(syncPanelControls);
+      }
+
+      root.querySelectorAll(&#x27;[data-version]&#x27;).forEach(function (button) {
+        button.addEventListener(&#x27;click&#x27;, function () { render(button.dataset.version); });
+      });
+
+      root.addEventListener(&#x27;click&#x27;, function (event) {
+        var projectToggle = event.target.closest(&#x27;[data-project-toggle]&#x27;);
+        if (projectToggle) {
+          toggleProjectSessions();
+          return;
+        }
+        var projectSelect = event.target.closest(&#x27;[data-project-select]&#x27;);
+        if (projectSelect) {
+          selectProjectScope();
+          return;
+        }
+        var sidebarSession = event.target.closest(&#x27;[data-sidebar-session]&#x27;);
+        if (sidebarSession) {
+          selectSidebarSession(sidebarSession);
+          return;
+        }
+        var closeFileTab = event.target.closest(&#x27;[data-close-workspace-file]&#x27;);
+        if (closeFileTab) {
+          closeWorkspaceFile(closeFileTab.dataset.closeWorkspaceFile);
+          return;
+        }
+        var workspaceFileTab = event.target.closest(&#x27;[data-workspace-file-tab]&#x27;);
+        if (workspaceFileTab) {
+          showFileWorkspace(workspaceFileTab.dataset.workspaceFileTab);
+          return;
+        }
+        var conversationTab = event.target.closest(&#x27;[data-workspace-tab=&quot;conversation&quot;]&#x27;);
+        if (conversationTab) {
+          showConversationWorkspace();
+          return;
+        }
+        var fileViewMode = event.target.closest(&#x27;[data-file-view-mode]&#x27;);
+        if (fileViewMode) {
+          setMarkdownViewMode(fileViewMode.dataset.fileViewMode);
+          return;
+        }
+        var fileButton = event.target.closest(&#x27;[data-file-preview]&#x27;);
+        if (fileButton) {
+          openWorkspaceFile(fileButton.dataset.filePreview);
+          if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+          window.requestAnimationFrame(syncPanelControls);
+          return;
+        }
+        var pathAction = event.target.closest(&#x27;[data-path-action]&#x27;);
+        if (pathAction) {
+          startPathDraft(pathAction.dataset.pathAction);
+          return;
+        }
+        var switchButton = event.target.closest(&#x27;[data-inspector-kind]&#x27;);
+        if (switchButton) {
+          showInspector(switchButton.dataset.inspectorKind, versions[currentVersion]);
+          return;
+        }
+        var resultRow = event.target.closest(&#x27;[data-search-item]&#x27;);
+        if (!resultRow) return;
+        openSearchResult(resultRow);
+      });
+
+      contextButton.addEventListener(&#x27;click&#x27;, function () {
+        var shouldOpen = contextPopover.hidden;
+        contextPopover.hidden = !shouldOpen;
+        contextButton.setAttribute(&#x27;aria-expanded&#x27;, shouldOpen ? &#x27;true&#x27; : &#x27;false&#x27;);
+        modelMenu.hidden = true;
+        modelButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+      });
+
+      fastButton.addEventListener(&#x27;click&#x27;, function () {
+        var isFast = fastButton.getAttribute(&#x27;aria-pressed&#x27;) !== &#x27;true&#x27;;
+        fastButton.setAttribute(&#x27;aria-pressed&#x27;, isFast ? &#x27;true&#x27; : &#x27;false&#x27;);
+        fastButton.setAttribute(&#x27;aria-label&#x27;, &#x27;极速：&#x27; + (isFast ? &#x27;开&#x27; : &#x27;关&#x27;));
+        fastState.textContent = isFast ? &#x27;开&#x27; : &#x27;关&#x27;;
+      });
+
+      modelButton.addEventListener(&#x27;click&#x27;, function () {
+        var shouldOpen = modelMenu.hidden;
+        modelMenu.hidden = !shouldOpen;
+        modelButton.setAttribute(&#x27;aria-expanded&#x27;, shouldOpen ? &#x27;true&#x27; : &#x27;false&#x27;);
+        contextPopover.hidden = true;
+        contextButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+      });
+
+      root.querySelectorAll(&#x27;[data-model-option]&#x27;).forEach(function (option) {
+        option.addEventListener(&#x27;click&#x27;, function () {
+          modelName.textContent = option.dataset.model;
+          thinkingLevel.textContent = option.dataset.thinking;
+          modelMenu.hidden = true;
+          modelButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+          modelButton.focus();
+        });
+      });
+
+      root.addEventListener(&#x27;click&#x27;, function (event) {
+        if (!event.target.closest(&#x27;.de-model-control&#x27;)) {
+          modelMenu.hidden = true;
+          modelButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+        }
+        if (!event.target.closest(&#x27;.de-context-control&#x27;)) {
+          contextPopover.hidden = true;
+          contextButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+        }
+      });
+
+      searchInput.addEventListener(&#x27;input&#x27;, applySearchFilters);
+      markdownSourceInput.addEventListener(&#x27;input&#x27;, function () {
+        if (!workspaceFiles[activeWorkspaceTab] || workspaceFiles[activeWorkspaceTab].kind !== &#x27;markdown&#x27;) return;
+        workspaceFileBuffers[activeWorkspaceTab] = markdownSourceInput.value;
+        scheduleMarkdownPreview(activeWorkspaceTab);
+      });
+      htmlSourceInput.addEventListener(&#x27;input&#x27;, function () {
+        if (!workspaceFiles[activeWorkspaceTab] || workspaceFiles[activeWorkspaceTab].kind !== &#x27;html&#x27;) return;
+        workspaceFileBuffers[activeWorkspaceTab] = htmlSourceInput.value;
+        syncWorkspaceEditState(activeWorkspaceTab);
+        scheduleHtmlPreview(activeWorkspaceTab);
+      });
+      projectFilter.addEventListener(&#x27;change&#x27;, applySearchFilters);
+      sourceFilter.addEventListener(&#x27;change&#x27;, applySearchFilters);
+      root.querySelector(&#x27;#de-draft-cancel&#x27;).addEventListener(&#x27;click&#x27;, cancelPathDraft);
+      root.querySelector(&#x27;#de-return-origin-path&#x27;).addEventListener(&#x27;click&#x27;, returnToOriginPath);
+      clearDraftButton.addEventListener(&#x27;click&#x27;, clearCurrentDraft);
+      root.querySelector(&#x27;#de-undo-clear-draft&#x27;).addEventListener(&#x27;click&#x27;, undoClearDraft);
+      root.querySelector(&#x27;#de-send-button&#x27;).addEventListener(&#x27;click&#x27;, sendComposer);
+      root.addEventListener(&#x27;dcode-prototype-association-removed&#x27;, function (event) {
+        if (!event.detail || event.detail.sessionId !== currentSessionId) return;
+        var associationLabel = event.detail.kind === &#x27;source-folder&#x27; ? &#x27;源文件夹关联&#x27; : &#x27;项目关联&#x27;;
+        composerMeta.textContent = associationLabel + &#x27;已移除 · 当前会话及本机草稿仍保留&#x27;;
+        syncClearDraftButton();
+      });
+      root.addEventListener(&#x27;dcode-prototype-session-deleted&#x27;, function (event) {
+        if (!event.detail || typeof event.detail.sessionId !== &#x27;string&#x27;) return;
+        deleteSessionDrafts(event.detail.sessionId);
+      });
+      composerInput.addEventListener(&#x27;input&#x27;, function () {
+        composerInput.removeAttribute(&#x27;aria-invalid&#x27;);
+        dismissClearNotice();
+        if (activePathDraft) {
+          setPendingDraft(activePathDraft, composerInput.value);
+          const hasPreservedDraft = Boolean(getPathDraft(activePathDraft.sessionId, activePathDraft.originPathId));
+          composerMeta.textContent = (hasPreservedDraft ? &#x27;原路径草稿已保存到本机 · &#x27; : &#x27;&#x27;) + &#x27;新路径草稿单独保存 · 发送成功后才创建路径&#x27;;
+          syncClearDraftButton();
+          return;
+        }
+        setPathDraft(currentSessionId, currentPathId, currentPathLabel, composerInput.value);
+        composerMeta.textContent = &#x27;当前路径 · &#x27; + currentPathLabel + (composerInput.value ? &#x27; · 已保存到本机，重启后恢复&#x27; : &#x27;&#x27;);
+        syncClearDraftButton();
+      });
+      composerInput.addEventListener(&#x27;keydown&#x27;, function (event) {
+        if (event.key !== &#x27;Enter&#x27; || (!event.metaKey &amp;&amp; !event.ctrlKey)) return;
+        event.preventDefault();
+        sendComposer();
+      });
+
+      searchInput.addEventListener(&#x27;keydown&#x27;, function (event) {
+        if (![&#x27;ArrowDown&#x27;, &#x27;ArrowUp&#x27;, &#x27;Enter&#x27;].includes(event.key)) return;
+        var visible = visibleSearchItems();
+        if (!visible.length) return;
+        var selectedIndex = visible.findIndex(function (row) { return row.getAttribute(&#x27;aria-selected&#x27;) === &#x27;true&#x27;; });
+        if (event.key === &#x27;Enter&#x27;) {
+          event.preventDefault();
+          openSearchResult(visible[Math.max(0, selectedIndex)]);
+          return;
+        }
+        event.preventDefault();
+        var offset = event.key === &#x27;ArrowDown&#x27; ? 1 : -1;
+        var nextIndex = selectedIndex &lt; 0 ? 0 : (selectedIndex + offset + visible.length) % visible.length;
+        selectSearchResult(visible[nextIndex]);
+      });
+
+      searchButton.addEventListener(&#x27;click&#x27;, function () {
+        if (currentVersion === &#x27;0.0.1&#x27;) return;
+        if (searchView.hidden) openSearch();
+        else closeSearch(true);
+      });
+
+      searchView.addEventListener(&#x27;click&#x27;, function (event) {
+        if (event.target !== this) return;
+        closeSearch(true);
+      });
+
+      window.addEventListener(&#x27;keydown&#x27;, function (event) {
+        if ((event.metaKey || event.ctrlKey) &amp;&amp; event.key.toLocaleLowerCase() === &#x27;k&#x27; &amp;&amp; currentVersion !== &#x27;0.0.1&#x27;) {
+          event.preventDefault();
+          openSearch();
+          return;
+        }
+        if (searchView.hidden) {
+          if (event.key === &#x27;Escape&#x27; &amp;&amp; (!modelMenu.hidden || !contextPopover.hidden)) {
+            modelMenu.hidden = true;
+            contextPopover.hidden = true;
+            modelButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+            contextButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+            return;
+          }
+          if (event.key === &#x27;Escape&#x27; &amp;&amp; activePathDraft) {
+            event.preventDefault();
+            cancelPathDraft();
+          }
+          return;
+        }
+        if (event.key === &#x27;Escape&#x27;) {
+          event.preventDefault();
+          closeSearch(true);
+          return;
+        }
+        if (event.metaKey &amp;&amp; /^[1-9]$/.test(event.key)) {
+          const item = searchItems.find(function (row) { return !row.hidden &amp;&amp; row.dataset.shortcut === event.key; });
+          if (item) {
+            event.preventDefault();
+            openSearchResult(item);
+          }
+        }
+      });
+
+      sidebarButton.addEventListener(&#x27;click&#x27;, function () {
+        if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) {
+          layout.classList.toggle(&#x27;is-sidebar-open&#x27;);
+          if (layout.classList.contains(&#x27;is-sidebar-open&#x27;)) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+        } else {
+          layout.classList.toggle(&#x27;is-sidebar-closed&#x27;);
+        }
+        window.requestAnimationFrame(syncPanelControls);
+      });
+
+      inspectorButton.addEventListener(&#x27;click&#x27;, function () {
+        if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) {
+          layout.classList.remove(&#x27;is-inspector-closed&#x27;);
+          layout.classList.toggle(&#x27;is-inspector-open&#x27;);
+          if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches &amp;&amp; layout.classList.contains(&#x27;is-inspector-open&#x27;)) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+        } else {
+          layout.classList.remove(&#x27;is-inspector-open&#x27;);
+          layout.classList.toggle(&#x27;is-inspector-closed&#x27;);
+        }
+        window.requestAnimationFrame(syncPanelControls);
+      });
+
+      window.addEventListener(&#x27;resize&#x27;, function () {
+        if (!window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+        if (!window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+        window.requestAnimationFrame(syncPanelControls);
+      });
+
+      initializeDraftStorage();
+      render(&#x27;0.0.1&#x27;);
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
