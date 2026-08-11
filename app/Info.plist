@@ -10,6 +10,8 @@
     <string>D Code</string>
     <key>CFBundleDisplayName</key>
     <string>D Code</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_CN</string>
     <key>CFBundlePackageType</key>

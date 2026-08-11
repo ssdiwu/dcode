@@ -9,6 +9,7 @@
 - `Sources/PiDCode/State/`：主线程应用状态和会话生命周期。
 - `Sources/PiDCode/Views/`：SwiftUI 原生界面。
 - `Tests/PiDCodeTests/`：协议解码、历史映射、Bundle 定位和状态边界测试。
+- `Resources/`：App 图标的 `1024 × 1024` PNG 母版与构建使用的 `.icns` 资源。
 - `Info.plist`：本机 App bundle metadata。
 - `build.sh`：release 构建、生产 Node 依赖装配与本地签名。
 
@@ -38,6 +39,6 @@ cd host && npm ci && cd ..
 open "dist/D Code.app"
 ```
 
-脚本默认内嵌 `~/.hermes/node/bin/node`；可用 `PI_DCODE_NODE_BIN=/absolute/path/to/node` 覆盖。当前本机构建只接受 arm64 Node `>=22.19.0`，输出 `dist/D Code.app`，资源布局为 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/`。App 优先使用包内资源，保留 `--node-bin`、`--host-entry` 和环境变量供开发诊断。`PiDCode` 继续作为内部 Swift 构建目标名，应用包内的可执行文件使用用户可见名称 `D Code`。
+脚本默认内嵌 `~/.hermes/node/bin/node`；可用 `PI_DCODE_NODE_BIN=/absolute/path/to/node` 覆盖。当前本机构建只接受 arm64 Node `>=22.19.0`，输出 `dist/D Code.app`，资源布局包含 `Contents/Resources/AppIcon.icns`、`Contents/Resources/runtime/node` 与 `Contents/Resources/host/`。App 优先使用包内资源，保留 `--node-bin`、`--host-entry` 和环境变量供开发诊断。`PiDCode` 继续作为内部 Swift 构建目标名，应用包内的可执行文件使用用户可见名称 `D Code`。
 
 该产物使用 ad-hoc signature，仅用于本机运行；未启用 App Sandbox、Hardened Runtime、Developer ID 或 notarization，也不代表已获得对外分发授权。App 仍只通过 Host 访问 `~/.pi/agent`，关闭窗口或终止应用时会停止内嵌 Host。

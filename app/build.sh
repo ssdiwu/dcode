@@ -9,6 +9,7 @@ CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 HOST_RESOURCES_DIR="${RESOURCES_DIR}/host"
+APP_ICON_FILE="${ROOT_DIR}/app/Resources/AppIcon.icns"
 NODE_BIN="${PI_DCODE_NODE_BIN:-${HOME}/.hermes/node/bin/node}"
 MODULE_LIST="$(mktemp)"
 trap 'rm -f "${MODULE_LIST}"' EXIT
@@ -21,6 +22,7 @@ require_file() {
 }
 
 require_file "${ROOT_DIR}/app/Info.plist"
+require_file "${APP_ICON_FILE}"
 require_file "${HOST_DIR}/package.json"
 if [[ ! -d "${HOST_DIR}/node_modules" ]]; then
     echo "error: Host dependencies are not installed. Run: cd host && npm ci" >&2
@@ -69,6 +71,7 @@ ditto "${NODE_BIN}" "${RESOURCES_DIR}/runtime/node"
 chmod 755 "${MACOS_DIR}/D Code" "${RESOURCES_DIR}/runtime/node"
 ditto "${HOST_DIR}/dist/src" "${HOST_RESOURCES_DIR}/dist/src"
 ditto "${HOST_DIR}/package.json" "${HOST_RESOURCES_DIR}/package.json"
+ditto "${APP_ICON_FILE}" "${RESOURCES_DIR}/AppIcon.icns"
 ditto "${ROOT_DIR}/app/Info.plist" "${CONTENTS_DIR}/Info.plist"
 printf 'APPL????' > "${CONTENTS_DIR}/PkgInfo"
 

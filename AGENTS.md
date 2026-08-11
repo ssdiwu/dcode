@@ -2,7 +2,7 @@
 
 ## 项目定位与权威
 
-`D Code` 是面向 macOS 的 Pi 原生桌面客户端：复用既有 Pi 会话、配置与 Pi SDK 运行能力，以自有原生界面呈现聊天、活动 Plan 和结构化产物。用户可见名称固定写作 `D Code`，其中 `D` 取自创作者长期使用的网名 `diwu`；项目目录使用 `dcode`，既有 `PiDCode` / `pi-dcode` 只保留为内部兼容标识。
+`D Code` 不是 Pi 客户端，而是以 Pi 为底层运行基座、围绕其会话、配置与 SDK 运行能力构建自有 `Harness（能力承载与编排层）` 的 macOS 原生工作台。产品核心是 D Code 自有的项目与工作上下文、能力编排、原生交互和结构化产物；Pi 不定义 D Code 的产品边界、界面或品牌。用户可见名称固定写作 `D Code`，其中 `D` 取自创作者长期使用的网名 `diwu`；项目目录使用 `dcode`，既有 `PiDCode` / `pi-dcode` 只保留为内部兼容标识。
 
 - 先读根 `README.md` 与 `doc/README.md`；当前产品范围和验收由 `doc/40-版本实施方案/README.md` 路由，难逆转决定由 `doc/决策档案/README.md` 路由。
 - Pi Host 的当前实现、协议和验证入口看 `host/README.md`、`doc/10-架构与运行/0001-Node-Pi-宿主与-IPC.md`、`host/package.json` 与相应源码；不要从产品规划推断已经交付的客户端能力。

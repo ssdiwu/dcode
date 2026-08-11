@@ -10,6 +10,7 @@
 - macOS 14+ SwiftUI/AppKit 原生工作区侧栏、按 `cwd` 分组的会话历史、显式“新会话/重新载入”动作、历史/工具/Thinking 展示、会话创建与接管入口、流式 composer、活动 Plan 浮层、代码/Mermaid 内容块和原生扩展对话框。
 - Swift Host 子进程桥、连续 JSONL 请求关联、streaming/persisted 回复去重、Finder 环境补全、诊断脱敏、16 项 Swift 测试与真实只读会话冒烟；Mermaid 支持缩放、复制源码/图片、PNG 导出及不支持类型的显式源码回退。
 - 本机 arm64 `D Code.app` 装配脚本：内嵌 Node 22、Host 与生产依赖，使用本地 ad-hoc 签名，无需手动启动辅助服务。
+- `D Code.app` 增加首枚临时品牌图标：以层叠 `D` 形工作台为主体，使用石墨外层与琥珀色工作内层，并随本机 App 构建写入 `.icns` 资源。
 - 既有会话可在 App 内确认独占使用后直接继续；Host 强制确认参数、静默窗口、原子租约和外部写入检测，不要求 CLI 插件、Handoff ID 或 marker。
 
 ### Changed
