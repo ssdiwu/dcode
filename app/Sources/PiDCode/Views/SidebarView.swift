@@ -4,6 +4,7 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
     let selectProject: (UUID) -> Void
     let selectSession: (String) -> Void
+    let searchSessions: () -> Void
     let newGlobalSession: () -> Void
     let editProject: (DCodeProject?) -> Void
 
@@ -62,13 +63,20 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: newGlobalSession) {
-                    Label("新建会话", systemImage: "square.and.pencil")
-                        .labelStyle(.iconOnly)
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-                }
+                Button("搜索会话", systemImage: "magnifyingglass", action: searchSessions)
+                .labelStyle(.iconOnly)
+                .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                .buttonStyle(.plain)
+                .dCodeAccessibleButton("搜索会话")
+                .disabled(model.connectionState != .ready || model.isOpeningSession)
+                Button("新建会话", systemImage: "square.and.pencil", action: newGlobalSession)
+                .labelStyle(.iconOnly)
+                .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
                 .buttonStyle(.plain)
                 .dCodeAccessibleButton("新建会话")
+                .accessibilityRepresentation {
+                    Button("新建会话", action: newGlobalSession)
+                }
                 .disabled(model.connectionState != .ready || model.isOpeningSession || model.isStreaming)
             }
             Button {

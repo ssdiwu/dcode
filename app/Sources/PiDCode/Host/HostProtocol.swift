@@ -70,6 +70,8 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "Pi 会话仍在更新，本次刷新没有采用不稳定内容；D Code 会继续等待下一次完整更新。"
             case "SESSION_IDENTITY_CHANGED":
                 "Pi 会话文件已被替换为不同身份。D Code 已保留上一次完整历史；请重新打开 D Code 后再继续。"
+            case "SEARCH_TARGET_STALE":
+                "这条搜索结果已不在当前会话路径中。搜索窗口已保留，请刷新结果后重试。"
             case "INVALID_SESSION":
                 "Pi 会话包含未完成或损坏的记录。D Code 已保留上一次完整历史；请等待 Pi 完成写入，持续出现时再检查会话文件。"
             default:

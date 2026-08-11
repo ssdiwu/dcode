@@ -35,9 +35,11 @@ import {
   type SessionSummary,
 } from "./session-reader.js";
 import { DCodeResourceLoader } from "./resource-policy.js";
+import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
+import { SessionSearchIndex } from "./session-search-index.js";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.1";
+const HOST_VERSION = "0.0.2";
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -45,6 +47,7 @@ export interface PiHostOptions {
   leaseAgentDir?: string;
   leaseQuietWindowMs?: number;
   conflictPollMs?: number;
+  searchCacheDirectory?: string;
   emit: Emit;
 }
 
@@ -192,10 +195,12 @@ export class PiHost {
   readonly sessionsDirectory: string;
   readonly leaseAgentDir: string;
   readonly reader: SessionReader;
+  readonly searchIndex: SessionSearchIndex;
   private active?: ActiveSession;
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
   private writePoison?: { sessionId: string; reason: string };
+  private searchShutdown?: Promise<void>;
   private readonly leaseQuietWindowMs: number;
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
@@ -207,6 +212,11 @@ export class PiHost {
     this.leaseQuietWindowMs = options.leaseQuietWindowMs ?? 500;
     this.conflictPollMs = options.conflictPollMs ?? 1_000;
     this.reader = new SessionReader(this.sessionsDirectory);
+    this.searchIndex = new SessionSearchIndex({
+      sessionsDirectory: this.sessionsDirectory,
+      ...(options.searchCacheDirectory ? { cacheDirectory: options.searchCacheDirectory } : {}),
+      emit: options.emit,
+    });
   }
 
   get wantsShutdown(): boolean { return this.shutdownRequested; }
@@ -215,14 +225,33 @@ export class PiHost {
     if (method === "extension.respond") {
       return await this.handleExtensionResponse(params);
     }
+    if (method === "session.search") {
+      return await this.searchIndex.search({
+        query: params.query as string,
+        requestToken: params.requestToken as string,
+        limit: typeof params.limit === "number" ? params.limit : 50,
+        projectSourceFolders: params.projectSourceFolders as string[],
+        ...(Array.isArray(params.filterSourceFolders)
+          ? { filterSourceFolders: params.filterSourceFolders as string[] }
+          : {}),
+        refresh: params.refresh === true,
+        ...(params.probe === true ? { probe: true } : {}),
+      });
+    }
     const operation = this.operationQueue.then(() => this.handleSerial(method, params));
     this.operationQueue = operation.then(() => undefined, () => undefined);
     return await operation;
   }
 
   async close(): Promise<void> {
-    await this.operationQueue;
-    await this.closeActive();
+    const searchClose = this.searchShutdown ?? this.searchIndex.close();
+    this.searchShutdown = searchClose;
+    try {
+      await this.operationQueue;
+      await this.closeActive();
+    } finally {
+      await searchClose;
+    }
   }
 
   private async handleSerial(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
@@ -246,6 +275,7 @@ export class PiHost {
             fastMode: true,
             sessionExternalSync: true,
             dcodeSessionOrigin: true,
+            sessionSearch: true,
           },
         };
       case "session.list":
@@ -272,6 +302,9 @@ export class PiHost {
           params.sessionId as string,
           params.mode === "writable" ? "writable" : "readOnly",
           params.writeIntent === true,
+          typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
+          typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
+          params.preserveActive === true,
         );
       case "session.close":
         await this.closeActive();
@@ -306,10 +339,13 @@ export class PiHost {
         return await this.setFastMode(params.enabled as boolean);
       case "host.shutdown":
         this.shutdownRequested = true;
-        await this.closeActive();
+        this.searchShutdown ??= this.searchIndex.close();
+        void this.searchShutdown.catch(() => undefined);
         return { shuttingDown: true };
       case "extension.respond":
         throw new PiHostError("INTERNAL_ERROR", "Extension method was not routed correctly");
+      case "session.search":
+        throw new PiHostError("INTERNAL_ERROR", "Search method was not routed correctly");
     }
   }
 
@@ -372,6 +408,7 @@ export class PiHost {
       .join("\n");
     this.assertWriteHealthy();
     await writeFile(sessionPath, `${initialDocument}\n`, { flag: "wx", mode: 0o600 });
+    this.searchIndex.invalidate();
     let summary: SessionSummary = {
       path: sessionPath,
       id: draft.getSessionId(),
@@ -418,32 +455,157 @@ export class PiHost {
     }
   }
 
+  private assertExpectedEntry(
+    inspection: SessionInspection,
+    expectedEntryId?: string,
+    expectedEntryDigest?: string,
+  ): void {
+    if (!expectedEntryId) return;
+    const entry = inspection.entries.find((candidate) => candidate.id === expectedEntryId);
+    if (entry && expectedEntryDigest === undefined) return;
+    if (entry?.type === "message" && expectedEntryDigest !== undefined) {
+      const searchable = extractSearchableMessage(entry.message);
+      if (searchable && searchEntryDigest(searchable.role, searchable.body) === expectedEntryDigest) return;
+    }
+    throw new PiHostError(
+      "SEARCH_TARGET_STALE",
+      "The search result is no longer unchanged on the current session path",
+      { sessionId: inspection.summary.id, expectedEntryId, expectedEntryDigest },
+    );
+  }
+
+  private installReadOnlyObservation(
+    inspection: SessionInspection,
+    version: SessionFileVersion,
+    modelRuntime: ModelRuntime,
+  ): Record<string, unknown> {
+    const active: ReadOnlySession = {
+      mode: "readOnly",
+      inspection,
+      modelRuntime,
+      observedVersion: version,
+      isChecking: false,
+    };
+    this.active = active;
+    active.refreshTimer = setInterval(() => { void this.checkReadOnlyChange(active); }, this.conflictPollMs);
+    active.refreshTimer.unref?.();
+    this.options.emit("session.opened", {
+      mode: active.mode,
+      sessionId: inspection.summary.id,
+      path: inspection.summary.path,
+    });
+    return { mode: active.mode, snapshot: inspection, state: this.getState() };
+  }
+
+  private async refreshCurrentForSearch(
+    active: ActiveSession,
+    expectedEntryId?: string,
+    expectedEntryDigest?: string,
+  ): Promise<Record<string, unknown>> {
+    if (active.mode === "writable") await this.assertLeaseStable(active);
+    const refreshed = await this.inspectStablePath(
+      active.inspection.summary.path,
+      active.inspection.summary.id,
+    );
+    this.assertSameSessionIdentity(active.inspection.header, refreshed.inspection.header);
+    this.assertExpectedEntry(refreshed.inspection, expectedEntryId, expectedEntryDigest);
+    if (active.mode === "writable") {
+      await this.assertLeaseStable(active);
+      active.inspection = refreshed.inspection;
+      active.activePlan = refreshed.inspection.activePlan;
+    } else {
+      active.inspection = refreshed.inspection;
+      active.observedVersion = refreshed.version;
+      active.notifiedVersion = undefined;
+      active.lastSyncError = undefined;
+    }
+    return { mode: active.mode, snapshot: refreshed.inspection, state: this.getState() };
+  }
+
+  private async openReadOnlySession(
+    sessionId: string,
+    expectedEntryId?: string,
+    expectedEntryDigest?: string,
+    preserveActive = false,
+  ): Promise<Record<string, unknown>> {
+    const current = this.active;
+    if (preserveActive && current?.inspection.summary.id === sessionId) {
+      return await this.refreshCurrentForSearch(current, expectedEntryId, expectedEntryDigest);
+    }
+
+    const preparedTarget = await this.inspectStableObservation(sessionId);
+    this.assertExpectedEntry(preparedTarget.inspection, expectedEntryId, expectedEntryDigest);
+    const targetRuntime = await ModelRuntime.create({
+      authPath: join(this.agentDir, "auth.json"),
+      modelsPath: join(this.agentDir, "models.json"),
+    });
+
+    let fallback: {
+      inspection: SessionInspection;
+      version: SessionFileVersion;
+      modelRuntime: ModelRuntime;
+    } | undefined;
+    if (current) {
+      const stableCurrent = await this.inspectStablePath(
+        current.inspection.summary.path,
+        current.inspection.summary.id,
+      );
+      this.assertSameSessionIdentity(current.inspection.header, stableCurrent.inspection.header);
+      fallback = {
+        inspection: stableCurrent.inspection,
+        version: stableCurrent.version,
+        modelRuntime: current.mode === "readOnly" ? current.modelRuntime : targetRuntime,
+      };
+    }
+
+    await this.closeActive();
+    try {
+      const finalTarget = await this.inspectStablePath(
+        preparedTarget.inspection.summary.path,
+        sessionId,
+      );
+      this.assertSameSessionIdentity(preparedTarget.inspection.header, finalTarget.inspection.header);
+      this.assertExpectedEntry(finalTarget.inspection, expectedEntryId, expectedEntryDigest);
+      return this.installReadOnlyObservation(finalTarget.inspection, finalTarget.version, targetRuntime);
+    } catch (error) {
+      if (fallback) {
+        let restored = fallback;
+        try {
+          const refreshedFallback = await this.inspectStablePath(
+            fallback.inspection.summary.path,
+            fallback.inspection.summary.id,
+          );
+          this.assertSameSessionIdentity(fallback.inspection.header, refreshedFallback.inspection.header);
+          restored = {
+            inspection: refreshedFallback.inspection,
+            version: refreshedFallback.version,
+            modelRuntime: fallback.modelRuntime,
+          };
+        } catch (restoreError) {
+          this.options.emit("session.syncError", {
+            sessionId: fallback.inspection.summary.id,
+            ...errorRecord(restoreError),
+          });
+        }
+        this.installReadOnlyObservation(restored.inspection, restored.version, restored.modelRuntime);
+      }
+      throw error;
+    }
+  }
+
   private async openSession(
     sessionId: string,
     mode: "readOnly" | "writable",
     writeIntent = false,
+    expectedEntryId?: string,
+    expectedEntryDigest?: string,
+    preserveActive = false,
   ): Promise<unknown> {
-    await this.closeActive();
-    if (mode === "writable") this.assertWriteHealthy();
     if (mode === "readOnly") {
-      const { inspection, version } = await this.inspectStableObservation(sessionId);
-      const modelRuntime = await ModelRuntime.create({
-        authPath: join(this.agentDir, "auth.json"),
-        modelsPath: join(this.agentDir, "models.json"),
-      });
-      const active: ReadOnlySession = {
-        mode,
-        inspection,
-        modelRuntime,
-        observedVersion: version,
-        isChecking: false,
-      };
-      this.active = active;
-      active.refreshTimer = setInterval(() => { void this.checkReadOnlyChange(active); }, this.conflictPollMs);
-      active.refreshTimer.unref?.();
-      this.options.emit("session.opened", { mode, sessionId, path: inspection.summary.path });
-      return { mode, snapshot: inspection, state: this.getState() };
+      return await this.openReadOnlySession(sessionId, expectedEntryId, expectedEntryDigest, preserveActive);
     }
+    await this.closeActive();
+    this.assertWriteHealthy();
     const inspection = await this.reader.inspect(sessionId);
     if ((inspection.header.version ?? 1) !== CURRENT_SESSION_VERSION) {
       throw new PiHostError(
@@ -842,6 +1004,7 @@ export class PiHost {
       || (event.type === "compaction_end" && !event.aborted && event.result !== undefined)
     );
     if (!shouldSynchronize) return;
+    this.searchIndex.invalidate();
     this.synchronizeOwnedSnapshot(active);
   }
 
@@ -1023,6 +1186,7 @@ export class PiHost {
       const observed = await readSessionFileVersion(active.inspection.summary.path);
       if (this.active !== active || !sameSessionFileVersion(active.observedVersion, baseline)) return;
       if (!sameSessionFileVersion(active.observedVersion, observed)) {
+        this.searchIndex.invalidate();
         active.lastSyncError = undefined;
         if (active.notifiedVersion && sameSessionFileVersion(active.notifiedVersion, observed)) return;
         active.notifiedVersion = observed;

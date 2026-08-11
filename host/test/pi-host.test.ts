@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiHost, PiHostError } from "../src/pi-host.js";
+import { searchEntryDigest } from "../src/search-entry-digest.js";
 
 interface Fixture {
   root: string;
@@ -58,6 +59,33 @@ async function fixture(): Promise<Fixture> {
   return { root, agentDir, sessionsDir: join(agentDir, "sessions"), sessionId };
 }
 
+async function writeTargetSession(f: Fixture, sessionId = "search-target"): Promise<string> {
+  const timestamp = new Date().toISOString();
+  const path = join(f.agentDir, "sessions", "project", `${sessionId}.jsonl`);
+  const entries = [
+    { type: "session", version: 3, id: sessionId, timestamp, cwd: f.root },
+    { type: "message", id: `${sessionId}-user`, parentId: null, timestamp, message: { role: "user", content: "target", timestamp: Date.now() } },
+    {
+      type: "message",
+      id: `${sessionId}-assistant`,
+      parentId: `${sessionId}-user`,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "target answer" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: {} },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    },
+  ];
+  await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  return path;
+}
+
 test("host lists, inspects, and opens a read-only session", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
@@ -79,7 +107,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.1");
+    assert.equal(hello.hostVersion, "0.0.2");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -89,6 +117,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal(hello.capabilities.fastMode, true);
     assert.equal(hello.capabilities.sessionExternalSync, true);
     assert.equal(hello.capabilities.dcodeSessionOrigin, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionSearch, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
@@ -148,6 +177,213 @@ test("read-only open retries when Pi appends between inspection and version capt
       mode: "readOnly",
     }) as { snapshot: { entries: Array<{ id?: string }> } };
     assert.ok(opened.snapshot.entries.some((entry) => entry.id === "open-race"));
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a stale search target does not close the current session", async () => {
+  const f = await fixture();
+  const host = new PiHost({ agentDir: f.agentDir, conflictPollMs: 60_000, emit: () => undefined });
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
+    await assert.rejects(
+      host.handle("session.open", {
+        sessionId: f.sessionId,
+        mode: "readOnly",
+        expectedEntryId: "missing-search-entry",
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
+    );
+    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
+    assert.equal(state.sessionId, f.sessionId);
+    assert.equal(state.writable, false);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("searching within the current writable session keeps its runtime and lease", async () => {
+  const f = await fixture();
+  const events: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 10,
+    conflictPollMs: 60_000,
+    emit: (event, data) => events.push({ event, data }),
+  });
+  const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const closedBefore = events.filter((event) => event.event === "session.closed").length;
+    const opened = await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "readOnly",
+      expectedEntryId: "assistant",
+      preserveActive: true,
+    }) as { mode: string; state: { writable: boolean } };
+    assert.equal(opened.mode, "writable");
+    assert.equal(opened.state.writable, true);
+    await access(leasePath);
+    await assert.rejects(
+      host.handle("session.open", {
+        sessionId: f.sessionId,
+        mode: "readOnly",
+        expectedEntryId: "missing-search-entry",
+        preserveActive: true,
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
+    );
+    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
+    assert.equal(state.sessionId, f.sessionId);
+    assert.equal(state.writable, true);
+    await access(leasePath);
+    assert.equal(events.filter((event) => event.event === "session.closed").length, closedBefore);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a target append during current-session cleanup opens the final complete snapshot", async () => {
+  const f = await fixture();
+  const targetId = "search-append-target";
+  const targetPath = await writeTargetSession(f, targetId);
+  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const internals = host as unknown as { closeActive: () => Promise<void> };
+    const originalClose = internals.closeActive.bind(host);
+    let appended = false;
+    internals.closeActive = async () => {
+      await originalClose();
+      if (appended) return;
+      appended = true;
+      await appendFile(targetPath, `${JSON.stringify({
+        type: "custom",
+        id: `${targetId}-latest`,
+        parentId: `${targetId}-assistant`,
+        timestamp: new Date().toISOString(),
+        customType: "latest",
+      })}\n`);
+    };
+    const opened = await host.handle("session.open", {
+      sessionId: targetId,
+      mode: "readOnly",
+      expectedEntryId: `${targetId}-assistant`,
+    }) as { snapshot: { entries: Array<{ id?: string }> } };
+    assert.ok(opened.snapshot.entries.some((entry) => entry.id === `${targetId}-latest`));
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a target branch change during cleanup restores the previous session as observation", async () => {
+  const f = await fixture();
+  const targetId = "search-branch-target";
+  const targetPath = await writeTargetSession(f, targetId);
+  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const internals = host as unknown as { closeActive: () => Promise<void> };
+    const originalClose = internals.closeActive.bind(host);
+    let branched = false;
+    internals.closeActive = async () => {
+      await originalClose();
+      if (branched) return;
+      branched = true;
+      await appendFile(join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`), `${JSON.stringify({
+        type: "custom",
+        id: "fallback-latest",
+        parentId: "assistant",
+        timestamp: new Date().toISOString(),
+        customType: "fallback-latest",
+      })}\n`);
+      await appendFile(targetPath, `${JSON.stringify({
+        type: "custom",
+        id: `${targetId}-alternate-leaf`,
+        parentId: `${targetId}-user`,
+        timestamp: new Date().toISOString(),
+        customType: "alternate",
+      })}\n`);
+    };
+    await assert.rejects(
+      host.handle("session.open", {
+        sessionId: targetId,
+        mode: "readOnly",
+        expectedEntryId: `${targetId}-assistant`,
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
+    );
+    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
+    assert.equal(state.sessionId, f.sessionId);
+    assert.equal(state.writable, false);
+    const refreshed = await host.handle("session.refresh", {}) as { entries: Array<{ id?: string }> };
+    assert.ok(refreshed.entries.some((entry) => entry.id === "fallback-latest"));
+    await assert.rejects(access(join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`)));
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a search result whose body changed under the same entry ID is stale", async () => {
+  const f = await fixture();
+  const targetId = "search-rewritten-target";
+  const targetPath = await writeTargetSession(f, targetId);
+  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const internals = host as unknown as { closeActive: () => Promise<void> };
+    const originalClose = internals.closeActive.bind(host);
+    let rewritten = false;
+    internals.closeActive = async () => {
+      await originalClose();
+      if (rewritten) return;
+      rewritten = true;
+      const entries = (await readFile(targetPath, "utf8"))
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const assistant = entries.find((entry) => entry.id === `${targetId}-assistant`);
+      if (!assistant) throw new Error("Missing assistant fixture entry");
+      assistant.message = {
+        ...(assistant.message as Record<string, unknown>),
+        content: [{ type: "text", text: "rewritten answer" }],
+      };
+      await writeFile(targetPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    };
+    await assert.rejects(
+      host.handle("session.open", {
+        sessionId: targetId,
+        mode: "readOnly",
+        expectedEntryId: `${targetId}-assistant`,
+        expectedEntryDigest: searchEntryDigest("assistant", "target answer"),
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
+    );
+    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
+    assert.equal(state.sessionId, f.sessionId);
+    assert.equal(state.writable, false);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });

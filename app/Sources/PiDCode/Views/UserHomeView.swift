@@ -19,7 +19,7 @@ struct UserHomeView: View {
                     .foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
-                Button("新建会话…", action: newSession)
+                Button("新建会话", action: newSession)
                     .controlSize(.large)
                     .dCodeAccessibleButton("新建会话")
                     .disabled(!canCreateSession)

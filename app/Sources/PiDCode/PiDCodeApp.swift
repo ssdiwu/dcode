@@ -37,6 +37,11 @@ struct PiDCodeApp: App {
         .windowStyle(.automatic)
         .commands {
             SidebarCommands()
+            CommandGroup(after: .sidebar) {
+                Button("搜索会话…") { model.presentSearch() }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!model.canUseHostSessions || model.isOpeningSession)
+            }
         }
 
         Settings {

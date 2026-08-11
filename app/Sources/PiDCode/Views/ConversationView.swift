@@ -5,6 +5,7 @@ import SwiftUI
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var highlightedEntryID: String?
     private let bottomID = "conversation-bottom"
 
     var body: some View {
@@ -22,6 +23,19 @@ struct ConversationView: View {
                     }
                     ForEach(model.transcript) { item in
                         MessageRow(item: item)
+                            .id(item.id)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(
+                                highlightedEntryID == item.id ? Color.accentColor.opacity(0.16) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                            .overlay {
+                                if highlightedEntryID == item.id {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.accentColor.opacity(0.45), lineWidth: 1.5)
+                                }
+                            }
                     }
                     if let message = model.optimisticUserMessage {
                         MessageRow(item: TranscriptItem(
@@ -44,11 +58,44 @@ struct ConversationView: View {
             }
             .id(model.selectedSessionID)
             .onChange(of: model.transcript.count) { _, count in
-                if count > 6 { scrollToBottom(proxy) }
+                if count > 6, model.conversationTarget == nil { scrollToBottom(proxy) }
             }
-            .onChange(of: model.streamingText) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.streamingThinking) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: model.streamingTools) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: model.streamingText) { _, _ in
+                if model.conversationTarget == nil { scrollToBottom(proxy) }
+            }
+            .onChange(of: model.streamingThinking) { _, _ in
+                if model.conversationTarget == nil { scrollToBottom(proxy) }
+            }
+            .onChange(of: model.streamingTools) { _, _ in
+                if model.conversationTarget == nil { scrollToBottom(proxy) }
+            }
+            .task(id: model.conversationTarget?.token) {
+                guard let target = model.conversationTarget else {
+                    highlightedEntryID = nil
+                    return
+                }
+                defer {
+                    if highlightedEntryID == target.entryID { highlightedEntryID = nil }
+                    model.clearConversationTarget(target.token)
+                }
+                guard target.sessionID == model.selectedSessionID,
+                      model.transcript.contains(where: { $0.id == target.entryID }) else { return }
+                highlightedEntryID = target.entryID
+                await Task.yield()
+                if reduceMotion {
+                    proxy.scrollTo(target.entryID, anchor: .center)
+                } else {
+                    withAnimation(.smooth(duration: 0.28)) {
+                        proxy.scrollTo(target.entryID, anchor: .center)
+                    }
+                }
+                try? await Task.sleep(for: .seconds(1.6))
+                guard !Task.isCancelled else { return }
+                if reduceMotion { highlightedEntryID = nil }
+                else {
+                    withAnimation(.easeOut(duration: 0.25)) { highlightedEntryID = nil }
+                }
+            }
         }
         .background(Color(nsColor: .textBackgroundColor))
     }

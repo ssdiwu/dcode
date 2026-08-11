@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var inspectorOverlayPresented = false
     @State private var projectEditorPresented = false
     @State private var editingProject: DCodeProject?
+    @State private var searchPreviousResponder: NSResponder?
 
     var body: some View {
         GeometryReader { proxy in
@@ -31,6 +32,16 @@ struct RootView: View {
                     if widthClass != .wide {
                         sidebarOverlayPresented = false
                         inspectorOverlayPresented = true
+                    }
+                }
+                .onChange(of: model.searchPresented) { _, presented in
+                    if presented {
+                        searchPreviousResponder = NSApp.keyWindow?.firstResponder
+                    } else if let responder = searchPreviousResponder {
+                        searchPreviousResponder = nil
+                        DispatchQueue.main.async {
+                            NSApp.keyWindow?.makeFirstResponder(responder)
+                        }
                     }
                 }
         }
@@ -77,6 +88,7 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(!overlayIsPresented)
                 .accessibilityHidden(overlayIsPresented)
+                .disabled(model.searchPresented)
 
             if inlineSidebar {
                 HStack(spacing: 0) {
@@ -86,8 +98,9 @@ struct RootView: View {
                     Spacer(minLength: 0)
                 }
                 .transition(.move(edge: .leading))
-                .allowsHitTesting(!inspectorOverlayPresented)
-                .accessibilityHidden(inspectorOverlayPresented)
+                .allowsHitTesting(!inspectorOverlayPresented && !model.searchPresented)
+                .accessibilityHidden(inspectorOverlayPresented || model.searchPresented)
+                .disabled(model.searchPresented)
             }
 
             if inlineInspector {
@@ -98,6 +111,9 @@ struct RootView: View {
                         .frame(width: inspectorWidth)
                 }
                 .transition(.move(edge: .trailing))
+                .allowsHitTesting(!model.searchPresented)
+                .accessibilityHidden(model.searchPresented)
+                .disabled(model.searchPresented)
             }
 
             if sidebarOverlayPresented || inspectorOverlayPresented {
@@ -119,6 +135,8 @@ struct RootView: View {
                 }
                 .transition(.move(edge: .leading))
                 .zIndex(3)
+                .disabled(model.searchPresented)
+                .accessibilityHidden(model.searchPresented)
             }
 
             if inspectorOverlayPresented, model.inspectorScope != nil {
@@ -130,12 +148,31 @@ struct RootView: View {
                 }
                 .transition(.move(edge: .trailing))
                 .zIndex(3)
+                .disabled(model.searchPresented)
+                .accessibilityHidden(model.searchPresented)
+            }
+
+            if model.searchPresented {
+                Color.black.opacity(0.24)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.dismissSearch() }
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+                    .zIndex(4)
+
+                SearchOverlayView()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 24)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.97).combined(with: .opacity))
+                    .zIndex(5)
             }
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: sidebarUserHidden)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorUserHidden)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: sidebarOverlayPresented)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorOverlayPresented)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: model.searchPresented)
     }
 
     private var centralContent: some View {
@@ -144,7 +181,7 @@ struct RootView: View {
                 SessionDetailView()
             } else {
                 UserHomeView(
-                    newSession: chooseDirectory,
+                    newSession: createGlobalSession,
                     newProject: { presentProjectEditor(nil) },
                     canCreateSession: model.canUseHostSessions && !model.isOpeningSession && !model.isStreaming,
                     canCreateProject: model.canEditProjects
@@ -167,7 +204,10 @@ struct RootView: View {
                 inspectorOverlayPresented = false
                 Task { await model.selectSession(sessionID) }
             },
-            newGlobalSession: chooseDirectory,
+            searchSessions: {
+                model.presentSearch()
+            },
+            newGlobalSession: createGlobalSession,
             editProject: presentProjectEditor
         )
     }
@@ -182,6 +222,8 @@ struct RootView: View {
             }
             .help(sidebarIsVisible(for: widthClass) ? "隐藏左栏" : "显示左栏")
             .accessibilityLabel(sidebarIsVisible(for: widthClass) ? "隐藏左栏" : "显示左栏")
+            .disabled(model.searchPresented)
+            .accessibilityHidden(model.searchPresented)
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
@@ -191,7 +233,8 @@ struct RootView: View {
             }
             .help(inspectorIsVisible(for: widthClass) ? "隐藏工作检查器" : "显示工作检查器")
             .accessibilityLabel(inspectorIsVisible(for: widthClass) ? "隐藏工作检查器" : "显示工作检查器")
-            .disabled(model.inspectorScope == nil)
+            .disabled(model.inspectorScope == nil || model.searchPresented)
+            .accessibilityHidden(model.searchPresented)
         }
     }
 
@@ -200,7 +243,7 @@ struct RootView: View {
     }
 
     private var overlayIsPresented: Bool {
-        sidebarOverlayPresented || inspectorOverlayPresented
+        sidebarOverlayPresented || inspectorOverlayPresented || model.searchPresented
     }
 
     private func presentProjectEditor(_ project: DCodeProject?) {
@@ -208,19 +251,9 @@ struct RootView: View {
         projectEditorPresented = true
     }
 
-    private func chooseDirectory() {
-        let panel = NSOpenPanel()
-        panel.title = "选择新会话的工作目录"
-        panel.prompt = "开始会话"
-        panel.message = "在项目内新建时，请使用项目行旁的加号选择已登记的源文件夹。"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { await model.createSession(at: url) }
-        }
+    private func createGlobalSession() {
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        Task { await model.createSession(at: homeDirectory) }
     }
 
     private func sidebarIsVisible(for widthClass: WorkbenchWidthClass) -> Bool {

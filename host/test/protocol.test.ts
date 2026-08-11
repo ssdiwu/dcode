@@ -105,6 +105,76 @@ test("method parameter validation rejects invalid values", () => {
   assert.equal(HOST_METHODS.includes("session.setFastMode"), true);
   assert.equal(isHostMethod("session.refresh"), true);
   assert.doesNotThrow(() => validateMethodParams("session.refresh", {}));
+  assert.doesNotThrow(() => validateMethodParams("session.search", {
+    query: "项目",
+    requestToken: "search-1",
+    limit: 50,
+    projectSourceFolders: ["/work/a", "/work/b"],
+    filterSourceFolders: ["/work/a"],
+    refresh: true,
+    probe: true,
+  }));
+  assert.throws(
+    () => validateMethodParams("session.search", {
+      query: "项目",
+      requestToken: "search-2",
+      projectSourceFolders: ["/work/a"],
+      filterSourceFolders: ["/work/b"],
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.search", {
+      query: "",
+      requestToken: "search-probe",
+      projectSourceFolders: [],
+      probe: "yes",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("session.open", {
+    sessionId: "s1",
+    mode: "readOnly",
+    expectedEntryId: "entry-1",
+    expectedEntryDigest: `v1:${"a".repeat(64)}`,
+    preserveActive: true,
+  }));
+  assert.throws(
+    () => validateMethodParams("session.open", {
+      sessionId: "s1",
+      mode: "readOnly",
+      expectedEntryDigest: `v1:${"a".repeat(64)}`,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.open", {
+      sessionId: "s1",
+      mode: "readOnly",
+      expectedEntryId: "entry-1",
+      expectedEntryDigest: "sha256:not-valid",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.open", {
+      sessionId: "s1",
+      mode: "writable",
+      writeIntent: true,
+      expectedEntryId: "entry-1",
+      expectedEntryDigest: `v1:${"a".repeat(64)}`,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.open", {
+      sessionId: "s1",
+      mode: "readOnly",
+      preserveActive: "yes",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.equal(isHostMethod("session.search"), true);
 });
 
 test("response and event constructors retain protocol correlation", () => {

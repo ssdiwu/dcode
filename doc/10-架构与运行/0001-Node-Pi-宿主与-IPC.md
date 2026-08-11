@@ -1,6 +1,6 @@
 # Node/Pi 宿主与 IPC
 
-状态：Implemented 0.0.1 release
+状态：Implemented 0.0.2 candidate（`v0.0.1` 已发布，`0.0.2` 等待 507 人工验收）
 
 ## 职责
 
@@ -10,6 +10,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 
 - 发现、解析和恢复 Pi Session；
 - 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的精确 Source Folder `cwd` 查询全部关联 Session Summary；
+- 在独立 Worker 中为上述可见会话建立可删除、可重建的 SQLite FTS5 本机索引，并搜索标题与当前活动路径的用户/助手正文；
 - 执行共享会话观察、按需 Session Lease 与冲突检测；
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
 - 返回 Pi SDK 的 Context Usage，并维护 D Code 自有、会话级持久化的极速状态；
@@ -38,12 +39,13 @@ open "dist/D Code.app"
 
 `build.sh` 将 release Swift executable、arm64 Node `22.22.3`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
 
-- Host 开发运行要求 Node `>=22.19.0`；`0.0.1` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时与随包许可证一致。
+- Host 开发运行要求 Node `>=22.19.0`；`0.0.2` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
 - `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
+- `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
 - App 退出应发送 `host.shutdown`；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
-- App 在执行任何会话查询前要求 `hostVersion=0.0.1`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage 与 Fast Mode 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航分类或写入路径。
+- App 在执行任何会话查询前要求 `hostVersion=0.0.2`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage、Fast Mode 与 `sessionSearch` 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航分类、搜索范围或写入路径。
 - Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
 
 ## Protocol v1
@@ -82,6 +84,7 @@ open "dist/D Code.app"
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
 | `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配 Source Folder；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
+| `session.search` | 在独立 Worker 中查询可见会话本机索引；请求携带完整 Project Source Folder 范围与可选筛选范围，Host 在排序和 limit 前再次强制可见性；搜索本身不打开会话、不创建租约 |
 | `session.refresh` | 从当前活动会话的已知规范路径读取最新快照，不重新扫描全部 Session 目录；用于外部 Pi 条目落盘后的合并刷新 |
 | `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建，随后返回 writable、observing 或 unavailable 激活结果，不以激活失败回滚或隐匿已创建 Session |
 | `session.open`、`session.close` | 打开内部观察态或可写会话并管理生命周期；既有会话的 writable 请求必须携带本次 Write Intent |
@@ -100,11 +103,22 @@ open "dist/D Code.app"
 
 ### 事件组
 
-- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
+- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`、`session.searchIndexChanged`；搜索索引事件只报告 idle/building/updating/rebuilding/ready/failed、完成度与可选错误，不携带正文；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
 - Pi 运行：`session.event`，其中载荷来自 `AgentSessionEvent`，`message_update.partial` 不转发累积快照；
 - 计划：`plan.changed`，只识别 `dgoal-work-v1` 与 `dgoal-plan-v2`；
 - 扩展：`extension.request`、`extension.closed`、`extension.notification`、`extension.status`、`extension.working`、`extension.editorText` 与 `extension.unsupported`；
 - 诊断：`protocol.error`、`session.operationError`、`session.cleanupError`、`session.cleanupTimeout`、`extension.error`。
+
+## 可见会话搜索缓存
+
+搜索数据库不是会话历史权威。Pi JSONL 仍保存完整 Session、消息与活动路径；`~/Library/Caches/D Code/Search/search-v1.sqlite3` 只保存当前版本允许搜索的可重建投影，用户删除缓存或数据库损坏后都可以从可见 Pi Session 重建。
+
+- Host 主线程只负责请求关联、状态事件和 Worker 生命周期；正文解析、增量更新与 SQLite FTS5 查询在独立 Worker 中执行，不阻塞普通聊天协议队列。
+- 可见集合是 D Code 创建的 Recent 与当前 Project Source Folder 精确 `cwd` 投影的并集。每次查询仍把完整 Project 范围传入 Worker，并在排序与 `limit` 之前执行可见性与 Project / Source Folder 筛选；缓存中的陈旧行不能绕过当前归属。
+- 每个 Session 只索引当前活动路径的标题、用户正文与助手正文。thinking、工具调用、工具结果、自定义数据和认证字段不会进入搜索文档。
+- Worker 使用文件路径、device、inode、size、mtimeNs 与 leaf ID 判断增量变化；正在追加的半条目保持索引 `complete=false` 并自动重试，刷新期间到达的新失效代际会触发后续刷新，不会被本轮完成状态吞掉。
+- `session.search` 不打开 Session、不创建 Session Lease、不触发 Write Intent，也不写 Pi JSONL、Project、工作区文件或 Git。搜索结果只携带稳定 Session ID、可选 Entry ID 与展示片段；真正打开前 Host 会再次验证目标条目和文件版本。
+- Node 运行时必须通过启动自检提供 SQLite FTS5。Worker 或数据库失败时发送明确 failed 状态；Swift 显示建立、重建或错误，不把不完整索引伪装成“没有结果”。
 
 ## 会话观察与写入所有权
 
@@ -143,7 +157,7 @@ Host 不导入或调用 `pi-tui`，不执行 extension 提供的 TUI factory，�
 npm test
 ```
 
-当前 Host 自动测试共 61 项，覆盖完整/半写入外部条目的稳定观察、同 ID 文件身份替换拒绝、打开与刷新竞态、冲突后恢复观察、运行时停止或租约释放失败时保留锁并阻止后续写入、协议、D Code 创建来源前缀判定与先筛选后分页、创建后激活失败的部分成功合同、Project 精确目录范围摘要、D Code 极速模式与共享状态事件、外部 `pi-dfast` 的安装与加载前排除、普通扩展动态重载、极速跨会话恢复隔离、Prompt 持久化确认、JSONL 分片与坏输入、输出失败、写入意图与租约竞争、失效 owner 租约自动恢复、并发恢复只产生一个所有者、静默窗口、租约与外部写入、连续 owned writes、新建会话、会话发现/恢复、结构化 Extension UI、对话响应的进程级交错、custom/widget 的明确边界、工具展开提示的 RPC 中性行为、Mermaid 成功/不支持分支、PiHost 生命周期、父进程消失后的有界退出及真实子进程 JSONL。Swift 包另有 36 项测试，覆盖 Host 版本/能力门禁、Project 写入门禁、持久化与损坏保护、真实 Git 只读查询、按需文件树和符号链接边界、Recent 来源查询与分页、会话创建激活结果、响应式宽度分类、单一应用级系统/浅色/深色外观权威、Context/Fast wire shape、协议映射、租约冲突文案、Prompt 确认与跨会话草稿隔离、连续 Pipe 响应、开发/Bundle Host 定位、Finder 环境补全、扩展界面生命周期、被忽略的展示提示不上浮全局通知、streaming/persisted 边界去重、诊断脱敏、transcript、fenced code/Mermaid 与 Active Plan 映射。
+当前 Host 自动测试共 90 项，除完整保留 `v0.0.1` 的会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议与进程生命周期回归外，还覆盖搜索可见集合、筛选先于结果上限、标题忠实性与优先级、中文相邻短语、真实命中片段、当前路径、隐私正文排除、有界暂存、非当前可见会话的轻量文件身份探测、运行期缓存损坏的一次安全重建、失败代次锁存、半写入退避与自动恢复、刷新中失效续跑、真实 Worker 进程 JSONL 纯净与无租约，以及打开搜索目标前后的稳定性复核。Swift 包另有 50 项测试，除 `v0.0.1` 的 Project、文件树、Git、Recent、外观、会话与 Composer 回归外，还覆盖搜索协议解码、可见集合与组合筛选参数、异步代次保护、探测请求边界、索引失效后立即清除旧结果、归属映射、选择边界、失败状态保持、`preserveActive`、Entry ID 定位生命周期、VoiceOver 组合名称，以及查询或筛选改变时立即清除不可操作的旧结果。
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 

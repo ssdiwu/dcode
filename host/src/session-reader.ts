@@ -8,13 +8,14 @@ import {
   type SessionEntry,
   type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
+import { D_CODE_SESSION_ORIGIN_TYPE } from "./session-origin.js";
+import { compactSessionPreview } from "./session-title.js";
 
-const FIRST_MESSAGE_LIMIT = 280;
+export { D_CODE_SESSION_ORIGIN_TYPE } from "./session-origin.js";
+
 const LIST_CONCURRENCY = 8;
 const HEADER_SCAN_BYTES = 1_024 * 1_024;
 const HEADER_CHUNK_BYTES = 4 * 1_024;
-
-export const D_CODE_SESSION_ORIGIN_TYPE = "dcode-session-origin-v1";
 
 export interface SessionSummary {
   path: string;
@@ -121,11 +122,6 @@ function extractMessageText(message: unknown): string {
     ))
     .map((part) => part.text)
     .join("\n");
-}
-
-function compactPreview(text: string): string {
-  const compact = text.replace(/\s+/g, " ").trim();
-  return compact.length <= FIRST_MESSAGE_LIMIT ? compact : `${compact.slice(0, FIRST_MESSAGE_LIMIT - 1)}…`;
 }
 
 function isDCodeSessionOrigin(record: Record<string, unknown>, sessionId: string): boolean {
@@ -328,7 +324,7 @@ async function readIndexedSummary(
       if (firstMessage) continue;
       const message = record.message;
       if (typeof message !== "object" || message === null || (message as { role?: unknown }).role !== "user") continue;
-      firstMessage = compactPreview(extractMessageText(message));
+      firstMessage = compactSessionPreview(extractMessageText(message));
     }
   } finally {
     lines.close();

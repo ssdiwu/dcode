@@ -75,6 +75,17 @@ final class AppModel {
     var availableModels: [HostModel] = []
     var availableThinkingLevels: [String] = []
     var availableCommands: [CommandDescriptor] = []
+    var searchPresented = false
+    var searchQuery = ""
+    var searchProjectID: UUID?
+    var searchSourceFolderPath: String?
+    var searchIndexStatus: SessionSearchIndexStatus = .idle
+    var searchResults: [SessionSearchResult] = []
+    var searchSelection = 0
+    var searchError: String?
+    var searchOpenError: String?
+    var isSearchQuerying = false
+    var conversationTarget: ConversationTarget?
 
     @ObservationIgnored private var client: PiHostClient?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -90,6 +101,10 @@ final class AppModel {
     @ObservationIgnored private var recentWindow = SessionListWindow()
     @ObservationIgnored private var projectWindows: [UUID: SessionListWindow] = [:]
     @ObservationIgnored private var projectLoadGenerations: [UUID: UUID] = [:]
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var searchProbeTask: Task<Void, Never>?
+    @ObservationIgnored private var searchGeneration = UUID()
+    @ObservationIgnored private var searchResultGeneration: UUID?
 
     init(projectStore: ProjectStore = ProjectStore()) {
         self.projectStore = projectStore
@@ -138,6 +153,20 @@ final class AppModel {
         let sessionPath = URL(fileURLWithPath: session.cwd).standardizedFileURL.resolvingSymlinksInPath().path
         return project.sourceFolders.first(where: { $0.path == sessionPath })?.displayName
             ?? URL(fileURLWithPath: session.cwd).lastPathComponent
+    }
+
+    var allProjectSourceFolderPaths: [String] {
+        projects.flatMap { $0.sourceFolders.map(\.path) }
+    }
+
+    func ownership(for result: SessionSearchResult) -> SearchResultOwnership {
+        let canonical = URL(fileURLWithPath: result.cwd).standardizedFileURL.resolvingSymlinksInPath().path
+        for project in projects {
+            if let folder = project.sourceFolders.first(where: { $0.path == canonical }) {
+                return SearchResultOwnership(projectName: project.name, sourceFolderName: folder.displayName)
+            }
+        }
+        return SearchResultOwnership(projectName: nil, sourceFolderName: nil)
     }
 
     func start() async {
@@ -266,6 +295,228 @@ final class AppModel {
     func toggleProject(_ projectID: UUID) {
         if expandedProjectIDs.contains(projectID) { expandedProjectIDs.remove(projectID) }
         else { expandedProjectIDs.insert(projectID) }
+    }
+
+    func presentSearch() {
+        guard canUseHostSessions, !isOpeningSession else { return }
+        searchPresented = true
+        searchError = nil
+        searchOpenError = nil
+        scheduleSearch(refresh: true)
+        startSearchFreshnessProbe()
+    }
+
+    func dismissSearch() {
+        guard !isOpeningSession else { return }
+        searchPresented = false
+        searchTask?.cancel()
+        searchTask = nil
+        searchProbeTask?.cancel()
+        searchProbeTask = nil
+        isSearchQuerying = false
+        searchGeneration = UUID()
+        searchResultGeneration = nil
+        searchOpenError = nil
+    }
+
+    func updateSearchQuery(_ query: String) {
+        guard !isOpeningSession, searchQuery != query else { return }
+        searchQuery = query
+        searchSelection = 0
+        scheduleSearch(refresh: false)
+    }
+
+    func selectSearchProject(_ projectID: UUID?) {
+        guard !isOpeningSession else { return }
+        searchProjectID = projectID
+        if let selectedPath = searchSourceFolderPath {
+            let belongsToProject = projectID.flatMap { selectedID in
+                projects.first(where: { $0.id == selectedID })
+            }?.sourceFolders.contains(where: { $0.path == selectedPath }) ?? false
+            if !belongsToProject { searchSourceFolderPath = nil }
+        }
+        searchSelection = 0
+        scheduleSearch(refresh: false)
+    }
+
+    func selectSearchSourceFolder(_ path: String?) {
+        guard !isOpeningSession else { return }
+        searchSourceFolderPath = path
+        searchSelection = 0
+        scheduleSearch(refresh: false)
+    }
+
+    func reconcileSearchScope() {
+        guard let projectID = searchProjectID,
+              let project = projects.first(where: { $0.id == projectID }) else {
+            searchProjectID = nil
+            searchSourceFolderPath = nil
+            return
+        }
+        if let path = searchSourceFolderPath,
+           !project.sourceFolders.contains(where: { $0.path == path }) {
+            searchSourceFolderPath = nil
+        }
+    }
+
+    func moveSearchSelection(by offset: Int) {
+        guard !searchResults.isEmpty else { return }
+        searchSelection = min(max(0, searchSelection + offset), searchResults.count - 1)
+    }
+
+    func openSelectedSearchResult() async {
+        guard searchPresented,
+              searchResultGeneration == searchGeneration,
+              searchResults.indices.contains(searchSelection),
+              !isStreaming,
+              !isOpeningSession else { return }
+        await openSearchResult(searchResults[searchSelection])
+    }
+
+    func openSearchResult(_ result: SessionSearchResult) async {
+        guard searchPresented,
+              searchResultGeneration == searchGeneration,
+              searchResults.contains(result),
+              !isStreaming,
+              !isOpeningSession else { return }
+        searchOpenError = nil
+        let opened = await openSession(
+            result.sessionId,
+            writable: false,
+            expectedEntryID: result.entryId,
+            expectedEntryDigest: result.entryDigest,
+            preserveActive: true,
+            presentFailure: false
+        )
+        guard opened else { return }
+        if let entryID = result.entryId {
+            conversationTarget = ConversationTarget(sessionID: result.sessionId, entryID: entryID, token: UUID())
+        }
+        dismissSearch()
+    }
+
+    func clearConversationTarget(_ token: UUID) {
+        guard conversationTarget?.token == token else { return }
+        conversationTarget = nil
+    }
+
+    func clearSearchOpenError() {
+        searchOpenError = nil
+    }
+
+    private func scheduleSearch(refresh: Bool) {
+        searchTask?.cancel()
+        searchTask = nil
+        searchResultGeneration = nil
+        searchResults = []
+        searchSelection = 0
+        searchError = nil
+        searchOpenError = nil
+        isSearchQuerying = false
+        guard searchPresented, let client = readyClient else { return }
+        isSearchQuerying = true
+        let generation = UUID()
+        searchGeneration = generation
+        let query = searchQuery
+        let projectPaths = allProjectSourceFolderPaths
+        let filterPaths: [String]?
+        if let path = searchSourceFolderPath {
+            filterPaths = [path]
+        } else if let projectID = searchProjectID {
+            filterPaths = projects.first(where: { $0.id == projectID })?.sourceFolders.map(\.path) ?? []
+        } else {
+            filterPaths = nil
+        }
+        let requestPlan = SessionSearchRequestPlan(
+            generation: generation,
+            query: query,
+            projectSourceFolders: projectPaths,
+            filterSourceFolders: filterPaths,
+            refresh: refresh
+        )
+        searchTask = Task { [weak self] in
+            do {
+                let response: SessionSearchResponse = try await client.request(
+                    "session.search",
+                    params: requestPlan.parameters
+                )
+                guard let self,
+                      requestPlan.accepts(
+                          response,
+                          searchPresented: self.searchPresented,
+                          currentGeneration: self.searchGeneration
+                      ) else { return }
+                self.searchIndexStatus = response.index
+                self.searchResults = response.results
+                self.searchResultGeneration = generation
+                self.isSearchQuerying = false
+                self.searchSelection = min(self.searchSelection, max(0, response.results.count - 1))
+                self.searchError = response.index.state == .failed
+                    ? DiagnosticSanitizer.redact(response.index.message ?? "搜索索引不可用")
+                    : nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, self.searchPresented, self.searchGeneration == generation else { return }
+                self.searchError = DiagnosticSanitizer.redact(error.localizedDescription)
+                self.searchResultGeneration = nil
+                self.isSearchQuerying = false
+            }
+        }
+    }
+
+    private func startSearchFreshnessProbe() {
+        searchProbeTask?.cancel()
+        searchProbeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { return }
+                guard let self else { return }
+                await self.probeSearchFreshness()
+            }
+        }
+    }
+
+    private func probeSearchFreshness() async {
+        guard searchPresented,
+              !isOpeningSession,
+              searchIndexStatus.canServeResults,
+              let client = readyClient else { return }
+        let plan = SessionSearchProbePlan(
+            token: UUID(),
+            projectSourceFolders: allProjectSourceFolderPaths
+        )
+        do {
+            let _: SessionSearchResponse = try await client.request(
+                "session.search",
+                params: plan.parameters
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            // The normal search request and index events own user-facing errors.
+        }
+    }
+
+    func applySearchIndexStatus(_ next: SessionSearchIndexStatus) {
+        searchIndexStatus = next
+        if next.state == .failed {
+            searchTask?.cancel()
+            isSearchQuerying = false
+            searchResultGeneration = nil
+            searchResults = []
+            searchError = DiagnosticSanitizer.redact(next.message ?? "搜索索引不可用")
+        } else if searchPresented, !next.canServeResults {
+            searchTask?.cancel()
+            searchTask = nil
+            searchResultGeneration = nil
+            searchResults = []
+            searchSelection = 0
+            searchOpenError = nil
+            isSearchQuerying = true
+        } else if searchPresented, next.canServeResults {
+            scheduleSearch(refresh: false)
+        }
     }
 
     func selectSession(_ sessionID: String?) async {
@@ -465,6 +716,7 @@ final class AppModel {
         )
         try await projectStore.save(result.projects)
         projects = result.projects
+        reconcileSearchScope()
         selectedProjectID = result.savedProjectID
         expandedProjectIDs.insert(result.savedProjectID)
         inspectorScope = .project(result.savedProjectID)
@@ -477,6 +729,7 @@ final class AppModel {
                 await reloadProjectSessions(projectID)
             }
         }
+        if searchPresented { scheduleSearch(refresh: true) }
         return result.savedProjectID
     }
 
@@ -485,6 +738,7 @@ final class AppModel {
         let updated = projects.filter { $0.id != projectID }
         try await projectStore.save(updated)
         projects = updated
+        reconcileSearchScope()
         projectSessions.removeValue(forKey: projectID)
         projectHasMore.removeValue(forKey: projectID)
         projectSessionErrors.removeValue(forKey: projectID)
@@ -494,16 +748,23 @@ final class AppModel {
         if inspectorScope == .project(projectID) {
             inspectorScope = selectedSessionID.map(InspectorScope.session)
         }
+        if searchProjectID == projectID {
+            searchProjectID = nil
+            searchSourceFolderPath = nil
+        }
+        if searchPresented { scheduleSearch(refresh: true) }
     }
 
     func loadProjects() async {
         do {
             projects = try await projectStore.load()
+            reconcileSearchScope()
             projectStoreWritable = true
             expandedProjectIDs = []
             projectSessionErrors.removeAll()
         } catch {
             projects = []
+            reconcileSearchScope()
             projectStoreWritable = false
             projectSessionErrors.removeAll()
             issue = AppIssue(
@@ -515,6 +776,9 @@ final class AppModel {
 
     func shutdown() async {
         refreshTask?.cancel()
+        searchTask?.cancel()
+        searchProbeTask?.cancel()
+        searchProbeTask = nil
         noticeTask?.cancel()
         resetExtensionUIState()
         await client?.shutdown()
@@ -527,28 +791,55 @@ final class AppModel {
     }
 
     @discardableResult
-    private func openSession(_ id: String, writable: Bool) async -> Bool {
+    private func openSession(
+        _ id: String,
+        writable: Bool,
+        expectedEntryID: String? = nil,
+        expectedEntryDigest: String? = nil,
+        preserveActive: Bool = false,
+        presentFailure: Bool = true
+    ) async -> Bool {
         guard let client = readyClient else { return false }
         let generation = UUID()
         openGeneration = generation
         isOpeningSession = true
         defer { if openGeneration == generation { isOpeningSession = false } }
-        var params: [String: JSONValue] = [
-            "sessionId": .string(id),
-            "mode": .string(writable ? "writable" : "readOnly"),
-        ]
-        if writable { params["writeIntent"] = .bool(true) }
+        let requestPlan = SessionOpenRequestPlan(
+            sessionID: id,
+            writable: writable,
+            expectedEntryID: expectedEntryID,
+            expectedEntryDigest: expectedEntryDigest,
+            preserveActive: preserveActive
+        )
         do {
-            let result: SessionOpenResult = try await client.request("session.open", params: params)
+            let result: SessionOpenResult = try await client.request(
+                "session.open",
+                params: requestPlan.parameters
+            )
             guard openGeneration == generation else { return false }
             await apply(result)
-            await loadRuntimeControls(includeCommands: writable)
+            await loadRuntimeControls(
+                includeCommands: result.mode == "writable" && result.state?.writable == true
+            )
             return true
         } catch {
-            present(error, title: writable ? "暂时无法写入当前会话" : "无法打开会话")
-            if writable { _ = await openSession(id, writable: false) }
+            if presentFailure {
+                present(error, title: writable ? "暂时无法写入当前会话" : "无法打开会话")
+            } else {
+                recordSearchOpenFailure(error.localizedDescription)
+            }
+            if writable {
+                _ = await openSession(id, writable: false)
+            } else {
+                await refreshSnapshot()
+                if hostState?.writable != true { availableCommands = [] }
+            }
             return false
         }
+    }
+
+    func recordSearchOpenFailure(_ message: String) {
+        searchOpenError = DiagnosticSanitizer.redact(message)
     }
 
     private func ensureWritable() async -> Bool {
@@ -558,6 +849,7 @@ final class AppModel {
     }
 
     private func apply(_ result: SessionOpenResult) async {
+        conversationTarget = nil
         selectedSessionID = result.snapshot.summary.id
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
@@ -625,6 +917,7 @@ final class AppModel {
     }
 
     private func clearActiveSessionPresentation() {
+        conversationTarget = nil
         selectedSessionID = nil
         inspection = nil
         transcript = []
@@ -713,6 +1006,11 @@ final class AppModel {
         case "session.changed":
             guard event.data?["sessionId"]?.stringValue == selectedSessionID else { return }
             scheduleRefresh()
+        case "session.searchIndexChanged":
+            if let value = event.data,
+               let next = try? value.decoded(SessionSearchIndexStatus.self) {
+                applySearchIndexStatus(next)
+            }
         case "session.syncError":
             guard event.data?["sessionId"]?.stringValue == selectedSessionID else { return }
             showNotice("暂时无法同步 Pi 会话：\(event.data?["message"]?.stringValue ?? "未知错误")", level: "warning")
@@ -746,6 +1044,8 @@ final class AppModel {
             showNotice(event.data?["message"]?.stringValue ?? "Host 诊断事件", level: "error")
         case "host.processEnded":
             resetExtensionUIState()
+            searchProbeTask?.cancel()
+            searchProbeTask = nil
             let expected = event.data?["expected"]?.boolValue ?? false
             connectionState = expected ? .idle : .failed
             if !expected {

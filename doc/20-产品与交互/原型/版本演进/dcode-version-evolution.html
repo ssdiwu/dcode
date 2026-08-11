@@ -1005,9 +1005,28 @@ html&gt;body{padding:0}&lt;/style&gt;
           &lt;/div&gt;
           &lt;div class=&quot;de-session-actions&quot;&gt;
             &lt;button class=&quot;de-icon-button&quot; id=&quot;de-lineage-button&quot; type=&quot;button&quot; aria-label=&quot;查看会话谱系&quot; hidden&gt;&lt;i data-lucide=&quot;history&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-            &lt;button class=&quot;de-icon-button&quot; type=&quot;button&quot; aria-label=&quot;更多会话操作&quot;&gt;&lt;i data-lucide=&quot;ellipsis&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;div class=&quot;de-session-menu-wrap&quot;&gt;
+              &lt;button class=&quot;de-icon-button&quot; id=&quot;de-session-menu-button&quot; type=&quot;button&quot; aria-label=&quot;更多会话操作&quot; aria-haspopup=&quot;menu&quot; aria-controls=&quot;de-session-menu&quot; aria-expanded=&quot;false&quot; hidden&gt;&lt;i data-lucide=&quot;ellipsis&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+              &lt;div class=&quot;de-session-menu&quot; id=&quot;de-session-menu&quot; role=&quot;menu&quot; hidden&gt;
+                &lt;button type=&quot;button&quot; role=&quot;menuitem&quot; data-copy-operation=&quot;copy&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;&lt;strong&gt;复制到项目…&lt;/strong&gt;&lt;small&gt;原会话继续显示&lt;/small&gt;&lt;/span&gt;&lt;/button&gt;
+                &lt;button type=&quot;button&quot; role=&quot;menuitem&quot; data-copy-operation=&quot;copy-archive&quot;&gt;&lt;i data-lucide=&quot;archive-restore&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;&lt;strong&gt;复制到项目并归档原会话…&lt;/strong&gt;&lt;small&gt;仅归档 D Code 中的原入口&lt;/small&gt;&lt;/span&gt;&lt;/button&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
           &lt;/div&gt;
         &lt;/header&gt;
+
+        &lt;section class=&quot;de-copy-panel&quot; id=&quot;de-copy-panel&quot; role=&quot;dialog&quot; aria-modal=&quot;false&quot; aria-labelledby=&quot;de-copy-panel-title&quot; hidden&gt;
+          &lt;header&gt;&lt;div&gt;&lt;strong id=&quot;de-copy-panel-title&quot;&gt;复制到项目&lt;/strong&gt;&lt;small id=&quot;de-copy-panel-subtitle&quot;&gt;创建新的 Pi 会话，原会话继续保留&lt;/small&gt;&lt;/div&gt;&lt;button class=&quot;de-icon-button&quot; id=&quot;de-copy-cancel&quot; type=&quot;button&quot; aria-label=&quot;取消复制&quot;&gt;&lt;i data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/header&gt;
+          &lt;label&gt;&lt;span&gt;目标项目&lt;/span&gt;&lt;select aria-label=&quot;目标项目&quot;&gt;&lt;option&gt;D Code&lt;/option&gt;&lt;option&gt;Curio&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+          &lt;label&gt;&lt;span&gt;目标源文件夹&lt;/span&gt;&lt;select aria-label=&quot;目标源文件夹&quot;&gt;&lt;option&gt;dcode · /Users/diwu/Workspace/Codes/Apps/dcode&lt;/option&gt;&lt;option&gt;pi-dgoal · /Users/diwu/Workspace/Codes/Githubs/pi-dgoal&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+          &lt;p&gt;复制完整已持久化会话并创建新 Session ID；未发送草稿、项目文件和 Git 状态不会复制。&lt;/p&gt;
+          &lt;footer&gt;&lt;button type=&quot;button&quot; id=&quot;de-copy-submit&quot;&gt;复制&lt;/button&gt;&lt;/footer&gt;
+        &lt;/section&gt;
+
+        &lt;div class=&quot;de-copy-result&quot; id=&quot;de-copy-result&quot; hidden aria-live=&quot;polite&quot;&gt;
+          &lt;i data-lucide=&quot;copy-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+          &lt;span&gt;&lt;strong id=&quot;de-copy-result-title&quot;&gt;会话已复制到 D Code&lt;/strong&gt;&lt;small id=&quot;de-copy-result-detail&quot;&gt;新会话使用 dcode 作为工作目录；原会话继续显示。&lt;/small&gt;&lt;/span&gt;
+        &lt;/div&gt;
 
         &lt;div class=&quot;de-runtime-strip&quot; id=&quot;de-runtime-strip&quot; hidden&gt;
           &lt;span&gt;配额：充足&lt;/span&gt;
@@ -1068,7 +1087,6 @@ html&gt;body{padding:0}&lt;/style&gt;
             &lt;div class=&quot;de-message-actions&quot; id=&quot;de-user-message-actions&quot; hidden&gt;
               &lt;button type=&quot;button&quot; aria-label=&quot;复制&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;button type=&quot;button&quot; aria-label=&quot;编辑并重走&quot; data-path-action=&quot;edit&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-              &lt;button type=&quot;button&quot; aria-label=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
             &lt;/div&gt;
           &lt;/div&gt;
 
@@ -1079,7 +1097,6 @@ html&gt;body{padding:0}&lt;/style&gt;
             &lt;div class=&quot;de-message-actions&quot; id=&quot;de-message-actions&quot; hidden&gt;
               &lt;button type=&quot;button&quot; aria-label=&quot;复制&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;button type=&quot;button&quot; aria-label=&quot;从这里继续&quot; data-path-action=&quot;continue&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-              &lt;button type=&quot;button&quot; aria-label=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
             &lt;/div&gt;
           &lt;/div&gt;
 
@@ -1287,6 +1304,8 @@ html&gt;body{padding:0}&lt;/style&gt;
     #dcode-version-evolution .de-more-button,
     #dcode-version-evolution .de-session-row,
     #dcode-version-evolution .de-project-row,
+    #dcode-version-evolution .de-session-menu button,
+    #dcode-version-evolution .de-copy-panel button,
     #dcode-version-evolution .de-message-actions button,
     #dcode-version-evolution .de-path-created button,
     #dcode-version-evolution .de-plan-strip button,
@@ -1424,6 +1443,69 @@ html&gt;body{padding:0}&lt;/style&gt;
     }
 
     #dcode-version-evolution .de-session-header h2 { margin: 4px 0 0; font-weight: 500; }
+
+    #dcode-version-evolution .de-session-menu-wrap { position: relative; }
+    #dcode-version-evolution .de-session-menu {
+      position: absolute;
+      top: 34px;
+      right: 0;
+      z-index: 12;
+      width: min(265px, calc(100vw - 40px));
+      padding: 6px;
+      background: var(--de-surface);
+      border: 1px solid var(--de-border);
+      border-radius: 10px;
+      box-shadow: 0 14px 34px rgb(0 0 0 / 0.2);
+    }
+    #dcode-version-evolution .de-session-menu button {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      width: 100%;
+      gap: 8px;
+      padding: 8px;
+      text-align: left;
+      background: transparent;
+      border-radius: 7px;
+    }
+    #dcode-version-evolution .de-session-menu button:hover { background: var(--de-hover); }
+    #dcode-version-evolution .de-session-menu span { display: grid; gap: 2px; }
+    #dcode-version-evolution .de-session-menu small { color: var(--de-secondary); }
+
+    #dcode-version-evolution .de-copy-panel {
+      position: absolute;
+      top: 62px;
+      right: 14px;
+      z-index: 11;
+      display: grid;
+      width: min(390px, calc(100% - 28px));
+      gap: 10px;
+      padding: 12px;
+      background: var(--de-surface);
+      border: 1px solid var(--de-border);
+      border-radius: 12px;
+      box-shadow: 0 18px 44px rgb(0 0 0 / 0.22);
+    }
+    #dcode-version-evolution .de-copy-panel &gt; header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+    #dcode-version-evolution .de-copy-panel &gt; header div { display: grid; gap: 3px; }
+    #dcode-version-evolution .de-copy-panel small,
+    #dcode-version-evolution .de-copy-panel p { margin: 0; color: var(--de-secondary); }
+    #dcode-version-evolution .de-copy-panel label { display: grid; gap: 5px; }
+    #dcode-version-evolution .de-copy-panel select { min-height: 40px; padding: 0 9px; color: inherit; font: inherit; background: var(--de-window); border: 1px solid var(--de-border); border-radius: 8px; }
+    #dcode-version-evolution .de-copy-panel footer { display: flex; justify-content: flex-end; }
+    #dcode-version-evolution .de-copy-panel footer button { min-height: 40px; padding: 0 14px; color: white; background: var(--de-accent); border-radius: 8px; }
+    #dcode-version-evolution .de-copy-result {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      color: var(--de-accent);
+      background: var(--de-accent-soft);
+      border-bottom: 1px solid var(--de-border);
+    }
+    #dcode-version-evolution .de-copy-result span { display: grid; gap: 2px; }
+    #dcode-version-evolution .de-copy-result small { color: var(--de-secondary); }
 
     #dcode-version-evolution .de-runtime-strip {
       flex-wrap: wrap;
@@ -1879,16 +1961,16 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageBody: &#x27;项目负责组织多个源文件夹；Pi 会话继续拥有自己的历史、上下文和稳定标识。&#x27;
         },
         &#x27;0.0.3&#x27;: {
-          title: &#x27;会话路径与复制&#x27;,
-          summary: &#x27;草稿不自动过期；仅发送、明确清空或删除会话时清除，移除项目关联仍然保留。&#x27;,
+          title: &#x27;会话路径、复制与归档&#x27;,
+          summary: &#x27;完整复制创建新会话；可在目标验证后归档原会话，但不删除 Pi 历史。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;overview&#x27;,
           projectFiles: true,
           paths: true,
           pathDraft: &#x27;continue&#x27;,
           preservedDraft: &#x27;补充当前方案的验收标准与异常边界。&#x27;,
-          messageHeading: &#x27;从任意消息继续，但项目文件保持当前状态&#x27;,
-          messageBody: &#x27;新的会话路径只改变对话历史与模型上下文，不创建或还原代码分支。&#x27;
+          messageHeading: &#x27;路径留在会话内，复制则创建新身份&#x27;,
+          messageBody: &#x27;复制到项目会保留完整历史和原会话；复制并归档只收起 D Code 中的原入口。&#x27;
         },
         &#x27;0.0.4&#x27;: {
           title: &#x27;工作区标签与只读文件&#x27;,
@@ -2063,6 +2145,15 @@ html&gt;body{padding:0}&lt;/style&gt;
       var sidebarSessionRows = Array.from(root.querySelectorAll(&#x27;[data-sidebar-session]&#x27;));
       var userMessage = root.querySelector(&#x27;#de-user-message&#x27;);
       var assistantMessage = root.querySelector(&#x27;#de-assistant-message&#x27;);
+      var sessionMenuButton = root.querySelector(&#x27;#de-session-menu-button&#x27;);
+      var sessionMenu = root.querySelector(&#x27;#de-session-menu&#x27;);
+      var copyPanel = root.querySelector(&#x27;#de-copy-panel&#x27;);
+      var copyPanelTitle = root.querySelector(&#x27;#de-copy-panel-title&#x27;);
+      var copyPanelSubtitle = root.querySelector(&#x27;#de-copy-panel-subtitle&#x27;);
+      var copySubmit = root.querySelector(&#x27;#de-copy-submit&#x27;);
+      var copyResult = root.querySelector(&#x27;#de-copy-result&#x27;);
+      var copyResultTitle = root.querySelector(&#x27;#de-copy-result-title&#x27;);
+      var copyResultDetail = root.querySelector(&#x27;#de-copy-result-detail&#x27;);
       var pathDraft = root.querySelector(&#x27;#de-path-draft&#x27;);
       var pathDraftOrigin = root.querySelector(&#x27;#de-path-draft-origin&#x27;);
       var pathCreated = root.querySelector(&#x27;#de-path-created&#x27;);
@@ -2110,6 +2201,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       var currentPathLabel = &#x27;智能体团队方案&#x27;;
       var lastOriginPath = null;
       var lastClearedDraft = null;
+      var pendingCopyOperation = &#x27;copy&#x27;;
       var draftState = { version: 1, sessions: {} };
       var draftStorageReady = false;
       var originalUserMessage = &#x27;我希望 D Code 保留 Pi 的全部能力，但用真正适合 macOS 的中文界面呈现。&#x27;;
@@ -2922,10 +3014,42 @@ html&gt;body{padding:0}&lt;/style&gt;
         syncClearDraftButton();
       }
 
+      function closeSessionMenu() {
+        sessionMenu.hidden = true;
+        sessionMenuButton.setAttribute(&#x27;aria-expanded&#x27;, &#x27;false&#x27;);
+      }
+
+      function openCopyPanel(operation) {
+        pendingCopyOperation = operation;
+        closeSessionMenu();
+        copyResult.hidden = true;
+        var shouldArchive = operation === &#x27;copy-archive&#x27;;
+        copyPanelTitle.textContent = shouldArchive ? &#x27;复制到项目并归档原会话&#x27; : &#x27;复制到项目&#x27;;
+        copyPanelSubtitle.textContent = shouldArchive
+          ? &#x27;目标验证成功后，只在 D Code 中归档原会话&#x27;
+          : &#x27;创建新的 Pi 会话，原会话继续显示&#x27;;
+        copySubmit.textContent = shouldArchive ? &#x27;复制并归档&#x27; : &#x27;复制&#x27;;
+        copyPanel.hidden = false;
+        window.requestAnimationFrame(function () { copyPanel.querySelector(&#x27;select&#x27;).focus(); });
+      }
+
+      function completeCopyPrototype() {
+        var shouldArchive = pendingCopyOperation === &#x27;copy-archive&#x27;;
+        copyPanel.hidden = true;
+        copyResult.hidden = false;
+        copyResultTitle.textContent = shouldArchive ? &#x27;新会话已创建，原会话已在 D Code 归档&#x27; : &#x27;会话已复制到 D Code&#x27;;
+        copyResultDetail.textContent = shouldArchive
+          ? &#x27;源 Pi JSONL 仍然保留，可从“已归档会话”恢复显示；新会话使用 dcode 作为工作目录。&#x27;
+          : &#x27;新会话使用 dcode 作为工作目录；原会话继续显示。&#x27;;
+      }
+
       function render(version) {
         var state = versions[version];
         if (!state) return;
         currentVersion = version;
+        closeSessionMenu();
+        copyPanel.hidden = true;
+        copyResult.hidden = true;
         resetPathDraft();
         resetWorkspaceTabs();
         var isSearch = state.mode === &#x27;search-popover&#x27;;
@@ -2946,6 +3070,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         root.querySelector(&#x27;#de-user-message-actions&#x27;).hidden = !state.paths;
         root.querySelector(&#x27;#de-message-actions&#x27;).hidden = !state.paths;
         root.querySelector(&#x27;#de-lineage-button&#x27;).hidden = !state.paths;
+        sessionMenuButton.hidden = !state.paths;
         root.querySelector(&#x27;#de-plan-strip&#x27;).hidden = false;
         root.querySelector(&#x27;#de-communication&#x27;).hidden = !state.communication;
         root.querySelector(&#x27;#de-runtime-strip&#x27;).hidden = !state.runtime;
@@ -3044,6 +3169,23 @@ html&gt;body{padding:0}&lt;/style&gt;
         if (!resultRow) return;
         openSearchResult(resultRow);
       });
+
+      sessionMenuButton.addEventListener(&#x27;click&#x27;, function () {
+        if (!versions[currentVersion].paths) return;
+        var shouldOpen = sessionMenu.hidden;
+        sessionMenu.hidden = !shouldOpen;
+        sessionMenuButton.setAttribute(&#x27;aria-expanded&#x27;, shouldOpen ? &#x27;true&#x27; : &#x27;false&#x27;);
+        if (shouldOpen) copyPanel.hidden = true;
+      });
+
+      root.querySelectorAll(&#x27;[data-copy-operation]&#x27;).forEach(function (button) {
+        button.addEventListener(&#x27;click&#x27;, function () { openCopyPanel(button.dataset.copyOperation); });
+      });
+      root.querySelector(&#x27;#de-copy-cancel&#x27;).addEventListener(&#x27;click&#x27;, function () {
+        copyPanel.hidden = true;
+        sessionMenuButton.focus();
+      });
+      copySubmit.addEventListener(&#x27;click&#x27;, completeCopyPrototype);
 
       contextButton.addEventListener(&#x27;click&#x27;, function () {
         var shouldOpen = contextPopover.hidden;
@@ -3172,6 +3314,16 @@ html&gt;body{padding:0}&lt;/style&gt;
           return;
         }
         if (searchView.hidden) {
+          if (event.key === &#x27;Escape&#x27; &amp;&amp; !copyPanel.hidden) {
+            copyPanel.hidden = true;
+            sessionMenuButton.focus();
+            return;
+          }
+          if (event.key === &#x27;Escape&#x27; &amp;&amp; !sessionMenu.hidden) {
+            closeSessionMenu();
+            sessionMenuButton.focus();
+            return;
+          }
           if (event.key === &#x27;Escape&#x27; &amp;&amp; (!modelMenu.hidden || !contextPopover.hidden)) {
             modelMenu.hidden = true;
             contextPopover.hidden = true;

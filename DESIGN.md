@@ -42,6 +42,10 @@ The maintained reference index is [`doc/参考文件/README.md`](doc/参考文�
 
 The sidebar starts with the latest ten sessions created by D Code and loads ten more on demand without opening transcript content. It does not expose every Pi session under the macOS home directory. D Code Project is the navigation object; after a Source Folder is associated, all Pi Sessions whose normalized `cwd` exactly matches that folder appear as one cross-folder recency list rather than folder groups. Each project session shows its Source Folder as secondary text. The same D Code-created session may appear in Recent and its Project with one stable ID. The Project row selects project Files/Changes; its separate chevron expands sessions, and its plus menu creates a Session in one registered Source Folder. Selecting a Session alone opens its history and offers direct continuation. Connection and reload state stay in the quiet footer.
 
+### Search overlay
+
+The sidebar search action and global `Command-K` open one centered native overlay without replacing the workbench. The search field owns initial focus; Project and Source Folder filters remain compact but keep `40 pt` targets. Empty input shows the latest visible sessions. Results combine title, best snippet, role, match count, time, Project/Source Folder ownership, and full-path help while remaining one selectable row per stable Session ID. The covered workbench and toolbar leave hit-testing and the accessibility tree until the overlay closes. Index build, rebuild, query failure, no-result, and target-open failure are distinct states; an open failure preserves the result list so another row can be chosen. `Escape` restores the prior responder, and a successful Entry ID result scrolls to and briefly highlights the same persisted message.
+
 ### Conversation
 
 - User text uses a content-sized accent-tinted bubble aligned to the trailing edge; short prompts never expand into full-width cards.
@@ -88,6 +92,7 @@ Concrete tokens and components live in:
 
 - `app/Sources/PiDCode/Views/DesignSystem.swift`
 - `app/Sources/PiDCode/Views/RootView.swift`
+- `app/Sources/PiDCode/Views/SearchOverlayView.swift`
 - `app/Sources/PiDCode/Views/ConversationView.swift`
 - `app/Sources/PiDCode/Views/ActivePlanView.swift`
 - `app/Sources/PiDCode/Views/ComposerView.swift`

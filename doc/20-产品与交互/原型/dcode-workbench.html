@@ -2960,13 +2960,13 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;i data-lucide=&quot;ellipsis&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
             &lt;/button&gt;
             &lt;div class=&quot;sl-session-menu&quot; role=&quot;menu&quot; hidden&gt;
-              &lt;button class=&quot;sl-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot; data-action=&quot;rename&quot;&gt;
-                &lt;i data-lucide=&quot;pencil&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-                重命名会话
+              &lt;button class=&quot;sl-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot; data-action=&quot;copy-session&quot;&gt;
+                &lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                复制到项目…
               &lt;/button&gt;
-              &lt;button class=&quot;sl-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot; data-action=&quot;clone-session&quot;&gt;
-                &lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-                复制当前进度为新会话…
+              &lt;button class=&quot;sl-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot; data-action=&quot;copy-archive-session&quot;&gt;
+                &lt;i data-lucide=&quot;archive&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+                复制到项目并归档原会话…
               &lt;/button&gt;
               &lt;div class=&quot;sl-menu-separator&quot;&gt;&lt;/div&gt;
               &lt;button class=&quot;sl-menu-item&quot; type=&quot;button&quot; role=&quot;menuitem&quot; data-action=&quot;toggle-history&quot;&gt;
@@ -3052,7 +3052,6 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-message-actions&quot; aria-label=&quot;这条用户消息的操作&quot;&gt;
                 &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-action=&quot;copy-message&quot; aria-label=&quot;复制这条消息&quot; data-tooltip=&quot;复制消息&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
                 &lt;button class=&quot;sl-message-action sl-message-action-primary&quot; type=&quot;button&quot; data-inline-continue=&quot;n3&quot; aria-label=&quot;编辑并重走这条消息&quot; data-tooltip=&quot;编辑并重走&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-                &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-inline-fork=&quot;n3&quot; aria-label=&quot;从这条消息新建会话&quot; data-tooltip=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;/div&gt;
             &lt;/article&gt;
 
@@ -3065,7 +3064,6 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-message-actions&quot; aria-label=&quot;这条智能体回复的操作&quot;&gt;
                 &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-action=&quot;copy-message&quot; aria-label=&quot;复制这条回复&quot; data-tooltip=&quot;复制回复&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
                 &lt;button class=&quot;sl-message-action sl-message-action-primary&quot; type=&quot;button&quot; data-inline-continue=&quot;n4&quot; aria-label=&quot;从这条回复继续&quot; data-tooltip=&quot;从这里继续&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-                &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-inline-fork=&quot;n4&quot; aria-label=&quot;从这条回复新建会话&quot; data-tooltip=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;/div&gt;
             &lt;/article&gt;
 
@@ -3075,7 +3073,6 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-message-actions&quot; aria-label=&quot;这条用户消息的操作&quot;&gt;
                 &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-action=&quot;copy-message&quot; aria-label=&quot;复制这条消息&quot; data-tooltip=&quot;复制消息&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
                 &lt;button class=&quot;sl-message-action sl-message-action-primary&quot; type=&quot;button&quot; data-inline-continue=&quot;n5&quot; aria-label=&quot;编辑并重走这条消息&quot; data-tooltip=&quot;编辑并重走&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-                &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-inline-fork=&quot;n5&quot; aria-label=&quot;从这条消息新建会话&quot; data-tooltip=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;/div&gt;
             &lt;/article&gt;
 
@@ -3088,7 +3085,6 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-message-actions&quot; aria-label=&quot;这条智能体回复的操作&quot;&gt;
                 &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-action=&quot;copy-message&quot; aria-label=&quot;复制这条回复&quot; data-tooltip=&quot;复制回复&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
                 &lt;button class=&quot;sl-message-action sl-message-action-primary&quot; type=&quot;button&quot; data-inline-continue=&quot;n6&quot; aria-label=&quot;从这条回复继续&quot; data-tooltip=&quot;从这里继续&quot;&gt;&lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
-                &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-inline-fork=&quot;n6&quot; aria-label=&quot;从这条回复新建会话&quot; data-tooltip=&quot;从这里新建会话&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
               &lt;/div&gt;
             &lt;/article&gt;
           &lt;/div&gt;
@@ -3126,10 +3122,6 @@ html&gt;body{padding:0}&lt;/style&gt;
             &lt;strong id=&quot;sl-action-title&quot;&gt;从 10:08 的用户消息重新考虑&lt;/strong&gt;
             &lt;span id=&quot;sl-action-subtitle&quot;&gt;原消息会回到输入框；现有路径完整保留。&lt;/span&gt;
           &lt;/div&gt;
-          &lt;button class=&quot;sl-secondary-button&quot; type=&quot;button&quot; data-action=&quot;fork-session&quot;&gt;
-            &lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-            从这里新建会话…
-          &lt;/button&gt;
           &lt;button class=&quot;sl-primary-button&quot; type=&quot;button&quot; data-action=&quot;continue-here&quot;&gt;
             &lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
             &lt;span id=&quot;sl-continue-label&quot;&gt;编辑并重走&lt;/span&gt;
@@ -3187,7 +3179,6 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;/div&gt;
         &lt;div class=&quot;sl-inspector-actions sl-history-only&quot;&gt;
           &lt;button class=&quot;sl-primary-button&quot; type=&quot;button&quot; data-action=&quot;continue-here&quot;&gt;&lt;span id=&quot;sl-inspector-continue-label&quot;&gt;编辑并重走&lt;/span&gt;&lt;/button&gt;
-          &lt;button class=&quot;sl-secondary-button&quot; type=&quot;button&quot; data-action=&quot;fork-session&quot;&gt;从这里新建会话…&lt;/button&gt;
           &lt;div class=&quot;sl-action-hint&quot; id=&quot;sl-inspector-hint&quot;&gt;新路径仍属于当前会话&lt;/div&gt;
         &lt;/div&gt;
 
@@ -3347,7 +3338,6 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;/div&gt;
         &lt;div class=&quot;sl-inspector-actions sl-conversation-only&quot;&gt;
           &lt;button class=&quot;sl-secondary-button&quot; type=&quot;button&quot; data-action=&quot;toggle-history&quot;&gt;&lt;i data-lucide=&quot;history&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;查看会话谱系&lt;/button&gt;
-          &lt;button class=&quot;sl-secondary-button&quot; type=&quot;button&quot; data-action=&quot;clone-session&quot;&gt;&lt;i data-lucide=&quot;copy-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;复制当前进度…&lt;/button&gt;
         &lt;/div&gt;
       &lt;/aside&gt;
 
@@ -3358,8 +3348,8 @@ html&gt;body{padding:0}&lt;/style&gt;
       &lt;section class=&quot;sl-sheet&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;sl-sheet-title&quot;&gt;
         &lt;header class=&quot;sl-sheet-head&quot;&gt;
           &lt;div&gt;
-            &lt;h2 id=&quot;sl-sheet-title&quot;&gt;从这里创建新会话&lt;/h2&gt;
-            &lt;p id=&quot;sl-sheet-subtitle&quot;&gt;复制到所选消息之前，并把原消息放回新会话输入框。&lt;/p&gt;
+            &lt;h2 id=&quot;sl-sheet-title&quot;&gt;复制到项目&lt;/h2&gt;
+            &lt;p id=&quot;sl-sheet-subtitle&quot;&gt;复制完整已持久化会话，原会话继续显示。&lt;/p&gt;
           &lt;/div&gt;
           &lt;button class=&quot;sl-icon-button&quot; type=&quot;button&quot; data-action=&quot;close-sheet&quot; aria-label=&quot;关闭&quot;&gt;
             &lt;i data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
@@ -3368,22 +3358,29 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;div class=&quot;sl-sheet-body&quot;&gt;
           &lt;div&gt;
             &lt;label class=&quot;sl-field-label&quot; for=&quot;sl-session-name&quot;&gt;新会话名称&lt;/label&gt;
-            &lt;input class=&quot;sl-name-input&quot; id=&quot;sl-session-name&quot; value=&quot;D Code 完整形态 · Messenger 路线&quot;&gt;
+            &lt;input class=&quot;sl-name-input&quot; id=&quot;sl-session-name&quot; value=&quot;定义 D Code 完整形态 · 副本&quot;&gt;
+          &lt;/div&gt;
+          &lt;div&gt;
+            &lt;label class=&quot;sl-field-label&quot; for=&quot;sl-copy-project&quot;&gt;目标项目&lt;/label&gt;
+            &lt;select class=&quot;sl-name-input&quot; id=&quot;sl-copy-project&quot;&gt;&lt;option&gt;D Code&lt;/option&gt;&lt;option&gt;Curio&lt;/option&gt;&lt;/select&gt;
+          &lt;/div&gt;
+          &lt;div&gt;
+            &lt;label class=&quot;sl-field-label&quot; for=&quot;sl-copy-folder&quot;&gt;目标源文件夹&lt;/label&gt;
+            &lt;select class=&quot;sl-name-input&quot; id=&quot;sl-copy-folder&quot;&gt;&lt;option&gt;dcode · …/Apps/dcode&lt;/option&gt;&lt;option&gt;pi-dgoal · …/Githubs/pi-dgoal&lt;/option&gt;&lt;/select&gt;
           &lt;/div&gt;
           &lt;dl class=&quot;sl-source-preview&quot;&gt;
-            &lt;dt&gt;来源&lt;/dt&gt;&lt;dd id=&quot;sl-sheet-source&quot;&gt;定义 D Code 完整形态 · 10:08&lt;/dd&gt;
-            &lt;dt&gt;项目与文件夹&lt;/dt&gt;&lt;dd&gt;D Code · dcode&lt;/dd&gt;
-            &lt;dt&gt;复制范围&lt;/dt&gt;&lt;dd id=&quot;sl-sheet-scope&quot;&gt;消息之前的当前路径&lt;/dd&gt;
+            &lt;dt&gt;来源&lt;/dt&gt;&lt;dd id=&quot;sl-sheet-source&quot;&gt;定义 D Code 完整形态&lt;/dd&gt;
+            &lt;dt&gt;复制范围&lt;/dt&gt;&lt;dd id=&quot;sl-sheet-scope&quot;&gt;完整已持久化会话与全部路径&lt;/dd&gt;
             &lt;dt&gt;创建后&lt;/dt&gt;&lt;dd&gt;打开新会话&lt;/dd&gt;
           &lt;/dl&gt;
           &lt;div class=&quot;sl-sheet-note&quot;&gt;
             &lt;i data-lucide=&quot;info&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-            &lt;span id=&quot;sl-sheet-note&quot;&gt;项目文件保持当前状态，不会回到这个时间点；原会话不变。&lt;/span&gt;
+            &lt;span id=&quot;sl-sheet-note&quot;&gt;新会话使用新的 Session ID 与目标 cwd；未发送草稿、项目文件和 Git 状态不会复制。&lt;/span&gt;
           &lt;/div&gt;
         &lt;/div&gt;
         &lt;footer class=&quot;sl-sheet-actions&quot;&gt;
           &lt;button class=&quot;sl-secondary-button&quot; type=&quot;button&quot; data-action=&quot;close-sheet&quot;&gt;取消&lt;/button&gt;
-          &lt;button class=&quot;sl-primary-button&quot; type=&quot;button&quot; data-action=&quot;create-session&quot;&gt;创建并打开&lt;/button&gt;
+          &lt;button class=&quot;sl-primary-button&quot; type=&quot;button&quot; data-action=&quot;create-session&quot;&gt;复制并打开&lt;/button&gt;
         &lt;/footer&gt;
       &lt;/section&gt;
     &lt;/div&gt;
@@ -3521,7 +3518,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       if (!root) return;
 
       var selectedNode = &#x27;n3&#x27;;
-      var sheetMode = &#x27;fork&#x27;;
+      var sheetMode = &#x27;copy&#x27;;
       var toastTimer;
       var inspectorOverlayQuery = window.matchMedia(&#x27;(max-width: 1279px)&#x27;);
       var compactQuery = window.matchMedia(&#x27;(max-width: 879px)&#x27;);
@@ -3817,14 +3814,18 @@ html&gt;body{padding:0}&lt;/style&gt;
 
       function openSheet(mode) {
         sheetMode = mode;
-        var data = nodeData[selectedNode];
-        var clone = mode === &#x27;clone&#x27;;
-        root.querySelector(&#x27;#sl-sheet-title&#x27;).textContent = clone ? &#x27;复制当前进度为新会话&#x27; : &#x27;从这里创建新会话&#x27;;
-        root.querySelector(&#x27;#sl-sheet-subtitle&#x27;).textContent = clone ? &#x27;只复制当前活动路径；同一 Session 的其他路径不会复制。&#x27; : (data.type === &#x27;用户消息&#x27; ? &#x27;复制到所选消息之前，并把原消息放回新会话输入框。&#x27; : &#x27;复制到所选回复为止，并创建独立会话。&#x27;);
-        root.querySelector(&#x27;#sl-session-name&#x27;).value = clone ? &#x27;定义 D Code 完整形态 · 副本&#x27; : &#x27;D Code 完整形态 · &#x27; + data.time + &#x27; 路线&#x27;;
-        root.querySelector(&#x27;#sl-sheet-source&#x27;).textContent = clone ? &#x27;定义 D Code 完整形态 · 当前路径&#x27; : &#x27;定义 D Code 完整形态 · &#x27; + data.time;
-        root.querySelector(&#x27;#sl-sheet-scope&#x27;).textContent = clone ? &#x27;当前活动路径到最新进度&#x27; : (data.type === &#x27;用户消息&#x27; ? &#x27;消息之前的当前路径&#x27; : &#x27;到所选回复为止&#x27;);
-        root.querySelector(&#x27;#sl-sheet-note&#x27;).textContent = &#x27;项目文件保持当前状态，不会回到这个时间点；原会话不变。&#x27;;
+        var shouldArchive = mode === &#x27;copy-archive&#x27;;
+        root.querySelector(&#x27;#sl-sheet-title&#x27;).textContent = shouldArchive ? &#x27;复制到项目并归档原会话&#x27; : &#x27;复制到项目&#x27;;
+        root.querySelector(&#x27;#sl-sheet-subtitle&#x27;).textContent = shouldArchive
+          ? &#x27;目标会话验证成功后，只在 D Code 中归档原会话。&#x27;
+          : &#x27;复制完整已持久化会话，原会话继续显示。&#x27;;
+        root.querySelector(&#x27;#sl-session-name&#x27;).value = &#x27;定义 D Code 完整形态 · 副本&#x27;;
+        root.querySelector(&#x27;#sl-sheet-source&#x27;).textContent = &#x27;定义 D Code 完整形态&#x27;;
+        root.querySelector(&#x27;#sl-sheet-scope&#x27;).textContent = &#x27;完整已持久化会话与全部路径&#x27;;
+        root.querySelector(&#x27;#sl-sheet-note&#x27;).textContent = shouldArchive
+          ? &#x27;新会话使用新的 Session ID 与目标 cwd；目标验证成功后，源 Pi JSONL 保留且可从“已归档会话”恢复显示。&#x27;
+          : &#x27;新会话使用新的 Session ID 与目标 cwd；未发送草稿、项目文件和 Git 状态不会复制。&#x27;;
+        root.querySelector(&#x27;[data-action=&quot;create-session&quot;]&#x27;).textContent = shouldArchive ? &#x27;复制、归档并打开&#x27; : &#x27;复制并打开&#x27;;
         root.querySelector(&#x27;.sl-fork-layer&#x27;).hidden = false;
         closeMenu();
         window.setTimeout(function () {
@@ -4013,13 +4014,15 @@ html&gt;body{padding:0}&lt;/style&gt;
         var strong = document.createElement(&#x27;strong&#x27;);
         strong.textContent = title;
         var subtitle = document.createElement(&#x27;span&#x27;);
-        subtitle.textContent = &#x27;来自「定义 D Code 完整形态」&#x27;;
+        subtitle.textContent = sheetMode === &#x27;copy-archive&#x27; ? &#x27;完整副本 · 原会话已归档&#x27; : &#x27;完整副本 · 原会话继续显示&#x27;;
         copy.append(strong, subtitle);
         button.append(icon, copy);
         root.querySelectorAll(&#x27;.sl-tree-button&#x27;).forEach(function (item) { item.classList.remove(&#x27;is-selected&#x27;); });
         root.querySelector(&#x27;#sl-other-sessions&#x27;).prepend(button);
         closeSheet();
-        showToast(sheetMode === &#x27;clone&#x27; ? &#x27;已复制当前活动路径为独立会话。&#x27; : &#x27;已从所选位置创建独立会话。&#x27;);
+        showToast(sheetMode === &#x27;copy-archive&#x27;
+          ? &#x27;新会话已创建并验证；原会话仅在 D Code 中归档，底层 Pi 历史仍保留。&#x27;
+          : &#x27;已复制完整会话；原会话继续显示。&#x27;);
       }
 
       function selectPath(button) {
@@ -4062,21 +4065,10 @@ html&gt;body{padding:0}&lt;/style&gt;
         button.addEventListener(&#x27;click&#x27;, startContinuation);
       });
 
-      root.querySelectorAll(&#x27;[data-action=&quot;fork-session&quot;]&#x27;).forEach(function (button) {
-        button.addEventListener(&#x27;click&#x27;, function () { openSheet(&#x27;fork&#x27;); });
-      });
-
       root.querySelectorAll(&#x27;[data-inline-continue]&#x27;).forEach(function (button) {
         button.addEventListener(&#x27;click&#x27;, function () {
           selectNode(button.getAttribute(&#x27;data-inline-continue&#x27;));
           startContinuation();
-        });
-      });
-
-      root.querySelectorAll(&#x27;[data-inline-fork]&#x27;).forEach(function (button) {
-        button.addEventListener(&#x27;click&#x27;, function () {
-          selectNode(button.getAttribute(&#x27;data-inline-fork&#x27;));
-          openSheet(&#x27;fork&#x27;);
         });
       });
 
@@ -4127,17 +4119,17 @@ html&gt;body{padding:0}&lt;/style&gt;
         event.currentTarget.setAttribute(&#x27;aria-expanded&#x27;, menu.hidden ? &#x27;false&#x27; : &#x27;true&#x27;);
       });
 
-      root.querySelectorAll(&#x27;[data-action=&quot;clone-session&quot;]&#x27;).forEach(function (button) {
+      root.querySelectorAll(&#x27;[data-action=&quot;copy-session&quot;]&#x27;).forEach(function (button) {
         button.addEventListener(&#x27;click&#x27;, function (event) {
           event.stopPropagation();
-          openSheet(&#x27;clone&#x27;);
+          openSheet(&#x27;copy&#x27;);
         });
       });
-
-      root.querySelector(&#x27;[data-action=&quot;rename&quot;]&#x27;).addEventListener(&#x27;click&#x27;, function (event) {
-        event.stopPropagation();
-        closeMenu();
-        showToast(&#x27;会话名称将进入就地编辑。&#x27;);
+      root.querySelectorAll(&#x27;[data-action=&quot;copy-archive-session&quot;]&#x27;).forEach(function (button) {
+        button.addEventListener(&#x27;click&#x27;, function (event) {
+          event.stopPropagation();
+          openSheet(&#x27;copy-archive&#x27;);
+        });
       });
 
       root.querySelectorAll(&#x27;[data-action=&quot;close-sheet&quot;]&#x27;).forEach(function (button) {

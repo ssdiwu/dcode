@@ -4,6 +4,6 @@ D Code 不把用户主目录下的全部 Pi Session 直接暴露为 Recent Sessi
 
 Session Header 与有效来源标记作为完整初始文档成功发布，是 D Code 创建 Session 的提交点。此后运行时可写激活属于独立结果：激活失败不得删除或重写 append-only Pi JSONL，也不得把已经持久化的 Session 报告成“创建失败”；Host 必须返回稳定 Session 身份，并区分 writable、observing 与 unavailable。
 
-旧 Pi Session 不做迁移，也不根据路径、时间或文件名猜测它是否由 D Code 创建。用户把其确切 `cwd` 登记为 Project Source Folder 后，旧会话才通过 Project 投影可见；关联或观察旧会话不会追加 D Code 来源。由其他 Pi 客户端复制的 Session 即使继承了原来的 Custom Entry，也因标记 Session ID 与新 Header ID 不一致而不进入 Recent。
+旧 Pi Session 不做迁移，也不根据路径、时间或文件名猜测它是否由 D Code 创建。用户把其确切 `cwd` 登记为 Project Source Folder 后，旧会话才通过 Project 投影可见；关联或观察旧会话不会追加 D Code 来源。由其他 Pi 客户端复制的 Session 即使继承了原来的 Custom Entry，也因标记 Session ID 与新 Header ID 不一致而不进入 Recent。D Code 自己完成会话复制时，必须为目标新 Session 建立与新 Header ID 匹配的来源条目；继承的旧条目仍然无效。
 
-因此会话导航的可见集合是“D Code 创建的 Recent Sessions”与“已关联 Project Source Folder 投影出的会话”的并集。同一 Session 可同时出现在两处，但稳定 ID、JSONL、消息与上下文始终只有一份。后续全局 Search 必须遵守同一可见集合，不得绕过 Project 关联暴露其他旧 Pi Session。
+因此普通会话导航的候选集合是“D Code 创建的 Recent Sessions”与“已关联 Project Source Folder 投影出的会话”的并集，再统一排除 D Code 已归档的 Session ID。同一 Session 可同时出现在 Recent 与 Project，但稳定 ID、JSONL、消息与上下文始终只有一份。全局 Search 必须遵守相同集合，不得绕过 Project 关联或归档状态暴露其他旧 Pi Session；归档对象只能通过已归档会话入口查看和恢复。

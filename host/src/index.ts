@@ -16,6 +16,7 @@ interface CliOptions {
   agentDir?: string;
   sessionsDirectory?: string;
   leaseAgentDir?: string;
+  searchCacheDirectory?: string;
 }
 
 function parseCli(argv: readonly string[]): CliOptions {
@@ -23,17 +24,23 @@ function parseCli(argv: readonly string[]): CliOptions {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const value = argv[index + 1];
-    if (argument === "--agent-dir" || argument === "--sessions-dir" || argument === "--lease-agent-dir") {
+    if (
+      argument === "--agent-dir"
+      || argument === "--sessions-dir"
+      || argument === "--lease-agent-dir"
+      || argument === "--search-cache-dir"
+    ) {
       if (!value) throw new Error(`Missing value for ${argument}`);
       const path = resolve(value);
       if (argument === "--agent-dir") options.agentDir = path;
       else if (argument === "--sessions-dir") options.sessionsDirectory = path;
-      else options.leaseAgentDir = path;
+      else if (argument === "--lease-agent-dir") options.leaseAgentDir = path;
+      else options.searchCacheDirectory = path;
       index += 1;
       continue;
     }
     if (argument === "--help") {
-      process.stderr.write("Usage: pi-dcode-host [--agent-dir PATH] [--sessions-dir PATH] [--lease-agent-dir PATH]\n");
+      process.stderr.write("Usage: pi-dcode-host [--agent-dir PATH] [--sessions-dir PATH] [--lease-agent-dir PATH] [--search-cache-dir PATH]\n");
       process.exit(0);
     }
     throw new Error(`Unknown argument: ${argument}`);
@@ -121,7 +128,8 @@ function schedule(value: unknown): void {
   if (pendingRequests >= MAX_PENDING_REQUESTS) process.stdin.pause();
   let bypassQueue = false;
   try {
-    bypassQueue = parseRequest(value).method === "extension.respond";
+    const method = parseRequest(value).method;
+    bypassQueue = method === "extension.respond" || method === "session.search";
   } catch {
     // Invalid envelopes stay on the serial path and are reported by handleValue.
   }
@@ -150,7 +158,7 @@ async function shutdown(exitCode: number): Promise<void> {
   exiting = true;
   if (parentWatch) clearInterval(parentWatch);
   const forcedExitCode = exitCode === 0 ? 1 : exitCode;
-  const forceExit = setTimeout(() => process.exit(forcedExitCode), 8_000);
+  const forceExit = setTimeout(() => process.exit(forcedExitCode), 20_000);
   process.stdin.pause();
   try {
     await host.close();

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { D_CODE_SESSION_ORIGIN_TYPE } from "../src/session-origin.js";
 
 const hostEntry = fileURLToPath(new URL("../src/index.js", import.meta.url));
 
@@ -98,6 +99,89 @@ test("host process keeps stdout as JSONL and shuts down cleanly", async () => {
   assert.ok(messages.some((message) => message.id === "unknown" && message.ok === false));
   assert.ok(messages.some((message) => message.id === "shutdown" && message.ok === true));
   await rm(root, { recursive: true, force: true });
+});
+
+test("search worker keeps the Host process JSONL-only and does not create a session lease", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-search-process-test-"));
+  const agentDir = join(root, "agent");
+  const sessionsDir = join(agentDir, "sessions", "project");
+  const cacheDir = join(root, "search-cache");
+  const sessionId = "search-process-session";
+  await mkdir(sessionsDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  const timestamp = new Date().toISOString();
+  await writeFile(join(sessionsDir, `${sessionId}.jsonl`), [
+    {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp,
+      cwd: root,
+    },
+    {
+      type: "custom",
+      id: `${sessionId}-origin`,
+      parentId: null,
+      timestamp,
+      customType: D_CODE_SESSION_ORIGIN_TYPE,
+      data: { version: 1, sessionId },
+    },
+    {
+      type: "message",
+      id: `${sessionId}-user`,
+      parentId: `${sessionId}-origin`,
+      timestamp,
+      message: { role: "user", content: "进程级搜索验证", timestamp: Date.now() },
+    },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+  const child = spawn(process.execPath, [
+    hostEntry,
+    "--agent-dir", agentDir,
+    "--search-cache-dir", cacheDir,
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+  const collector = collectMessages(child.stdout);
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  try {
+    await collector.waitFor((message) => message.event === "host.ready", "host.ready");
+    child.stdin.write(request("search-build", "session.search", {
+      query: "进程级",
+      requestToken: "build",
+      limit: 20,
+      projectSourceFolders: [],
+      refresh: true,
+    }));
+    await collector.waitFor((message) => message.id === "search-build" && message.ok === true, "initial search");
+    await collector.waitFor(
+      (message) => message.event === "session.searchIndexChanged"
+        && (message.data as { state?: unknown }).state === "ready",
+      "ready search index",
+    );
+    child.stdin.write(request("search-ready", "session.search", {
+      query: "进程级",
+      requestToken: "ready",
+      limit: 20,
+      projectSourceFolders: [],
+      refresh: false,
+    }));
+    const searched = await collector.waitFor((message) => message.id === "search-ready", "ready search");
+    assert.equal(searched.ok, true);
+    const results = ((searched.result as { results?: unknown[] }).results ?? []) as Array<{ sessionId?: unknown }>;
+    assert.deepEqual(results.map((result) => result.sessionId), [sessionId]);
+    await assert.rejects(access(join(agentDir, "pi-dcode", "leases")));
+
+    child.stdin.write(request("shutdown", "host.shutdown"));
+    const [code] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+    assert.equal(code, 0);
+    assert.equal(stderr, "");
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("extension dialog responses bypass a prompt waiting for native UI", async () => {

@@ -3,6 +3,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export const HOST_METHODS = [
   "host.hello",
   "session.list",
+  "session.search",
   "session.inspect",
   "session.refresh",
   "session.create",
@@ -101,6 +102,31 @@ function optionalString(params: Record<string, unknown>, key: string): string | 
   if (value === undefined) return undefined;
   if (typeof value !== "string") {
     throw new ProtocolValidationError("INVALID_PARAMS", `Expected params.${key} to be a string`);
+  }
+  return value;
+}
+
+function requireStringArray(
+  params: Record<string, unknown>,
+  key: string,
+  maximumItems: number,
+  optional = false,
+): string[] | undefined {
+  const value = params[key];
+  if (value === undefined && optional) return undefined;
+  if (!Array.isArray(value) || value.length > maximumItems) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      `Expected params.${key} to be an array containing at most ${maximumItems} paths`,
+    );
+  }
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0 || item.length > 4_096) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        `Expected every params.${key} item to be a non-empty string up to 4096 characters`,
+      );
+    }
   }
   return value;
 }
@@ -212,6 +238,35 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       optionalCwdScope(params);
       optionalSessionOrigin(params);
       return;
+    case "session.search": {
+      const query = requireString(params, "query", { allowEmpty: true });
+      if (query.length > 512) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.query to be at most 512 characters");
+      }
+      const requestToken = requireString(params, "requestToken");
+      if (requestToken.length > 128) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.requestToken to be at most 128 characters");
+      }
+      optionalInteger(params, "limit", 1, 100);
+      const projectSourceFolders = requireStringArray(params, "projectSourceFolders", 1_024) ?? [];
+      const filterSourceFolders = requireStringArray(params, "filterSourceFolders", 1_024, true);
+      if (filterSourceFolders) {
+        const projectSet = new Set(projectSourceFolders);
+        if (filterSourceFolders.some((path) => !projectSet.has(path))) {
+          throw new ProtocolValidationError(
+            "INVALID_PARAMS",
+            "Expected params.filterSourceFolders to be a subset of params.projectSourceFolders",
+          );
+        }
+      }
+      if (params.refresh !== undefined && typeof params.refresh !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.refresh to be a boolean");
+      }
+      if (params.probe !== undefined && typeof params.probe !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.probe to be a boolean");
+      }
+      return;
+    }
     case "session.inspect":
       requireString(params, "sessionId");
       return;
@@ -220,6 +275,26 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     case "session.open": {
       requireString(params, "sessionId");
+      const expectedEntryId = optionalString(params, "expectedEntryId");
+      if (expectedEntryId !== undefined && (expectedEntryId.length === 0 || expectedEntryId.length > 128)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.expectedEntryId to be a non-empty string up to 128 characters",
+        );
+      }
+      const expectedEntryDigest = optionalString(params, "expectedEntryDigest");
+      if (expectedEntryDigest !== undefined && !/^v1:[a-f0-9]{64}$/.test(expectedEntryDigest)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.expectedEntryDigest to be a v1 SHA-256 digest",
+        );
+      }
+      if (expectedEntryDigest !== undefined && expectedEntryId === undefined) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "params.expectedEntryDigest requires params.expectedEntryId",
+        );
+      }
       const mode = params.mode;
       if (mode !== undefined && mode !== "readOnly" && mode !== "writable") {
         throw new ProtocolValidationError("INVALID_PARAMS", 'Expected params.mode to be "readOnly" or "writable"');
@@ -227,10 +302,19 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if (params.writeIntent !== undefined && typeof params.writeIntent !== "boolean") {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.writeIntent to be a boolean");
       }
+      if (params.preserveActive !== undefined && typeof params.preserveActive !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.preserveActive to be a boolean");
+      }
       if (mode === "writable" && params.writeIntent !== true) {
         throw new ProtocolValidationError(
           "INVALID_PARAMS",
           "Writable session.open requires params.writeIntent=true",
+        );
+      }
+      if (mode === "writable" && expectedEntryDigest !== undefined) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "params.expectedEntryDigest is only valid for read-only search navigation",
         );
       }
       return;

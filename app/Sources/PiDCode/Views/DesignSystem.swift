@@ -38,8 +38,8 @@ struct IconActionStyle: ButtonStyle {
 
 extension View {
     func dCodeAccessibleButton(_ label: String) -> some View {
-        accessibilityLabel(Text(label))
-            .help(label)
+        help(label)
+            .accessibilityLabel(Text(label))
     }
 }
 

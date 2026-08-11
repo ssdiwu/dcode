@@ -64,6 +64,16 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             details: nil
         ))
         XCTAssertTrue(identityChanged.localizedDescription.contains("保留上一次完整历史"))
+
+        let staleSearchResult = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "SEARCH_TARGET_STALE",
+            message: "The search result is stale",
+            details: nil
+        ))
+        XCTAssertEqual(
+            staleSearchResult.localizedDescription,
+            "这条搜索结果已不在当前会话路径中。搜索窗口已保留，请刷新结果后重试。"
+        )
     }
 
     func testRequestEncodingIsOneJSONLine() throws {
@@ -375,12 +385,13 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testHostCompatibilityRejectsOldOrIncompleteHostBeforeSessionQueries() throws {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionExternalSync"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("dcodeSessionOrigin"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionSearch"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.1",
+            hostVersion: "0.0.2",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -401,7 +412,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.1",
+            hostVersion: "0.0.2",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
