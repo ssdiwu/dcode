@@ -2,18 +2,38 @@ import AppKit
 import SwiftUI
 
 struct RootView: View {
+    private let sidebarWidth: CGFloat = 286
+    private let inspectorWidth: CGFloat = 340
+
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(WorkbenchPreferenceKey.sidebarUserHidden) private var sidebarUserHidden = false
+    @AppStorage(WorkbenchPreferenceKey.inspectorUserHidden) private var inspectorUserHidden = false
+    @State private var sidebarOverlayPresented = false
+    @State private var inspectorOverlayPresented = false
+    @State private var projectEditorPresented = false
+    @State private var editingProject: DCodeProject?
 
     var body: some View {
-        @Bindable var model = model
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 230, ideal: 285, max: 380)
-        } detail: {
-            SessionDetailView()
+        GeometryReader { proxy in
+            let widthClass = WorkbenchWidthClass.classify(proxy.size.width)
+            workbench(width: proxy.size.width, widthClass: widthClass)
+                .toolbar { toolbar(widthClass: widthClass) }
+                .onChange(of: widthClass) { _, next in
+                    normalizeOverlays(for: next)
+                }
+                .onChange(of: model.selectedSessionID) { _, _ in
+                    closeOverlays()
+                }
+                .onChange(of: model.inspectorScope) { _, scope in
+                    guard case .project = scope else { return }
+                    inspectorUserHidden = false
+                    if widthClass != .wide {
+                        sidebarOverlayPresented = false
+                        inspectorOverlayPresented = true
+                    }
+                }
         }
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: "搜索标题、路径或 Session ID")
         .overlay(alignment: .top) {
             if let notice = model.notice {
                 NoticeBanner(notice: notice)
@@ -21,7 +41,7 @@ struct RootView: View {
                     .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(reduceMotion ? nil : .smooth, value: model.notice?.id)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: model.notice?.id)
         .alert(
             model.issue?.title ?? "",
             isPresented: Binding(
@@ -38,124 +58,161 @@ struct RootView: View {
             ExtensionDialogView(dialog: dialog)
                 .interactiveDismissDisabled()
         }
-    }
-
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text("工作区")
-                    .font(.headline)
-                Spacer()
-                Button(action: chooseDirectory) {
-                    Label("新会话", systemImage: "plus")
-                }
-                .buttonStyle(.borderless)
-                .frame(minHeight: PiDCodeMetrics.minimumTarget)
-                .accessibilityLabel("新建会话")
-                .accessibilityValue("选择工作目录并开始新会话")
-                .disabled(model.connectionState != .ready || model.isOpeningSession || model.isStreaming)
-                .help("选择工作目录并新建会话")
-            }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-
-            Divider()
-
-            if model.sessions.isEmpty, !model.isLoadingSessions {
-                ContentUnavailableView(
-                    "没有 Pi 会话",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("选择一个工作目录，开始新的原生会话。")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(selection: selectionBinding) {
-                    ForEach(model.filteredSessionGroups) { group in
-                        Section {
-                            ForEach(group.sessions) { session in
-                                SessionRow(session: session)
-                                    .tag(session.id)
-                                    .help("\(session.cwd)\nSession ID: \(session.id)")
-                            }
-                        } header: {
-                            WorkspaceHeader(group: group)
-                        }
-                    }
-                }
-                .listStyle(.sidebar)
-                .disabled(model.isStreaming)
-                .overlay {
-                    if model.filteredSessions.isEmpty {
-                        ContentUnavailableView.search(text: model.searchText)
-                    }
-                }
-            }
-
-            Divider()
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 8, height: 8)
-                    .accessibilityHidden(true)
-                Text(model.connectionState.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !model.isLoadingSessions {
-                    Text("· \(model.sessions.count) 个会话")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer()
-                if model.isLoadingSessions {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        Task { await model.reloadSessions() }
-                    } label: {
-                        Label("重新载入", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
-                    .accessibilityLabel("重新载入会话列表")
-                    .accessibilityValue("重新扫描 Pi 会话")
-                    .disabled(model.connectionState != .ready || model.isStreaming)
-                    .help("重新载入 Pi 会话")
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
+        .sheet(isPresented: $projectEditorPresented, onDismiss: { editingProject = nil }) {
+            ProjectEditorView(project: editingProject)
         }
     }
 
-    private var selectionBinding: Binding<String?> {
-        Binding(
-            get: { model.selectedSessionID },
-            set: { id in
-                guard !model.isStreaming else { return }
-                Task { await model.selectSession(id) }
+    @ViewBuilder
+    private func workbench(width: CGFloat, widthClass: WorkbenchWidthClass) -> some View {
+        let inlineSidebar = widthClass != .compact && !sidebarUserHidden
+        let inlineInspector = widthClass == .wide
+            && !inspectorUserHidden
+            && model.inspectorScope != nil
+
+        ZStack {
+            centralContent
+                .padding(.leading, inlineSidebar ? sidebarWidth : 0)
+                .padding(.trailing, inlineInspector ? inspectorWidth : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(!overlayIsPresented)
+                .accessibilityHidden(overlayIsPresented)
+
+            if inlineSidebar {
+                HStack(spacing: 0) {
+                    sidebar(widthClass: widthClass)
+                        .frame(width: sidebarWidth)
+                    Divider()
+                    Spacer(minLength: 0)
+                }
+                .transition(.move(edge: .leading))
+                .allowsHitTesting(!inspectorOverlayPresented)
+                .accessibilityHidden(inspectorOverlayPresented)
             }
+
+            if inlineInspector {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Divider()
+                    WorkInspectorView()
+                        .frame(width: inspectorWidth)
+                }
+                .transition(.move(edge: .trailing))
+            }
+
+            if sidebarOverlayPresented || inspectorOverlayPresented {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeOverlays() }
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+                    .zIndex(2)
+            }
+
+            if sidebarOverlayPresented {
+                HStack(spacing: 0) {
+                    sidebar(widthClass: widthClass)
+                        .frame(width: min(sidebarWidth, width * 0.84))
+                        .shadow(color: .black.opacity(0.2), radius: 18, x: 6)
+                    Spacer(minLength: 0)
+                }
+                .transition(.move(edge: .leading))
+                .zIndex(3)
+            }
+
+            if inspectorOverlayPresented, model.inspectorScope != nil {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    WorkInspectorView()
+                        .frame(width: min(inspectorWidth, width * 0.88))
+                        .shadow(color: .black.opacity(0.2), radius: 18, x: -6)
+                }
+                .transition(.move(edge: .trailing))
+                .zIndex(3)
+            }
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: sidebarUserHidden)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorUserHidden)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: sidebarOverlayPresented)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorOverlayPresented)
+    }
+
+    private var centralContent: some View {
+        Group {
+            if model.inspection != nil {
+                SessionDetailView()
+            } else {
+                UserHomeView(
+                    newSession: chooseDirectory,
+                    newProject: { presentProjectEditor(nil) },
+                    canCreateSession: model.canUseHostSessions && !model.isOpeningSession && !model.isStreaming,
+                    canCreateProject: model.canEditProjects
+                )
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func sidebar(widthClass: WorkbenchWidthClass) -> some View {
+        SidebarView(
+            selectProject: { projectID in
+                if widthClass == .compact { sidebarOverlayPresented = false }
+                inspectorUserHidden = false
+                if widthClass != .wide { inspectorOverlayPresented = true }
+                Task { await model.selectProject(projectID) }
+            },
+            selectSession: { sessionID in
+                if widthClass == .compact { sidebarOverlayPresented = false }
+                inspectorOverlayPresented = false
+                Task { await model.selectSession(sessionID) }
+            },
+            newGlobalSession: chooseDirectory,
+            editProject: presentProjectEditor
         )
+    }
+
+    @ToolbarContentBuilder
+    private func toolbar(widthClass: WorkbenchWidthClass) -> some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                toggleSidebar(for: widthClass)
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .help(sidebarIsVisible(for: widthClass) ? "隐藏左栏" : "显示左栏")
+            .accessibilityLabel(sidebarIsVisible(for: widthClass) ? "隐藏左栏" : "显示左栏")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                toggleInspector(for: widthClass)
+            } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .help(inspectorIsVisible(for: widthClass) ? "隐藏工作检查器" : "显示工作检查器")
+            .accessibilityLabel(inspectorIsVisible(for: widthClass) ? "隐藏工作检查器" : "显示工作检查器")
+            .disabled(model.inspectorScope == nil)
+        }
     }
 
     private var dialogBinding: Binding<ExtensionDialog?> {
         Binding(get: { model.activeDialog }, set: { _ in })
     }
 
-    private var connectionColor: Color {
-        switch model.connectionState {
-        case .ready: .green
-        case .connecting: .orange
-        case .failed: .red
-        case .idle: .secondary
-        }
+    private var overlayIsPresented: Bool {
+        sidebarOverlayPresented || inspectorOverlayPresented
+    }
+
+    private func presentProjectEditor(_ project: DCodeProject?) {
+        editingProject = project
+        projectEditorPresented = true
     }
 
     private func chooseDirectory() {
         let panel = NSOpenPanel()
         panel.title = "选择新会话的工作目录"
         panel.prompt = "开始会话"
-        panel.message = "D Code 会让 Pi Host 在此目录中工作。"
+        panel.message = "在项目内新建时，请使用项目行旁的加号选择已登记的源文件夹。"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
@@ -165,62 +222,49 @@ struct RootView: View {
             Task { await model.createSession(at: url) }
         }
     }
-}
 
-private struct WorkspaceHeader: View {
-    let group: SessionWorkspaceGroup
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 7) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(group.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(group.cwd)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            Text("\(group.sessions.count)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.top, 6)
-        .padding(.bottom, 2)
-        .textCase(nil)
-        .help(group.cwd)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("工作区 \(group.displayName)，\(group.sessions.count) 个会话")
+    private func sidebarIsVisible(for widthClass: WorkbenchWidthClass) -> Bool {
+        widthClass == .compact ? sidebarOverlayPresented : !sidebarUserHidden
     }
-}
 
-private struct SessionRow: View {
-    let session: SessionSummary
+    private func inspectorIsVisible(for widthClass: WorkbenchWidthClass) -> Bool {
+        if widthClass == .wide { return !inspectorUserHidden && model.inspectorScope != nil }
+        return inspectorOverlayPresented && model.inspectorScope != nil
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(session.displayTitle)
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-            HStack(spacing: 6) {
-                Text("\(session.messageCount) 条")
-                    .monospacedDigit()
-                Spacer(minLength: 4)
-                if let date = session.modifiedDate {
-                    Text(date.piDCodeRelativeLabel)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    private func toggleSidebar(for widthClass: WorkbenchWidthClass) {
+        if widthClass == .compact {
+            sidebarOverlayPresented.toggle()
+            if sidebarOverlayPresented { inspectorOverlayPresented = false }
+        } else {
+            sidebarUserHidden.toggle()
         }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.displayTitle)，\(session.messageCount) 条消息")
+    }
+
+    private func toggleInspector(for widthClass: WorkbenchWidthClass) {
+        guard model.inspectorScope != nil else { return }
+        if widthClass == .wide {
+            inspectorUserHidden.toggle()
+        } else {
+            inspectorOverlayPresented.toggle()
+            if inspectorOverlayPresented, widthClass == .compact { sidebarOverlayPresented = false }
+        }
+    }
+
+    private func normalizeOverlays(for widthClass: WorkbenchWidthClass) {
+        switch widthClass {
+        case .wide:
+            closeOverlays()
+        case .medium:
+            sidebarOverlayPresented = false
+        case .compact:
+            if sidebarOverlayPresented && inspectorOverlayPresented { inspectorOverlayPresented = false }
+        }
+    }
+
+    private func closeOverlays() {
+        sidebarOverlayPresented = false
+        inspectorOverlayPresented = false
     }
 }
 

@@ -15,7 +15,7 @@ struct ConversationView: View {
                         ContentUnavailableView(
                             "空会话",
                             systemImage: "text.bubble",
-                            description: Text(model.canWrite ? "在下方输入第一条消息。" : "接管会话后即可开始。")
+                            description: Text("在下方输入第一条消息。")
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 80)

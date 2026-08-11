@@ -1,19 +1,34 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionReadError, SessionReader } from "../src/session-reader.js";
 
-async function createSessionFixture(root: string, id: string, modifiedOffset = 0): Promise<string> {
+async function createSessionFixture(
+  root: string,
+  id: string,
+  modifiedOffset = 0,
+  cwd = `/tmp/${id}`,
+  originSessionId?: string,
+): Promise<string> {
   const directory = join(root, `project-${id}`);
   await mkdir(directory, { recursive: true });
   const path = join(directory, `2026-01-01_${id}.jsonl`);
   const timestamp = new Date(Date.now() + modifiedOffset).toISOString();
+  const originId = `origin-${id}`;
   const entries = [
-    { type: "session", version: 3, id, timestamp, cwd: `/tmp/${id}` },
-    { type: "model_change", id: "model-one", parentId: null, timestamp, provider: "test", modelId: "model" },
+    { type: "session", version: 3, id, timestamp, cwd },
+    ...(originSessionId === undefined ? [] : [{
+      type: "custom",
+      id: originId,
+      parentId: null,
+      timestamp,
+      customType: "dcode-session-origin-v1",
+      data: { version: 1, sessionId: originSessionId },
+    }]),
+    { type: "model_change", id: "model-one", parentId: originSessionId === undefined ? null : originId, timestamp, provider: "test", modelId: "model" },
     { type: "thinking_level_change", id: "thinking-one", parentId: "model-one", timestamp, thinkingLevel: "high" },
     { type: "message", id: "user-one", parentId: "thinking-one", timestamp, message: { role: "user", content: "Inspect this project", timestamp: Date.now() } },
     { type: "message", id: "assistant-one", parentId: "user-one", timestamp, message: { role: "assistant", content: [{ type: "text", text: "Done" }], api: "test", provider: "test", model: "model", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() } },
@@ -21,6 +36,8 @@ async function createSessionFixture(root: string, id: string, modifiedOffset = 0
     { type: "session_info", id: "name-one", parentId: "plan-one", timestamp, name: `Session ${id}` },
   ];
   await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  const modified = new Date(Date.now() + modifiedOffset);
+  await utimes(path, modified, modified);
   return path;
 }
 
@@ -70,6 +87,82 @@ test("list filters and sorts sessions", async () => {
     assert.deepEqual(limited.map((session) => session.id), ["newer"]);
     const filtered = await reader.list({ query: "OLDER", limit: 1 });
     assert.deepEqual(filtered.map((session) => session.id), ["older"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("list scopes summaries to exact project folders or the user home", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-test-"));
+  try {
+    const home = join(root, "home");
+    const sourceA = join(home, "code", "a");
+    const sourceB = join(home, "code", "b");
+    const outside = join(root, "outside");
+    await Promise.all([sourceA, sourceB, outside].map((path) => mkdir(path, { recursive: true })));
+    const aPath = await createSessionFixture(root, "a", 0, sourceA);
+    const bPath = await createSessionFixture(root, "b", -1_000, sourceB);
+    const outsidePath = await createSessionFixture(root, "outside", 1_000, outside);
+    const now = Date.now();
+    await utimes(aPath, new Date(now), new Date(now));
+    await utimes(bPath, new Date(now - 1_000), new Date(now - 1_000));
+    await utimes(outsidePath, new Date(now + 1_000), new Date(now + 1_000));
+    const reader = new SessionReader(root);
+
+    const exact = await reader.list({
+      limit: 10,
+      cwdScope: { match: "exact", paths: [sourceA, sourceB] },
+    });
+    assert.deepEqual(exact.map((session) => session.id), ["a", "b"]);
+
+    const homeSessions = await reader.list({
+      limit: 10,
+      cwdScope: { match: "descendantOrEqual", paths: [home] },
+    });
+    assert.deepEqual(homeSessions.map((session) => session.id), ["a", "b"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("D Code origin filtering happens before pagination and rejects inherited markers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-test-"));
+  try {
+    const cwd = join(root, "source");
+    await mkdir(cwd, { recursive: true });
+    for (let index = 0; index < 12; index += 1) {
+      await createSessionFixture(root, `external-${index}`, 20_000 + index, cwd);
+    }
+    for (let index = 0; index < 11; index += 1) {
+      const id = `dcode-${index}`;
+      await createSessionFixture(root, id, index, cwd, id);
+    }
+    await createSessionFixture(root, "copied", 30_000, cwd, "source-session-id");
+    const lateMarkerPath = await createSessionFixture(root, "late-marker", 40_000, cwd);
+    await appendFile(lateMarkerPath, `${JSON.stringify({
+      type: "custom",
+      id: "late-origin",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "dcode-session-origin-v1",
+      data: { version: 1, sessionId: "late-marker" },
+    })}\n`);
+
+    const reader = new SessionReader(root);
+    const recent = await reader.list({ origin: "dcode", limit: 10 });
+    assert.deepEqual(
+      recent.map((session) => session.id),
+      Array.from({ length: 10 }, (_, offset) => `dcode-${10 - offset}`),
+    );
+
+    const project = await reader.list({
+      cwdScope: { match: "exact", paths: [cwd] },
+      limit: 100,
+    });
+    assert.equal(project.length, 25);
+    assert.ok(project.some((session) => session.id === "external-0"));
+    assert.ok(project.some((session) => session.id === "copied"));
+    assert.ok(project.some((session) => session.id === "late-marker"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

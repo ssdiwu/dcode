@@ -62,8 +62,16 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "这个会话仍在其他客户端中变化。请先停止该客户端，等待片刻后重试。"
             case "EXTERNAL_WRITE_DETECTED":
                 "检测到其他客户端写入。D Code 已停止写入以保护会话；关闭其他客户端后可重新继续。"
-            case "EXCLUSIVE_USE_CONFIRMATION_REQUIRED":
-                "继续会话前必须确认其他客户端已经停止使用它。"
+            case "WRITE_INTENT_REQUIRED":
+                "本次操作缺少明确的写入意图，D Code 没有修改会话。请重试刚才的操作。"
+            case "HOST_RESTART_REQUIRED":
+                "上一次写入未能安全停止。D Code 仍可观察会话，但再次写入前需要重新打开 D Code。"
+            case "SESSION_CHANGED_DURING_REFRESH":
+                "Pi 会话仍在更新，本次刷新没有采用不稳定内容；D Code 会继续等待下一次完整更新。"
+            case "SESSION_IDENTITY_CHANGED":
+                "Pi 会话文件已被替换为不同身份。D Code 已保留上一次完整历史；请重新打开 D Code 后再继续。"
+            case "INVALID_SESSION":
+                "Pi 会话包含未完成或损坏的记录。D Code 已保留上一次完整历史；请等待 Pi 完成写入，持续出现时再检查会话文件。"
             default:
                 "\(error.message)（\(error.code)）"
             }

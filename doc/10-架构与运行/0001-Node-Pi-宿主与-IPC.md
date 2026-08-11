@@ -1,6 +1,6 @@
 # Node/Pi 宿主与 IPC
 
-状态：Implemented baseline
+状态：Implemented 0.0.1 release
 
 ## 职责
 
@@ -9,8 +9,10 @@
 Swift 负责原生呈现与用户输入；Host 负责：
 
 - 发现、解析和恢复 Pi Session；
-- 执行 App 内直接会话接管、Session Lease 与冲突检测；
+- 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的精确 Source Folder `cwd` 查询全部关联 Session Summary；
+- 执行共享会话观察、按需 Session Lease 与冲突检测；
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
+- 返回 Pi SDK 的 Context Usage，并维护 D Code 自有、会话级持久化的极速状态；
 - 转发 Pi 流式事件和结构化 Active Plan；
 - 以原生 Unicode 结构渲染受支持的 Mermaid 图表，并为不支持类型返回显式失败；
 - 把标准扩展交互转换为协议事件，并对 custom/widget 等 TUI 能力发出明确 unsupported 事件；
@@ -34,13 +36,14 @@ node dist/src/index.js --agent-dir ~/.pi/agent
 open "dist/D Code.app"
 ```
 
-`build.sh` 将 release Swift executable、arm64 Node `>=22.19.0`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
+`build.sh` 将 release Swift executable、arm64 Node `22.22.3`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
 
-- 运行时要求 Node `>=22.19.0`。
+- Host 开发运行要求 Node `>=22.19.0`；`0.0.1` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时与随包许可证一致。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
 - `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
 - App 退出应发送 `host.shutdown`；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
+- App 在执行任何会话查询前要求 `hostVersion=0.0.1`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage 与 Fast Mode 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航分类或写入路径。
 - Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
 
 ## Protocol v1
@@ -78,47 +81,49 @@ open "dist/D Code.app"
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
-| `session.list`、`session.inspect` | 不创建 `AgentSession`，只读发现与恢复历史快照；有界列表先按文件 mtime 选择最近候选，再解析完整摘要 |
-| `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped JSONL、取得租约并以 writable 打开 |
-| `session.open`、`session.close` | 打开只读或可写会话并管理生命周期；既有会话的 writable 请求必须携带 App 的独占使用确认 |
+| `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配 Source Folder；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
+| `session.refresh` | 从当前活动会话的已知规范路径读取最新快照，不重新扫描全部 Session 目录；用于外部 Pi 条目落盘后的合并刷新 |
+| `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建，随后返回 writable、observing 或 unavailable 激活结果，不以激活失败回滚或隐匿已创建 Session |
+| `session.open`、`session.close` | 打开内部观察态或可写会话并管理生命周期；既有会话的 writable 请求必须携带本次 Write Intent |
 | `session.prompt`、`session.abort` | 发送输入与中止当前运行 |
 | `session.getState`、`session.getCommands` | 获取当前权威状态、命令、模板与 skills |
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前会话设置 |
+| `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
 | `extension.respond` | 完成标准 select/confirm/input/editor 扩展请求 |
 | `content.renderMermaid` | 校验至多 100,000 字符的源码，返回 Unicode 行、语义 span、尺寸、类型和 warning；不支持的类型返回结构化失败 |
+| `host.shutdown` | 关闭活动会话、刷新输出并退出 Host |
 
 `host.hello.capabilities.mermaidUnicode=true` 表示该 Host 提供上述原生渲染动作，不表示支持 Mermaid 的全部图表语法。当前渲染器来自精确固定的 `grok-mermaid@0.2.2`，Swift 不自行解析图表语法。
-| `host.shutdown` | 关闭活动会话、刷新输出并退出 Host |
 
 参数的可执行权威位于 `host/src/protocol.ts`；Swift 客户端不得依赖未列入 Protocol v1 的内部对象字段。
 
 ### 事件组
 
-- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.conflict`；
+- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
 - Pi 运行：`session.event`，其中载荷来自 `AgentSessionEvent`，`message_update.partial` 不转发累积快照；
 - 计划：`plan.changed`，只识别 `dgoal-work-v1` 与 `dgoal-plan-v2`；
 - 扩展：`extension.request`、`extension.closed`、`extension.notification`、`extension.status`、`extension.working`、`extension.editorText` 与 `extension.unsupported`；
 - 诊断：`protocol.error`、`session.operationError`、`session.cleanupError`、`session.cleanupTimeout`、`extension.error`。
 
-## 会话打开与所有权
+## 会话观察与写入所有权
 
-### 只读
+### 观察
 
-`session.open` 的 `mode=readOnly` 只挂载已解析快照，不创建 `AgentSession`，不能调用 prompt、模型修改或扩展动作。
+`session.open` 的内部 `mode=readOnly` 代表 Session Observation：只挂载已解析快照，不创建 `AgentSession`，也不创建租约。Host 以轻量 stat 轮询当前文件的 device、inode、size 与 mtime；变化后发出 `session.changed`，Swift 再用 `session.refresh` 从已知路径取得最新活动分支。无变化时不重复解析完整 JSONL，不重新扫描全部 Session 目录。该内部模式不映射为用户可见的“只读会话”；App 始终保留正常 transcript 与 Composer。
 
 ### 可写
 
 `mode=writable` 必须依次通过：
 
 1. stable session ID 定位到唯一 JSONL；
-2. 对既有会话，Protocol 要求 `exclusiveUseConfirmed=true`，对应 App 中用户确认其他客户端已停止使用；新建会话由 Host 自己保证初始独占；
+2. 对既有会话，Protocol 以 `writeIntent=true` 表达本次用户 Write Intent；它由发送或修改运行设置触发，不对应一张额外确认页；新建会话由 Host 自己保证初始独占；
 3. 原子创建该 session ID 的 Session Lease，已有租约时返回 `SESSION_IN_USE`；
 4. 静默窗口前后文件规范路径、device、inode、size、mtime 与 leaf ID 不变；
 5. Pi SDK 成功打开会话并绑定扩展 UI context；
 6. 运行期间每次写入前后及定时轮询持续核对租约指纹与 runtime snapshot。
 
-直接接管不依赖 CLI 插件、Handoff ID 或会话 marker。App 的确认不是对非协作进程的技术锁：用户仍须先停止在其他客户端中使用该会话；如果 Pi CLI 或其它进程之后写入，Host 会检测冲突并立即停止，不能承诺在两个进程同时开始写入时无缝迁移在途操作。
+按需写入不依赖 CLI 插件、Handoff ID 或 D Code 创建来源标记；该标记只控制 Recent 导航可见性，不是写入锁。Write Intent 不是对非协作进程的技术锁：如果 Pi CLI 或其它进程在 D Code 写入期间继续写入，Host 会检测冲突并立即停止。App 随后关闭冲突运行时、释放自己的租约、回到观察态并刷新最新历史；不能承诺在两个进程同时开始写入时无缝合并在途操作。
 
 租约指纹包括规范路径、device、inode、size、mtimeNs 与 leaf ID。Host 在普通 message、工具结果、扩展 entry、thinking、session info、compaction 和已包装的模型/树操作发生持久化后，将 Pi runtime 的完整逻辑快照 digest 与磁盘 JSONL 复核，再接受新指纹；连续 owned writes 会合并或重试，混入 runtime 未知条目则判定为外部写入。写入前和定时轮询发现外部变化时，立即标记 conflict、中止运行并拒绝后续写操作。无法验证 owner nonce 的租约不得强制删除。
 
@@ -126,7 +131,7 @@ open "dist/D Code.app"
 
 标准 `select`、`confirm`、`input`、`editor` 请求由 `extension.request` 表达，并以 request ID 确保结果、取消或错误只完成一次。
 
-Host 不导入或调用 `pi-tui`，不执行 extension 提供的 TUI factory，也不向 Swift 发送终端字符帧。`ui.custom()` 先发出 `extension.unsupported`，再以 `EXTENSION_UI_UNSUPPORTED` 明确失败；非空 `setWidget()` 发出一次去重的 unsupported 事件但不调用 factory。Header、footer、theme、terminal input 等未原生适配的显示请求同样显式忽略或阻止，不得静默返回成功。
+Host 不导入或调用 `pi-tui`，不执行 extension 提供的 TUI factory，也不向 Swift 发送终端字符帧。`ui.custom()` 先发出 `extension.unsupported`，再以 `EXTENSION_UI_UNSUPPORTED` 明确失败；非空 `setWidget()` 发出一次去重的 unsupported 事件但不调用 factory。Header、footer、theme、terminal input 等未原生适配的显示请求显式记录为忽略或阻止；只有阻止用户操作的错误进入产品通知。`getToolsExpanded()` / `setToolsExpanded()` 与 Pi RPC 一致，使用折叠默认值与 no-op（空操作），不冒充成产品能力失败。
 
 `host.hello.capabilities` 中 `extensionDialogs=true`，`extensionCustomHeadless=false`，`extensionWidgets=false`。这表示原生结构化对话框可用，不表示提供任意 Pi 扩展界面的兼容层。
 
@@ -138,10 +143,10 @@ Host 不导入或调用 `pi-tui`，不执行 extension 提供的 TUI factory，�
 npm test
 ```
 
-当前 Host 自动测试共 37 项，覆盖协议、JSONL 分片与坏输入、输出失败、直接接管确认、存活所有者拒绝、失效 owner 租约自动恢复、并发恢复只产生一个所有者、静默窗口、租约与外部写入、连续 owned writes、新建会话、会话发现/恢复、结构化 Extension UI、对话响应的进程级交错、custom/widget 与查询型 TUI 能力的明确拒绝、Mermaid 成功/不支持分支、PiHost 生命周期、父进程消失后的有界退出及真实子进程 JSONL。Swift 包另有 16 项测试，覆盖协议映射、可操作的租约冲突文案、连续 Pipe 响应、开发/Bundle Host 定位、Finder 环境补全、无外部 token 的接管入口、按 cwd 的稳定工作区分组、扩展界面状态的会话/Host 生命周期清理、streaming/persisted 回复边界去重、诊断脱敏、transcript、fenced code/Mermaid 与 Active Plan 映射。
+当前 Host 自动测试共 61 项，覆盖完整/半写入外部条目的稳定观察、同 ID 文件身份替换拒绝、打开与刷新竞态、冲突后恢复观察、运行时停止或租约释放失败时保留锁并阻止后续写入、协议、D Code 创建来源前缀判定与先筛选后分页、创建后激活失败的部分成功合同、Project 精确目录范围摘要、D Code 极速模式与共享状态事件、外部 `pi-dfast` 的安装与加载前排除、普通扩展动态重载、极速跨会话恢复隔离、Prompt 持久化确认、JSONL 分片与坏输入、输出失败、写入意图与租约竞争、失效 owner 租约自动恢复、并发恢复只产生一个所有者、静默窗口、租约与外部写入、连续 owned writes、新建会话、会话发现/恢复、结构化 Extension UI、对话响应的进程级交错、custom/widget 的明确边界、工具展开提示的 RPC 中性行为、Mermaid 成功/不支持分支、PiHost 生命周期、父进程消失后的有界退出及真实子进程 JSONL。Swift 包另有 36 项测试，覆盖 Host 版本/能力门禁、Project 写入门禁、持久化与损坏保护、真实 Git 只读查询、按需文件树和符号链接边界、Recent 来源查询与分页、会话创建激活结果、响应式宽度分类、单一应用级系统/浅色/深色外观权威、Context/Fast wire shape、协议映射、租约冲突文案、Prompt 确认与跨会话草稿隔离、连续 Pipe 响应、开发/Bundle Host 定位、Finder 环境补全、扩展界面生命周期、被忽略的展示提示不上浮全局通知、streaming/persisted 边界去重、诊断脱敏、transcript、fenced code/Mermaid 与 Active Plan 映射。
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 
-无插件直接接管已在临时 agentDir 的真实 `.app` 上验收：App 只读打开 `ui-direct-takeover` 后，原生确认页不含插件、Handoff ID 或 marker 输入；确认后状态变为“可写”并出现 composer。租约 owner 绑定同一 session ID，源 JSONL 的 handoff marker 数量为 0；关闭 App 后租约目录消失，session hash 不变；第二次启动仍恢复相同两条历史并保持只读，等待用户再次直接继续。自动测试另证明未确认 writable 被拒、第二个 Host 在首个租约释放前得到 `SESSION_IN_USE`、静默窗口变化与未知外部条目得到明确冲突。
+早期无插件直接接管曾在临时 agentDir 的真实 `.app` 上完成历史验收，但当时使用“先只读、再确认”的界面，已由 ADR 0006 取代，不能作为当前 UI 证据。当前自动测试证明观察态不创建租约、外部变化发出 `session.changed` 并可从已知路径刷新；冲突后的 writable runtime 能释放租约并重新进入观察。第二个 Host 在首个租约释放前仍得到 `SESSION_IN_USE`，静默窗口变化与未知外部条目仍得到明确冲突。
 
-Swift App 已在真实 `~/.pi/agent` 上完成只读窗口冒烟：Host 握手、最近 60 个会话、当前 stable Session ID 精确搜索、1,202 条当前历史与原生目录选择面板均可达。另以真实 Mermaid 会话验证 flowchart、sequence、state 与 class 的原生呈现、`110%` 缩放、源码复制、图片剪贴板和 `2724 × 398` PNG 导出；gantt 与 pie 显式显示不支持错误并回退原始源码。arm64 本机 App 由 LaunchServices/Finder 路径启动后，进程命令行确认只使用包内 Node 与 Host，`host.hello` 成功、60 个真实会话可见，Finder 环境包含 Homebrew/用户命令目录；App bundle 通过 `codesign --verify --deep --strict`，关窗后内嵌 Node 子进程退出。1233 个 JSONL、约 2.4 GiB 的现实目录下，`session.list(limit=60)` 实测 0.747 秒，随后按 ID `session.inspect` 实测 0.337 秒。该结论仍不代表当前真实会话的最终可写接管或对外分发已经完成。
+旧全量发现基线曾在真实 `~/.pi/agent` 上完成只读窗口冒烟：Host 握手、最近 60 个扫描结果、当前 stable Session ID 精确搜索、1,202 条当前历史与原生目录选择面板均可达。另以真实 Mermaid 会话验证 flowchart、sequence、state 与 class 的原生呈现、`110%` 缩放、源码复制、图片剪贴板和 `2724 × 398` PNG 导出；gantt 与 pie 显式显示不支持错误并回退原始源码。arm64 本机 App 由 LaunchServices/Finder 路径启动后，进程命令行确认只使用包内 Node 与 Host，`host.hello` 成功、扫描器可返回 60 个真实会话，Finder 环境包含 Homebrew/用户命令目录；App bundle 通过 `codesign --verify --deep --strict`，关窗后内嵌 Node 子进程退出。1233 个 JSONL、约 2.4 GiB 的现实目录下，`session.list(limit=60)` 实测 0.747 秒，随后按 ID `session.inspect` 实测 0.337 秒。该证据只证明扫描器与会话主链路的历史性能，不再代表 `0.0.1` Recent 的产品可见集合，也不证明当前真实会话的最终可写接管或对外分发已经完成。

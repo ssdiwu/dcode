@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import PiDCode
@@ -49,18 +50,77 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             details: nil
         ))
         XCTAssertTrue(externalWrite.localizedDescription.contains("已停止写入以保护会话"))
+
+        let restartRequired = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "HOST_RESTART_REQUIRED",
+            message: "Runtime did not stop cleanly",
+            details: nil
+        ))
+        XCTAssertTrue(restartRequired.localizedDescription.contains("重新打开 D Code"))
+
+        let identityChanged = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "SESSION_IDENTITY_CHANGED",
+            message: "Session identity changed",
+            details: nil
+        ))
+        XCTAssertTrue(identityChanged.localizedDescription.contains("保留上一次完整历史"))
     }
 
     func testRequestEncodingIsOneJSONLine() throws {
         let data = try HostProtocolCodec.encodeRequest(
             id: "mac-1",
             method: "session.prompt",
-            params: ["message": .string("hello\nworld")]
+            params: ["message": .string("hello\nworld"), "promptId": .string("prompt-1")]
         )
         XCTAssertEqual(data.last, 0x0A)
         XCTAssertEqual(data.filter { $0 == 0x0A }.count, 1)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(object["method"] as? String, "session.prompt")
+    }
+
+    func testPromptCompletionAndFailureStayScopedToTheMatchingSessionDraft() {
+        let model = AppModel()
+        model.pendingPrompt = PendingPromptDraft(sessionID: "session-a", promptID: "prompt-a", draft: "已发送内容")
+        model.selectedSessionID = "session-b"
+        model.composerText = "B 的新草稿"
+
+        model.handle(HostEvent(
+            name: "session.conflict",
+            data: .object(["sessionId": .string("session-b")])
+        ))
+        XCTAssertEqual(model.composerText, "B 的新草稿")
+        XCTAssertEqual(model.pendingPrompt, PendingPromptDraft(
+            sessionID: "session-a",
+            promptID: "prompt-a",
+            draft: "已发送内容"
+        ))
+
+        model.handle(HostEvent(
+            name: "session.promptCompleted",
+            data: .object([
+                "sessionId": .string("session-a"),
+                "promptId": .string("prompt-a"),
+            ])
+        ))
+        XCTAssertNil(model.pendingPrompt)
+
+        model.pendingPrompt = PendingPromptDraft(sessionID: "session-b", promptID: "prompt-b", draft: "未完成输入")
+        model.handle(HostEvent(
+            name: "session.promptFailed",
+            data: .object([
+                "sessionId": .string("session-b"),
+                "promptId": .string("prompt-b"),
+                "message": .string("运行失败"),
+            ])
+        ))
+        XCTAssertEqual(model.composerText, "未完成输入\n\nB 的新草稿")
+        XCTAssertNil(model.pendingPrompt)
+
+        model.handle(HostEvent(
+            name: "session.conflict",
+            data: .object(["sessionId": .string("session-b")])
+        ))
+        XCTAssertEqual(model.composerText, "未完成输入\n\nB 的新草稿")
     }
 
     func testTranscriptParserPreservesThinkingToolsAndErrors() throws {
@@ -118,15 +178,6 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(source.contains("print"))
     }
 
-    func testDirectTakeoverNeedsNoExternalToken() async {
-        let model = AppModel()
-        model.selectedSessionID = "session-id"
-
-        await model.takeOverCurrentSession()
-
-        XCTAssertNil(model.issue)
-    }
-
     func testExtensionUIStateDoesNotSurviveSessionOrHostLifecycleChanges() throws {
         let model = AppModel()
         let dialog = try XCTUnwrap(ExtensionDialog(data: .object([
@@ -152,7 +203,25 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertNil(model.workingMessage)
     }
 
-    func testWorkspaceGroupsPreserveRecencyWhileGroupingByDirectory() {
+    func testIgnoredExtensionPresentationHintDoesNotShowGlobalNotice() {
+        let model = AppModel()
+        model.handle(HostEvent(name: "extension.unsupported", data: .object([
+            "capability": .string("setWidget"),
+            "behavior": .string("ignored"),
+        ])))
+        XCTAssertNil(model.notice)
+        XCTAssertNil(model.issue)
+
+        model.handle(HostEvent(name: "extension.unsupported", data: .object([
+            "capability": .string("custom"),
+            "behavior": .string("blocked"),
+        ])))
+        XCTAssertNil(model.notice)
+        XCTAssertEqual(model.issue?.title, "当前交互无法完成")
+        XCTAssertTrue(model.issue?.message.contains("custom") == true)
+    }
+
+    func testSessionListWindowShowsTenThenTwentyWithoutRegrouping() {
         func session(_ id: String, cwd: String, title: String) -> SessionSummary {
             SessionSummary(
                 path: "/tmp/\(id).jsonl",
@@ -167,15 +236,178 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             )
         }
 
-        let groups = SessionWorkspaceGroup.ordered(from: [
-            session("a-new", cwd: "/work/a", title: "A new"),
-            session("b-new", cwd: "/work/b", title: "B new"),
-            session("a-old", cwd: "/work/a", title: "A old"),
-        ])
+        let sessions = (0..<21).map { index in
+            session("session-\(index)", cwd: index.isMultiple(of: 2) ? "/work/a" : "/work/b", title: "Session \(index)")
+        }
+        var window = SessionListWindow()
+        XCTAssertEqual(window.requestLimit, 11)
+        var page = window.page(from: sessions)
+        XCTAssertEqual(page.items.map(\.id), (0..<10).map { "session-\($0)" })
+        XCTAssertTrue(page.hasMore)
 
-        XCTAssertEqual(groups.map(\.cwd), ["/work/a", "/work/b"])
-        XCTAssertEqual(groups[0].sessions.map(\.id), ["a-new", "a-old"])
-        XCTAssertEqual(groups[1].sessions.map(\.id), ["b-new"])
+        window.loadMore()
+        XCTAssertEqual(window.requestLimit, 21)
+        page = window.page(from: sessions)
+        XCTAssertEqual(page.items.count, 20)
+        XCTAssertEqual(page.items.map(\.cwd).prefix(4), ["/work/a", "/work/b", "/work/a", "/work/b"])
+        XCTAssertTrue(page.hasMore)
+    }
+
+    func testRecentSessionListParametersAlwaysRequireDCodeOrigin() {
+        let params = AppModel.recentSessionListParameters(limit: 11)
+        XCTAssertEqual(params["limit"], .number(11))
+        XCTAssertEqual(params["origin"], .string("dcode"))
+        XCTAssertNil(params["cwdScope"])
+    }
+
+    func testSessionCreateResultKeepsPersistenceSeparateFromActivation() throws {
+        let data = Data("""
+        {
+          "created": true,
+          "session": {
+            "path": "/tmp/session.jsonl",
+            "id": "created-session",
+            "cwd": "/tmp",
+            "created": "2026-08-11T00:00:00.000Z",
+            "modified": "2026-08-11T00:00:00.000Z",
+            "messageCount": 0,
+            "firstMessage": ""
+          },
+          "activation": {
+            "status": "unavailable",
+            "error": {"code": "SESSION_ACTIVATION_FAILED", "message": "activation failed"},
+            "observationError": {"code": "SESSION_OBSERVATION_FAILED", "message": "observation failed"}
+          }
+        }
+        """.utf8)
+        let result = try JSONDecoder().decode(SessionCreateResult.self, from: data)
+        XCTAssertTrue(result.created)
+        XCTAssertEqual(result.session.id, "created-session")
+        XCTAssertEqual(result.activation.status, "unavailable")
+        XCTAssertNil(result.activation.open)
+        XCTAssertEqual(result.activation.error?.code, "SESSION_ACTIVATION_FAILED")
+        XCTAssertEqual(result.activation.observationError?.code, "SESSION_OBSERVATION_FAILED")
+    }
+
+    func testWorkbenchWidthBoundariesMatchTheProductContract() {
+        XCTAssertEqual(WorkbenchWidthClass.classify(1_280), .wide)
+        XCTAssertEqual(WorkbenchWidthClass.classify(1_279), .medium)
+        XCTAssertEqual(WorkbenchWidthClass.classify(880), .medium)
+        XCTAssertEqual(WorkbenchWidthClass.classify(879), .compact)
+    }
+
+    func testProjectSelectionPreservesCurrentSessionTranscriptAndDraft() async {
+        let model = AppModel(projectStore: ProjectStore(fileURL: temporaryURL("projects.json")))
+        let project = DCodeProject(name: "D Code", sourceFolders: [])
+        let transcript = TranscriptItem(id: "a", role: .assistant, timestamp: nil, blocks: [.text(id: "t", value: "keep")])
+        model.projects = [project]
+        model.selectedSessionID = "session"
+        model.transcript = [transcript]
+        model.composerText = "未发送草稿"
+
+        await model.selectProject(project.id)
+
+        XCTAssertEqual(model.selectedSessionID, "session")
+        XCTAssertEqual(model.transcript, [transcript])
+        XCTAssertEqual(model.composerText, "未发送草稿")
+        XCTAssertEqual(model.inspectorScope, .project(project.id))
+    }
+
+    func testLoadingSavedProjectsKeepsThemCollapsedAndDoesNotPreloadSessionCaches() async throws {
+        let root = temporaryURL("project-load-policy")
+        let source = root.appending(path: "source", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(fileURL: root.appending(path: "projects.json"))
+        let project = DCodeProject(name: "D Code", sourceFolders: [SourceFolder(path: source.path)])
+        try await store.save([project])
+
+        let model = AppModel(projectStore: store)
+        await model.loadProjects()
+
+        XCTAssertEqual(model.projects, [project])
+        XCTAssertTrue(model.expandedProjectIDs.isEmpty)
+        XCTAssertTrue(model.projectSessions.isEmpty)
+        XCTAssertTrue(model.projectHasMore.isEmpty)
+    }
+
+    func testProjectEditingStaysDisabledUntilTheStoreLoadsSafely() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "dcode-project-gate-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let storeURL = root.appending(path: "projects.json", directoryHint: .notDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = AppModel(projectStore: ProjectStore(fileURL: storeURL))
+        XCTAssertFalse(model.canEditProjects)
+
+        await model.loadProjects()
+
+        XCTAssertTrue(model.canEditProjects)
+    }
+
+    func testHostStateDecodesContextFastModeAndUnifiedReadOnlyModel() throws {
+        let source = #"{"mode":"readOnly","sessionId":"s","sessionFile":"/tmp/s.jsonl","cwd":"/tmp","model":{"provider":"openai","id":"gpt-4o-mini"},"thinkingLevel":"high","activePlan":null,"isStreaming":false,"contextUsage":null,"fastMode":null,"writable":false,"conflict":null}"#
+        let state = try JSONDecoder().decode(HostState.self, from: Data(source.utf8))
+        XCTAssertEqual(state.model?.provider, "openai")
+        XCTAssertEqual(state.model?.id, "gpt-4o-mini")
+        XCTAssertNil(state.contextUsage)
+        XCTAssertNil(state.fastMode)
+    }
+
+    func testHostStateDecodesRealContextUsageAndFastModeShape() throws {
+        let source = #"{"mode":"writable","sessionId":"s","sessionFile":"/tmp/s.jsonl","sessionName":"Demo","cwd":"/tmp","model":{"provider":"openai-codex","id":"gpt-5.6-sol","name":"GPT-5.6 Sol","reasoning":true,"contextWindow":256000,"maxTokens":128000},"thinkingLevel":"xhigh","activePlan":null,"isStreaming":false,"pendingMessageCount":0,"contextUsage":{"tokens":128000,"contextWindow":256000,"percent":50},"fastMode":{"enabled":true,"active":true,"provider":"openai-codex","model":"gpt-5.6-sol","requestedServiceTier":"priority","reason":"supported"},"writable":true,"conflict":null}"#
+        let state = try JSONDecoder().decode(HostState.self, from: Data(source.utf8))
+
+        XCTAssertEqual(state.contextUsage, ContextUsage(tokens: 128_000, contextWindow: 256_000, percent: 50))
+        XCTAssertEqual(
+            state.fastMode,
+            FastModeState(
+                enabled: true,
+                active: true,
+                provider: "openai-codex",
+                model: "gpt-5.6-sol",
+                requestedServiceTier: "priority",
+                reason: "supported"
+            )
+        )
+    }
+
+    func testHostCompatibilityRejectsOldOrIncompleteHostBeforeSessionQueries() throws {
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionExternalSync"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("dcodeSessionOrigin"))
+        let capabilities = Dictionary(
+            uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
+        )
+        let compatible = HostHello(
+            protocolVersion: 1,
+            hostVersion: "0.0.1",
+            piVersion: "0.84.1",
+            nodeVersion: "22.19.0",
+            capabilities: capabilities
+        )
+        XCTAssertNoThrow(try HostCompatibility.validate(compatible))
+
+        XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
+            protocolVersion: 1,
+            hostVersion: nil,
+            piVersion: "0.84.1",
+            nodeVersion: "22.19.0",
+            capabilities: capabilities
+        ))) { error in
+            XCTAssertEqual(error as? HostCompatibilityError, .incompatibleHostVersion(nil))
+        }
+
+        var incomplete = capabilities
+        incomplete["projectCwdScope"] = .bool(false)
+        XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
+            protocolVersion: 1,
+            hostVersion: "0.0.1",
+            piVersion: "0.84.1",
+            nodeVersion: "22.19.0",
+            capabilities: incomplete
+        ))) { error in
+            XCTAssertEqual(error as? HostCompatibilityError, .missingCapabilities(["projectCwdScope"]))
+        }
     }
 
     func testSettledTranscriptRefreshClearsOnlyFinishedStreamingPresentation() {
@@ -377,4 +609,295 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertNil(ActivePlanParser.parse(completed))
     }
 
+    func testProjectStorePersistsOrderAndCanonicalizesSymlinkAliases() async throws {
+        let root = temporaryURL("project-store")
+        let sourceA = root.appending(path: "a", directoryHint: .isDirectory)
+        let sourceB = root.appending(path: "b", directoryHint: .isDirectory)
+        let aliasA = root.appending(path: "alias-a", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sourceA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceB, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: aliasA, withDestinationURL: sourceA)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = ProjectStore(fileURL: root.appending(path: "projects.json"))
+        let first = try ProjectStore.applying(
+            projectID: nil,
+            name: "D Code",
+            folderURLs: [aliasA, sourceB],
+            to: [],
+            moveConflicts: false
+        )
+        try await store.save(first.projects)
+        let restored = try await store.load()
+
+        XCTAssertEqual(restored.map(\.name), ["D Code"])
+        XCTAssertEqual(restored[0].sourceFolders.map(\.path), [sourceA.path, sourceB.path])
+        XCTAssertEqual(restored[0].sourceFolders.map(\.id), [sourceA.path, sourceB.path])
+    }
+
+    func testProjectMoveRequiresConfirmationAndDoesNotTouchDirectories() async throws {
+        let root = temporaryURL("project-move")
+        let sourceA = root.appending(path: "a", directoryHint: .isDirectory)
+        let sourceB = root.appending(path: "b", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sourceA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceB, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let projectA = DCodeProject(name: "A", sourceFolders: [SourceFolder(path: sourceA.path)])
+        let projectB = DCodeProject(name: "B", sourceFolders: [SourceFolder(path: sourceB.path)])
+        let storeURL = root.appending(path: "projects.json")
+        let store = ProjectStore(fileURL: storeURL)
+        try await store.save([projectA, projectB])
+        let before = try Data(contentsOf: storeURL)
+
+        XCTAssertThrowsError(try ProjectStore.applying(
+            projectID: projectB.id,
+            name: projectB.name,
+            folderURLs: [sourceB, sourceA],
+            to: [projectA, projectB],
+            moveConflicts: false
+        )) { error in
+            guard case ProjectStoreError.missingMoveConfirmation = error else {
+                return XCTFail("Expected explicit move confirmation")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: storeURL), before)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceA.path))
+
+        let moved = try ProjectStore.applying(
+            projectID: projectB.id,
+            name: projectB.name,
+            folderURLs: [sourceB, sourceA],
+            to: [projectA, projectB],
+            moveConflicts: true
+        )
+        try await store.save(moved.projects)
+        XCTAssertTrue(moved.projects.first(where: { $0.id == projectA.id })?.sourceFolders.isEmpty == true)
+        XCTAssertEqual(moved.projects.first(where: { $0.id == projectB.id })?.sourceFolders.map(\.path), [sourceB.path, sourceA.path])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceA.path))
+    }
+
+    func testProjectStoreLeavesMalformedDocumentUntouched() async throws {
+        let root = temporaryURL("project-corrupt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appending(path: "projects.json")
+        let original = Data("{not-json\n".utf8)
+        try original.write(to: storeURL)
+        let store = ProjectStore(fileURL: storeURL)
+
+        do {
+            _ = try await store.load()
+            XCTFail("Expected malformed document to fail")
+        } catch {
+            XCTAssertEqual(try Data(contentsOf: storeURL), original)
+        }
+    }
+
+    func testProjectStoreRejectsUnsupportedVersionAndDuplicateProjectIDsWithoutChangingBytes() async throws {
+        let root = temporaryURL("project-invalid-documents")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appending(path: "projects.json")
+        let store = ProjectStore(fileURL: storeURL)
+
+        let unsupported = Data(#"{"projects":[],"version":2}"#.utf8)
+        try unsupported.write(to: storeURL)
+        do {
+            _ = try await store.load()
+            XCTFail("Expected unsupported version to fail")
+        } catch ProjectStoreError.invalidDocumentVersion(2) {
+            XCTAssertEqual(try Data(contentsOf: storeURL), unsupported)
+        }
+
+        let duplicateID = UUID()
+        let duplicate = Data(#"{"projects":[{"id":"\#(duplicateID.uuidString)","name":"A","sourceFolders":[]},{"id":"\#(duplicateID.uuidString)","name":"B","sourceFolders":[]}],"version":1}"#.utf8)
+        try duplicate.write(to: storeURL)
+        do {
+            _ = try await store.load()
+            XCTFail("Expected duplicate project IDs to fail")
+        } catch ProjectStoreError.duplicateProjectID(duplicateID) {
+            XCTAssertEqual(try Data(contentsOf: storeURL), duplicate)
+        }
+    }
+
+    func testProjectOwnershipFollowsAStoredFolderThatBecomesASymbolicLink() throws {
+        let root = temporaryURL("project-rewired-link")
+        let original = root.appending(path: "original", directoryHint: .isDirectory)
+        let target = root.appending(path: "target", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = DCodeProject(name: "A", sourceFolders: [SourceFolder(path: original.path)])
+
+        try FileManager.default.removeItem(at: original)
+        try FileManager.default.createSymbolicLink(at: original, withDestinationURL: target)
+
+        let conflicts = ProjectStore.conflicts(paths: [target.path], in: [project], excluding: nil)
+        XCTAssertEqual(conflicts.map(\.projectID), [project.id])
+    }
+
+    func testFileTreeReadsOneLevelAndNeverExpandsSymbolicLinks() async throws {
+        let root = temporaryURL("file-tree")
+        let child = root.appending(path: "child", directoryHint: .isDirectory)
+        let file = root.appending(path: "note.md")
+        let link = root.appending(path: "child-link")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try "hello".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: child)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let children = try await FileTreeReader.children(rootPath: root.path, directoryPath: root.path)
+        XCTAssertEqual(children.first?.name, "child")
+        XCTAssertEqual(children.first(where: { $0.name == "note.md" })?.kind, .file)
+        XCTAssertEqual(children.first(where: { $0.name == "child-link" })?.kind, .symbolicLink)
+        do {
+            _ = try await FileTreeReader.children(rootPath: root.path, directoryPath: link.path)
+            XCTFail("Expected symbolic links to remain unexpanded")
+        } catch let error as FileTreeReaderError {
+            XCTAssertEqual(error, .symbolicLinkNotExpandable)
+        }
+
+        let sibling = root.deletingLastPathComponent().appending(path: "outside-(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sibling) }
+        do {
+            _ = try await FileTreeReader.children(rootPath: root.path, directoryPath: sibling.path)
+            XCTFail("Expected an outside directory to be rejected")
+        } catch let error as FileTreeReaderError {
+            XCTAssertEqual(error, .outsideSourceFolder)
+        }
+    }
+
+    func testGitPorcelainParserPreservesSpacesAndRenameSource() {
+        let data = Data(" M file with space.md\0R  new name.md\0old name.md\0?? new file.txt\0".utf8)
+        let changes = GitChangesReader.parsePorcelainV1(data)
+        XCTAssertEqual(changes.count, 3)
+        XCTAssertEqual(changes[0], GitChange(status: " M", path: "file with space.md", originalPath: nil))
+        XCTAssertEqual(changes[1], GitChange(status: "R ", path: "new name.md", originalPath: "old name.md"))
+        XCTAssertEqual(changes[2], GitChange(status: "??", path: "new file.txt", originalPath: nil))
+    }
+
+    func testGitChangesReaderDeduplicatesRepositoryRootsAndDoesNotChangeWorkspaceState() async throws {
+        let root = temporaryURL("git-read-only")
+        let nested = root.appending(path: "nested", directoryHint: .isDirectory)
+        let nonRepository = temporaryURL("not-git")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: nonRepository, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: nonRepository)
+        }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try "base\n".write(to: root.appending(path: "base.txt"), atomically: true, encoding: .utf8)
+        try "rename\n".write(to: root.appending(path: "old name.txt"), atomically: true, encoding: .utf8)
+        try runGit(["add", "base.txt", "old name.txt"], at: root)
+        try runGit(["-c", "user.name=D Code Test", "-c", "user.email=dcode@example.invalid", "commit", "-m", "baseline"], at: root)
+
+        try "changed\n".write(to: root.appending(path: "base.txt"), atomically: true, encoding: .utf8)
+        try "staged\n".write(to: root.appending(path: "staged.txt"), atomically: true, encoding: .utf8)
+        try "untracked\n".write(to: root.appending(path: "untracked.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.moveItem(
+            at: root.appending(path: "old name.txt"),
+            to: root.appending(path: "new name.txt")
+        )
+        try runGit(["add", "-A", "staged.txt", "old name.txt", "new name.txt"], at: root)
+
+        let headBefore = try runGit(["rev-parse", "HEAD"], at: root)
+        let indexBefore = try runGit(["write-tree"], at: root)
+        let statusBefore = try runGitData(["status", "--porcelain=v1", "-z", "--untracked-files=all"], at: root)
+        let snapshots = await GitChangesReader.read(sourceFolders: [
+            SourceFolder(path: root.path),
+            SourceFolder(path: nested.path),
+            SourceFolder(path: nonRepository.path),
+        ])
+
+        let ready = try XCTUnwrap(snapshots.first(where: { $0.rootPath == root.path }))
+        XCTAssertEqual(ready.sourceFolderNames.count, 2)
+        guard case let .ready(branch, changes) = ready.state else {
+            return XCTFail("Expected a ready Git repository")
+        }
+        XCTAssertEqual(branch, "main")
+        XCTAssertTrue(changes.contains(where: { $0.path == "base.txt" && $0.status == " M" }))
+        XCTAssertTrue(changes.contains(where: { $0.path == "staged.txt" && $0.status == "A " }))
+        XCTAssertTrue(changes.contains(where: { $0.path == "untracked.txt" && $0.status == "??" }))
+        XCTAssertTrue(changes.contains(where: { $0.path == "new name.txt" && $0.originalPath == "old name.txt" }))
+        XCTAssertTrue(snapshots.contains(where: {
+            $0.rootPath == nonRepository.path && $0.state == .notRepository
+        }))
+        XCTAssertEqual(try runGit(["rev-parse", "HEAD"], at: root), headBefore)
+        XCTAssertEqual(try runGit(["write-tree"], at: root), indexBefore)
+        XCTAssertEqual(try runGitData(["status", "--porcelain=v1", "-z", "--untracked-files=all"], at: root), statusBefore)
+    }
+
+    func testAppearancePreferenceMapsSystemLightAndDark() {
+        XCTAssertEqual(AppAppearance.resolve("system"), .system)
+        XCTAssertEqual(AppAppearance.resolve("light"), .light)
+        XCTAssertEqual(AppAppearance.resolve("dark"), .dark)
+        XCTAssertEqual(AppAppearance.resolve("unexpected"), .system)
+        XCTAssertNil(AppAppearance.system.appearanceName)
+        XCTAssertEqual(AppAppearance.light.appearanceName, .aqua)
+        XCTAssertEqual(AppAppearance.dark.appearanceName, .darkAqua)
+    }
+
+    func testAppearancePreferenceUsesOneApplicationWideAppearanceAuthority() {
+        let previous = NSApplication.shared.appearance
+        defer { NSApplication.shared.appearance = previous }
+
+        AppAppearance.light.apply()
+        XCTAssertEqual(NSApplication.shared.appearance?.name, .aqua)
+        AppAppearance.dark.apply()
+        XCTAssertEqual(NSApplication.shared.appearance?.name, .darkAqua)
+        AppAppearance.system.apply()
+        XCTAssertNil(NSApplication.shared.appearance)
+    }
+
+    private func temporaryURL(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appending(path: "dcode-\(name)-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    @discardableResult
+    private func runGit(_ arguments: [String], at directory: URL) throws -> String {
+        String(decoding: try runGitData(arguments, at: directory), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runGitData(_ arguments: [String], at directory: URL) throws -> Data {
+        let process = Process()
+        let output = Pipe()
+        let error = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", directory.path] + arguments
+        process.standardOutput = output
+        process.standardError = error
+        try process.run()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "DCodeGitTest",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: String(decoding: errorData, as: UTF8.self)]
+            )
+        }
+        return outputData
+    }
+
+}
+
+@MainActor
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected error", file: file, line: line)
+    } catch {
+        // Expected.
+    }
 }

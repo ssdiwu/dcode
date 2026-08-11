@@ -8,6 +8,49 @@ struct HostHello: Codable, Sendable {
     let capabilities: [String: JSONValue]
 }
 
+enum HostCompatibilityError: LocalizedError, Equatable {
+    case unsupportedProtocol(Int)
+    case incompatibleHostVersion(String?)
+    case missingCapabilities([String])
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupportedProtocol(version):
+            "D Code 0.0.1 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+        case let .incompatibleHostVersion(version):
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.1。请重新构建 App，避免混用旧 Host。"
+        case let .missingCapabilities(capabilities):
+            "当前 Host 缺少 0.0.1 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+        }
+    }
+}
+
+enum HostCompatibility {
+    static let appVersion = "0.0.1"
+    static let requiredCapabilities = [
+        "sessionLease",
+        "onDemandWrite",
+        "structuredPlan",
+        "mermaidUnicode",
+        "projectCwdScope",
+        "contextUsage",
+        "fastMode",
+        "sessionExternalSync",
+        "dcodeSessionOrigin",
+    ]
+
+    static func validate(_ hello: HostHello) throws {
+        guard hello.protocolVersion == 1 else {
+            throw HostCompatibilityError.unsupportedProtocol(hello.protocolVersion)
+        }
+        guard hello.hostVersion == appVersion else {
+            throw HostCompatibilityError.incompatibleHostVersion(hello.hostVersion)
+        }
+        let missing = requiredCapabilities.filter { hello.capabilities[$0]?.boolValue != true }
+        guard missing.isEmpty else { throw HostCompatibilityError.missingCapabilities(missing) }
+    }
+}
+
 struct SessionListResult: Codable, Sendable {
     let sessions: [SessionSummary]
 }
@@ -70,6 +113,21 @@ struct HostModel: Codable, Hashable, Sendable, Identifiable {
     var qualifiedName: String { "\(provider)/\(id)" }
 }
 
+struct ContextUsage: Codable, Equatable, Sendable {
+    let tokens: Int?
+    let contextWindow: Int
+    let percent: Double?
+}
+
+struct FastModeState: Codable, Equatable, Sendable {
+    let enabled: Bool
+    let active: Bool
+    let provider: String?
+    let model: String?
+    let requestedServiceTier: String
+    let reason: String
+}
+
 struct HostState: Codable, Sendable {
     let mode: String
     let sessionId: String
@@ -81,6 +139,8 @@ struct HostState: Codable, Sendable {
     let activePlan: JSONValue?
     let isStreaming: Bool
     let pendingMessageCount: Int?
+    let contextUsage: ContextUsage?
+    let fastMode: FastModeState?
     let writable: Bool
     let conflict: HostErrorPayload?
 }
@@ -91,6 +151,19 @@ struct SessionOpenResult: Codable, Sendable {
     let snapshot: SessionInspection
     let state: HostState?
     let extensions: ExtensionLoadResult?
+}
+
+struct SessionActivationResult: Codable, Sendable {
+    let status: String
+    let open: SessionOpenResult?
+    let error: HostErrorPayload?
+    let observationError: HostErrorPayload?
+}
+
+struct SessionCreateResult: Codable, Sendable {
+    let created: Bool
+    let session: SessionSummary
+    let activation: SessionActivationResult
 }
 
 struct ExtensionLoadResult: Codable, Sendable {

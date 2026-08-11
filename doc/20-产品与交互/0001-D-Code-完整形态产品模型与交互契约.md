@@ -12,15 +12,16 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 
 ## Product Model（产品模型）
 
-### User Home（用户根目录）
+### User Home（用户首页）
 
 - D Code 启动后首先进入 User Home，而不是自动生成 Project。
-- User Home 使用当前 macOS 用户主目录作为全局会话发现边界；当前主要使用者对应 `/Users/diwu`。
-- User Home 只提供 Recent Sessions 与全局搜索，不成为任何 Pi Session 的 `cwd`，也不拥有项目文件。
+- User Home 以当前 macOS 用户名标识使用者，但不把用户主目录当作会话发现边界。
+- User Home 只提供 D Code 创建的 Recent Sessions 与全局搜索入口，不成为任何 Pi Session 的 `cwd`，也不拥有项目文件。
 
 ### Recent Sessions（最近会话）
 
-- Recent Sessions 是全部可发现 Pi Session 的跨项目投影，按最后更新时间降序排列。
+- Recent Sessions 只投影由 D Code 创建、且带有效 `dcode-session-origin-v1` 来源条目的 Pi Session，按最后更新时间降序排列。
+- 来源条目不进入模型上下文，且其 Session ID 必须与会话头相同；路径、时间和文件名不能作为 D Code 创建来源的猜测依据。
 - 初始只呈现最近 10 条 Session Summary，包括名称、`cwd`、更新时间与必要状态，不预加载完整对话正文。
 - “查看更多”继续取得更早摘要；选择一条会话后才加载其完整对话与可恢复状态。
 - 同一 Pi Session 可以同时出现在 Recent Sessions 与所属 Project 中，但始终是同一个稳定 Session ID 对象。
@@ -43,8 +44,9 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 
 - Pi Session 的稳定 ID、消息、模型上下文和 Pi 已持久化的运行条目继续以 `~/.pi/agent` 为唯一权威。
 - 添加 Source Folder 后，D Code 读取并展示已有 `cwd` 与该文件夹对应的 Pi Session；不需要导入、复制或重写 JSONL。
+- 未关联的旧 Pi Session 不出现在 Recent 或任何 Project；打开、续写或观察旧会话不会把它转换为 D Code Recent Session。
 - 在 Project 内新建会话时，用户先从该项目的 Source Folder 中选择一个目录；该目录成为新 Pi Session 的 `cwd`。
-- Recent Sessions、Project 列表与 Search Results 都只是同一批 Pi Session 的不同视图，不改变会话身份或写入所有权。
+- Recent Sessions、Project 列表与 Search Results 都只是同一 Pi Session 权威上的不同可见性投影，不改变会话身份或写入所有权。
 
 ### Session Path（会话路径）与独立会话
 
@@ -96,7 +98,7 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 ## Search（搜索）
 
 - 搜索参考 Codex 的轻量浮层形态打开，覆盖在当前工作台上方但不替换当前对话、左栏或工作检查器；关闭浮层后原工作状态保持不变。
-- 全局搜索覆盖全部可发现历史 Pi Session，而不只覆盖当前已经显示的 10 条摘要。
+- 全局搜索只覆盖“D Code 创建的 Recent Sessions”与“已关联 Project Source Folder 投影出的会话”的并集，而不只覆盖当前已经显示的 10 条摘要。
 - 可搜索会话标题、用户消息正文和助手消息正文。
 - 默认不搜索隐藏 thinking、原始工具输入、工具结果、认证内容或其他可能含凭据的非对话正文。
 - 结果显示命中片段、会话名称、更新时间、`cwd`、所属 Project 与 Source Folder；可按 Project 和 Source Folder 缩小范围。
@@ -116,6 +118,7 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - 产品仅支持 macOS，并使用原生 SwiftUI/AppKit 界面。
 - 产品界面默认使用简体中文。“项目”“源文件夹”“会话”“会话路径”“目标”“智能体”“上下文”“文件”“变更”和“工作清单”等产品概念不得以英文作为主要界面文案；`D Code`、模型名、命令、文件路径与代码标识符保留原文。
 - `~/.pi/agent` 继续是 Pi 配置与会话的权威来源；D Code 不建立竞争性会话历史数据库。
+- D Code 会话来源以同一 Pi Session 内的结构化 Custom Entry 持久化，只影响导航可见性，不复制消息或模型上下文。
 - Project 名称、顺序与 Source Folder 归属是 D Code 自有组织元数据，与 Pi 会话权威严格分离。
 - Swift 前端不直接修改 Pi 会话 JSONL；会话写入继续经过嵌入 `pi-coding-agent` SDK 的 D Code Host。
 - D Code 不直接依赖或调用 `pi-tui`；所有产品界面由自有 SwiftUI/AppKit 组件或受控内容渲染器实现。传递依赖可以存在，但不得成为呈现路径。
@@ -128,15 +131,16 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 ### 最近会话、Project 与 Source Folder
 
 - [ ] 全新状态打开 D Code 时只出现 Recent Sessions 和新建 Project 入口，不自动把 `cwd` 分组冒充 Project。
-- [ ] Recent Sessions 首屏最多显示最近 10 条摘要；不打开会话时不加载完整 transcript，点击“查看更多”可以取得更早摘要。
+- [ ] 未带 D Code 来源的旧 Pi Session 不会直接出现在 Recent；Recent 首屏最多显示由 D Code 创建的最近 10 条摘要，“查看更多”只继续读取同一来源集合。
 - [ ] 用户可以创建 Project 并添加多个 Source Folder；Project 会按更新时间平铺显示这些文件夹已有的 Pi Session，不出现 Source Folder 会话分组，每条会话在标题下显示来源文件夹。
+- [ ] 在 Project 内由 D Code 新建的会话同时出现在 Recent 与该 Project，两处指向相同稳定 Session ID。
 - [ ] 已经属于其他 Project 的 Source Folder 不能重复添加；界面显示现有归属，只有明确确认后才移动。
 - [ ] 移动 Source Folder 前后，真实文件、Git 状态、Pi Session ID 与 JSONL 内容均不被改写。
 - [ ] 在多 Source Folder Project 中新建会话时必须选择一个具体文件夹，新会话的 `cwd` 与选择一致。
 
 ### 搜索与恢复
 
-- [ ] 全局搜索能够命中首屏 10 条之外的历史会话标题、用户消息和助手消息。
+- [ ] 全局搜索能够命中可见会话集合中、首屏 10 条之外的历史会话标题、用户消息和助手消息，不命中未关联的旧 Pi Session。
 - [ ] 搜索结果展示足以区分同名会话的 Project、Source Folder、`cwd`、时间与命中片段，并支持按 Project 或 Source Folder 缩小范围。
 - [ ] 选择搜索结果后打开同一个稳定 Session ID，并可定位命中消息；不会创建导入副本。
 - [ ] 删除搜索索引后可以从 Pi 会话重新生成；索引为空、过期或损坏时显示明确状态，不改写原会话。

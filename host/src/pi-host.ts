@@ -1,23 +1,43 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
   CURRENT_SESSION_VERSION,
+  ModelRuntime,
   SessionManager,
+  SettingsManager,
   VERSION as PI_VERSION,
   createAgentSession,
   getAgentDir,
   type AgentSession,
   type AgentSessionEvent,
   type SessionEntry,
+  type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { diagramKind, render } from "grok-mermaid";
+import {
+  DCodeFastController,
+  createDCodeFastExtension,
+  createFastSnapshot,
+  restoreFastMode,
+} from "./dcode-fast.js";
 import { ExtensionUIBridge } from "./extension-ui.js";
 import type { HostMethod } from "./protocol.js";
 import { SessionLease, sessionSnapshotDigest } from "./session-lease.js";
-import { SessionReader, type SessionInspection, type SessionSummary } from "./session-reader.js";
+import {
+  SessionReader,
+  D_CODE_SESSION_ORIGIN_TYPE,
+  type SessionCwdScope,
+  type SessionOrigin,
+  type SessionInspection,
+  type SessionSummary,
+} from "./session-reader.js";
+import { DCodeResourceLoader } from "./resource-policy.js";
 
 type Emit = (event: string, data?: unknown) => void;
+const HOST_VERSION = "0.0.1";
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -38,6 +58,12 @@ export class PiHostError extends Error {
 interface ReadOnlySession {
   mode: "readOnly";
   inspection: SessionInspection;
+  modelRuntime: ModelRuntime;
+  observedVersion: SessionFileVersion;
+  notifiedVersion?: SessionFileVersion;
+  refreshTimer?: ReturnType<typeof setInterval>;
+  isChecking: boolean;
+  lastSyncError?: string;
 }
 
 interface WritableSession {
@@ -49,12 +75,54 @@ interface WritableSession {
   unsubscribe: () => void;
   conflictTimer: ReturnType<typeof setInterval>;
   conflict?: { code: string; message: string; details?: unknown };
+  conflictAbort?: Promise<void>;
   leaseSync: Promise<void>;
   ownedMutationDepth: number;
   activePlan: unknown;
+  fastMode: DCodeFastController;
+  closing: boolean;
 }
 
 type ActiveSession = ReadOnlySession | WritableSession;
+
+interface PromptCallContext {
+  active: WritableSession;
+  promptId: string;
+  confirmed: boolean;
+  confirmation?: Promise<void>;
+}
+
+interface SessionFileVersion {
+  device: string;
+  inode: string;
+  size: string;
+  mtimeNs: string;
+}
+
+async function readSessionFileVersion(path: string): Promise<SessionFileVersion> {
+  const fileStat = await stat(path, { bigint: true });
+  return {
+    device: String(fileStat.dev),
+    inode: String(fileStat.ino),
+    size: String(fileStat.size),
+    mtimeNs: String(fileStat.mtimeNs),
+  };
+}
+
+function sameSessionFileVersion(left: SessionFileVersion, right: SessionFileVersion): boolean {
+  return left.device === right.device
+    && left.inode === right.inode
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs;
+}
+
+function sameSessionIdentity(left: SessionHeader, right: SessionHeader): boolean {
+  return left.id === right.id
+    && (left.version ?? 1) === (right.version ?? 1)
+    && left.timestamp === right.timestamp
+    && left.cwd === right.cwd
+    && (left.parentSession ?? null) === (right.parentSession ?? null);
+}
 
 function toWireEvent(event: AgentSessionEvent): unknown {
   if (event.type !== "message_update") return event;
@@ -127,8 +195,10 @@ export class PiHost {
   private active?: ActiveSession;
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
+  private writePoison?: { sessionId: string; reason: string };
   private readonly leaseQuietWindowMs: number;
   private readonly conflictPollMs: number;
+  private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
 
   constructor(private readonly options: PiHostOptions) {
     this.agentDir = options.agentDir ?? getAgentDir();
@@ -160,16 +230,22 @@ export class PiHost {
       case "host.hello":
         return {
           protocolVersion: 1,
+          hostVersion: HOST_VERSION,
           piVersion: PI_VERSION,
           nodeVersion: process.versions.node,
           capabilities: {
             sessionLease: true,
-            directTakeover: true,
+            onDemandWrite: true,
             extensionDialogs: true,
             extensionCustomHeadless: false,
             extensionWidgets: false,
             structuredPlan: true,
             mermaidUnicode: true,
+            projectCwdScope: true,
+            contextUsage: true,
+            fastMode: true,
+            sessionExternalSync: true,
+            dcodeSessionOrigin: true,
           },
         };
       case "session.list":
@@ -177,10 +253,16 @@ export class PiHost {
           sessions: await this.reader.list({
             ...(typeof params.query === "string" ? { query: params.query } : {}),
             ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
+            ...(typeof params.cwdScope === "object" && params.cwdScope !== null
+              ? { cwdScope: params.cwdScope as SessionCwdScope }
+              : {}),
+            ...(params.origin === "dcode" ? { origin: params.origin as SessionOrigin } : {}),
           }),
         };
       case "session.inspect":
         return await this.reader.inspect(params.sessionId as string);
+      case "session.refresh":
+        return await this.refreshActiveSession();
       case "content.renderMermaid":
         return this.renderMermaid(params.source as string);
       case "session.create":
@@ -189,13 +271,13 @@ export class PiHost {
         return await this.openSession(
           params.sessionId as string,
           params.mode === "writable" ? "writable" : "readOnly",
-          params.exclusiveUseConfirmed === true,
+          params.writeIntent === true,
         );
       case "session.close":
         await this.closeActive();
         return { closed: true };
       case "session.prompt":
-        return await this.prompt(params.message as string, params.streamingBehavior as "steer" | "followUp" | undefined);
+        return await this.prompt(params.message as string, params.promptId as string);
       case "session.abort": {
         const active = this.requireWritable();
         await active.session.abort();
@@ -208,7 +290,7 @@ export class PiHost {
       case "session.getModels":
         return this.getModels();
       case "session.getThinkingLevels":
-        return { levels: this.requireWritable().session.getAvailableThinkingLevels() };
+        return this.getThinkingLevels();
       case "session.setModel":
         return await this.setModel(params.provider as string, params.modelId as string);
       case "session.setThinking": {
@@ -220,6 +302,8 @@ export class PiHost {
         });
         return { level };
       }
+      case "session.setFastMode":
+        return await this.setFastMode(params.enabled as boolean);
       case "host.shutdown":
         this.shutdownRequested = true;
         await this.closeActive();
@@ -263,7 +347,7 @@ export class PiHost {
   }
 
   private async createSession(cwd: string): Promise<unknown> {
-    await this.closeActive();
+    this.assertWriteHealthy();
     let canonicalCwd: string;
     try {
       canonicalCwd = await realpath(cwd);
@@ -277,33 +361,100 @@ export class PiHost {
     const draft = SessionManager.create(canonicalCwd, sessionDir);
     const sessionPath = draft.getSessionFile();
     if (!sessionPath) throw new PiHostError("SESSION_CREATE_FAILED", "Pi did not allocate a session path");
-    await writeFile(sessionPath, `${JSON.stringify(draft.getHeader())}\n`, { flag: "wx", mode: 0o600 });
-    const opened = await this.openSession(draft.getSessionId(), "writable", true) as Record<string, unknown>;
-    return { created: true, ...opened };
+    const header = draft.getHeader();
+    if (!header) throw new PiHostError("SESSION_CREATE_FAILED", "Pi did not create a session header");
+    draft.appendCustomEntry(D_CODE_SESSION_ORIGIN_TYPE, {
+      version: 1,
+      sessionId: draft.getSessionId(),
+    });
+    const initialDocument = [header, ...draft.getEntries()]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    this.assertWriteHealthy();
+    await writeFile(sessionPath, `${initialDocument}\n`, { flag: "wx", mode: 0o600 });
+    let summary: SessionSummary = {
+      path: sessionPath,
+      id: draft.getSessionId(),
+      cwd: canonicalCwd,
+      ...(header.parentSession ? { parentSessionPath: header.parentSession } : {}),
+      created: header.timestamp,
+      modified: header.timestamp,
+      messageCount: 0,
+      firstMessage: "",
+    };
+    try {
+      summary = await this.reader.resolve(draft.getSessionId());
+    } catch {
+      // Publishing the complete Header + origin document is the creation commit point.
+      // Activation below owns every post-commit failure and must still acknowledge it.
+    }
+    try {
+      const open = await this.openSession(draft.getSessionId(), "writable", true) as Record<string, unknown>;
+      return {
+        created: true,
+        session: (open.snapshot as SessionInspection | undefined)?.summary ?? summary,
+        activation: { status: "writable", open },
+      };
+    } catch (activationError) {
+      const activation = errorRecord(activationError);
+      try {
+        const open = await this.openSession(draft.getSessionId(), "readOnly") as Record<string, unknown>;
+        return {
+          created: true,
+          session: (open.snapshot as SessionInspection | undefined)?.summary ?? summary,
+          activation: { status: "observing", open, error: activation },
+        };
+      } catch (observationError) {
+        return {
+          created: true,
+          session: summary,
+          activation: {
+            status: "unavailable",
+            error: activation,
+            observationError: errorRecord(observationError),
+          },
+        };
+      }
+    }
   }
 
   private async openSession(
     sessionId: string,
     mode: "readOnly" | "writable",
-    exclusiveUseConfirmed = false,
+    writeIntent = false,
   ): Promise<unknown> {
     await this.closeActive();
-    const inspection = await this.reader.inspect(sessionId);
+    if (mode === "writable") this.assertWriteHealthy();
     if (mode === "readOnly") {
-      this.active = { mode, inspection };
+      const { inspection, version } = await this.inspectStableObservation(sessionId);
+      const modelRuntime = await ModelRuntime.create({
+        authPath: join(this.agentDir, "auth.json"),
+        modelsPath: join(this.agentDir, "models.json"),
+      });
+      const active: ReadOnlySession = {
+        mode,
+        inspection,
+        modelRuntime,
+        observedVersion: version,
+        isChecking: false,
+      };
+      this.active = active;
+      active.refreshTimer = setInterval(() => { void this.checkReadOnlyChange(active); }, this.conflictPollMs);
+      active.refreshTimer.unref?.();
       this.options.emit("session.opened", { mode, sessionId, path: inspection.summary.path });
-      return { mode, snapshot: inspection };
+      return { mode, snapshot: inspection, state: this.getState() };
     }
+    const inspection = await this.reader.inspect(sessionId);
     if ((inspection.header.version ?? 1) !== CURRENT_SESSION_VERSION) {
       throw new PiHostError(
         "SESSION_MIGRATION_REQUIRED",
         `Session version ${inspection.header.version ?? 1} must be migrated outside writable open`,
       );
     }
-    if (!exclusiveUseConfirmed) {
+    if (!writeIntent) {
       throw new PiHostError(
-        "EXCLUSIVE_USE_CONFIRMATION_REQUIRED",
-        "Confirm that no other client is using this session before writable open",
+        "WRITE_INTENT_REQUIRED",
+        "Writable open requires an explicit write intent",
         { sessionId },
       );
     }
@@ -321,10 +472,21 @@ export class PiHost {
     try {
       const manager = SessionManager.open(inspection.summary.path);
       await lease.assertUnchanged();
+      const fastMode = new DCodeFastController();
+      const sourceSettingsManager = SettingsManager.create(manager.getCwd(), this.agentDir);
+      const resourceLoader = new DCodeResourceLoader({
+        cwd: manager.getCwd(),
+        agentDir: this.agentDir,
+        sourceSettingsManager,
+        extensionFactories: [{ name: "dcode-fast", hidden: true, factory: createDCodeFastExtension(fastMode) }],
+      });
+      await resourceLoader.reload();
       const created = await createAgentSession({
         cwd: manager.getCwd(),
         agentDir: this.agentDir,
         sessionManager: manager,
+        settingsManager: sourceSettingsManager,
+        resourceLoader,
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
       });
       session = created.session;
@@ -340,10 +502,18 @@ export class PiHost {
         leaseSync: Promise.resolve(),
         ownedMutationDepth: 0,
         activePlan: inspection.activePlan,
+        fastMode,
+        closing: false,
       };
+      this.installPromptSourceBoundary(active);
       clearInterval(active.conflictTimer);
       this.active = active;
-      unsubscribe = session.subscribe((event) => this.onSessionEvent(active, event));
+      const unsubscribeSession = session.subscribe((event) => this.onSessionEvent(active, event));
+      const unsubscribePersistedEvents = session.agent.subscribe((event) => this.onPersistedAgentEvent(active, event));
+      unsubscribe = () => {
+        unsubscribeSession();
+        unsubscribePersistedEvents();
+      };
       active.unsubscribe = unsubscribe;
       await lease.acceptOwnedChange(agentSessionSnapshotDigest(session));
       await session.bindExtensions({
@@ -371,15 +541,24 @@ export class PiHost {
       });
       await this.synchronizeOwnedSnapshot(active);
       if (active.conflict) throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
+      await this.assertLeaseStable(active);
+      const { inspection: synchronizedInspection } = await this.inspectStablePath(
+        inspection.summary.path,
+        sessionId,
+      );
+      this.assertSameSessionIdentity(inspection.header, synchronizedInspection.header);
+      await this.assertLeaseStable(active);
+      active.inspection = synchronizedInspection;
+      active.activePlan = synchronizedInspection.activePlan;
       active.conflictTimer = setInterval(() => { void this.checkConflict(active); }, this.conflictPollMs);
       active.conflictTimer.unref?.();
-      this.options.emit("session.opened", { mode, sessionId, path: inspection.summary.path });
+      this.options.emit("session.opened", { mode, sessionId, path: synchronizedInspection.summary.path });
       return {
         mode,
-        snapshot: inspection,
+        snapshot: synchronizedInspection,
         state: this.getState(),
         extensions: {
-          loaded: created.extensionsResult.extensions.length,
+          loaded: created.extensionsResult.extensions.filter((extension) => !extension.hidden).length,
           errors: created.extensionsResult.errors,
         },
       };
@@ -388,7 +567,17 @@ export class PiHost {
       unsubscribe?.();
       ui?.cancelAll("Session open failed");
       session?.dispose();
-      try { await lease.release(); } catch { /* preserve original failure */ }
+      if (this.active?.mode === "writable") {
+        clearInterval(this.active.conflictTimer);
+        this.active.fastMode.dispose();
+      }
+      try {
+        await lease.release();
+      } catch (releaseError) {
+        const cleanup = errorRecord(releaseError);
+        this.options.emit("session.cleanupError", { sessionId, step: "failed activation lease release", ...cleanup });
+        this.poisonWritesForSession(sessionId, "A failed session activation could not release its lease");
+      }
       this.active = undefined;
       throw error;
     }
@@ -399,27 +588,46 @@ export class PiHost {
     if (!active) return;
     this.active = undefined;
     if (active.mode === "readOnly") {
+      if (active.refreshTimer) clearInterval(active.refreshTimer);
       this.options.emit("session.closed", { mode: active.mode, sessionId: active.inspection.summary.id });
       return;
     }
     clearInterval(active.conflictTimer);
+    active.closing = true;
     active.ui.cancelAll("Session closing");
+    let safeToRelease = true;
     try {
-      await this.cleanupStep(active, "abort", active.session.abort(), 5_000);
-      const shutdownSettled = await this.cleanupStep(
-        active,
-        "extension shutdown",
-        active.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
-        5_000,
-      );
-      const leaseSettled = await this.cleanupStep(active, "lease synchronization", active.leaseSync, 2_000);
-      if (shutdownSettled && leaseSettled) {
-        await active.lease.acceptOwnedChange(agentSessionSnapshotDigest(active.session));
+      if (active.conflict) {
+        safeToRelease = await this.cleanupStep(
+          active,
+          "conflict abort",
+          active.conflictAbort ?? Promise.resolve(),
+          5_000,
+        );
+      } else {
+        const abortSettled = await this.cleanupStep(active, "abort", active.session.abort(), 5_000);
+        const shutdownSettled = await this.cleanupStep(
+          active,
+          "extension shutdown",
+          active.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }),
+          5_000,
+        );
+        const leaseSettled = await this.cleanupStep(active, "lease synchronization", active.leaseSync, 2_000);
+        safeToRelease = abortSettled && shutdownSettled && leaseSettled;
       }
     } finally {
       active.unsubscribe();
       active.session.dispose();
-      await active.lease.release();
+      active.fastMode.dispose();
+      if (safeToRelease) {
+        try {
+          await active.lease.release();
+        } catch (error) {
+          safeToRelease = false;
+          this.options.emit("session.cleanupError", { step: "lease release", ...errorRecord(error) });
+        }
+      }
+      if (!safeToRelease) this.poisonWrites(active, "The previous runtime did not stop cleanly");
       this.options.emit("session.closed", { mode: active.mode, sessionId: active.inspection.summary.id });
     }
   }
@@ -446,14 +654,14 @@ export class PiHost {
       this.options.emit("session.cleanupError", { step: name, ...errorRecord(result.error) });
       return false;
     }
-    this.shutdownRequested = true;
     this.options.emit("session.cleanupTimeout", { step: name, timeoutMs, action: "host restart required" });
     return false;
   }
 
-  private async prompt(message: string, streamingBehavior?: "steer" | "followUp"): Promise<unknown> {
+  private async prompt(message: string, promptId: string): Promise<unknown> {
     const active = this.requireWritable();
     await this.beforeMutation(active);
+    const call: PromptCallContext = { active, promptId, confirmed: false };
     return await new Promise((resolve, reject) => {
       let responded = false;
       const accept = (completed = false) => {
@@ -461,30 +669,84 @@ export class PiHost {
         responded = true;
         resolve({ accepted: true, completed });
       };
-      void active.session.prompt(message, {
-        ...(streamingBehavior ? { streamingBehavior } : {}),
-        source: "rpc",
-        preflightResult: (success) => { if (success) accept(false); },
-      }).then(() => accept(true), (error) => {
+      const operation = this.promptCall.run(call, () => active.session.prompt(message, {
+          source: "rpc",
+          preflightResult: (success) => { if (success) accept(false); },
+        }));
+      void operation.then(async () => {
+        if (call.confirmation) await call.confirmation;
+        if (!call.confirmed) {
+          await active.leaseSync;
+          if (active.conflict) {
+            throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
+          }
+          call.confirmed = true;
+          this.options.emit("session.promptCompleted", {
+            sessionId: active.session.sessionId,
+            promptId,
+            outcome: "handled",
+          });
+        }
+        accept(true);
+      }).catch((error) => {
         if (!responded) reject(error);
-        else this.options.emit("session.operationError", errorRecord(error));
+        else this.options.emit("session.promptFailed", {
+          sessionId: active.session.sessionId,
+          promptId,
+          ...errorRecord(error),
+        });
       });
     });
+  }
+
+  private installPromptSourceBoundary(active: WritableSession): void {
+    const prompt = active.session.prompt.bind(active.session);
+    active.session.prompt = (text, options) => {
+      const currentCall = this.promptCall.getStore();
+      const correlatedCall = options?.source === "rpc" && currentCall?.active === active
+        ? currentCall
+        : undefined;
+      return this.promptCall.run(correlatedCall, () => prompt(text, options));
+    };
   }
 
   private getState(): unknown {
     const active = this.requireActive();
     if (active.mode === "readOnly") {
+      const model = active.inspection.context.model
+        ? active.modelRuntime.getModel(
+            active.inspection.context.model.provider,
+            active.inspection.context.model.modelId,
+          )
+        : undefined;
+      const fastMode = createFastSnapshot(
+        restoreFastMode(active.inspection.entries),
+        active.inspection.context.model
+          ? {
+              provider: active.inspection.context.model.provider,
+              id: active.inspection.context.model.modelId,
+            }
+          : undefined,
+      );
       return {
         mode: active.mode,
         sessionId: active.inspection.summary.id,
         sessionFile: active.inspection.summary.path,
         cwd: active.inspection.summary.cwd,
-        model: active.inspection.context.model,
+        model: active.inspection.context.model
+          ? {
+              provider: active.inspection.context.model.provider,
+              id: active.inspection.context.model.modelId,
+            }
+          : null,
         thinkingLevel: active.inspection.context.thinkingLevel,
         activePlan: active.inspection.activePlan,
         isStreaming: false,
         writable: false,
+        contextUsage: model && model.contextWindow > 0
+          ? { tokens: null, contextWindow: model.contextWindow, percent: null }
+          : null,
+        fastMode,
       };
     }
     return {
@@ -499,6 +761,8 @@ export class PiHost {
       isStreaming: active.session.isStreaming,
       isCompacting: active.session.isCompacting,
       pendingMessageCount: active.session.pendingMessageCount,
+      contextUsage: active.session.getContextUsage() ?? null,
+      fastMode: active.fastMode.snapshot,
       writable: !active.conflict,
       conflict: active.conflict ?? null,
     };
@@ -525,8 +789,23 @@ export class PiHost {
   }
 
   private getModels(): unknown {
-    const active = this.requireWritable();
-    return { models: active.session.modelRuntime.getAvailableSnapshot().map((model) => safeModel(model)) };
+    const active = this.requireActive();
+    const models = active.mode === "writable"
+      ? active.session.modelRuntime.getAvailableSnapshot()
+      : active.modelRuntime.getAvailableSnapshot();
+    return { models: models.map((model) => safeModel(model)) };
+  }
+
+  private getThinkingLevels(): unknown {
+    const active = this.requireActive();
+    if (active.mode === "writable") {
+      return { levels: active.session.getAvailableThinkingLevels() };
+    }
+    const modelRef = active.inspection.context.model;
+    const model = modelRef
+      ? active.modelRuntime.getModel(modelRef.provider, modelRef.modelId)
+      : undefined;
+    return { levels: model ? getSupportedThinkingLevels(model) : ["off"] };
   }
 
   private async setModel(provider: string, modelId: string): Promise<unknown> {
@@ -538,7 +817,14 @@ export class PiHost {
     return { model: safeModel(model) };
   }
 
+  private async setFastMode(enabled: boolean): Promise<unknown> {
+    const active = this.requireWritable();
+    await this.beforeMutation(active);
+    return await this.withOwnedMutation(active, async () => active.fastMode.setEnabled(enabled));
+  }
+
   private onSessionEvent(active: WritableSession, event: AgentSessionEvent): void {
+    if (this.active !== active || active.closing) return;
     this.options.emit("session.event", toWireEvent(event));
     if (event.type === "entry_appended") {
       const plan = planFromEntry(event.entry);
@@ -547,14 +833,40 @@ export class PiHost {
         this.options.emit("plan.changed", { entryId: event.entry.id, plan: plan.plan });
       }
     }
-    if (
+    const shouldSynchronize = (
       event.type === "entry_appended"
       || event.type === "message_end"
       || event.type === "thinking_level_changed"
       || event.type === "session_info_changed"
       || event.type === "agent_settled"
       || (event.type === "compaction_end" && !event.aborted && event.result !== undefined)
-    ) void this.synchronizeOwnedSnapshot(active);
+    );
+    if (!shouldSynchronize) return;
+    this.synchronizeOwnedSnapshot(active);
+  }
+
+  private onPersistedAgentEvent(active: WritableSession, event: AgentEvent): void {
+    if (this.active !== active || active.closing) return;
+    const call = this.promptCall.getStore();
+    if (
+      event.type === "message_end"
+      && event.message.role === "user"
+      && call?.active === active
+      && !call.confirmed
+      && !call.confirmation
+    ) {
+      const leaf = active.session.sessionManager.getLeafEntry();
+      if (leaf?.type !== "message" || leaf.message !== event.message) return;
+      call.confirmation = this.synchronizeOwnedSnapshot(active).then(() => {
+        if (active.conflict || call.confirmed) return;
+        call.confirmed = true;
+        this.options.emit("session.promptCompleted", {
+          sessionId: active.session.sessionId,
+          promptId: call.promptId,
+          outcome: "persisted",
+        });
+      });
+    }
   }
 
   private synchronizeOwnedSnapshot(active: WritableSession): Promise<void> {
@@ -573,7 +885,9 @@ export class PiHost {
           }
         }
       })
-      .catch((error) => { this.markConflict(active, error); });
+      .catch((error) => {
+        if (!active.closing) this.markConflict(active, error);
+      });
     return active.leaseSync;
   }
 
@@ -614,16 +928,123 @@ export class PiHost {
     try {
       await this.assertLeaseStable(active);
     } catch (error) {
+      if (this.active !== active || active.conflict) return;
       this.markConflict(active, error);
-      try { await active.session.abort(); } catch { /* conflict already reported */ }
     }
   }
 
   private markConflict(active: WritableSession, error: unknown): void {
-    if (active.conflict) return;
+    if (this.active !== active || active.closing || active.conflict) return;
     active.conflict = errorRecord(error);
     clearInterval(active.conflictTimer);
-    this.options.emit("session.conflict", active.conflict);
+    const abort = active.session.abort();
+    void abort.catch(() => undefined);
+    active.conflictAbort = abort;
+    this.options.emit("session.conflict", {
+      sessionId: active.inspection.summary.id,
+      ...active.conflict,
+    });
+  }
+
+  private async inspectStableObservation(sessionId: string): Promise<{
+    inspection: SessionInspection;
+    version: SessionFileVersion;
+  }> {
+    const summary = await this.reader.resolve(sessionId);
+    return await this.inspectStablePath(summary.path, sessionId);
+  }
+
+  private async inspectStablePath(path: string, sessionId: string): Promise<{
+    inspection: SessionInspection;
+    version: SessionFileVersion;
+  }> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const before = await readSessionFileVersion(path);
+      try {
+        const inspection = await this.reader.inspectPath(path, sessionId);
+        const after = await readSessionFileVersion(path);
+        if (sameSessionFileVersion(before, after)) return { inspection, version: after };
+      } catch (error) {
+        let after: SessionFileVersion;
+        try {
+          after = await readSessionFileVersion(path);
+        } catch {
+          if (attempt === 3) throw error;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          continue;
+        }
+        if (sameSessionFileVersion(before, after)) throw error;
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new PiHostError(
+      "SESSION_CHANGED_DURING_REFRESH",
+      "The session kept changing while D Code was opening it",
+      { sessionId },
+    );
+  }
+
+  private async refreshActiveSession(): Promise<SessionInspection> {
+    const active = this.requireActive();
+    if (active.mode === "writable") {
+      const inspection = await this.reader.inspectPath(
+        active.inspection.summary.path,
+        active.inspection.summary.id,
+      );
+      this.assertSameSessionIdentity(active.inspection.header, inspection.header);
+      return inspection;
+    }
+    const before = await readSessionFileVersion(active.inspection.summary.path);
+    const inspection = await this.reader.inspectPath(
+      active.inspection.summary.path,
+      active.inspection.summary.id,
+    );
+    const after = await readSessionFileVersion(active.inspection.summary.path);
+    if (!sameSessionFileVersion(before, after)) {
+      throw new PiHostError(
+        "SESSION_CHANGED_DURING_REFRESH",
+        "The session changed while D Code was refreshing it",
+        { sessionId: active.inspection.summary.id },
+      );
+    }
+    this.assertSameSessionIdentity(active.inspection.header, inspection.header);
+    active.inspection = inspection;
+    active.observedVersion = after;
+    active.notifiedVersion = undefined;
+    active.lastSyncError = undefined;
+    return inspection;
+  }
+
+  private async checkReadOnlyChange(active: ReadOnlySession): Promise<void> {
+    if (this.active !== active || active.isChecking) return;
+    active.isChecking = true;
+    try {
+      const baseline = active.observedVersion;
+      const observed = await readSessionFileVersion(active.inspection.summary.path);
+      if (this.active !== active || !sameSessionFileVersion(active.observedVersion, baseline)) return;
+      if (!sameSessionFileVersion(active.observedVersion, observed)) {
+        active.lastSyncError = undefined;
+        if (active.notifiedVersion && sameSessionFileVersion(active.notifiedVersion, observed)) return;
+        active.notifiedVersion = observed;
+        this.options.emit("session.changed", {
+          sessionId: active.inspection.summary.id,
+          path: active.inspection.summary.path,
+        });
+      }
+    } catch (error) {
+      if (this.active !== active) return;
+      const record = errorRecord(error);
+      const signature = `${record.code}:${record.message}`;
+      if (active.lastSyncError !== signature) {
+        active.lastSyncError = signature;
+        this.options.emit("session.syncError", {
+          sessionId: active.inspection.summary.id,
+          ...record,
+        });
+      }
+    } finally {
+      active.isChecking = false;
+    }
   }
 
   private requireActive(): ActiveSession {
@@ -631,10 +1052,39 @@ export class PiHost {
     return this.active;
   }
 
+  private assertSameSessionIdentity(expected: SessionHeader, actual: SessionHeader): void {
+    if (sameSessionIdentity(expected, actual)) return;
+    throw new PiHostError(
+      "SESSION_IDENTITY_CHANGED",
+      "The session file identity changed while D Code was observing it",
+      { sessionId: expected.id },
+    );
+  }
+
   private requireWritable(): WritableSession {
+    this.assertWriteHealthy();
     const active = this.requireActive();
     if (active.mode !== "writable") throw new PiHostError("SESSION_READ_ONLY", "The open session is read-only");
     if (active.conflict) throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
     return active;
+  }
+
+  private assertWriteHealthy(): void {
+    if (!this.writePoison) return;
+    throw new PiHostError(
+      "HOST_RESTART_REQUIRED",
+      "D Code must restart its Host before another write",
+      this.writePoison,
+    );
+  }
+
+  private poisonWrites(active: WritableSession, reason: string): void {
+    this.poisonWritesForSession(active.inspection.summary.id, reason);
+  }
+
+  private poisonWritesForSession(sessionId: string, reason: string): void {
+    if (this.writePoison) return;
+    this.writePoison = { sessionId, reason };
+    this.options.emit("host.restartRequired", this.writePoison);
   }
 }

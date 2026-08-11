@@ -182,8 +182,11 @@ export class ExtensionUIBridge {
         bridge.reportUnsupported("setTheme", "ignored");
         return { success: false, error: "Theme switching is controlled by the native app" };
       },
-      getToolsExpanded() { return bridge.blockUnsupported("getToolsExpanded"); },
-      setToolsExpanded() { bridge.reportUnsupported("setToolsExpanded", "ignored"); },
+      // Match Pi's RPC UI contract: native clients have no global TUI expansion
+      // state, so extensions observe the safe collapsed default and writes are a
+      // no-op. This is a presentation hint, not an unsupported user action.
+      getToolsExpanded() { return false; },
+      setToolsExpanded() {},
     } as ExtensionUIContext;
   }
 }

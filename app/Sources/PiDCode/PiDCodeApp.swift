@@ -5,6 +5,11 @@ import SwiftUI
 final class PiDCodeAppDelegate: NSObject, NSApplicationDelegate {
     static weak var model: AppModel?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let stored = UserDefaults.standard.string(forKey: AppAppearance.storageKey)
+        AppAppearance.resolve(stored ?? AppAppearance.system.rawValue).apply()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         Self.model?.emergencyStop()
     }
@@ -19,7 +24,7 @@ struct PiDCodeApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
-                .frame(minWidth: 900, minHeight: 620)
+                .frame(minWidth: 640, minHeight: 620)
                 .task {
                     PiDCodeAppDelegate.model = model
                     await model.start()
@@ -28,10 +33,14 @@ struct PiDCodeApp: App {
                     Task { await model.shutdown() }
                 }
         }
-        .defaultSize(width: 1_240, height: 820)
+        .defaultSize(width: 1_360, height: 860)
         .windowStyle(.automatic)
         .commands {
             SidebarCommands()
+        }
+
+        Settings {
+            SettingsView()
         }
     }
 }

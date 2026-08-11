@@ -139,12 +139,15 @@ test("extension dialog responses bypass a prompt waiting for native UI", async (
     child.stdin.write(request("open", "session.open", {
       sessionId,
       mode: "writable",
-      exclusiveUseConfirmed: true,
+      writeIntent: true,
     }));
     const opened = await collector.waitFor((message) => message.id === "open", "writable session response");
     assert.equal(opened.ok, true);
 
-    child.stdin.write(request("prompt", "session.prompt", { message: "/native-dialog" }));
+    child.stdin.write(request("prompt", "session.prompt", {
+      message: "/native-dialog",
+      promptId: "native-dialog-prompt",
+    }));
     const dialog = await collector.waitFor(
       (message) => message.type === "event" && message.event === "extension.request",
       "extension.request",

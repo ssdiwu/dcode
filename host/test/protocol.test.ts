@@ -53,7 +53,7 @@ test("method parameter validation rejects invalid values", () => {
   );
   assert.doesNotThrow(() => validateMethodParams(
     "session.open",
-    { sessionId: "s1", mode: "writable", exclusiveUseConfirmed: true },
+    { sessionId: "s1", mode: "writable", writeIntent: true },
   ));
   assert.doesNotThrow(() => validateMethodParams("session.open", { sessionId: "s1", mode: "readOnly" }));
   assert.throws(
@@ -64,9 +64,47 @@ test("method parameter validation rejects invalid values", () => {
     () => validateMethodParams("content.renderMermaid", { source: "x".repeat(100_001) }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("session.list", {
+    limit: 11,
+    origin: "dcode",
+    cwdScope: { match: "exact", paths: ["/work/a", "/work/b"] },
+  }));
+  assert.throws(
+    () => validateMethodParams("session.list", { origin: "pi" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.list", { cwdScope: { match: "parent", paths: ["/work"] } }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.list", { cwdScope: { match: "exact", paths: [] } }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("session.setFastMode", { enabled: true }));
+  assert.throws(
+    () => validateMethodParams("session.setFastMode", { enabled: "yes" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("session.prompt", { message: "hello", promptId: "prompt-1" }));
+  assert.throws(
+    () => validateMethodParams("session.prompt", { message: "hello" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.prompt", {
+      message: "hello",
+      promptId: "prompt-queued",
+      streamingBehavior: "followUp",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.equal(isHostMethod("extension.customInput"), false);
   assert.equal(isHostMethod("extension.customResize"), false);
   assert.equal(HOST_METHODS.includes("extension.respond"), true);
+  assert.equal(HOST_METHODS.includes("session.setFastMode"), true);
+  assert.equal(isHostMethod("session.refresh"), true);
+  assert.doesNotThrow(() => validateMethodParams("session.refresh", {}));
 });
 
 test("response and event constructors retain protocol correlation", () => {

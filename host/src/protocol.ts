@@ -4,6 +4,7 @@ export const HOST_METHODS = [
   "host.hello",
   "session.list",
   "session.inspect",
+  "session.refresh",
   "session.create",
   "session.open",
   "session.close",
@@ -15,6 +16,7 @@ export const HOST_METHODS = [
   "session.getThinkingLevels",
   "session.setModel",
   "session.setThinking",
+  "session.setFastMode",
   "extension.respond",
   "content.renderMermaid",
   "host.shutdown",
@@ -120,6 +122,41 @@ function optionalInteger(
   return value as number;
 }
 
+function optionalCwdScope(params: Record<string, unknown>): void {
+  const value = params.cwdScope;
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.cwdScope to be an object");
+  }
+  if (value.match !== "exact" && value.match !== "descendantOrEqual") {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      'Expected params.cwdScope.match to be "exact" or "descendantOrEqual"',
+    );
+  }
+  if (!Array.isArray(value.paths) || value.paths.length === 0 || value.paths.length > 64) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      "Expected params.cwdScope.paths to contain between 1 and 64 paths",
+    );
+  }
+  for (const path of value.paths) {
+    if (typeof path !== "string" || path.length === 0 || path.length > 4_096) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected every params.cwdScope.paths item to be a non-empty string up to 4096 characters",
+      );
+    }
+  }
+}
+
+function optionalSessionOrigin(params: Record<string, unknown>): void {
+  const value = params.origin;
+  if (value !== undefined && value !== "dcode") {
+    throw new ProtocolValidationError("INVALID_PARAMS", 'Expected params.origin to be "dcode"');
+  }
+}
+
 export function isHostMethod(method: string): method is HostMethod {
   return (HOST_METHODS as readonly string[]).includes(method);
 }
@@ -166,11 +203,14 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.getCommands":
     case "session.getModels":
     case "session.getThinkingLevels":
+    case "session.refresh":
     case "host.shutdown":
       return;
     case "session.list":
       optionalString(params, "query");
       optionalInteger(params, "limit", 1, 10_000);
+      optionalCwdScope(params);
+      optionalSessionOrigin(params);
       return;
     case "session.inspect":
       requireString(params, "sessionId");
@@ -184,24 +224,27 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if (mode !== undefined && mode !== "readOnly" && mode !== "writable") {
         throw new ProtocolValidationError("INVALID_PARAMS", 'Expected params.mode to be "readOnly" or "writable"');
       }
-      if (params.exclusiveUseConfirmed !== undefined && typeof params.exclusiveUseConfirmed !== "boolean") {
-        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.exclusiveUseConfirmed to be a boolean");
+      if (params.writeIntent !== undefined && typeof params.writeIntent !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.writeIntent to be a boolean");
       }
-      if (mode === "writable" && params.exclusiveUseConfirmed !== true) {
+      if (mode === "writable" && params.writeIntent !== true) {
         throw new ProtocolValidationError(
           "INVALID_PARAMS",
-          "Writable session.open requires params.exclusiveUseConfirmed=true",
+          "Writable session.open requires params.writeIntent=true",
         );
       }
       return;
     }
     case "session.prompt": {
       requireString(params, "message", { allowEmpty: true });
-      const behavior = params.streamingBehavior;
-      if (behavior !== undefined && behavior !== "steer" && behavior !== "followUp") {
+      const promptId = requireString(params, "promptId");
+      if (promptId.length > 128) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");
+      }
+      if (params.streamingBehavior !== undefined) {
         throw new ProtocolValidationError(
           "INVALID_PARAMS",
-          'Expected params.streamingBehavior to be "steer" or "followUp"',
+          "Queued streaming prompts are not part of D Code Protocol v1",
         );
       }
       return;
@@ -218,6 +261,11 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       }
       return;
     }
+    case "session.setFastMode":
+      if (typeof params.enabled !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
+      }
+      return;
     case "content.renderMermaid": {
       const source = requireString(params, "source");
       if (source.length > 100_000) {

@@ -36,6 +36,13 @@ struct IconActionStyle: ButtonStyle {
     }
 }
 
+extension View {
+    func dCodeAccessibleButton(_ label: String) -> some View {
+        accessibilityLabel(Text(label))
+            .help(label)
+    }
+}
+
 extension Date {
     var piDCodeRelativeLabel: String {
         formatted(.relative(presentation: .named, unitsStyle: .abbreviated))

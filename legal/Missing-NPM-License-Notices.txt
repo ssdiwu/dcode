@@ -1,0 +1,66 @@
+D Code embedded npm packages whose published archives omit a license file
+
+The packages below declare the indicated license in their package metadata.
+The applicable full MIT and Apache License 2.0 terms are distributed alongside
+this file in the D Code application bundle.
+
+Apache-2.0
+-----------
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+@aws-sdk/credential-provider-http 3.972.39
+@aws-sdk/credential-provider-http 3.972.69
+@aws-sdk/credential-provider-login 3.972.41
+@aws-sdk/credential-provider-login 3.972.74
+@aws-sdk/nested-clients 3.997.9
+@aws-sdk/nested-clients 3.997.41
+
+MIT
+---
+Copyright (c) 2025 Mario Zechner
+
+@earendil-works/pi-agent-core 0.84.1
+@earendil-works/pi-ai 0.84.1
+@earendil-works/pi-client 0.84.1
+@earendil-works/pi-coding-agent 0.84.1
+@earendil-works/pi-protocol 0.84.1
+@earendil-works/pi-telemetry 0.84.1
+@earendil-works/pi-tui 0.84.1
+
+Copyright Mario Zechner and contributors.
+
+@mariozechner/clipboard 0.3.9
+@mariozechner/clipboard-darwin-arm64 0.3.9
+@mariozechner/clipboard-darwin-universal 0.3.9
+
+Copyright (c) 2026 Nodable.
+
+@nodable/entities 2.1.0
+
+Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>.
+
+data-uri-to-buffer 4.0.1
+
+Copyright (c) 2026 Natural Intelligence.
+
+xml-naming 0.1.0
+
+MIT License Terms
+-----------------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notices and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

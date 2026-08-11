@@ -87,7 +87,6 @@ test("unsupported TUI queries fail explicitly instead of returning normal empty 
   assert.throws(() => bridge.context.getEditorComponent(), isUnsupported);
   assert.throws(() => bridge.context.getAllThemes(), isUnsupported);
   assert.throws(() => bridge.context.getTheme("dark"), isUnsupported);
-  assert.throws(() => bridge.context.getToolsExpanded(), isUnsupported);
   assert.deepEqual(events.map((entry) => entry.data), [
     {
       capability: "getEditorComponent",
@@ -104,10 +103,13 @@ test("unsupported TUI queries fail explicitly instead of returning normal empty 
       behavior: "blocked",
       message: "D Code blocked unsupported extension UI capability: getTheme",
     },
-    {
-      capability: "getToolsExpanded",
-      behavior: "blocked",
-      message: "D Code blocked unsupported extension UI capability: getToolsExpanded",
-    },
   ]);
+});
+
+test("tool expansion hints use Pi RPC's neutral native-client behavior", () => {
+  const { bridge, events } = setup();
+  assert.equal(bridge.context.getToolsExpanded(), false);
+  bridge.context.setToolsExpanded(true);
+  bridge.context.setToolsExpanded(false);
+  assert.deepEqual(events, []);
 });

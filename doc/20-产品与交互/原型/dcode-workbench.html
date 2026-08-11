@@ -3432,8 +3432,8 @@ html&gt;body{padding:0}&lt;/style&gt;
       &lt;section class=&quot;sl-sheet sl-search-sheet&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;sl-search-title&quot;&gt;
         &lt;header class=&quot;sl-sheet-head&quot;&gt;
           &lt;div&gt;
-            &lt;h2 id=&quot;sl-search-title&quot;&gt;搜索全部历史会话&lt;/h2&gt;
-            &lt;p&gt;覆盖标题、用户消息与助手消息；不受首屏 10 条限制。&lt;/p&gt;
+            &lt;h2 id=&quot;sl-search-title&quot;&gt;搜索可见会话&lt;/h2&gt;
+            &lt;p&gt;覆盖 D Code Recent 与已关联项目中的标题、用户消息和助手消息；不受首屏 10 条限制。&lt;/p&gt;
           &lt;/div&gt;
           &lt;button class=&quot;sl-icon-button&quot; type=&quot;button&quot; data-action=&quot;close-overlay&quot; aria-label=&quot;关闭&quot;&gt;
             &lt;i data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
@@ -3443,7 +3443,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           &lt;div class=&quot;sl-search-controls&quot;&gt;
             &lt;div&gt;
               &lt;label class=&quot;sl-field-label&quot; for=&quot;sl-global-search&quot;&gt;搜索内容&lt;/label&gt;
-              &lt;input class=&quot;sl-search-input&quot; id=&quot;sl-global-search&quot; type=&quot;search&quot; value=&quot;项目&quot; placeholder=&quot;搜索全部历史对话……&quot;&gt;
+              &lt;input class=&quot;sl-search-input&quot; id=&quot;sl-global-search&quot; type=&quot;search&quot; value=&quot;项目&quot; placeholder=&quot;搜索可见会话……&quot;&gt;
             &lt;/div&gt;
             &lt;div&gt;
               &lt;label class=&quot;sl-field-label&quot; for=&quot;sl-search-scope&quot;&gt;范围&lt;/label&gt;
@@ -3454,7 +3454,7 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;/select&gt;
             &lt;/div&gt;
           &lt;/div&gt;
-          &lt;div class=&quot;sl-sheet-summary&quot; id=&quot;sl-search-summary&quot;&gt;在全部历史中找到 3 条结果&lt;/div&gt;
+          &lt;div class=&quot;sl-sheet-summary&quot; id=&quot;sl-search-summary&quot;&gt;在可见会话中找到 3 条结果&lt;/div&gt;
           &lt;div class=&quot;sl-search-results&quot; id=&quot;sl-search-results&quot; aria-live=&quot;polite&quot;&gt;
             &lt;button class=&quot;sl-search-result&quot; type=&quot;button&quot; data-search-project=&quot;D Code&quot; data-search-text=&quot;定义 d code 完整形态 项目 文件夹 source folder 用户消息 助手消息&quot;&gt;
               &lt;i data-lucide=&quot;message-square-text&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
@@ -3903,7 +3903,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           if (!result.hidden) visible += 1;
         });
         root.querySelector(&#x27;#sl-search-empty&#x27;).hidden = visible !== 0;
-        root.querySelector(&#x27;#sl-search-summary&#x27;).textContent = visible ? &#x27;在全部历史中找到 &#x27; + visible + &#x27; 条结果&#x27; : &#x27;没有找到匹配结果&#x27;;
+        root.querySelector(&#x27;#sl-search-summary&#x27;).textContent = visible ? &#x27;在可见会话中找到 &#x27; + visible + &#x27; 条结果&#x27; : &#x27;没有找到匹配结果&#x27;;
       }
 
       function openSearch() {
