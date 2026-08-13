@@ -2,7 +2,7 @@
 
 状态：Reference Index（参考索引）
 
-最后对齐：2026-08-10
+最后对齐：2026-08-13
 
 ## 权威边界
 
@@ -19,12 +19,14 @@
 |---|---|---|---|---|
 | REF-001 | OpenAI Codex 桌面端 | Product UI（产品界面） | 多张界面截图与持续对照反馈 | 工作台主骨架参考 |
 | REF-002 | ZCode | Product UI（产品界面） | [zcode.z.ai/cn](https://zcode.z.ai/cn) | 信息层级参考 |
-| REF-003 | MiniMax Code | Product UI（产品界面） | Agent Team 界面截图 | 智能体团队呈现参考 |
+| REF-003 | MiniMax Code | Product UI（产品界面） | 本机 `3.0.60` 与[官方本地产品文档](https://agent.minimaxi.com/docs/code/welcome) | 本地工作台、Goal、Agent 与权限交互参考 |
 | REF-004 | PiDeck | Open-source App（开源应用） | [Skitre/PiDeck](https://github.com/Skitre/PiDeck) | Pi 能力运用与差距检查 |
 | REF-005 | Flue | Agent Harness（智能体宿主） | [withastro/flue](https://github.com/withastro/flue) | 架构参考，不作为 D Code 基座 |
 | REF-006 | Orca | Open-source App（开源应用） | [stablyai/orca](https://github.com/stablyai/orca) | 标签、编辑与预览参考 |
 | REF-007 | pi-intercom | Pi Extension（Pi 扩展） | [nicobailon/pi-intercom](https://github.com/nicobailon/pi-intercom) | 跨会话通信机制参考 |
 | REF-008 | pi-messenger | Pi Extension（Pi 扩展） | [nicobailon/pi-messenger](https://github.com/nicobailon/pi-messenger) | 多智能体协作机制参考 |
+| REF-009 | Todos | Agent Team Workspace（智能体团队工作空间） | [todos.dev](https://todos.dev/) | Work Map、Run 历史与人工门禁参考 |
+| REF-010 | pi-dteam | Pi Extension（Pi 扩展） | [ssdiwu/pi-dteam](https://github.com/ssdiwu/pi-dteam) | D Team 执行层机制参考 |
 
 ## REF-001 OpenAI Codex 桌面端
 
@@ -45,15 +47,23 @@
 
 **D Code 借鉴**：成熟工作台的整体信息层级，包括耐久导航、中央对话、固定输入区，以及靠近工作内容的紧凑活动与进度呈现。
 
-**明确不借鉴**：不复制营销视觉、Web/Electron 外观、常驻挤压主空间的右栏，也不因参考其界面引入第二套 Agent Runtime（智能体运行时）。
+**明确不借鉴**：不复制营销视觉、Web/Electron 外观、不保留中央最小宽度却强行挤入的右栏，也不因参考其界面引入第二套 Agent Runtime（智能体运行时）。D Code 的 Work Inspector 在空间允许时非模态常驻，并通过左栏临时覆盖保留中央宽度。
 
 ## REF-003 MiniMax Code
 
-**D Code 借鉴**：Agent Team（智能体团队）是当前 Session 内的一组协作者；成员可以彼此通信，用户可以集中查看成员职责、状态、工作轨迹、通信和阶段结论，并按成员展开细节。
+**已核实证据**：本机 `/Applications/MiniMax Code.app` 为 `3.0.60`（build `3.0.60.123`）；版本元数据只证明研究对象，不单独证明具体界面行为。本路线只采用 507 明确采纳的观察，以及 [Tasks](https://agent.minimaxi.com/docs/code/workflows/tasks)、[Panels](https://agent.minimaxi.com/docs/code/desktop/panels)、[Goal](https://agent.minimaxi.com/docs/code/desktop/goal)、[Agent Team](https://agent.minimaxi.com/docs/code/agents/team)、[Custom Agents](https://agent.minimaxi.com/docs/code/agents/custom-agents) 与 [Permissions](https://agent.minimaxi.com/docs/code/workflows/permissions) 可核实的本地产品机制；不反编译应用或复制其代码、文案和视觉资产。具体动态行为仍需在进入版本 PRD 时记录可复现操作路径。
 
-**明确不借鉴**：不照搬固定 Coder/Verifier/General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。
+**D Code 借鉴**：
 
-**证据边界**：当前来源是 507 提供的产品截图；后续如需核实动态行为，应补充可复现的产品版本与操作路径。
+- 对话仍是任务主空间，本机文件、变更与运行信息作为可并行操作的上下文，不用模态蒙版切断左栏和中央对话；
+- Project 文件树和助手正文中的文件、目录、代码行引用可在 D Code 自有 Workspace Tab 中打开并定位；
+- Goal 在输入区附近持续显示阶段、耗时、证据、阻塞与人工控制，但不取代 D Code 的耐久 Work Map；
+- Agent Profile 与 Team Member Run 分离；`0.0.7` 先呈现档案职责 / 模型路由与当次成员实际工具授予、状态、当前活动、卡住 / 重试、请求和结构化报告，`0.0.9` 再加入版本化 Skill 引用与权限策略；
+- 权限请求显示动作、目标、风险理由与作用范围；上下文和用量只呈现 Pi 能提供的真实本地数据。
+
+**明确不借鉴**：不复制 Electron 架构或视觉皮肤，不照搬固定 Coder / Verifier / General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。Remote Control、IM、云端 / 定时任务、账号积分与签到、在线部署、Chrome Cookie 导入、BYOK、Skill 市场和增长反馈入口均不进入 D Code 本机版本路线。
+
+**产品边界**：MiniMax Code 只提供本地信息层级与交互参考。D Code 继续使用 SwiftUI / AppKit、Pi 配置与 Session 权威、固定“对话”首标签、耐久 Work Map、显式 Team Run 与主智能体有界中转，不接入 MiniMax Runtime。
 
 ## REF-004 PiDeck
 
@@ -89,9 +99,30 @@
 
 ## REF-008 pi-messenger
 
-**D Code 借鉴**：同一 Project 内多个 Agent 的通信网络，与 MiniMax Code 的 Agent Team 用户形态结合，让用户能集中理解每个成员做了什么、说了什么和形成了什么结论。
+**D Code 借鉴**：多 Agent 消息的稳定身份、来源、目标与可观察结果，与 MiniMax Code 的 Agent Team 用户形态结合，让用户能集中理解每个成员做了什么、主智能体转发了什么，以及形成了什么结论。
 
 **明确不借鉴**：不直接接入其 TUI、会话存储或扩展 UI；成员、消息、活动和结论由 D Code 自有数据合同表达。
+
+## REF-009 Todos
+
+**D Code 借鉴**：
+
+- Goal 之下的稳定 Work Item，以及同一工作项的多次 Run 历史；
+- Plan / Changes 作为可寻址、可版本化的工作产物，而不是被对话流冲走的临时消息；
+- 计划确认、结果验收和用户回答等明确人工门禁；
+- 工具、机器、凭据与人类角色相互约束的分层权限思路。
+
+**明确不借鉴**：不把 Todos Cloud 设为 D Code 的事实权威，不把一个 Todo 强制等同于一个 Pi Session，不在近期版本复制全局 Chief、常驻角色团队、每项独立 Worktree、定时重跑、远程机器或自动合并发布。目前没有核实到可供 D Code 复制或随 App 分发的开放源码许可；只学习公开产品机制，不复制其编译代码。服务权利边界见 [Todos Terms](https://todos.dev/terms)。
+
+**连接边界**：Todos 的 [Remote MCP](https://todos.dev/docs/mcp) 只是 D Code 本机工作对象合同稳定后的可选连接器候选。即使后续接入，Todos Project / Todo 也只是远程引用，不改写 D Code 的本机身份与状态权威。
+
+## REF-010 pi-dteam
+
+**D Code 借鉴**：模型分级路由、有界 Worker 任务、只读默认与显式写入范围，以及 Finding、Request、Control、恢复和结构化 WorkerReport 的生命周期语义。主智能体继续负责判断、路由、中转和最终综合。
+
+**明确不借鉴**：不把当前进程内 Worker Runtime 伪装成耐久 Work Map，不声称 Worker P2P，不自动调度工作项依赖，不持久化完整 Worker Transcript 或隐藏 Thinking，不解析 `/dteam` TUI 作为产品界面。
+
+**当前定位**：pi-dteam 是 `0.0.7` D Team Execution Plane（执行层）的机制与可复用实现来源；D Code 自己拥有 Work Item / Team Run / Member / Event / Report 的产品合同、Host IPC、持久化边界和 SwiftUI 原生呈现，不要求用户另外安装该扩展。
 
 ## 技术上游，不属于竞品参考
 

@@ -103,7 +103,24 @@ struct SessionSearchRequestPlan: Equatable, Sendable {
     let query: String
     let projectSourceFolders: [String]
     let filterSourceFolders: [String]?
+    let excludedSessionIDs: [String]
     let refresh: Bool
+
+    init(
+        generation: UUID,
+        query: String,
+        projectSourceFolders: [String],
+        filterSourceFolders: [String]?,
+        excludedSessionIDs: [String] = [],
+        refresh: Bool
+    ) {
+        self.generation = generation
+        self.query = query
+        self.projectSourceFolders = projectSourceFolders
+        self.filterSourceFolders = filterSourceFolders
+        self.excludedSessionIDs = excludedSessionIDs
+        self.refresh = refresh
+    }
 
     var parameters: [String: JSONValue] {
         var result: [String: JSONValue] = [
@@ -111,6 +128,7 @@ struct SessionSearchRequestPlan: Equatable, Sendable {
             "requestToken": .string(generation.uuidString),
             "limit": .number(50),
             "projectSourceFolders": .array(projectSourceFolders.map(JSONValue.string)),
+            "excludedSessionIds": .array(excludedSessionIDs.map(JSONValue.string)),
             "refresh": .bool(refresh),
         ]
         if let filterSourceFolders {
@@ -133,6 +151,13 @@ struct SessionSearchRequestPlan: Equatable, Sendable {
 struct SessionSearchProbePlan: Equatable, Sendable {
     let token: UUID
     let projectSourceFolders: [String]
+    let excludedSessionIDs: [String]
+
+    init(token: UUID, projectSourceFolders: [String], excludedSessionIDs: [String] = []) {
+        self.token = token
+        self.projectSourceFolders = projectSourceFolders
+        self.excludedSessionIDs = excludedSessionIDs
+    }
 
     var parameters: [String: JSONValue] {
         [
@@ -140,6 +165,7 @@ struct SessionSearchProbePlan: Equatable, Sendable {
             "requestToken": .string(token.uuidString),
             "limit": .number(1),
             "projectSourceFolders": .array(projectSourceFolders.map(JSONValue.string)),
+            "excludedSessionIds": .array(excludedSessionIDs.map(JSONValue.string)),
             "refresh": .bool(false),
             "probe": .bool(true),
         ]
@@ -152,6 +178,23 @@ struct SessionOpenRequestPlan: Equatable, Sendable {
     let expectedEntryID: String?
     let expectedEntryDigest: String?
     let preserveActive: Bool
+    let pathID: String?
+
+    init(
+        sessionID: String,
+        writable: Bool,
+        expectedEntryID: String?,
+        expectedEntryDigest: String?,
+        preserveActive: Bool,
+        pathID: String? = nil
+    ) {
+        self.sessionID = sessionID
+        self.writable = writable
+        self.expectedEntryID = expectedEntryID
+        self.expectedEntryDigest = expectedEntryDigest
+        self.preserveActive = preserveActive
+        self.pathID = pathID
+    }
 
     var parameters: [String: JSONValue] {
         var result: [String: JSONValue] = [
@@ -162,6 +205,7 @@ struct SessionOpenRequestPlan: Equatable, Sendable {
         if let expectedEntryID { result["expectedEntryId"] = .string(expectedEntryID) }
         if let expectedEntryDigest { result["expectedEntryDigest"] = .string(expectedEntryDigest) }
         if preserveActive { result["preserveActive"] = .bool(true) }
+        if let pathID { result["pathId"] = .string(pathID) }
         return result
     }
 
@@ -171,7 +215,8 @@ struct SessionOpenRequestPlan: Equatable, Sendable {
             writable: false,
             expectedEntryID: result.entryId,
             expectedEntryDigest: result.entryDigest,
-            preserveActive: true
+            preserveActive: true,
+            pathID: nil
         )
     }
 }

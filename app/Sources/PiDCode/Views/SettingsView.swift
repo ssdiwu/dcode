@@ -72,15 +72,15 @@ struct SettingsView: View {
             Text("工作台布局")
                 .font(.title2.weight(.semibold))
 
-            Toggle("中宽与宽窗口中显示左栏", isOn: showSidebar)
-                .accessibilityLabel("中宽与宽窗口中显示左栏")
-                .accessibilityHint("立即更新可并排的工作台布局，并在下次启动时保留")
+            Toggle("空间允许时显示左栏", isOn: showSidebar)
+                .accessibilityLabel("空间允许时显示左栏")
+                .accessibilityHint("工作检查器常驻且空间不足时，左栏会改为按需覆盖，不改变这个偏好")
 
-            Toggle("宽窗口中显示工作检查器", isOn: showInspector)
-                .accessibilityLabel("宽窗口中显示工作检查器")
-                .accessibilityHint("中等与窄窗口仍会按可用宽度自动切换为覆盖面板")
+            Toggle("显示工作检查器", isOn: showInspector)
+                .accessibilityLabel("显示工作检查器")
+                .accessibilityHint("中宽与宽窗口中常驻显示；窄窗口按需覆盖")
 
-            Text("窄窗口始终优先保留对话空间，左右栏按需以覆盖面板打开，不受并排布局偏好强制展开。")
+            Text("工作检查器是非模态工作区；空间不足以同时容纳三栏时，右栏保持常驻，左栏按需覆盖。窄窗口仍优先保留对话空间。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

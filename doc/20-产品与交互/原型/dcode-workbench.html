@@ -2641,33 +2641,30 @@ html&gt;body{padding:0}&lt;/style&gt;
 
     #dcode-session-lineage .sl-toast[hidden] { display: none; }
 
-    @media (max-width: 1279px) {
+    @media (min-width: 880px) and (max-width: 1105px) {
       #dcode-session-lineage .sl-layout,
       #dcode-session-lineage.sl-right-hidden .sl-layout,
       #dcode-session-lineage.sl-left-hidden .sl-layout,
       #dcode-session-lineage.sl-left-hidden.sl-right-hidden .sl-layout {
-        grid-template-columns: 250px minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr) 332px;
       }
 
-      #dcode-session-lineage.sl-left-hidden .sl-layout,
+      #dcode-session-lineage.sl-right-hidden .sl-layout,
       #dcode-session-lineage.sl-left-hidden.sl-right-hidden .sl-layout {
         grid-template-columns: minmax(0, 1fr);
       }
 
-      #dcode-session-lineage .sl-right {
+      #dcode-session-lineage .sl-left {
         position: absolute;
         top: 0;
         bottom: 0;
+        left: 0;
         z-index: 10;
-        width: min(352px, calc(100% - 40px));
+        width: min(332px, calc(100% - 40px));
+        box-shadow: 12px 0 30px var(--sl-shadow);
       }
 
-      #dcode-session-lineage .sl-right {
-        right: 0;
-        box-shadow: -12px 0 30px var(--sl-shadow);
-      }
-
-      #dcode-session-lineage:not(.sl-right-hidden) .sl-panel-backdrop {
+      #dcode-session-lineage:not(.sl-left-hidden) .sl-panel-backdrop {
         display: block;
       }
     }
@@ -3059,7 +3056,7 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-message-heading&quot;&gt;&lt;strong&gt;D Code&lt;/strong&gt;&lt;span&gt;10:26&lt;/span&gt;&lt;/div&gt;
               &lt;div class=&quot;sl-chat-message&quot;&gt;
                 &lt;h2&gt;两项能力都可以纳入，但角色不同&lt;/h2&gt;
-                &lt;p&gt;&lt;strong&gt;pi-intercom&lt;/strong&gt; 提供持久会话定向通信的机制参考；&lt;strong&gt;pi-messenger&lt;/strong&gt; 提供同一项目内多智能体协作网络的机制参考。D Code 以自有数据合同和原生组件实现这些产品能力，不把两个扩展作为运行时依赖。&lt;/p&gt;
+                &lt;p&gt;&lt;strong&gt;pi-intercom&lt;/strong&gt; 提供持久会话定向通信的机制参考；&lt;strong&gt;pi-messenger&lt;/strong&gt; 提供多智能体消息的稳定身份、来源、目标与可观察结果参考。D Code 由主智能体有界中转成员协作，以自有数据合同和原生组件实现这些产品能力，不把两个扩展作为运行时依赖。&lt;/p&gt;
               &lt;/div&gt;
               &lt;div class=&quot;sl-message-actions&quot; aria-label=&quot;这条智能体回复的操作&quot;&gt;
                 &lt;button class=&quot;sl-message-action&quot; type=&quot;button&quot; data-action=&quot;copy-message&quot; aria-label=&quot;复制这条回复&quot; data-tooltip=&quot;复制回复&quot;&gt;&lt;i data-lucide=&quot;copy&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
@@ -3216,8 +3213,8 @@ html&gt;body{padding:0}&lt;/style&gt;
 
           &lt;div id=&quot;sl-panel-agents&quot; role=&quot;tabpanel&quot; data-inspector-panel=&quot;Agents&quot;&gt;
             &lt;section class=&quot;sl-current-summary&quot; aria-label=&quot;当前协作组摘要&quot;&gt;
-              &lt;strong&gt;智能体团队 · 本轮已完成&lt;/strong&gt;
-              &lt;span&gt;4 位成员并行研究，协调智能体已汇总结论。&lt;/span&gt;
+              &lt;strong&gt;D Team · 本次执行已关闭&lt;/strong&gt;
+              &lt;span&gt;4 个成员执行引用各自档案版本；协调智能体已汇总，但工作项仍待验收。&lt;/span&gt;
             &lt;/section&gt;
 
             &lt;section class=&quot;sl-work-section&quot; aria-labelledby=&quot;sl-team-members&quot;&gt;
@@ -3230,13 +3227,13 @@ html&gt;body{padding:0}&lt;/style&gt;
               &lt;div class=&quot;sl-agent-detail&quot; aria-live=&quot;polite&quot;&gt;
                 &lt;div class=&quot;sl-agent-detail-head&quot;&gt;
                   &lt;span class=&quot;sl-agent-dot&quot;&gt;&lt;/span&gt;
-                  &lt;div&gt;&lt;strong id=&quot;sl-agent-name&quot;&gt;产品结构&lt;/strong&gt;&lt;span id=&quot;sl-agent-role&quot;&gt;负责对象层级与日常工作流&lt;/span&gt;&lt;/div&gt;
+                  &lt;div&gt;&lt;strong id=&quot;sl-agent-name&quot;&gt;产品结构&lt;/strong&gt;&lt;span id=&quot;sl-agent-role&quot;&gt;档案 v3 · 对象层级｜本次：高级模型 · 只读工具&lt;/span&gt;&lt;/div&gt;
                   &lt;span id=&quot;sl-agent-status&quot;&gt;已汇总&lt;/span&gt;
                 &lt;/div&gt;
                 &lt;p id=&quot;sl-agent-summary&quot;&gt;确认项目是 D Code 的组织对象，可包含多个唯一归属的源文件夹；Pi 会话与 cwd 仍保持原义。&lt;/p&gt;
                 &lt;div class=&quot;sl-agent-events&quot; id=&quot;sl-agent-events&quot;&gt;
-                  &lt;div class=&quot;sl-agent-event&quot;&gt;&lt;time&gt;11:07&lt;/time&gt;&lt;span&gt;向界面评审询问右栏信息密度。&lt;/span&gt;&lt;/div&gt;
-                  &lt;div class=&quot;sl-agent-event&quot;&gt;&lt;time&gt;11:14&lt;/time&gt;&lt;span&gt;收到“对话优先、谱系二级”的反馈。&lt;/span&gt;&lt;/div&gt;
+                  &lt;div class=&quot;sl-agent-event&quot;&gt;&lt;time&gt;11:07&lt;/time&gt;&lt;span&gt;请求协调智能体转问右栏信息密度。&lt;/span&gt;&lt;/div&gt;
+                  &lt;div class=&quot;sl-agent-event&quot;&gt;&lt;time&gt;11:14&lt;/time&gt;&lt;span&gt;经协调智能体收到“对话优先、谱系二级”的反馈。&lt;/span&gt;&lt;/div&gt;
                   &lt;div class=&quot;sl-agent-event&quot;&gt;&lt;time&gt;11:18&lt;/time&gt;&lt;span&gt;提交结构结论给协调智能体。&lt;/span&gt;&lt;/div&gt;
                 &lt;/div&gt;
               &lt;/div&gt;
@@ -3520,7 +3517,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       var selectedNode = &#x27;n3&#x27;;
       var sheetMode = &#x27;copy&#x27;;
       var toastTimer;
-      var inspectorOverlayQuery = window.matchMedia(&#x27;(max-width: 1279px)&#x27;);
+      var inspectorOverlayQuery = window.matchMedia(&#x27;(min-width: 880px) and (max-width: 1105px)&#x27;);
       var compactQuery = window.matchMedia(&#x27;(max-width: 879px)&#x27;);
       var panelPreference = { left: true, right: true };
       var inspectorState = { scope: &#x27;Session&#x27;, Session: &#x27;Agents&#x27;, Project: &#x27;文件&#x27; };
@@ -3542,22 +3539,22 @@ html&gt;body{padding:0}&lt;/style&gt;
       };
       var agentData = {
         &#x27;产品结构&#x27;: {
-          role: &#x27;负责对象层级与日常工作流&#x27;,
+          role: &#x27;档案 v3 · 对象层级｜本次：高级模型 · 只读工具&#x27;,
           summary: &#x27;确认项目是 D Code 的组织对象，可包含多个唯一归属的源文件夹；Pi 会话与 cwd 仍保持原义。&#x27;,
-          events: [[&#x27;11:07&#x27;, &#x27;向界面评审询问右栏信息密度。&#x27;], [&#x27;11:14&#x27;, &#x27;收到“对话优先、谱系二级”的反馈。&#x27;], [&#x27;11:18&#x27;, &#x27;提交结构结论给协调智能体。&#x27;]]
+          events: [[&#x27;11:07&#x27;, &#x27;请求协调智能体转问右栏信息密度。&#x27;], [&#x27;11:14&#x27;, &#x27;经协调智能体收到“对话优先、谱系二级”的反馈。&#x27;], [&#x27;11:18&#x27;, &#x27;提交结构结论给协调智能体。&#x27;]]
         },
         &#x27;Pi 语义&#x27;: {
-          role: &#x27;核对会话、路径与复制的真实边界&#x27;,
+          role: &#x27;档案 v2 · Pi 边界｜本次：标准模型 · 只读工具&#x27;,
           summary: &#x27;确认会话内回溯与独立新会话是两种不同操作，项目文件都保持当前状态。&#x27;,
-          events: [[&#x27;10:42&#x27;, &#x27;核对 navigateTree 的同会话语义。&#x27;], [&#x27;10:49&#x27;, &#x27;确认 fork 与 clone 创建独立会话。&#x27;], [&#x27;11:02&#x27;, &#x27;把边界发送给产品结构。&#x27;]]
+          events: [[&#x27;10:42&#x27;, &#x27;核对 navigateTree 的同会话语义。&#x27;], [&#x27;10:49&#x27;, &#x27;确认 fork 与 clone 创建独立会话。&#x27;], [&#x27;11:02&#x27;, &#x27;提交边界结论给协调智能体，由其转给产品结构。&#x27;]]
         },
         &#x27;扩展审计&#x27;: {
-          role: &#x27;盘点现有 Pi 扩展与原生化入口&#x27;,
+          role: &#x27;档案 v4 · 扩展审计｜本次：标准模型 · 只读工具&#x27;,
           summary: &#x27;确认扩展继续在 Pi 运行时执行；原生界面消费结构化状态、消息和产物。&#x27;,
           events: [[&#x27;10:36&#x27;, &#x27;完成启用扩展清单。&#x27;], [&#x27;10:51&#x27;, &#x27;标记 Intercom 与 Messenger 接缝。&#x27;], [&#x27;11:05&#x27;, &#x27;提交原生整合优先级。&#x27;]]
         },
         &#x27;界面评审&#x27;: {
-          role: &#x27;验证三栏层级与信息密度&#x27;,
+          role: &#x27;档案 v2 · 界面验证｜本次：高级模型 · 只读工具&#x27;,
           summary: &#x27;建议左栏常驻、右栏按宽度自适应，并把会话信息与项目信息分成两个作用域。&#x27;,
           events: [[&#x27;11:08&#x27;, &#x27;评估 Codex 式消息快捷操作。&#x27;], [&#x27;11:15&#x27;, &#x27;提出会话 / 项目双作用域。&#x27;], [&#x27;11:20&#x27;, &#x27;确认文件树进入项目作用域。&#x27;]]
         }
@@ -3588,7 +3585,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           setPanel(&#x27;left&#x27;, false, false);
           setPanel(&#x27;right&#x27;, false, false);
         } else if (inspectorOverlayQuery.matches) {
-          setPanel(&#x27;right&#x27;, false, false);
+          setPanel(&#x27;left&#x27;, false, false);
         }
       }
 
@@ -3597,8 +3594,8 @@ html&gt;body{padding:0}&lt;/style&gt;
           setPanel(&#x27;left&#x27;, false, false);
           setPanel(&#x27;right&#x27;, false, false);
         } else if (inspectorOverlayQuery.matches) {
-          setPanel(&#x27;left&#x27;, panelPreference.left, false);
-          setPanel(&#x27;right&#x27;, false, false);
+          setPanel(&#x27;left&#x27;, false, false);
+          setPanel(&#x27;right&#x27;, panelPreference.right, false);
         } else {
           setPanel(&#x27;left&#x27;, panelPreference.left, false);
           setPanel(&#x27;right&#x27;, panelPreference.right, false);
@@ -3648,7 +3645,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         });
         showInspectorTab(&#x27;文件&#x27;, &#x27;Project&#x27;);
         setPanel(&#x27;right&#x27;, true, false);
-        if (compactQuery.matches) setPanel(&#x27;left&#x27;, false, false);
+        if (compactQuery.matches || inspectorOverlayQuery.matches) setPanel(&#x27;left&#x27;, false, false);
       }
 
       function selectAgent(name) {

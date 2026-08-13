@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { access, appendFile, chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiHost, PiHostError } from "../src/pi-host.js";
+import { publishNewFileAtomically } from "../src/atomic-file.js";
 import { searchEntryDigest } from "../src/search-entry-digest.js";
+import { SessionLease } from "../src/session-lease.js";
 
 interface Fixture {
   root: string;
@@ -107,7 +109,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.2");
+    assert.equal(hello.hostVersion, "0.0.3");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -118,6 +120,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal(hello.capabilities.sessionExternalSync, true);
     assert.equal(hello.capabilities.dcodeSessionOrigin, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionSearch, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionTrash, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
@@ -146,6 +149,325 @@ test("host lists, inspects, and opens a read-only session", async () => {
       (error: unknown) => error instanceof PiHostError && error.code === "SESSION_READ_ONLY",
     );
   } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("read-only open exposes incomplete legacy model metadata as null", async () => {
+  const f = await fixture();
+  const path = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  const entries = (await readFile(path, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const modelEntry = entries.find((entry) => entry.type === "model_change");
+  if (modelEntry) delete modelEntry.modelId;
+  const assistant = entries.find((entry) => entry.id === "assistant") as {
+    message: Record<string, unknown>;
+  };
+  delete assistant.message.provider;
+  delete assistant.message.model;
+  await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => undefined });
+  try {
+    const opened = await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "readOnly",
+    }) as {
+      snapshot: { context: { model: unknown } };
+      state: { model: unknown; contextUsage: unknown };
+    };
+
+    assert.equal(opened.snapshot.context.model, null);
+    assert.equal(opened.state.model, null);
+    assert.equal(opened.state.contextUsage, null);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("opening a historical path keeps the writable runtime on that exact leaf", async () => {
+  const f = await fixture();
+  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  await appendFile(sessionPath, `${JSON.stringify({
+    type: "message",
+    id: "assistant-alternate",
+    parentId: "user",
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "alternate answer" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: {} },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    },
+  })}\n`);
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  try {
+    const observed = await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "readOnly",
+      pathId: "leaf:assistant",
+    }) as { snapshot: { selectedPathId: string; entries: Array<{ id?: string }> } };
+    assert.equal(observed.snapshot.selectedPathId, "leaf:assistant");
+    assert.ok(observed.snapshot.entries.some((entry) => entry.id === "assistant"));
+    assert.equal(observed.snapshot.entries.some((entry) => entry.id === "assistant-alternate"), false);
+
+    const opened = await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+      pathId: "leaf:assistant",
+    }) as { snapshot: { selectedPathId: string } };
+    assert.equal(opened.snapshot.selectedPathId, "leaf:assistant");
+    const active = (host as unknown as {
+      active?: { session: { sessionManager: SessionManager } };
+    }).active;
+    assert.equal(active?.session.sessionManager.getLeafId(), "assistant");
+    const refreshed = await host.handle("session.refresh", {}) as { selectedPathId: string };
+    assert.equal(refreshed.selectedPathId, "leaf:assistant");
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("path actions roll back before persistence and stay committed after the user entry persists", async () => {
+  const f = await fixture();
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  type PromptOptions = { preflightResult?: (success: boolean) => void; source?: "rpc" | "extension" };
+  type WritableInternals = {
+    session: {
+      sessionId: string;
+      sessionManager: SessionManager;
+      prompt: (message: string, options?: PromptOptions) => Promise<void>;
+      extensionRunner: {
+        emit: (event: { type: string; [key: string]: unknown }) => Promise<unknown>;
+      };
+    };
+  };
+  const internals = host as unknown as {
+    active?: WritableInternals;
+    prompt: (
+      message: string,
+      promptId: string,
+      pathAction?: { kind: "editUser" | "continueAssistant" | "continuePath"; entryId: string },
+    ) => Promise<{ accepted: boolean; completed: boolean }>;
+    installPromptSourceBoundary: (active: WritableInternals) => void;
+    onSessionEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+    onPersistedAgentEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+    applyPathAction: (
+      active: WritableInternals,
+      action: { kind: "editUser" | "continueAssistant" | "continuePath"; entryId: string },
+    ) => Promise<string | null>;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const manager = active.session.sessionManager;
+    const originalPrompt = active.session.prompt;
+
+    active.session.prompt = async (_message, options) => { options?.preflightResult?.(true); };
+    internals.installPromptSourceBoundary(active);
+    assert.deepEqual(
+      await internals.prompt("handled edit", "handled-path", { kind: "editUser", entryId: "user" }),
+      { accepted: true, completed: false },
+    );
+    await waitUntil(
+      () => emitted.some(({ data }) => (data as { promptId?: string } | undefined)?.promptId === "handled-path"),
+      "handled path completion",
+    );
+    assert.equal(manager.getLeafId(), "assistant");
+
+    let continuedEntryId: string | undefined;
+    active.session.prompt = async (_message, options) => {
+      options?.preflightResult?.(true);
+      const ownMessage = { role: "user", content: "continued from user", timestamp: Date.now() };
+      const event = { type: "message_end", message: ownMessage } as AgentSessionEvent;
+      internals.onSessionEvent(active, event);
+      continuedEntryId = manager.appendMessage(ownMessage as never);
+      internals.onPersistedAgentEvent(active, event);
+    };
+    internals.installPromptSourceBoundary(active);
+    assert.deepEqual(
+      await internals.prompt("continued from user", "continued-path", { kind: "continuePath", entryId: "user" }),
+      { accepted: true, completed: false },
+    );
+    await waitUntil(
+      () => emitted.some(({ event, data }) => event === "session.promptCompleted"
+        && (data as { promptId?: string } | undefined)?.promptId === "continued-path"),
+      "continued path persistence",
+    );
+    assert.ok(continuedEntryId);
+    assert.equal(manager.getEntry(continuedEntryId)?.parentId, "user");
+
+    active.session.prompt = async (_message, options) => {
+      options?.preflightResult?.(true);
+      const ownMessage = { role: "user", content: "persisted edit", timestamp: Date.now() };
+      const event = { type: "message_end", message: ownMessage } as AgentSessionEvent;
+      internals.onSessionEvent(active, event);
+      manager.appendMessage(ownMessage as never);
+      internals.onPersistedAgentEvent(active, event);
+      throw new Error("agent failed after persistence");
+    };
+    internals.installPromptSourceBoundary(active);
+    assert.deepEqual(
+      await internals.prompt("persisted edit", "persisted-path", { kind: "editUser", entryId: "user" }),
+      { accepted: true, completed: false },
+    );
+    await waitUntil(
+      () => emitted.some(({ event, data }) => event === "session.promptFailed"
+        && (data as { promptId?: string } | undefined)?.promptId === "persisted-path"),
+      "persisted path failure",
+    );
+    const failed = emitted.find(({ event, data }) => event === "session.promptFailed"
+      && (data as { promptId?: string } | undefined)?.promptId === "persisted-path");
+    assert.equal(typeof (failed?.data as { persistedEntryId?: string }).persistedEntryId, "string");
+    assert.notEqual(manager.getLeafId(), "assistant");
+    assert.equal(manager.getLeafEntry()?.type, "message");
+    active.session.prompt = originalPrompt;
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("an extension-cancelled path action keeps the leaf and emits no session_tree", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  type Active = {
+    session: {
+      sessionManager: SessionManager;
+      extensionRunner: {
+        hasHandlers: (eventType: string) => boolean;
+        emit: (event: { type: string; [key: string]: unknown }) => Promise<unknown>;
+      };
+    };
+  };
+  const internals = host as unknown as {
+    active?: Active;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const originalLeafId = active.session.sessionManager.getLeafId();
+    const originalHasHandlers = active.session.extensionRunner.hasHandlers.bind(active.session.extensionRunner);
+    const originalEmit = active.session.extensionRunner.emit.bind(active.session.extensionRunner);
+    const lifecycle: string[] = [];
+    active.session.extensionRunner.hasHandlers = (eventType) => (
+      eventType === "session_before_tree" || originalHasHandlers(eventType)
+    );
+    active.session.extensionRunner.emit = async (event) => {
+      lifecycle.push(event.type);
+      if (event.type === "session_before_tree") return { cancel: true };
+      return await originalEmit(event);
+    };
+
+    await assert.rejects(
+      host.handle("session.prompt", {
+        message: "edited question",
+        promptId: "cancelled-path",
+        pathAction: { kind: "editUser", entryId: "user" },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_PATH_CANCELLED",
+    );
+    assert.equal(active.session.sessionManager.getLeafId(), originalLeafId);
+    assert.deepEqual(lifecycle, ["session_before_tree"]);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("copy releases a temporary source lease when copying fails", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
+  const sourcePath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  try {
+    await appendFile(sourcePath, "{incomplete");
+    await assert.rejects(
+      host.handle("session.copy", { sessionId: f.sessionId, targetCwd: f.root }),
+      (error: unknown) => typeof error === "object"
+        && error !== null
+        && (error as { code?: unknown }).code === "INVALID_SESSION",
+    );
+    await assert.rejects(access(leasePath));
+    const retryLease = await SessionLease.acquire({
+      agentDir: f.agentDir,
+      sessionId: f.sessionId,
+      sessionPath: sourcePath,
+      quietWindowMs: 1,
+    });
+    await retryLease.release();
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("copy rechecks current-session busy state immediately before publish", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  const copier = host.sessionCopier;
+  const originalCopy = copier.copy.bind(copier);
+  let busy = false;
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = (host as unknown as { active?: { session: object } }).active;
+    assert.ok(active);
+    Object.defineProperty(active.session, "isStreaming", { configurable: true, get: () => busy });
+    copier.copy = async (options) => await originalCopy({
+      ...options,
+      assertSourceStable: async () => {
+        busy = true;
+        await options.assertSourceStable();
+      },
+    });
+
+    await assert.rejects(
+      host.handle("session.copy", { sessionId: f.sessionId, targetCwd: f.root }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_BUSY",
+    );
+    const recent = await host.reader.list({ origin: "dcode" });
+    assert.deepEqual(recent, []);
+    busy = false;
+    Reflect.deleteProperty(active.session, "isStreaming");
+  } finally {
+    busy = false;
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
@@ -720,6 +1042,33 @@ test("writable open requires explicit write intent and releases its lease", asyn
   }
 });
 
+test("session.close only closes the expected active session", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    emit: () => undefined,
+  });
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
+    await assert.rejects(
+      host.handle("session.close", { expectedSessionId: "another-session" }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_ACTIVE_CHANGED",
+    );
+    const retained = await host.handle("session.getState", {}) as { sessionId: string };
+    assert.equal(retained.sessionId, f.sessionId);
+
+    const closed = await host.handle("session.close", { expectedSessionId: f.sessionId }) as { closed: boolean };
+    assert.equal(closed.closed, true);
+    await assert.rejects(
+      host.handle("session.getState", {}),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_NOT_OPEN",
+    );
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("writable open returns every complete Pi entry accepted before write ownership", async () => {
   const f = await fixture();
   const host = new PiHost({
@@ -890,7 +1239,7 @@ test("a second direct takeover is rejected until the first owner releases its le
   }
 });
 
-test("host creates a writable Pi session in the cwd-scoped directory", async () => {
+test("host commits a Pi session without opening a runtime or taking a lease", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-dcode-create-test-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
@@ -900,30 +1249,25 @@ test("host creates a writable Pi session in the cwd-scoped directory", async () 
     const created = await host.handle("session.create", { cwd: root }) as {
       created: boolean;
       session: { id: string; path: string; cwd: string };
-      activation: {
-        status: string;
-        open: { mode: string; snapshot: { summary: { id: string; path: string; cwd: string } } };
-      };
+      activation: { status: string };
     };
     assert.equal(created.created, true);
-    assert.equal(created.activation.status, "writable");
-    assert.equal(created.activation.open.mode, "writable");
+    assert.equal(created.activation.status, "created");
     assert.equal(created.session.cwd, await realpath(root));
     assert.ok(created.session.path.includes("--"));
-    const state = await host.handle("session.getState", {}) as { writable: boolean; sessionId: string };
-    assert.equal(state.writable, true);
-    assert.equal(state.sessionId, created.session.id);
+    await assert.rejects(
+      host.handle("session.getState", {}),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_NOT_OPEN",
+    );
+    await assert.rejects(access(join(agentDir, "pi-dcode", "leases", `${created.session.id}.lock`)));
     await assert.rejects(
       host.handle("session.create", { cwd: join(root, "missing") }),
       (error: unknown) => error instanceof PiHostError && error.code === "CWD_NOT_ACCESSIBLE",
     );
-    const stateAfterFailedCreate = await host.handle("session.getState", {}) as {
-      writable: boolean;
-      sessionId: string;
-    };
-    assert.equal(stateAfterFailedCreate.writable, true);
-    assert.equal(stateAfterFailedCreate.sessionId, created.session.id);
-    await host.handle("session.close", {});
+    await assert.rejects(
+      host.handle("session.getState", {}),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_NOT_OPEN",
+    );
     const document = (await readFile(created.session.path, "utf8"))
       .trimEnd()
       .split("\n")
@@ -943,30 +1287,112 @@ test("host creates a writable Pi session in the cwd-scoped directory", async () 
   }
 });
 
-test("a failed writable activation acknowledges creation and falls back to observation", async () => {
+test("creation does not depend on a global session-id resolve after the file commit", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-dcode-create-failure-test-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "settings.json"), "{}\n");
   const host = new PiHost({ agentDir, leaseQuietWindowMs: 1, conflictPollMs: 60_000, emit: () => undefined });
+  const reader = host.reader as unknown as { resolve: (sessionId: string) => Promise<unknown> };
+  reader.resolve = async () => { throw new Error("global resolve must not run during create"); };
+  try {
+    const created = await host.handle("session.create", { cwd: root }) as {
+      created: boolean;
+      session: { id: string };
+      activation: { status: string };
+    };
+    assert.equal(created.created, true);
+    assert.equal(created.activation.status, "created");
+    assert.ok(created.session.id);
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("atomic new-file publication never exposes a partial destination and never overwrites", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-atomic-publish-test-"));
+  const destination = join(root, "created.jsonl");
+  const contents = `${"x".repeat(16 * 1024 * 1024)}\n`;
+  try {
+    let settled = false;
+    const publishing = publishNewFileAtomically(destination, contents).finally(() => { settled = true; });
+    const visibleSizes: number[] = [];
+    while (!settled) {
+      try { visibleSizes.push((await stat(destination)).size); }
+      catch { /* The atomic destination is intentionally absent before commit. */ }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    await publishing;
+    visibleSizes.push((await stat(destination)).size);
+    assert.ok(visibleSizes.length > 0);
+    assert.ok(visibleSizes.every((size) => size === Buffer.byteLength(contents)));
+
+    await assert.rejects(publishNewFileAtomically(destination, "replacement\n"));
+    assert.equal(await readFile(destination, "utf8"), contents);
+    assert.equal((await readdir(root)).filter((name) => name.endsWith(".pending")).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("creating a new session leaves the existing writable runtime active", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const created = await host.handle("session.create", { cwd: f.root }) as {
+      session: { id: string; path: string };
+      activation: { status: string };
+    };
+    const state = await host.handle("session.getState", {}) as {
+      sessionId: string;
+      writable: boolean;
+    };
+    assert.equal(created.activation.status, "created");
+    assert.notEqual(created.session.id, f.sessionId);
+    assert.equal(state.sessionId, f.sessionId);
+    assert.equal(state.writable, true);
+    await access(created.session.path);
+    await assert.rejects(access(join(f.agentDir, "pi-dcode", "leases", `${created.session.id}.lock`)));
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("creation never calls runtime activation after the file commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-create-unavailable-test-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  const host = new PiHost({ agentDir, leaseQuietWindowMs: 1, conflictPollMs: 60_000, emit: () => undefined });
   const internals = host as unknown as {
-    openSession: (sessionId: string, mode: "readOnly" | "writable", writeIntent?: boolean) => Promise<unknown>;
+    openReadOnlySession: (...args: unknown[]) => Promise<unknown>;
   };
-  const originalOpenSession = internals.openSession.bind(host);
-  internals.openSession = async (sessionId, mode, writeIntent) => {
-    if (mode === "writable") throw new PiHostError("SESSION_ACTIVATION_FAILED", "Synthetic activation failure");
-    return await originalOpenSession(sessionId, mode, writeIntent);
+  let activationCalls = 0;
+  internals.openReadOnlySession = async () => {
+    activationCalls += 1;
+    throw new PiHostError("SESSION_OBSERVATION_FAILED", "Synthetic observation failure");
   };
   try {
     const created = await host.handle("session.create", { cwd: root }) as {
       created: boolean;
       session: { id: string };
-      activation: { status: string; open: { mode: string }; error: { code: string } };
+      activation: { status: string };
     };
     assert.equal(created.created, true);
-    assert.equal(created.activation.status, "observing");
-    assert.equal(created.activation.open.mode, "readOnly");
-    assert.equal(created.activation.error.code, "SESSION_ACTIVATION_FAILED");
+    assert.equal(created.activation.status, "created");
+    assert.equal(activationCalls, 0);
     const recent = await host.handle("session.list", { origin: "dcode" }) as { sessions: Array<{ id: string }> };
     assert.deepEqual(recent.sessions.map((session) => session.id), [created.session.id]);
   } finally {
@@ -975,37 +1401,220 @@ test("a failed writable activation acknowledges creation and falls back to obser
   }
 });
 
-test("creation remains acknowledged when writable activation and observation both fail", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-dcode-create-unavailable-test-"));
+test("an empty D Code session moves to the recoverable Trash and disappears from navigation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-test-"));
   const agentDir = join(root, "agent");
+  const trashDirectory = join(root, "Trash");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "settings.json"), "{}\n");
-  const host = new PiHost({ agentDir, leaseQuietWindowMs: 1, conflictPollMs: 60_000, emit: () => undefined });
-  const internals = host as unknown as {
-    openSession: (sessionId: string, mode: "readOnly" | "writable", writeIntent?: boolean) => Promise<unknown>;
-  };
-  internals.openSession = async (_sessionId, mode) => {
-    throw new PiHostError(
-      mode === "writable" ? "SESSION_ACTIVATION_FAILED" : "SESSION_OBSERVATION_FAILED",
-      `Synthetic ${mode} failure`,
-    );
-  };
+  const host = new PiHost({
+    agentDir,
+    trashDirectory,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
   try {
     const created = await host.handle("session.create", { cwd: root }) as {
-      created: boolean;
-      session: { id: string };
-      activation: {
-        status: string;
-        error: { code: string };
-        observationError: { code: string };
-      };
+      session: { id: string; path: string };
     };
-    assert.equal(created.created, true);
-    assert.equal(created.activation.status, "unavailable");
-    assert.equal(created.activation.error.code, "SESSION_ACTIVATION_FAILED");
-    assert.equal(created.activation.observationError.code, "SESSION_OBSERVATION_FAILED");
-    const recent = await host.handle("session.list", { origin: "dcode" }) as { sessions: Array<{ id: string }> };
-    assert.deepEqual(recent.sessions.map((session) => session.id), [created.session.id]);
+    await host.handle("session.open", { sessionId: created.session.id, mode: "readOnly" });
+    const result = await host.handle("session.trash", { sessionId: created.session.id }) as {
+      trashed: boolean;
+      trashPath: string;
+    };
+    assert.equal(result.trashed, true);
+    await assert.rejects(access(created.session.path));
+    await access(result.trashPath);
+    assert.equal((await readdir(trashDirectory)).length, 1);
+    const recent = await host.handle("session.list", { origin: "dcode" }) as { sessions: unknown[] };
+    assert.deepEqual(recent.sessions, []);
+    await assert.rejects(
+      host.handle("session.getState", {}),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_NOT_OPEN",
+    );
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trash refuses non-empty and non-D Code sessions without removing their files", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    trashDirectory: join(f.root, "Trash"),
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => undefined,
+  });
+  const originalPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  try {
+    await assert.rejects(
+      host.handle("session.trash", { sessionId: f.sessionId }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_TRASH_NOT_ALLOWED",
+    );
+    await access(originalPath);
+
+    const created = await host.handle("session.create", { cwd: f.root }) as {
+      session: { id: string; path: string };
+    };
+    const document = (await readFile(created.session.path, "utf8")).trimEnd().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const origin = document[1] as Record<string, unknown>;
+    await appendFile(created.session.path, `${JSON.stringify({
+      type: "message",
+      id: "user-after-create",
+      parentId: origin.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "keep me", timestamp: Date.now() },
+    })}\n`);
+    await assert.rejects(
+      host.handle("session.trash", { sessionId: created.session.id }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_TRASH_NOT_EMPTY",
+    );
+    await access(created.session.path);
+
+    const emptySource = await host.handle("session.create", { cwd: f.root }) as {
+      session: { id: string; path: string };
+    };
+    const childPath = join(f.sessionsDir, "child-of-empty-source.jsonl");
+    await writeFile(childPath, `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "child-of-empty-source",
+      timestamp: new Date().toISOString(),
+      cwd: f.root,
+      parentSession: emptySource.session.path,
+    })}\n`);
+    await assert.rejects(
+      host.handle("session.trash", { sessionId: emptySource.session.id }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_HAS_DESCENDANTS",
+    );
+    await access(emptySource.session.path);
+    await access(childPath);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("trash restores the source when an external writer appends after quarantine", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-append-race-test-"));
+  const agentDir = join(root, "agent");
+  const trashDirectory = join(root, "Trash");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  const host = new PiHost({ agentDir, trashDirectory, leaseQuietWindowMs: 1, emit: () => undefined });
+  try {
+    const created = await host.handle("session.create", { cwd: root }) as {
+      session: { id: string; path: string };
+    };
+    const origin = JSON.parse((await readFile(created.session.path, "utf8")).trimEnd().split("\n")[1] as string) as {
+      id: string;
+    };
+    const reader = host.reader as unknown as {
+      inspectPath: (path: string, sessionId: string, leafId?: string | null) => Promise<unknown>;
+    };
+    const originalInspect = reader.inspectPath.bind(host.reader);
+    let appended = false;
+    reader.inspectPath = async (path, sessionId, leafId) => {
+      if (!appended && path.endsWith(".trash-pending")) {
+        appended = true;
+        await appendFile(path, `${JSON.stringify({
+          type: "message",
+          id: "external-user",
+          parentId: origin.id,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "external", timestamp: Date.now() },
+        })}\n`);
+      }
+      return await originalInspect(path, sessionId, leafId);
+    };
+
+    await assert.rejects(
+      host.handle("session.trash", { sessionId: created.session.id }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_TRASH_NOT_EMPTY",
+    );
+    assert.equal(appended, true);
+    await access(created.session.path);
+    assert.equal((await readdir(trashDirectory)).length, 0);
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trash restores the source when a descendant appears during the isolated check", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-child-race-test-"));
+  const agentDir = join(root, "agent");
+  const trashDirectory = join(root, "Trash");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  const host = new PiHost({ agentDir, trashDirectory, leaseQuietWindowMs: 1, emit: () => undefined });
+  try {
+    const created = await host.handle("session.create", { cwd: root }) as {
+      session: { id: string; path: string };
+    };
+    const reader = host.reader as unknown as {
+      hasDescendantSession: (path: string) => Promise<boolean>;
+    };
+    const originalHasDescendant = reader.hasDescendantSession.bind(host.reader);
+    let checks = 0;
+    const childPath = join(agentDir, "sessions", "race-child.jsonl");
+    reader.hasDescendantSession = async (path) => {
+      checks += 1;
+      const result = await originalHasDescendant(path);
+      if (checks === 3) {
+        await writeFile(childPath, `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "race-child",
+          timestamp: new Date().toISOString(),
+          cwd: root,
+          parentSession: created.session.path,
+        })}\n`);
+        return false;
+      }
+      return result;
+    };
+
+    await assert.rejects(
+      host.handle("session.trash", { sessionId: created.session.id }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_HAS_DESCENDANTS",
+    );
+    await access(created.session.path);
+    await access(childPath);
+    assert.equal((await readdir(trashDirectory)).length, 0);
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trash failure restores an active read-only observation without changing the source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-restore-observation-test-"));
+  const agentDir = join(root, "agent");
+  const blockedTrashPath = join(root, "Trash-is-a-file");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  await writeFile(blockedTrashPath, "not a directory\n");
+  const host = new PiHost({
+    agentDir,
+    trashDirectory: blockedTrashPath,
+    leaseQuietWindowMs: 1,
+    emit: () => undefined,
+  });
+  try {
+    const created = await host.handle("session.create", { cwd: root }) as {
+      session: { id: string; path: string };
+    };
+    await host.handle("session.open", { sessionId: created.session.id, mode: "readOnly" });
+    await assert.rejects(host.handle("session.trash", { sessionId: created.session.id }));
+    await access(created.session.path);
+    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
+    assert.equal(state.sessionId, created.session.id);
+    assert.equal(state.writable, false);
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });
@@ -1098,13 +1707,12 @@ test("owned message persistence does not race the conflict poller", async () => 
     emitPromptMessage();
     await new Promise<void>((resolve) => setImmediate(resolve));
     await internals.beforeMutation(active);
-    assert.deepEqual(
-      emitted.find(({ event }) => event === "session.promptCompleted"),
-      {
-        event: "session.promptCompleted",
-        data: { sessionId: f.sessionId, promptId: "owned-prompt-1", outcome: "persisted" },
-      },
-    );
+    const persisted = emitted.find(({ event }) => event === "session.promptCompleted");
+    assert.equal(persisted?.event, "session.promptCompleted");
+    assert.equal((persisted?.data as { sessionId?: string }).sessionId, f.sessionId);
+    assert.equal((persisted?.data as { promptId?: string }).promptId, "owned-prompt-1");
+    assert.equal((persisted?.data as { outcome?: string }).outcome, "persisted");
+    assert.match((persisted?.data as { entryId?: string }).entryId ?? "", /^[0-9a-f]{8}$/);
     const sessionFile = manager.getSessionFile();
     assert.ok(sessionFile);
     assert.match(await readFile(sessionFile, "utf8"), /owned prompt/);

@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { realpath, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { link, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, extname, join } from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
@@ -9,6 +11,7 @@ import {
   SessionManager,
   SettingsManager,
   VERSION as PI_VERSION,
+  collectEntriesForBranchSummary,
   createAgentSession,
   getAgentDir,
   type AgentSession,
@@ -35,11 +38,13 @@ import {
   type SessionSummary,
 } from "./session-reader.js";
 import { DCodeResourceLoader } from "./resource-policy.js";
+import { publishNewFileAtomically } from "./atomic-file.js";
 import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
+import { SessionCopier } from "./session-copy.js";
 import { SessionSearchIndex } from "./session-search-index.js";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.2";
+const HOST_VERSION = "0.0.3";
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -48,6 +53,7 @@ export interface PiHostOptions {
   leaseQuietWindowMs?: number;
   conflictPollMs?: number;
   searchCacheDirectory?: string;
+  trashDirectory?: string;
   emit: Emit;
 }
 
@@ -61,6 +67,7 @@ export class PiHostError extends Error {
 interface ReadOnlySession {
   mode: "readOnly";
   inspection: SessionInspection;
+  pinnedLeafId?: string | null;
   modelRuntime: ModelRuntime;
   observedVersion: SessionFileVersion;
   notifiedVersion?: SessionFileVersion;
@@ -93,6 +100,20 @@ interface PromptCallContext {
   promptId: string;
   confirmed: boolean;
   confirmation?: Promise<void>;
+  persistedEntryId?: string;
+  rollbackLeafId?: string | null;
+}
+
+interface SessionPathAction {
+  kind: "editUser" | "continueAssistant" | "continuePath";
+  entryId: string;
+}
+
+function leafIdForPathId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === "root") return null;
+  if (typeof value === "string" && value.startsWith("leaf:") && value.length > 5) return value.slice(5);
+  throw new PiHostError("SESSION_PATH_NOT_FOUND", `Unknown session path: ${String(value)}`);
 }
 
 interface SessionFileVersion {
@@ -138,6 +159,8 @@ function toWireEvent(event: AgentSessionEvent): unknown {
 function safeModel(model: unknown): unknown {
   if (typeof model !== "object" || model === null) return null;
   const source = model as Record<string, unknown>;
+  if (typeof source.provider !== "string" || source.provider.trim() === "") return null;
+  if (typeof source.id !== "string" || source.id.trim() === "") return null;
   const keys = ["provider", "id", "name", "api", "reasoning", "input", "contextWindow", "maxTokens", "cost"];
   return Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
 }
@@ -196,6 +219,8 @@ export class PiHost {
   readonly leaseAgentDir: string;
   readonly reader: SessionReader;
   readonly searchIndex: SessionSearchIndex;
+  readonly sessionCopier: SessionCopier;
+  readonly trashDirectory: string;
   private active?: ActiveSession;
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
@@ -212,6 +237,8 @@ export class PiHost {
     this.leaseQuietWindowMs = options.leaseQuietWindowMs ?? 500;
     this.conflictPollMs = options.conflictPollMs ?? 1_000;
     this.reader = new SessionReader(this.sessionsDirectory);
+    this.sessionCopier = new SessionCopier(this.sessionsDirectory);
+    this.trashDirectory = options.trashDirectory ?? join(homedir(), ".Trash");
     this.searchIndex = new SessionSearchIndex({
       sessionsDirectory: this.sessionsDirectory,
       ...(options.searchCacheDirectory ? { cacheDirectory: options.searchCacheDirectory } : {}),
@@ -234,6 +261,9 @@ export class PiHost {
         ...(Array.isArray(params.filterSourceFolders)
           ? { filterSourceFolders: params.filterSourceFolders as string[] }
           : {}),
+        excludedSessionIds: Array.isArray(params.excludedSessionIds)
+          ? params.excludedSessionIds as string[]
+          : [],
         refresh: params.refresh === true,
         ...(params.probe === true ? { probe: true } : {}),
       });
@@ -276,6 +306,10 @@ export class PiHost {
             sessionExternalSync: true,
             dcodeSessionOrigin: true,
             sessionSearch: true,
+            sessionPaths: true,
+            sessionCopy: true,
+            sessionTrash: true,
+            sessionVisibilityExclusions: true,
           },
         };
       case "session.list":
@@ -287,16 +321,27 @@ export class PiHost {
               ? { cwdScope: params.cwdScope as SessionCwdScope }
               : {}),
             ...(params.origin === "dcode" ? { origin: params.origin as SessionOrigin } : {}),
+            ...(Array.isArray(params.sessionIds) ? { sessionIds: params.sessionIds as string[] } : {}),
+            ...(Array.isArray(params.excludedSessionIds)
+              ? { excludedSessionIds: params.excludedSessionIds as string[] }
+              : {}),
           }),
         };
       case "session.inspect":
-        return await this.reader.inspect(params.sessionId as string);
+        return await this.reader.inspect(
+          params.sessionId as string,
+          leafIdForPathId(params.pathId),
+        );
       case "session.refresh":
         return await this.refreshActiveSession();
       case "content.renderMermaid":
         return this.renderMermaid(params.source as string);
       case "session.create":
         return await this.createSession(params.cwd as string);
+      case "session.copy":
+        return await this.copySession(params.sessionId as string, params.targetCwd as string);
+      case "session.trash":
+        return await this.trashSession(params.sessionId as string);
       case "session.open":
         return await this.openSession(
           params.sessionId as string,
@@ -305,12 +350,30 @@ export class PiHost {
           typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
           typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
           params.preserveActive === true,
+          leafIdForPathId(params.pathId),
         );
       case "session.close":
+        if (typeof params.expectedSessionId === "string"
+          && this.active?.inspection.summary.id !== params.expectedSessionId) {
+          throw new PiHostError(
+            "SESSION_ACTIVE_CHANGED",
+            "The active session changed before it could be closed",
+            {
+              expectedSessionId: params.expectedSessionId,
+              activeSessionId: this.active?.inspection.summary.id ?? null,
+            },
+          );
+        }
         await this.closeActive();
         return { closed: true };
       case "session.prompt":
-        return await this.prompt(params.message as string, params.promptId as string);
+        return await this.prompt(
+          params.message as string,
+          params.promptId as string,
+          typeof params.pathAction === "object" && params.pathAction !== null
+            ? params.pathAction as unknown as SessionPathAction
+            : undefined,
+        );
       case "session.abort": {
         const active = this.requireWritable();
         await active.session.abort();
@@ -407,9 +470,9 @@ export class PiHost {
       .map((entry) => JSON.stringify(entry))
       .join("\n");
     this.assertWriteHealthy();
-    await writeFile(sessionPath, `${initialDocument}\n`, { flag: "wx", mode: 0o600 });
+    await publishNewFileAtomically(sessionPath, `${initialDocument}\n`);
     this.searchIndex.invalidate();
-    let summary: SessionSummary = {
+    const summary: SessionSummary = {
       path: sessionPath,
       id: draft.getSessionId(),
       cwd: canonicalCwd,
@@ -419,39 +482,302 @@ export class PiHost {
       messageCount: 0,
       firstMessage: "",
     };
+    // The complete Header + origin document is the creation commit point. Return
+    // before closing an existing writable runtime: that cleanup can legitimately
+    // take several seconds, but it must not delay confirmation that the new file
+    // already exists. The App opens this Session as a separate follow-up request.
+    return {
+      created: true,
+      session: summary,
+      activation: { status: "created" },
+    };
+  }
+
+  private async copySession(sessionId: string, targetCwd: string): Promise<unknown> {
+    this.assertWriteHealthy();
+    const current = this.active;
+    let source: SessionSummary;
+    let temporaryLease: SessionLease | undefined;
+    let assertSourceStable: () => Promise<void>;
+
     try {
-      summary = await this.reader.resolve(draft.getSessionId());
-    } catch {
-      // Publishing the complete Header + origin document is the creation commit point.
-      // Activation below owns every post-commit failure and must still acknowledge it.
-    }
-    try {
-      const open = await this.openSession(draft.getSessionId(), "writable", true) as Record<string, unknown>;
-      return {
-        created: true,
-        session: (open.snapshot as SessionInspection | undefined)?.summary ?? summary,
-        activation: { status: "writable", open },
-      };
-    } catch (activationError) {
-      const activation = errorRecord(activationError);
-      try {
-        const open = await this.openSession(draft.getSessionId(), "readOnly") as Record<string, unknown>;
-        return {
-          created: true,
-          session: (open.snapshot as SessionInspection | undefined)?.summary ?? summary,
-          activation: { status: "observing", open, error: activation },
+      if (current?.mode === "writable" && current.inspection.summary.id === sessionId) {
+        this.assertCopyIdle(current);
+        await this.assertLeaseStable(current);
+        const stableVersion = await readSessionFileVersion(current.inspection.summary.path);
+        source = current.inspection.summary;
+        assertSourceStable = async () => {
+          this.assertCopyIdle(current);
+          await this.assertLeaseStable(current);
+          const finalVersion = await readSessionFileVersion(source.path);
+          if (!sameSessionFileVersion(stableVersion, finalVersion)) {
+            throw new PiHostError(
+              "SESSION_CHANGED_DURING_COPY",
+              "源会话在复制期间发生了变化，请重试",
+              { sessionId },
+            );
+          }
+          this.assertCopyIdle(current);
+          await this.assertLeaseStable(current);
         };
-      } catch (observationError) {
-        return {
-          created: true,
-          session: summary,
-          activation: {
-            status: "unavailable",
-            error: activation,
-            observationError: errorRecord(observationError),
-          },
+      } else {
+        const summary = await this.reader.resolve(sessionId);
+        const lease = await SessionLease.acquire({
+          agentDir: this.leaseAgentDir,
+          sessionId,
+          sessionPath: summary.path,
+          quietWindowMs: this.leaseQuietWindowMs,
+        });
+        temporaryLease = lease;
+        const stableVersion = await readSessionFileVersion(summary.path);
+        source = summary;
+        assertSourceStable = async () => {
+          await lease.assertUnchanged();
+          const finalVersion = await readSessionFileVersion(source.path);
+          if (!sameSessionFileVersion(stableVersion, finalVersion)) {
+            throw new PiHostError(
+              "SESSION_CHANGED_DURING_COPY",
+              "源会话在复制期间发生了变化，请重试",
+              { sessionId },
+            );
+          }
+          await lease.assertUnchanged();
         };
       }
+      const result = await this.sessionCopier.copy({ source, targetCwd, assertSourceStable });
+      this.searchIndex.invalidate();
+      return result;
+    } finally {
+      if (temporaryLease) {
+        try { await temporaryLease.release(); }
+        catch (error) {
+          this.options.emit("session.cleanupError", {
+            sessionId,
+            step: "copy lease release",
+            ...errorRecord(error),
+          });
+          this.poisonWritesForSession(sessionId, "A copied session lease could not be released");
+        }
+      }
+    }
+  }
+
+  private async trashSession(sessionId: string): Promise<unknown> {
+    this.assertWriteHealthy();
+    const summary = await this.assertTrashEligible(sessionId);
+    const summaryPath = summary.path;
+    const current = this.active;
+    let restoreObservation: ReadOnlySession | undefined;
+    if (current?.inspection.summary.id === sessionId) {
+      if (current.mode === "writable") {
+        throw new PiHostError(
+          "SESSION_BUSY",
+          "Close the writable session before moving it to the Trash",
+          { sessionId },
+        );
+      }
+      restoreObservation = current;
+      await this.closeActive();
+    }
+
+    let lease: SessionLease | undefined;
+    let trashed = false;
+    let movedPath = summaryPath;
+    const extension = extname(summaryPath) || ".jsonl";
+    const originalName = basename(summaryPath, extension);
+    const trashPath = join(this.trashDirectory, `${originalName}-${randomUUID()}${extension}`);
+    const quarantinePath = join(
+      dirname(summaryPath),
+      `.${basename(summaryPath)}-${randomUUID()}.trash-pending`,
+    );
+    try {
+      // Do all potentially slow directory preparation before the final source
+      // checks. There must be no mkdir gap between validation and isolation.
+      await mkdir(this.trashDirectory, { recursive: true, mode: 0o700 });
+      lease = await SessionLease.acquire({
+        agentDir: this.leaseAgentDir,
+        sessionId,
+        sessionPath: summaryPath,
+        quietWindowMs: this.leaseQuietWindowMs,
+      });
+      // Eligibility was first checked for a fast user-facing error. Re-read it
+      // under the Lease so an external append or duplicate identity cannot turn
+      // an empty-session cleanup into removal of a non-empty Session.
+      await this.assertTrashEligible(sessionId, summaryPath);
+      await lease.assertUnchanged();
+
+      // First remove the JSONL from ordinary discovery without deleting it.
+      // A Pi process with an existing file descriptor may still append, so the
+      // quarantined document is held through another quiet window and checked
+      // again before and after entering the Trash.
+      await rename(summaryPath, quarantinePath);
+      movedPath = quarantinePath;
+      await this.assertQuarantinedTrashEligible(quarantinePath, summaryPath, sessionId);
+      await rename(quarantinePath, trashPath);
+      movedPath = trashPath;
+      await this.assertQuarantinedTrashEligible(trashPath, summaryPath, sessionId);
+      trashed = true;
+      this.searchIndex.invalidate();
+      this.options.emit("session.trashed", { sessionId, originalPath: summaryPath, trashPath });
+      return { trashed: true, sessionId, originalPath: summaryPath, trashPath };
+    } catch (error) {
+      let failure = error;
+      if (!trashed && movedPath !== summaryPath) {
+        try {
+          // link() is intentionally no-replace. Never overwrite a path that an
+          // external Pi process may have recreated while this file was hidden.
+          await link(movedPath, summaryPath);
+          await unlink(movedPath);
+          movedPath = summaryPath;
+          this.searchIndex.invalidate();
+        } catch (restoreError) {
+          failure = new PiHostError(
+            "SESSION_TRASH_RESTORE_FAILED",
+            "The session was preserved, but its original path could not be restored",
+            {
+              sessionId,
+              preservedPath: movedPath,
+              originalPath: summaryPath,
+              failure: errorRecord(error),
+              restoreFailure: errorRecord(restoreError),
+            },
+          );
+        }
+      }
+      if (restoreObservation && movedPath === summaryPath) {
+        this.installReadOnlyObservation(
+          restoreObservation.inspection,
+          restoreObservation.observedVersion,
+          restoreObservation.modelRuntime,
+          restoreObservation.pinnedLeafId,
+        );
+      }
+      throw failure;
+    } finally {
+      if (lease) {
+        try {
+          await lease.release();
+        } catch (error) {
+          this.options.emit("session.cleanupError", {
+            sessionId,
+            step: "trash lease release",
+            ...errorRecord(error),
+          });
+          this.poisonWritesForSession(sessionId, "A trashed session lease could not be released");
+        }
+      }
+    }
+  }
+
+  private async assertQuarantinedTrashEligible(
+    quarantinedPath: string,
+    originalPath: string,
+    sessionId: string,
+  ): Promise<void> {
+    const beforeQuiet = await readSessionFileVersion(quarantinedPath);
+    await new Promise((resolve) => setTimeout(resolve, this.leaseQuietWindowMs));
+    const afterQuiet = await readSessionFileVersion(quarantinedPath);
+    if (!sameSessionFileVersion(beforeQuiet, afterQuiet)) {
+      throw new PiHostError(
+        "SESSION_NOT_IDLE",
+        "The session changed while it was being moved to the Trash",
+        { sessionId },
+      );
+    }
+    const stable = await this.inspectStablePath(quarantinedPath, sessionId);
+    if (!await this.reader.hasDCodeOrigin(stable.inspection.summary)) {
+      throw new PiHostError(
+        "SESSION_TRASH_NOT_ALLOWED",
+        "Only sessions created by D Code can be moved to the Trash",
+        { sessionId },
+      );
+    }
+    if (stable.inspection.summary.messageCount !== 0) {
+      throw new PiHostError(
+        "SESSION_TRASH_NOT_EMPTY",
+        "Only empty D Code sessions can be moved to the Trash in this version",
+        { sessionId, messageCount: stable.inspection.summary.messageCount },
+      );
+    }
+    if (await this.reader.hasDescendantSession(originalPath)) {
+      throw new PiHostError(
+        "SESSION_HAS_DESCENDANTS",
+        "This session is referenced by a copied or forked session; archive it instead",
+        { sessionId },
+      );
+    }
+    const finalVersion = await readSessionFileVersion(quarantinedPath);
+    if (!sameSessionFileVersion(stable.version, finalVersion)) {
+      throw new PiHostError(
+        "SESSION_NOT_IDLE",
+        "The session changed while its descendants were being checked",
+        { sessionId },
+      );
+    }
+  }
+
+  private async assertTrashEligible(sessionId: string, expectedPath?: string): Promise<SessionSummary> {
+    const summary = await this.reader.resolve(sessionId);
+    if (expectedPath && summary.path !== expectedPath) {
+      throw new PiHostError(
+        "SESSION_IDENTITY_CHANGED",
+        "The session path changed before it could be moved to the Trash",
+        { sessionId, expectedPath, actualPath: summary.path },
+      );
+    }
+    if (!await this.reader.hasDCodeOrigin(summary)) {
+      throw new PiHostError(
+        "SESSION_TRASH_NOT_ALLOWED",
+        "Only sessions created by D Code can be moved to the Trash",
+        { sessionId },
+      );
+    }
+    if (summary.messageCount !== 0) {
+      throw new PiHostError(
+        "SESSION_TRASH_NOT_EMPTY",
+        "Only empty D Code sessions can be moved to the Trash in this version",
+        { sessionId, messageCount: summary.messageCount },
+      );
+    }
+    if (await this.reader.hasDescendantSession(summary.path)) {
+      throw new PiHostError(
+        "SESSION_HAS_DESCENDANTS",
+        "This session is referenced by a copied or forked session; archive it instead",
+        { sessionId },
+      );
+    }
+    return summary;
+  }
+
+  private assertCopyIdle(active: WritableSession): void {
+    if (active.conflict
+      || active.session.isStreaming
+      || active.session.isCompacting
+      || active.session.pendingMessageCount > 0
+      || active.session.isBashRunning
+      || active.session.hasPendingBashMessages
+      || active.ui.hasPendingDialogs) {
+      throw new PiHostError(
+        "SESSION_BUSY",
+        "请等待当前生成、工具、压缩或结构化交互结束后再复制会话",
+        { sessionId: active.session.sessionId },
+      );
+    }
+  }
+
+  private assertPathActionIdle(active: WritableSession): void {
+    if (active.conflict
+      || active.session.isStreaming
+      || active.session.isCompacting
+      || active.session.pendingMessageCount > 0
+      || active.session.isBashRunning
+      || active.session.hasPendingBashMessages
+      || active.ui.hasPendingDialogs) {
+      throw new PiHostError(
+        "SESSION_BUSY",
+        "请等待当前生成、工具、压缩或结构化交互结束后再切换会话路径",
+        { sessionId: active.session.sessionId },
+      );
     }
   }
 
@@ -478,10 +804,12 @@ export class PiHost {
     inspection: SessionInspection,
     version: SessionFileVersion,
     modelRuntime: ModelRuntime,
+    pinnedLeafId?: string | null,
   ): Record<string, unknown> {
     const active: ReadOnlySession = {
       mode: "readOnly",
       inspection,
+      pinnedLeafId,
       modelRuntime,
       observedVersion: version,
       isChecking: false,
@@ -511,10 +839,14 @@ export class PiHost {
     this.assertExpectedEntry(refreshed.inspection, expectedEntryId, expectedEntryDigest);
     if (active.mode === "writable") {
       await this.assertLeaseStable(active);
+      if (refreshed.inspection.leafId === null) active.session.sessionManager.resetLeaf();
+      else active.session.sessionManager.branch(refreshed.inspection.leafId);
+      active.session.agent.state.messages = active.session.sessionManager.buildSessionContext().messages;
       active.inspection = refreshed.inspection;
       active.activePlan = refreshed.inspection.activePlan;
     } else {
       active.inspection = refreshed.inspection;
+      active.pinnedLeafId = undefined;
       active.observedVersion = refreshed.version;
       active.notifiedVersion = undefined;
       active.lastSyncError = undefined;
@@ -527,13 +859,17 @@ export class PiHost {
     expectedEntryId?: string,
     expectedEntryDigest?: string,
     preserveActive = false,
+    selectedLeafId?: string | null,
+    knownPath?: string,
   ): Promise<Record<string, unknown>> {
     const current = this.active;
     if (preserveActive && current?.inspection.summary.id === sessionId) {
       return await this.refreshCurrentForSearch(current, expectedEntryId, expectedEntryDigest);
     }
 
-    const preparedTarget = await this.inspectStableObservation(sessionId);
+    const preparedTarget = knownPath
+      ? await this.inspectStablePath(knownPath, sessionId, selectedLeafId)
+      : await this.inspectStableObservation(sessionId, selectedLeafId);
     this.assertExpectedEntry(preparedTarget.inspection, expectedEntryId, expectedEntryDigest);
     const targetRuntime = await ModelRuntime.create({
       authPath: join(this.agentDir, "auth.json"),
@@ -544,17 +880,20 @@ export class PiHost {
       inspection: SessionInspection;
       version: SessionFileVersion;
       modelRuntime: ModelRuntime;
+      pinnedLeafId?: string | null;
     } | undefined;
     if (current) {
       const stableCurrent = await this.inspectStablePath(
         current.inspection.summary.path,
         current.inspection.summary.id,
+        current.mode === "readOnly" ? current.pinnedLeafId : undefined,
       );
       this.assertSameSessionIdentity(current.inspection.header, stableCurrent.inspection.header);
       fallback = {
         inspection: stableCurrent.inspection,
         version: stableCurrent.version,
         modelRuntime: current.mode === "readOnly" ? current.modelRuntime : targetRuntime,
+        pinnedLeafId: current.mode === "readOnly" ? current.pinnedLeafId : undefined,
       };
     }
 
@@ -563,10 +902,16 @@ export class PiHost {
       const finalTarget = await this.inspectStablePath(
         preparedTarget.inspection.summary.path,
         sessionId,
+        selectedLeafId,
       );
       this.assertSameSessionIdentity(preparedTarget.inspection.header, finalTarget.inspection.header);
       this.assertExpectedEntry(finalTarget.inspection, expectedEntryId, expectedEntryDigest);
-      return this.installReadOnlyObservation(finalTarget.inspection, finalTarget.version, targetRuntime);
+      return this.installReadOnlyObservation(
+        finalTarget.inspection,
+        finalTarget.version,
+        targetRuntime,
+        selectedLeafId,
+      );
     } catch (error) {
       if (fallback) {
         let restored = fallback;
@@ -574,12 +919,14 @@ export class PiHost {
           const refreshedFallback = await this.inspectStablePath(
             fallback.inspection.summary.path,
             fallback.inspection.summary.id,
+            fallback.pinnedLeafId,
           );
           this.assertSameSessionIdentity(fallback.inspection.header, refreshedFallback.inspection.header);
           restored = {
             inspection: refreshedFallback.inspection,
             version: refreshedFallback.version,
             modelRuntime: fallback.modelRuntime,
+            pinnedLeafId: fallback.pinnedLeafId,
           };
         } catch (restoreError) {
           this.options.emit("session.syncError", {
@@ -587,7 +934,12 @@ export class PiHost {
             ...errorRecord(restoreError),
           });
         }
-        this.installReadOnlyObservation(restored.inspection, restored.version, restored.modelRuntime);
+        this.installReadOnlyObservation(
+          restored.inspection,
+          restored.version,
+          restored.modelRuntime,
+          restored.pinnedLeafId,
+        );
       }
       throw error;
     }
@@ -600,13 +952,20 @@ export class PiHost {
     expectedEntryId?: string,
     expectedEntryDigest?: string,
     preserveActive = false,
+    selectedLeafId?: string | null,
   ): Promise<unknown> {
     if (mode === "readOnly") {
-      return await this.openReadOnlySession(sessionId, expectedEntryId, expectedEntryDigest, preserveActive);
+      return await this.openReadOnlySession(
+        sessionId,
+        expectedEntryId,
+        expectedEntryDigest,
+        preserveActive,
+        selectedLeafId,
+      );
     }
     await this.closeActive();
     this.assertWriteHealthy();
-    const inspection = await this.reader.inspect(sessionId);
+    const inspection = await this.reader.inspect(sessionId, selectedLeafId);
     if ((inspection.header.version ?? 1) !== CURRENT_SESSION_VERSION) {
       throw new PiHostError(
         "SESSION_MIGRATION_REQUIRED",
@@ -633,6 +992,10 @@ export class PiHost {
     let conflictTimer: ReturnType<typeof setInterval> | undefined;
     try {
       const manager = SessionManager.open(inspection.summary.path);
+      if (selectedLeafId !== undefined) {
+        if (selectedLeafId === null) manager.resetLeaf();
+        else manager.branch(selectedLeafId);
+      }
       await lease.assertUnchanged();
       const fastMode = new DCodeFastController();
       const sourceSettingsManager = SettingsManager.create(manager.getCwd(), this.agentDir);
@@ -707,6 +1070,7 @@ export class PiHost {
       const { inspection: synchronizedInspection } = await this.inspectStablePath(
         inspection.summary.path,
         sessionId,
+        session.sessionManager.getLeafId(),
       );
       this.assertSameSessionIdentity(inspection.header, synchronizedInspection.header);
       await this.assertLeaseStable(active);
@@ -820,10 +1184,160 @@ export class PiHost {
     return false;
   }
 
-  private async prompt(message: string, promptId: string): Promise<unknown> {
+  private async refreshWritablePathSnapshot(active: WritableSession): Promise<void> {
+    await this.assertLeaseStable(active);
+    const selectedLeafId = active.session.sessionManager.getLeafId();
+    const { inspection } = await this.inspectStablePath(
+      active.inspection.summary.path,
+      active.inspection.summary.id,
+      selectedLeafId,
+    );
+    this.assertSameSessionIdentity(active.inspection.header, inspection.header);
+    await this.assertLeaseStable(active);
+    active.inspection = inspection;
+    active.activePlan = inspection.activePlan;
+  }
+
+  private async navigateToExactLeaf(active: WritableSession, targetId: string): Promise<void> {
+    const manager = active.session.sessionManager;
+    const oldLeafId = manager.getLeafId();
+    if (oldLeafId === targetId) return;
+    const { entries, commonAncestorId } = collectEntriesForBranchSummary(manager, oldLeafId, targetId);
+    const controller = new AbortController();
+    const result = await active.session.extensionRunner.emit({
+      type: "session_before_tree",
+      preparation: {
+        targetId,
+        oldLeafId,
+        commonAncestorId,
+        entriesToSummarize: entries,
+        userWantsSummary: false,
+      },
+      signal: controller.signal,
+    });
+    if (result?.cancel) {
+      throw new PiHostError(
+        "SESSION_PATH_CANCELLED",
+        "会话路径切换被扩展取消",
+        { sessionId: active.session.sessionId, targetId },
+      );
+    }
+    manager.branch(targetId);
+    active.session.agent.state.messages = manager.buildSessionContext().messages;
+    await active.session.extensionRunner.emit({
+      type: "session_tree",
+      newLeafId: manager.getLeafId(),
+      oldLeafId,
+    });
+  }
+
+  private async applyPathAction(active: WritableSession, action: SessionPathAction): Promise<string | null> {
+    this.assertPathActionIdle(active);
+    const manager = active.session.sessionManager;
+    const target = manager.getEntry(action.entryId);
+    if (!target) {
+      throw new PiHostError("SESSION_PATH_NOT_FOUND", `Session path entry not found: ${action.entryId}`);
+    }
+    if (action.kind === "editUser" && (
+      target.type !== "message"
+      || typeof target.message !== "object"
+      || target.message === null
+      || (target.message as { role?: unknown }).role !== "user"
+    )) {
+      throw new PiHostError("INVALID_PATH_ACTION", "编辑并重走只能从用户消息开始");
+    }
+    if (action.kind === "continueAssistant" && (
+      target.type !== "message"
+      || typeof target.message !== "object"
+      || target.message === null
+      || (target.message as { role?: unknown }).role !== "assistant"
+    )) {
+      throw new PiHostError("INVALID_PATH_ACTION", "从这里继续只能从助手消息开始");
+    }
+    const oldLeafId = manager.getLeafId();
+    try {
+      await this.withOwnedMutation(active, async () => {
+        if (action.kind === "continuePath") {
+          await this.navigateToExactLeaf(active, target.id);
+        } else {
+          const result = await active.session.navigateTree(target.id, { summarize: false });
+          if (result.cancelled) {
+            throw new PiHostError(
+              "SESSION_PATH_CANCELLED",
+              "会话路径切换被扩展取消",
+              { sessionId: active.session.sessionId, targetId: target.id },
+            );
+          }
+        }
+      });
+      this.assertPathActionIdle(active);
+      await this.refreshWritablePathSnapshot(active);
+      return oldLeafId;
+    } catch (error) {
+      await this.rollbackPromptPath({
+        active,
+        promptId: "path-action",
+        confirmed: false,
+        rollbackLeafId: oldLeafId,
+      });
+      throw error;
+    }
+  }
+
+  private async rollbackPromptPath(call: PromptCallContext): Promise<void> {
+    if (call.rollbackLeafId === undefined || call.persistedEntryId !== undefined) return;
+    const rollbackLeafId = call.rollbackLeafId;
+    call.rollbackLeafId = undefined;
+    const active = call.active;
+    const manager = active.session.sessionManager;
+    const oldLeafId = manager.getLeafId();
+    if (oldLeafId === rollbackLeafId) return;
+    try {
+      await this.withOwnedMutation(active, async () => {
+        if (rollbackLeafId === null) manager.resetLeaf();
+        else manager.branch(rollbackLeafId);
+        active.session.agent.state.messages = manager.buildSessionContext().messages;
+        await active.session.extensionRunner.emit({
+          type: "session_tree",
+          newLeafId: manager.getLeafId(),
+          oldLeafId,
+        });
+      });
+      await this.refreshWritablePathSnapshot(active);
+    } catch (error) {
+      this.markConflict(active, new PiHostError(
+        "SESSION_PATH_ROLLBACK_FAILED",
+        "会话路径未能安全回滚，需要重新打开会话",
+        { cause: errorRecord(error) },
+      ));
+    }
+  }
+
+  private async prompt(
+    message: string,
+    promptId: string,
+    pathAction?: SessionPathAction,
+  ): Promise<unknown> {
+    if (pathAction && message.trim().length === 0) {
+      throw new PiHostError("EMPTY_PATH_PROMPT", "路径草稿不能为空");
+    }
     const active = this.requireWritable();
     await this.beforeMutation(active);
-    const call: PromptCallContext = { active, promptId, confirmed: false };
+    this.assertPathActionIdle(active);
+    const call: PromptCallContext = {
+      active,
+      promptId,
+      confirmed: false,
+    };
+    if (pathAction) {
+      call.rollbackLeafId = await this.applyPathAction(active, pathAction);
+      try {
+        this.assertPathActionIdle(active);
+      } catch (error) {
+        await this.rollbackPromptPath(call);
+        throw error;
+      }
+    }
     return await new Promise((resolve, reject) => {
       let responded = false;
       const accept = (completed = false) => {
@@ -838,6 +1352,7 @@ export class PiHost {
       void operation.then(async () => {
         if (call.confirmation) await call.confirmation;
         if (!call.confirmed) {
+          await this.rollbackPromptPath(call);
           await active.leaseSync;
           if (active.conflict) {
             throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
@@ -850,11 +1365,14 @@ export class PiHost {
           });
         }
         accept(true);
-      }).catch((error) => {
+      }).catch(async (error) => {
+        if (call.confirmation) await call.confirmation;
+        await this.rollbackPromptPath(call);
         if (!responded) reject(error);
         else this.options.emit("session.promptFailed", {
           sessionId: active.session.sessionId,
           promptId,
+          ...(call.persistedEntryId ? { persistedEntryId: call.persistedEntryId } : {}),
           ...errorRecord(error),
         });
       });
@@ -1020,6 +1538,7 @@ export class PiHost {
     ) {
       const leaf = active.session.sessionManager.getLeafEntry();
       if (leaf?.type !== "message" || leaf.message !== event.message) return;
+      call.persistedEntryId = leaf.id;
       call.confirmation = this.synchronizeOwnedSnapshot(active).then(() => {
         if (active.conflict || call.confirmed) return;
         call.confirmed = true;
@@ -1027,6 +1546,7 @@ export class PiHost {
           sessionId: active.session.sessionId,
           promptId: call.promptId,
           outcome: "persisted",
+          entryId: leaf.id,
         });
       });
     }
@@ -1109,22 +1629,22 @@ export class PiHost {
     });
   }
 
-  private async inspectStableObservation(sessionId: string): Promise<{
+  private async inspectStableObservation(sessionId: string, leafId?: string | null): Promise<{
     inspection: SessionInspection;
     version: SessionFileVersion;
   }> {
     const summary = await this.reader.resolve(sessionId);
-    return await this.inspectStablePath(summary.path, sessionId);
+    return await this.inspectStablePath(summary.path, sessionId, leafId);
   }
 
-  private async inspectStablePath(path: string, sessionId: string): Promise<{
+  private async inspectStablePath(path: string, sessionId: string, leafId?: string | null): Promise<{
     inspection: SessionInspection;
     version: SessionFileVersion;
   }> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const before = await readSessionFileVersion(path);
       try {
-        const inspection = await this.reader.inspectPath(path, sessionId);
+        const inspection = await this.reader.inspectPath(path, sessionId, leafId);
         const after = await readSessionFileVersion(path);
         if (sameSessionFileVersion(before, after)) return { inspection, version: after };
       } catch (error) {
@@ -1153,6 +1673,7 @@ export class PiHost {
       const inspection = await this.reader.inspectPath(
         active.inspection.summary.path,
         active.inspection.summary.id,
+        active.session.sessionManager.getLeafId(),
       );
       this.assertSameSessionIdentity(active.inspection.header, inspection.header);
       return inspection;
@@ -1161,6 +1682,7 @@ export class PiHost {
     const inspection = await this.reader.inspectPath(
       active.inspection.summary.path,
       active.inspection.summary.id,
+      active.mode === "readOnly" ? active.pinnedLeafId : undefined,
     );
     const after = await readSessionFileVersion(active.inspection.summary.path);
     if (!sameSessionFileVersion(before, after)) {

@@ -203,6 +203,7 @@ final class SearchModelsTests: XCTestCase {
             query: "项目搜索",
             projectSourceFolders: ["/work/a", "/work/b"],
             filterSourceFolders: ["/work/b"],
+            excludedSessionIDs: ["archived-session"],
             refresh: true
         )
 
@@ -212,6 +213,7 @@ final class SearchModelsTests: XCTestCase {
             "limit": .number(50),
             "projectSourceFolders": .array([.string("/work/a"), .string("/work/b")]),
             "filterSourceFolders": .array([.string("/work/b")]),
+            "excludedSessionIds": .array([.string("archived-session")]),
             "refresh": .bool(true),
         ])
     }
@@ -220,7 +222,8 @@ final class SearchModelsTests: XCTestCase {
         let token = UUID()
         let plan = SessionSearchProbePlan(
             token: token,
-            projectSourceFolders: ["/work/a", "/work/b"]
+            projectSourceFolders: ["/work/a", "/work/b"],
+            excludedSessionIDs: ["archived-session"]
         )
 
         XCTAssertEqual(plan.parameters, [
@@ -228,6 +231,7 @@ final class SearchModelsTests: XCTestCase {
             "requestToken": .string(token.uuidString),
             "limit": .number(1),
             "projectSourceFolders": .array([.string("/work/a"), .string("/work/b")]),
+            "excludedSessionIds": .array([.string("archived-session")]),
             "refresh": .bool(false),
             "probe": .bool(true),
         ])

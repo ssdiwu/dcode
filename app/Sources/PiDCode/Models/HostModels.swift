@@ -16,17 +16,17 @@ enum HostCompatibilityError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedProtocol(version):
-            "D Code 0.0.2 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+            "D Code 0.0.3 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
         case let .incompatibleHostVersion(version):
-            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.2。请重新构建 App，避免混用旧 Host。"
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.3。请重新构建 App，避免混用旧 Host。"
         case let .missingCapabilities(capabilities):
-            "当前 Host 缺少 0.0.2 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+            "当前 Host 缺少 0.0.3 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
         }
     }
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.2"
+    static let appVersion = "0.0.3"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -38,6 +38,10 @@ enum HostCompatibility {
         "sessionExternalSync",
         "dcodeSessionOrigin",
         "sessionSearch",
+        "sessionPaths",
+        "sessionCopy",
+        "sessionTrash",
+        "sessionVisibilityExclusions",
     ]
 
     static func validate(_ hello: HostHello) throws {
@@ -84,11 +88,42 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
 struct SessionInspection: Codable, Sendable {
     let summary: SessionSummary
     let header: JSONValue
+    let parentSessionId: String?
     let leafId: String?
+    let currentPathId: String
+    let selectedPathId: String
+    let paths: [SessionPathSummary]
     let entries: [JSONValue]
     let context: SessionContextSnapshot
     let activePlan: JSONValue?
 
+}
+
+struct SessionCopySource: Codable, Sendable {
+    let id: String
+    let path: String
+    let leafId: String?
+    let entryCount: Int
+}
+
+struct SessionCopyVerification: Codable, Sendable {
+    let entryCount: Int
+    let leafId: String?
+    let origin: Bool
+}
+
+struct SessionCopyResult: Codable, Sendable {
+    let copied: Bool
+    let source: SessionCopySource
+    let target: SessionSummary
+    let verification: SessionCopyVerification
+}
+
+struct SessionTrashResult: Codable, Sendable {
+    let trashed: Bool
+    let sessionId: String
+    let originalPath: String
+    let trashPath: String
 }
 
 struct SessionContextSnapshot: Codable, Sendable {

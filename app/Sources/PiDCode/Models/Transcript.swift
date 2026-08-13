@@ -45,7 +45,49 @@ struct TranscriptItem: Identifiable, Sendable, Equatable {
     let id: String
     let role: TranscriptRole
     let timestamp: Date?
+    let persistedAt: Date?
     let blocks: [TranscriptBlock]
+    let editableText: String?
+    let assistantStopReason: String?
+
+    init(
+        id: String,
+        role: TranscriptRole,
+        timestamp: Date?,
+        persistedAt: Date? = nil,
+        blocks: [TranscriptBlock],
+        editableText: String? = nil,
+        assistantStopReason: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.timestamp = timestamp
+        self.persistedAt = persistedAt
+        self.blocks = blocks
+        self.editableText = editableText
+        self.assistantStopReason = assistantStopReason
+    }
+
+    var plainText: String {
+        blocks.compactMap { block in
+            switch block {
+            case let .text(_, value), let .code(_, _, value), let .thinking(_, value): value
+            default: nil
+            }
+        }.joined(separator: "\n")
+    }
+}
+
+enum MarkdownPresentation {
+    static func attributedString(for value: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: value,
+            options: .init(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(value)
+    }
 }
 
 enum TranscriptParser {
@@ -60,20 +102,28 @@ enum TranscriptParser {
               let message = object["message"]?.objectValue,
               let roleName = message["role"]?.stringValue else { return nil }
 
-        let timestamp = date(from: message["timestamp"] ?? object["timestamp"])
+        let persistedAt = date(from: object["timestamp"])
+        let timestamp = date(from: message["timestamp"]) ?? persistedAt
         switch roleName {
         case "user":
-            return TranscriptItem(id: id, role: .user, timestamp: timestamp, blocks: contentBlocks(
+            return TranscriptItem(id: id, role: .user, timestamp: timestamp, persistedAt: persistedAt, blocks: contentBlocks(
                 message["content"],
                 entryID: id,
                 includeTools: false
-            ))
+            ), editableText: message["content"]?.stringValue)
         case "assistant":
             var blocks = contentBlocks(message["content"], entryID: id, includeTools: true)
             if let error = message["errorMessage"]?.stringValue, !error.isEmpty {
                 blocks.append(.error(id: "\(id)-error", value: error))
             }
-            return TranscriptItem(id: id, role: .assistant, timestamp: timestamp, blocks: blocks)
+            return TranscriptItem(
+                id: id,
+                role: .assistant,
+                timestamp: timestamp,
+                persistedAt: persistedAt,
+                blocks: blocks,
+                assistantStopReason: message["stopReason"]?.stringValue
+            )
         case "toolResult":
             let callID = message["toolCallId"]?.stringValue ?? id
             let name = message["toolName"]?.stringValue ?? "Tool"
@@ -90,12 +140,13 @@ enum TranscriptParser {
                 id: id,
                 role: .tool,
                 timestamp: timestamp,
+                persistedAt: persistedAt,
                 blocks: [.toolResult(id: "\(id)-result", value: result)]
             )
         default:
             let blocks = contentBlocks(message["content"], entryID: id, includeTools: false)
             guard !blocks.isEmpty else { return nil }
-            return TranscriptItem(id: id, role: .system, timestamp: timestamp, blocks: blocks)
+            return TranscriptItem(id: id, role: .system, timestamp: timestamp, persistedAt: persistedAt, blocks: blocks)
         }
     }
 

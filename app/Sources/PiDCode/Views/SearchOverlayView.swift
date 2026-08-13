@@ -58,7 +58,7 @@ struct SearchOverlayView: View {
             .font(.title3)
             .accessibilityLabel("搜索会话")
             .focused($searchFocused)
-            .disabled(model.isOpeningSession)
+            .disabled(model.isOpeningSession || model.isPromptTransactionActive)
             .defaultFocus($searchFocused, true)
             .onSubmit { Task { await model.openSelectedSearchResult() } }
             .onKeyPress(.upArrow) {
@@ -80,7 +80,7 @@ struct SearchOverlayView: View {
             .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
             .buttonStyle(.plain)
             .dCodeAccessibleButton("关闭搜索")
-            .disabled(model.isOpeningSession)
+            .disabled(model.isOpeningSession || model.isPromptTransactionActive)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -105,7 +105,7 @@ struct SearchOverlayView: View {
             .frame(maxWidth: 220, minHeight: PiDCodeMetrics.minimumTarget, alignment: .leading)
             .contentShape(Rectangle())
             .accessibilityLabel("项目筛选")
-            .disabled(model.isOpeningSession)
+            .disabled(model.isOpeningSession || model.isPromptTransactionActive)
 
             Picker(
                 "源文件夹",
@@ -123,7 +123,7 @@ struct SearchOverlayView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: 220, minHeight: PiDCodeMetrics.minimumTarget, alignment: .leading)
             .contentShape(Rectangle())
-            .disabled(selectedProject == nil || model.isOpeningSession)
+            .disabled(selectedProject == nil || model.isOpeningSession || model.isPromptTransactionActive)
             .accessibilityLabel("源文件夹筛选")
 
             Spacer(minLength: 0)
@@ -209,7 +209,7 @@ struct SearchOverlayView: View {
                                 )
                             }
                             .buttonStyle(.plain)
-                            .disabled(model.isStreaming || model.isOpeningSession)
+                            .disabled(model.isStreaming || model.isOpeningSession || model.isPromptTransactionActive)
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(
                                 result.accessibilityDescription(ownership: model.ownership(for: result))

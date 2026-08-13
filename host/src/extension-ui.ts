@@ -27,6 +27,8 @@ export class ExtensionUIBridge {
     this.context = this.createContext();
   }
 
+  get hasPendingDialogs(): boolean { return this.pendingDialogs.size > 0; }
+
   respond(requestId: string, response: unknown): boolean {
     const dialog = this.pendingDialogs.get(requestId);
     if (!dialog) return false;

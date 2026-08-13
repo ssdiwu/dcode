@@ -32,7 +32,11 @@ export interface SessionSummary {
 export interface SessionInspection {
   summary: SessionSummary;
   header: SessionHeader;
+  parentSessionId?: string;
   leafId: string | null;
+  currentPathId: string;
+  selectedPathId: string;
+  paths: SessionPathSummary[];
   entries: SessionEntry[];
   context: {
     messageCount: number;
@@ -40,6 +44,18 @@ export interface SessionInspection {
     thinkingLevel: string;
   };
   activePlan: unknown;
+}
+
+export interface SessionPathSummary {
+  id: string;
+  leafId: string | null;
+  title: string;
+  updated: string;
+  entryCount: number;
+  branchFromEntryId?: string;
+  branchFromPreview?: string;
+  isCurrent: boolean;
+  isSelected: boolean;
 }
 
 export interface SessionCwdScope {
@@ -63,6 +79,16 @@ export class SessionReadError extends Error {
     super(message);
     this.name = "SessionReadError";
   }
+}
+
+function normalizedContextModel(
+  model: unknown,
+): { provider: string; modelId: string } | null {
+  if (typeof model !== "object" || model === null) return null;
+  const source = model as Record<string, unknown>;
+  if (typeof source.provider !== "string" || source.provider.trim() === "") return null;
+  if (typeof source.modelId !== "string" || source.modelId.trim() === "") return null;
+  return { provider: source.provider, modelId: source.modelId };
 }
 
 function parseStrictSessionDocument(content: string, path: string): FileEntry[] {
@@ -173,6 +199,7 @@ async function mapConcurrent<T, R>(values: readonly T[], limit: number, mapper: 
 interface SessionHeaderIdentity {
   id: string;
   cwd: string;
+  parentSession?: string;
 }
 
 async function readLeadingLines(
@@ -232,9 +259,14 @@ async function readHeaderIdentity(path: string): Promise<SessionHeaderIdentity |
       type?: unknown;
       id?: unknown;
       cwd?: unknown;
+      parentSession?: unknown;
     };
     return value.type === "session" && typeof value.id === "string" && typeof value.cwd === "string"
-      ? { id: value.id, cwd: value.cwd }
+      ? {
+          id: value.id,
+          cwd: value.cwd,
+          ...(typeof value.parentSession === "string" ? { parentSession: value.parentSession } : {}),
+        }
       : undefined;
   } catch {
     return undefined;
@@ -355,9 +387,16 @@ async function readSummary(path: string): Promise<SessionSummary> {
   return record.summary;
 }
 
-function buildActiveBranch(entries: SessionEntry[]): { leafId: string | null; branch: SessionEntry[] } {
+function pathId(leafId: string | null): string {
+  return leafId ? `leaf:${leafId}` : "root";
+}
+
+function buildBranch(entries: SessionEntry[], requestedLeafId?: string | null): { leafId: string | null; branch: SessionEntry[] } {
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const leafId = entries.at(-1)?.id ?? null;
+  const leafId = requestedLeafId === undefined ? entries.at(-1)?.id ?? null : requestedLeafId;
+  if (leafId !== null && !byId.has(leafId)) {
+    throw new SessionReadError("INVALID_SESSION", `Session path leaf not found: ${leafId}`);
+  }
   const reverse: SessionEntry[] = [];
   const visited = new Set<string>();
   let current = leafId ? byId.get(leafId) : undefined;
@@ -368,6 +407,81 @@ function buildActiveBranch(entries: SessionEntry[]): { leafId: string | null; br
   }
   reverse.reverse();
   return { leafId, branch: reverse };
+}
+
+function pathTitle(branch: readonly SessionEntry[], fallback: string): string {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (!entry || entry.type !== "message") continue;
+    const role = typeof entry.message === "object" && entry.message !== null
+      ? (entry.message as { role?: unknown }).role
+      : undefined;
+    const preview = compactSessionPreview(extractMessageText(entry.message));
+    if (preview) return `${role === "user" ? "用户" : role === "assistant" ? "助手" : "消息"} · ${preview}`;
+  }
+  return fallback;
+}
+
+function entryPreview(entry: SessionEntry | undefined): string | undefined {
+  if (!entry || entry.type !== "message") return undefined;
+  const preview = compactSessionPreview(extractMessageText(entry.message));
+  return preview || undefined;
+}
+
+function sessionPaths(
+  entries: SessionEntry[],
+  selectedLeafId: string | null,
+  fallbackUpdated: string,
+): SessionPathSummary[] {
+  if (entries.length === 0) {
+    return [{
+      id: "root",
+      leafId: null,
+      title: "初始路径",
+      updated: fallbackUpdated,
+      entryCount: 0,
+      isCurrent: true,
+      isSelected: selectedLeafId === null,
+    }];
+  }
+  const parentIds = new Set(entries.flatMap((entry) => entry.parentId ? [entry.parentId] : []));
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const childCounts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.parentId) childCounts.set(entry.parentId, (childCounts.get(entry.parentId) ?? 0) + 1);
+  }
+  const currentLeafId = entries.at(-1)?.id ?? null;
+  return entries
+    .filter((entry) => !parentIds.has(entry.id))
+    .filter((entry) => {
+      if (entry.id === currentLeafId) return true;
+      return buildBranch(entries, entry.id).branch.some((candidate) => candidate.type === "message");
+    })
+    .map((entry) => {
+      const branch = buildBranch(entries, entry.id).branch;
+      const branchStart = branch.find((candidate) => (
+        candidate.parentId !== null && (childCounts.get(candidate.parentId) ?? 0) > 1
+      ));
+      const branchFromEntryId = branchStart?.parentId ?? undefined;
+      const branchFromPreview = entryPreview(branchFromEntryId ? byId.get(branchFromEntryId) : undefined);
+      const timestamp = (entry as { timestamp?: unknown }).timestamp;
+      return {
+        id: pathId(entry.id),
+        leafId: entry.id,
+        title: pathTitle(branch, "会话路径"),
+        updated: typeof timestamp === "string" ? timestamp : fallbackUpdated,
+        entryCount: branch.length,
+        ...(branchFromEntryId ? { branchFromEntryId } : {}),
+        ...(branchFromPreview ? { branchFromPreview } : {}),
+        isCurrent: entry.id === currentLeafId,
+        isSelected: entry.id === selectedLeafId,
+      };
+    })
+    .sort((left, right) => {
+      if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
+      if (left.updated !== right.updated) return right.updated.localeCompare(left.updated);
+      return left.id.localeCompare(right.id);
+    });
 }
 
 function findActivePlan(entries: SessionEntry[]): unknown {
@@ -396,18 +510,27 @@ export class SessionReader {
     limit?: number;
     cwdScope?: SessionCwdScope;
     origin?: SessionOrigin;
+    sessionIds?: string[];
+    excludedSessionIds?: string[];
   } = {}): Promise<SessionSummary[]> {
     const files = await collectSessionFiles(this.sessionsDirectory);
     const query = options.query?.trim().toLocaleLowerCase();
     const matchesCwd = await createCwdMatcher(options.cwdScope);
+    const includedSessionIds = options.sessionIds ? new Set(options.sessionIds) : undefined;
+    const excludedSessionIds = new Set(options.excludedSessionIds ?? []);
     const scopePaths = async (paths: string[]): Promise<string[]> => {
-      if (!options.cwdScope) return paths;
+      if (!options.cwdScope && !includedSessionIds && excludedSessionIds.size === 0) return paths;
       const identities = await mapConcurrent(paths, LIST_CONCURRENCY * 2, async (path) => ({
         path,
         identity: await readHeaderIdentity(path),
       }));
       const matches = await Promise.all(identities.map(async ({ path, identity }) => (
-        identity && await matchesCwd(identity.cwd) ? path : undefined
+        identity
+          && (!includedSessionIds || includedSessionIds.has(identity.id))
+          && !excludedSessionIds.has(identity.id)
+          && await matchesCwd(identity.cwd)
+          ? path
+          : undefined
       )));
       return matches.filter((path): path is string => path !== undefined);
     };
@@ -423,7 +546,13 @@ export class SessionReader {
       options.origin === undefined || (options.origin === "dcode" && record.dcodeOrigin)
     );
 
-    if (!query && (options.limit !== undefined || options.cwdScope !== undefined || options.origin !== undefined)) {
+    if (!query && (
+      options.limit !== undefined
+      || options.cwdScope !== undefined
+      || options.origin !== undefined
+      || includedSessionIds !== undefined
+      || excludedSessionIds.size > 0
+    )) {
       const ranked = (await mapConcurrent(files, LIST_CONCURRENCY * 2, async (path) => {
         try { return { path, modified: (await stat(path)).mtimeMs }; }
         catch { return undefined; }
@@ -475,33 +604,62 @@ export class SessionReader {
     return await readSummary(matchingPaths[0] as string);
   }
 
-  async inspect(sessionId: string): Promise<SessionInspection> {
+  async hasDCodeOrigin(summary: SessionSummary): Promise<boolean> {
+    const record = await readIndexedSummary(summary.path, "dcode");
+    return record?.summary.id === summary.id;
+  }
+
+  async hasDescendantSession(parentPath: string): Promise<boolean> {
+    const canonicalParent = await canonicalPath(parentPath);
+    const files = await collectSessionFiles(this.sessionsDirectory);
+    for (const path of files) {
+      if (path === parentPath) continue;
+      const identity = await readHeaderIdentity(path);
+      if (!identity?.parentSession) continue;
+      if (await canonicalPath(identity.parentSession) === canonicalParent) return true;
+    }
+    return false;
+  }
+
+  async inspect(sessionId: string, leafId?: string | null): Promise<SessionInspection> {
     const summary = await this.resolve(sessionId);
-    return await this.inspectSummary(summary, sessionId);
+    return await this.inspectSummary(summary, sessionId, leafId);
   }
 
-  async inspectPath(path: string, sessionId: string): Promise<SessionInspection> {
+  async inspectPath(path: string, sessionId: string, leafId?: string | null): Promise<SessionInspection> {
     const summary = await readSummary(path);
-    return await this.inspectSummary(summary, sessionId);
+    return await this.inspectSummary(summary, sessionId, leafId);
   }
 
-  private async inspectSummary(summary: SessionSummary, sessionId: string): Promise<SessionInspection> {
+  private async inspectSummary(
+    summary: SessionSummary,
+    sessionId: string,
+    requestedLeafId?: string | null,
+  ): Promise<SessionInspection> {
     const parsed = parseStrictSessionDocument(await readFile(summary.path, "utf8"), summary.path);
     const header = parsed.find((entry): entry is SessionHeader => entry.type === "session");
     if (!header || header.id !== sessionId) {
       throw new SessionReadError("INVALID_SESSION", `Session header mismatch: ${summary.path}`);
     }
     const entries = parsed.filter((entry): entry is SessionEntry => entry.type !== "session");
-    const { leafId, branch } = buildActiveBranch(entries);
+    const currentLeafId = entries.at(-1)?.id ?? null;
+    const { leafId, branch } = buildBranch(entries, requestedLeafId);
     const context = buildSessionContext(entries, leafId);
+    const parentSessionId = header.parentSession
+      ? (await readHeaderIdentity(header.parentSession))?.id
+      : undefined;
     return {
       summary,
       header,
+      ...(parentSessionId ? { parentSessionId } : {}),
       leafId,
+      currentPathId: pathId(currentLeafId),
+      selectedPathId: pathId(leafId),
+      paths: sessionPaths(entries, leafId, summary.modified),
       entries: branch,
       context: {
         messageCount: context.messages.length,
-        model: context.model,
+        model: normalizedContextModel(context.model),
         thinkingLevel: context.thinkingLevel,
       },
       activePlan: findActivePlan(branch),

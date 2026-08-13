@@ -56,6 +56,11 @@ test("method parameter validation rejects invalid values", () => {
     { sessionId: "s1", mode: "writable", writeIntent: true },
   ));
   assert.doesNotThrow(() => validateMethodParams("session.open", { sessionId: "s1", mode: "readOnly" }));
+  assert.doesNotThrow(() => validateMethodParams("session.close", { expectedSessionId: "s1" }));
+  assert.throws(
+    () => validateMethodParams("session.close", { expectedSessionId: "" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("session.create", { cwd: "" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
@@ -68,6 +73,11 @@ test("method parameter validation rejects invalid values", () => {
     limit: 11,
     origin: "dcode",
     cwdScope: { match: "exact", paths: ["/work/a", "/work/b"] },
+    excludedSessionIds: ["archived-a", "archived-b"],
+  }));
+  assert.doesNotThrow(() => validateMethodParams("session.list", {
+    sessionIds: ["session-a", "session-b"],
+    excludedSessionIds: ["session-b"],
   }));
   assert.throws(
     () => validateMethodParams("session.list", { origin: "pi" }),
@@ -87,6 +97,27 @@ test("method parameter validation rejects invalid values", () => {
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
   assert.doesNotThrow(() => validateMethodParams("session.prompt", { message: "hello", promptId: "prompt-1" }));
+  assert.doesNotThrow(() => validateMethodParams("session.prompt", {
+    message: "rewrite",
+    promptId: "prompt-path",
+    pathAction: { kind: "editUser", entryId: "user-old" },
+  }));
+  assert.throws(
+    () => validateMethodParams("session.prompt", {
+      message: " \n ",
+      promptId: "prompt-empty-path",
+      pathAction: { kind: "continuePath", entryId: "assistant-old" },
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.prompt", {
+      message: "hello",
+      promptId: "prompt-invalid-path",
+      pathAction: { kind: "move", entryId: "assistant-old" },
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("session.prompt", { message: "hello" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
@@ -135,6 +166,7 @@ test("method parameter validation rejects invalid values", () => {
   assert.doesNotThrow(() => validateMethodParams("session.open", {
     sessionId: "s1",
     mode: "readOnly",
+    pathId: "leaf:assistant-old",
     expectedEntryId: "entry-1",
     expectedEntryDigest: `v1:${"a".repeat(64)}`,
     preserveActive: true,
@@ -175,6 +207,21 @@ test("method parameter validation rejects invalid values", () => {
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
   assert.equal(isHostMethod("session.search"), true);
+  assert.equal(isHostMethod("session.copy"), true);
+  assert.equal(isHostMethod("session.trash"), true);
+  assert.doesNotThrow(() => validateMethodParams("session.copy", {
+    sessionId: "session-source",
+    targetCwd: "/work/target",
+  }));
+  assert.throws(
+    () => validateMethodParams("session.copy", { sessionId: "session-source", targetCwd: "" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("session.trash", { sessionId: "session-source" }));
+  assert.throws(
+    () => validateMethodParams("session.trash", { sessionId: "" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
 });
 
 test("response and event constructors retain protocol correlation", () => {

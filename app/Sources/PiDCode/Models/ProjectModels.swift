@@ -57,6 +57,7 @@ enum ProjectStoreError: LocalizedError, Equatable {
     case missingMoveConfirmation([ProjectFolderConflict])
     case invalidProjectName
     case unavailableAfterLoadFailure
+    case mutationBlockedDuringSessionCopy
 
     var errorDescription: String? {
         switch self {
@@ -74,6 +75,8 @@ enum ProjectStoreError: LocalizedError, Equatable {
             "请输入项目名称。"
         case .unavailableAfterLoadFailure:
             "项目资料尚未安全载入；为保留原文件，本次不允许写入。"
+        case .mutationBlockedDuringSessionCopy:
+            "会话复制期间不能修改 Project 或 Source Folder；请等待复制完成。"
         }
     }
 }

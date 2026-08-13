@@ -1843,10 +1843,52 @@ html&gt;body{padding:0}&lt;/style&gt;
 
     #dcode-version-evolution [hidden] { display: none !important; }
 
-    @media (max-width: 1279px) {
+    @media (min-width: 880px) and (max-width: 1105px) {
+      #dcode-version-evolution .de-sidebar { display: none; }
+      #dcode-version-evolution .de-layout,
+      #dcode-version-evolution .de-layout.is-sidebar-closed { grid-template-columns: minmax(0, 1fr); }
       #dcode-version-evolution .de-layout.has-inspector,
-      #dcode-version-evolution .de-layout.has-inspector.is-inspector-closed { grid-template-columns: 190px minmax(0, 1fr); }
-      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed { grid-template-columns: minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed { grid-template-columns: minmax(0, 1fr) 215px; }
+      #dcode-version-evolution .de-layout.has-inspector.is-inspector-closed,
+      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed.is-inspector-closed { grid-template-columns: minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.is-sidebar-open .de-sidebar {
+        position: absolute;
+        z-index: 6;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        display: block;
+        width: min(260px, calc(100% - 20px));
+        overflow: auto;
+        box-shadow: 12px 0 28px var(--de-shadow);
+      }
+    }
+
+    @media (max-width: 879px) {
+      #dcode-version-evolution .de-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+      #dcode-version-evolution .de-brand,
+      #dcode-version-evolution .de-breadcrumb &gt; span,
+      #dcode-version-evolution .de-breadcrumb &gt; svg:first-child,
+      #dcode-version-evolution .de-breadcrumb &gt; svg:nth-of-type(2) { display: none; }
+      #dcode-version-evolution .de-breadcrumb::before { content: &quot;…&quot;; color: var(--de-secondary); }
+      #dcode-version-evolution .de-sidebar { display: none; }
+      #dcode-version-evolution .de-layout,
+      #dcode-version-evolution .de-layout.is-sidebar-closed,
+      #dcode-version-evolution .de-layout.has-inspector,
+      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed,
+      #dcode-version-evolution .de-layout.has-inspector.is-inspector-closed,
+      #dcode-version-evolution .de-layout.has-inspector.is-sidebar-closed.is-inspector-closed { grid-template-columns: minmax(0, 1fr); }
+      #dcode-version-evolution .de-layout.is-sidebar-open .de-sidebar {
+        position: absolute;
+        z-index: 6;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        display: block;
+        width: min(260px, calc(100% - 20px));
+        overflow: auto;
+        box-shadow: 12px 0 28px var(--de-shadow);
+      }
       #dcode-version-evolution .de-layout.has-inspector .de-inspector {
         position: absolute;
         z-index: 5;
@@ -1860,29 +1902,6 @@ html&gt;body{padding:0}&lt;/style&gt;
         box-shadow: -12px 0 28px var(--de-shadow);
       }
       #dcode-version-evolution .de-layout.has-inspector.is-inspector-open .de-inspector { display: block; }
-    }
-
-    @media (max-width: 879px) {
-      #dcode-version-evolution .de-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
-      #dcode-version-evolution .de-brand,
-      #dcode-version-evolution .de-breadcrumb &gt; span,
-      #dcode-version-evolution .de-breadcrumb &gt; svg:first-child,
-      #dcode-version-evolution .de-breadcrumb &gt; svg:nth-of-type(2) { display: none; }
-      #dcode-version-evolution .de-breadcrumb::before { content: &quot;…&quot;; color: var(--de-secondary); }
-      #dcode-version-evolution .de-sidebar { display: none; }
-      #dcode-version-evolution .de-layout,
-      #dcode-version-evolution .de-layout.has-inspector { grid-template-columns: minmax(0, 1fr); }
-      #dcode-version-evolution .de-layout.is-sidebar-open .de-sidebar {
-        position: absolute;
-        z-index: 6;
-        top: 0;
-        bottom: 0;
-        left: 0;
-        display: block;
-        width: min(260px, calc(100% - 20px));
-        overflow: auto;
-        box-shadow: 12px 0 28px var(--de-shadow);
-      }
       #dcode-version-evolution .de-session-header { min-height: 58px; }
       #dcode-version-evolution .de-conversation { min-height: 0; gap: 12px; padding: 14px 12px; }
       #dcode-version-evolution .de-search-view { padding: 10px; }
@@ -1973,16 +1992,16 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageBody: &#x27;复制到项目会保留完整历史和原会话；复制并归档只收起 D Code 中的原入口。&#x27;
         },
         &#x27;0.0.4&#x27;: {
-          title: &#x27;工作区标签与只读文件&#x27;,
-          summary: &#x27;从项目文件树打开中央内容标签；首次只读查看，不改变文件与上下文。&#x27;,
+          title: &#x27;本地工作区与只读文件&#x27;,
+          summary: &#x27;文件树与助手引用都能打开并定位中央内容标签；首次只读，不改变文件与上下文。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;files&#x27;,
           projectFiles: true,
           projectInspector: true,
           sessionRight: &#x27;overview&#x27;,
           paths: true,
-          messageHeading: &#x27;对话与文件共用中央标签页&#x27;,
-          messageBody: &#x27;对话始终是第一个标签；文件从第二个标签开始只读打开。&#x27;
+          messageHeading: &#x27;对话与本机文件共用中央标签页&#x27;,
+          messageBody: &#x27;对话始终是第一个标签；文件从第二个标签开始只读打开，切换后会话路径、滚动、草稿与已开文件保持。&#x27;
         },
         &#x27;0.0.5&#x27;: {
           title: &#x27;Markdown 与 HTML 即时预览&#x27;,
@@ -1998,8 +2017,8 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageBody: &#x27;Markdown 与 HTML 同时完成才算交付；打开与编辑仍不会自动加入模型上下文。&#x27;
         },
         &#x27;0.0.6&#x27;: {
-          title: &#x27;目标与工作清单&#x27;,
-          summary: &#x27;目标进入右栏，活动计划继续贴近输入区；两处使用同一份结构化状态。&#x27;,
+          title: &#x27;目标与工作地图&#x27;,
+          summary: &#x27;稳定工作项记录结果、范围、依赖、验收证据与人工门禁；Goal 控制明确启动的执行。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;goal&#x27;,
           projectFiles: true,
@@ -2008,12 +2027,12 @@ html&gt;body{padding:0}&lt;/style&gt;
           paths: true,
           livePreview: true,
           goal: true,
-          messageHeading: &#x27;目标成为可恢复的工作面&#x27;,
-          messageBody: &#x27;右栏查看工作清单、检查与阶段结论；输入区只保留当前活动计划的紧凑状态。&#x27;
+          messageHeading: &#x27;目标成为可恢复、可控制的工作地图&#x27;,
+          messageBody: &#x27;当前阶段、耗时、最近证据与阻塞保持可见；暂停执行不会把工作项误标为完成。&#x27;
         },
         &#x27;0.0.7&#x27;: {
-          title: &#x27;智能体团队与团队通信&#x27;,
-          summary: &#x27;右栏汇总成员、职责、状态和通信；中央按需查看成员的可见工作轨迹。&#x27;,
+          title: &#x27;智能体档案与 D Team&#x27;,
+          summary: &#x27;可复用档案与当次成员执行分开；复杂任务显式组队，主智能体中转并综合报告。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;agents&#x27;,
           projectFiles: true,
@@ -2022,12 +2041,12 @@ html&gt;body{padding:0}&lt;/style&gt;
           paths: true,
           livePreview: true,
           goal: true,
-          messageHeading: &#x27;智能体团队属于当前会话&#x27;,
-          messageBody: &#x27;主对话保留协调结论，成员之间的通信和阶段结果进入智能体视图。&#x27;
+          messageHeading: &#x27;档案定义默认能力，成员记录当次执行&#x27;,
+          messageBody: &#x27;右栏查看档案版本、实际模型、工具授予、状态与当前活动；中央查看请求、发现、验证退回与结构化报告。&#x27;
         },
         &#x27;0.0.8&#x27;: {
-          title: &#x27;跨会话通信&#x27;,
-          summary: &#x27;加入持久来源、送达状态和未读状态，让其它会话可以定向协作。&#x27;,
+          title: &#x27;跨会话交接与通信&#x27;,
+          summary: &#x27;以耐久工作项为锚点，保留消息来源、目标、送达、已读、失败与重试。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;communication&#x27;,
           projectFiles: true,
@@ -2037,12 +2056,12 @@ html&gt;body{padding:0}&lt;/style&gt;
           livePreview: true,
           goal: true,
           communication: true,
-          messageHeading: &#x27;跨会话消息保留来源与送达状态&#x27;,
-          messageBody: &#x27;D Code 的跨会话消息不会伪装成普通用户回复，也不会丢失目标会话和恢复信息。&#x27;
+          messageHeading: &#x27;跨会话协作以工作项为锚点&#x27;,
+          messageBody: &#x27;交接先可靠送达；只有接收方或用户明确采纳后才启动新会话或执行，且不伪装恢复已经销毁的工作智能体。&#x27;
         },
         &#x27;0.0.9&#x27;: {
-          title: &#x27;原生能力收口候选&#x27;,
-          summary: &#x27;自有原生能力与不支持边界逐项验收，不再增加新的主导航。&#x27;,
+          title: &#x27;本机能力、安全与恢复&#x27;,
+          summary: &#x27;收口 Skill、权限策略、有效授予、审计、用量与异常恢复，不增加在线市场或平行配置。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;abilities&#x27;,
           projectFiles: true,
@@ -2053,8 +2072,8 @@ html&gt;body{padding:0}&lt;/style&gt;
           goal: true,
           communication: true,
           runtime: true,
-          messageHeading: &#x27;产品能力进入统一的中文工作台&#x27;,
-          messageBody: &#x27;高价值状态拥有专属呈现，相似能力共用原生界面；依赖 TUI 的特殊交互明确不支持，不再建立兼容呈现路径。&#x27;
+          messageHeading: &#x27;本机能力进入可信的原生控制面&#x27;,
+          messageBody: &#x27;Skill 不等于权限；Profile 策略在运行时解析为有效授予，审计与报告只做脱敏持久化。&#x27;
         },
         &#x27;1.0.0&#x27;: {
           title: &#x27;完整版本&#x27;,
@@ -2107,23 +2126,25 @@ html&gt;body{padding:0}&lt;/style&gt;
         }
         if (kind === &#x27;goal&#x27;) {
           return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;目标&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;定义 D Code 1.0&lt;/strong&gt;&lt;small&gt;完成原生能力与不支持边界收口&lt;/small&gt;&lt;div class=&quot;de-progress&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;工作清单&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;确定版本规则&lt;/span&gt;&lt;small&gt;完成&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;核对能力矩阵&lt;/span&gt;&lt;small&gt;进行中&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;逐版确认界面&lt;/span&gt;&lt;small&gt;等待&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;定义 D Code 1.0&lt;/strong&gt;&lt;small&gt;阶段 3 · 已耗时 42 分钟 · 最近证据：版本边界复核&lt;/small&gt;&lt;div class=&quot;de-progress&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;工作地图&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;确定版本规则&lt;/span&gt;&lt;small&gt;完成 · 证据 2&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;核对能力矩阵&lt;/span&gt;&lt;small&gt;进行中 · 依赖 1&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;逐版确认界面&lt;/span&gt;&lt;small&gt;需要验收&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;当前控制&lt;/strong&gt;&lt;small&gt;继续执行 · 暂停 · 编辑 Goal · 清除活动呈现&lt;/small&gt;&lt;/section&gt;&#x27;;
         }
         if (kind === &#x27;agents&#x27;) {
           return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;智能体&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;智能体团队 · 4 位成员&lt;/strong&gt;&lt;small&gt;本轮围绕同一目标协作&lt;/small&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;产品结构&lt;/span&gt;&lt;small&gt;已汇总&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;Pi 语义&lt;/span&gt;&lt;small&gt;工作中&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展审计&lt;/span&gt;&lt;small&gt;已汇总&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面评审&lt;/span&gt;&lt;small&gt;等待&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;最近通信&lt;/strong&gt;&lt;small&gt;Pi 语义 → 产品结构：会话复制必须保留稳定来源。&lt;/small&gt;&lt;/section&gt;&#x27;;
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;D Team · 3 位成员&lt;/strong&gt;&lt;small&gt;显式启动 · 来源路径：智能体团队方案 · 已运行 8 分钟&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;智能体档案&lt;/strong&gt;&lt;small&gt;产品结构 · 档案 v3 · 高级模型 · 只读工具&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;产品结构&lt;/span&gt;&lt;small&gt;已报告 · 3 分钟&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;Pi 语义&lt;/span&gt;&lt;small&gt;运行中 · 正在核对 Skill 边界&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;验证复核&lt;/span&gt;&lt;small&gt;等待回应 · 需确认范围&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;主智能体中转&lt;/strong&gt;&lt;small&gt;Request：是否把 Skill 权限管理留到 0.0.9？ · 查看结构化报告&lt;/small&gt;&lt;/section&gt;&#x27;;
         }
         if (kind === &#x27;communication&#x27;) {
           return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;通信&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;跨会话通信&lt;/strong&gt;&lt;small&gt;来源、目标与送达状态均可恢复&lt;/small&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展协议研究&lt;/span&gt;&lt;small&gt;1 条未读&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标工作清单&lt;/span&gt;&lt;small&gt;已送达&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面版本演进&lt;/span&gt;&lt;small&gt;等待回复&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;跨会话交接&lt;/strong&gt;&lt;small&gt;工作项、来源、目标与送达状态均可恢复&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展协议研究&lt;/span&gt;&lt;small&gt;已读&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标工作地图&lt;/span&gt;&lt;small&gt;已送达&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面版本演进&lt;/span&gt;&lt;small&gt;失败 · 可重试&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
         }
         return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span&gt;通信&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
           &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;能力状态&lt;/strong&gt;&lt;small&gt;按产品语义汇总，不按扩展逐个堆入口&lt;/small&gt;&lt;/section&gt;&#x27; +
-          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标与工作清单&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;智能体团队与通信&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;图片与结构化产物&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;标准工具与命令&lt;/span&gt;&lt;small&gt;统一呈现&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;本机 Skill&lt;/span&gt;&lt;small&gt;来源与兼容性可见&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;权限策略 → 有效授予&lt;/span&gt;&lt;small&gt;本次运行快照&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;D Team 审计与恢复&lt;/span&gt;&lt;small&gt;脱敏事件 / 报告&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;上下文与用量&lt;/span&gt;&lt;small&gt;仅本机真实来源&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
       }
 
       var currentVersion = &#x27;0.0.1&#x27;;
@@ -2295,7 +2316,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             &#x27;&#x27;,
             &#x27;export default function dgoal(pi: ExtensionAPI) {&#x27;,
             &quot;  pi.registerCommand(&#x27;goal&#x27;, {&quot;,
-            &quot;    description: &#x27;打开当前目标与工作清单&#x27;&quot;,
+            &quot;    description: &#x27;打开当前目标与工作地图&#x27;&quot;,
             &#x27;  })&#x27;,
             &#x27;}&#x27;
           ].join(&#x27;\n&#x27;)
@@ -2459,9 +2480,13 @@ html&gt;body{padding:0}&lt;/style&gt;
         layout.classList.add(&#x27;has-inspector&#x27;);
         layout.classList.remove(&#x27;is-inspector-closed&#x27;);
         showInspector(&#x27;files&#x27;, state);
-        if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) {
-          layout.classList.add(&#x27;is-inspector-open&#x27;);
+        if (window.matchMedia(&#x27;(max-width: 1105px)&#x27;).matches) {
           layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+        }
+        if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) {
+          layout.classList.add(&#x27;is-inspector-open&#x27;);
+        } else {
+          layout.classList.remove(&#x27;is-inspector-open&#x27;);
         }
         window.requestAnimationFrame(syncPanelControls);
       }
@@ -3151,7 +3176,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         var fileButton = event.target.closest(&#x27;[data-file-preview]&#x27;);
         if (fileButton) {
           openWorkspaceFile(fileButton.dataset.filePreview);
-          if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+          if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
           window.requestAnimationFrame(syncPanelControls);
           return;
         }
@@ -3352,9 +3377,9 @@ html&gt;body{padding:0}&lt;/style&gt;
       });
 
       sidebarButton.addEventListener(&#x27;click&#x27;, function () {
-        if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) {
+        if (window.matchMedia(&#x27;(max-width: 1105px)&#x27;).matches) {
           layout.classList.toggle(&#x27;is-sidebar-open&#x27;);
-          if (layout.classList.contains(&#x27;is-sidebar-open&#x27;)) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+          if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches &amp;&amp; layout.classList.contains(&#x27;is-sidebar-open&#x27;)) layout.classList.remove(&#x27;is-inspector-open&#x27;);
         } else {
           layout.classList.toggle(&#x27;is-sidebar-closed&#x27;);
         }
@@ -3362,10 +3387,10 @@ html&gt;body{padding:0}&lt;/style&gt;
       });
 
       inspectorButton.addEventListener(&#x27;click&#x27;, function () {
-        if (window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) {
+        if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) {
           layout.classList.remove(&#x27;is-inspector-closed&#x27;);
           layout.classList.toggle(&#x27;is-inspector-open&#x27;);
-          if (window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches &amp;&amp; layout.classList.contains(&#x27;is-inspector-open&#x27;)) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+          if (layout.classList.contains(&#x27;is-inspector-open&#x27;)) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
         } else {
           layout.classList.remove(&#x27;is-inspector-open&#x27;);
           layout.classList.toggle(&#x27;is-inspector-closed&#x27;);
@@ -3374,8 +3399,8 @@ html&gt;body{padding:0}&lt;/style&gt;
       });
 
       window.addEventListener(&#x27;resize&#x27;, function () {
-        if (!window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
-        if (!window.matchMedia(&#x27;(max-width: 1279px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
+        if (!window.matchMedia(&#x27;(max-width: 1105px)&#x27;).matches) layout.classList.remove(&#x27;is-sidebar-open&#x27;);
+        if (!window.matchMedia(&#x27;(max-width: 879px)&#x27;).matches) layout.classList.remove(&#x27;is-inspector-open&#x27;);
         window.requestAnimationFrame(syncPanelControls);
       });
 

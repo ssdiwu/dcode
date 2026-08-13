@@ -6,13 +6,15 @@ struct ComposerView: View {
     @State private var showingContext = false
 
     var body: some View {
-        @Bindable var model = model
         VStack(spacing: 0) {
             if !commandSuggestions.isEmpty {
                 commandPalette
                 Divider()
             }
-            composer(text: $model.composerText)
+            composer(text: Binding(
+                get: { model.composerText },
+                set: { model.updateComposerText($0) }
+            ))
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -20,6 +22,31 @@ struct ComposerView: View {
     private func composer(text: Binding<String>) -> some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
+                if let draftStoreIssue = model.draftStoreIssue {
+                    Label(draftStoreIssue, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("草稿无法持久保存：\(draftStoreIssue)")
+                }
+                if model.pendingPathDraft != nil {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .foregroundStyle(Color.accentColor)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("新会话路径草稿")
+                                .font(.caption.weight(.semibold))
+                            Text("尚未创建 · 原路径保留；发送成功后才形成新路径")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("取消") { model.cancelPathDraft() }
+                            .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                            .disabled(model.isSendingRequest || model.pendingPrompt != nil)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 TextField(
                     "交给 D Code 一项工作，或输入 / 使用命令",
                     text: text,
@@ -30,6 +57,7 @@ struct ComposerView: View {
                 .lineLimit(3...7)
                 .frame(minHeight: 66, maxHeight: 126, alignment: .topLeading)
                 .focused($focused)
+                .disabled(model.isSendingRequest || model.pendingPrompt != nil)
                 .accessibilityLabel("消息输入")
 
                 runtimeControls
@@ -77,10 +105,12 @@ struct ComposerView: View {
             .buttonStyle(.borderless)
             .accessibilityLabel(fastAccessibilityLabel)
             .help(fastHelp)
+            .disabled(model.pendingPathDraft != nil || model.isPromptTransactionActive)
 
             Spacer(minLength: 4)
 
             modelAndThinkingMenu
+                .disabled(model.pendingPathDraft != nil || model.isPromptTransactionActive)
 
             if model.isStreaming {
                 Button {
@@ -108,7 +138,7 @@ struct ComposerView: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!sendEnabled)
                 .help("发送（⌘↩）")
-                .accessibilityLabel("发送消息")
+                .accessibilityLabel(model.pendingPathDraft == nil ? "发送消息" : "发送并创建新路径")
             }
         }
         .font(.caption)
@@ -157,9 +187,6 @@ struct ComposerView: View {
                     .lineLimit(1)
                 Text(thinkingLabel(model.hostState?.thinkingLevel))
                     .foregroundStyle(.purple)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
             .frame(minHeight: PiDCodeMetrics.minimumTarget)
         }
@@ -204,7 +231,7 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(commandSuggestions.prefix(6)) { command in
                 Button {
-                    model.composerText = "/\(command.name) "
+                    model.updateComposerText("/\(command.name) ")
                     focused = true
                 } label: {
                     HStack(spacing: 10) {
@@ -234,6 +261,7 @@ struct ComposerView: View {
     private var sendEnabled: Bool {
         !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.isSendingRequest
+            && model.pendingPrompt == nil
             && !model.isStreaming
     }
 

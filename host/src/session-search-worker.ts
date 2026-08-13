@@ -130,6 +130,7 @@ let status: SessionSearchIndexStatus = { state: "idle", complete: false, revisio
 let revision = 0;
 let refreshRunning = false;
 let requestedScope: string[] = [];
+let requestedExcludedSessionIds: string[] = [];
 let requestedScopeKey = "";
 let completedScopeKey = "";
 let invalidationGeneration = 1;
@@ -391,6 +392,7 @@ async function probeCandidate(
 
 async function discoverCandidates(
   sourceFolders: readonly string[],
+  excludedSessionIds: ReadonlySet<string>,
   shouldCancel: () => boolean,
 ): Promise<CandidateDiscovery> {
   const files = await collectSessionFiles(data.sessionsDirectory, shouldCancel);
@@ -405,9 +407,12 @@ async function discoverCandidates(
   const visibleFiles: Array<{ path: string; fingerprint: FileFingerprint }> = [];
   for (const discovered of candidates) {
     if (!discovered) continue;
-    if (discovered.transient) transientFiles.push(discovered.transient);
+    if (discovered.transient && (
+      discovered.transient.sessionId === undefined
+      || !excludedSessionIds.has(discovered.transient.sessionId)
+    )) transientFiles.push(discovered.transient);
     const candidate = discovered.candidate;
-    if (!candidate) continue;
+    if (!candidate || excludedSessionIds.has(candidate.sessionId)) continue;
     visibleFiles.push({ path: candidate.path, fingerprint: candidate.fingerprint });
     const group = grouped.get(candidate.sessionId) ?? [];
     group.push(candidate);
@@ -1134,6 +1139,7 @@ async function retryTransientFiles(): Promise<void> {
 
 async function refreshAttempt(
   scope: string[],
+  excludedSessionIds: ReadonlySet<string>,
   scopeKey: string,
   startedGeneration: number,
   rebuilding: boolean,
@@ -1149,7 +1155,7 @@ async function refreshAttempt(
       revision,
       progress: { completed: 0, total: 0 },
     });
-    const discovery = await discoverCandidates(scope, shouldCancel);
+    const discovery = await discoverCandidates(scope, excludedSessionIds, shouldCancel);
     const transientByPath = new Map(discovery.transientFiles.map((file) => [file.path, file]));
     const stableCandidates = discovery.candidates.filter((candidate) => !transientByPath.has(candidate.path));
     updateStatus({ ...status, progress: { completed: 0, total: stableCandidates.length } });
@@ -1222,7 +1228,12 @@ async function refreshAttempt(
     }
 }
 
-async function refreshIndex(scope: string[], scopeKey: string, startedGeneration: number): Promise<void> {
+async function refreshIndex(
+  scope: string[],
+  excludedSessionIds: ReadonlySet<string>,
+  scopeKey: string,
+  startedGeneration: number,
+): Promise<void> {
   refreshRunning = true;
   const shouldCancel = (): boolean => refreshCancelled(scopeKey, startedGeneration);
   let rebuildBeforeAttempt = forceDatabaseRebuild;
@@ -1235,7 +1246,14 @@ async function refreshIndex(scope: string[], scopeKey: string, startedGeneration
           updateStatus({ state: "rebuilding", complete: false, revision });
           await closeAndRemoveDatabase();
         }
-        await refreshAttempt(scope, scopeKey, startedGeneration, rebuildBeforeAttempt, shouldCancel);
+        await refreshAttempt(
+          scope,
+          excludedSessionIds,
+          scopeKey,
+          startedGeneration,
+          rebuildBeforeAttempt,
+          shouldCancel,
+        );
         failedGeneration = undefined;
         break;
       } catch (error) {
@@ -1279,9 +1297,10 @@ function startRefresh(): void {
     retryTimer = undefined;
   }
   const scope = [...requestedScope];
+  const excludedSessionIds = new Set(requestedExcludedSessionIds);
   const scopeKey = requestedScopeKey;
   const generation = invalidationGeneration;
-  void refreshIndex(scope, scopeKey, generation);
+  void refreshIndex(scope, excludedSessionIds, scopeKey, generation);
 }
 
 function requestDatabaseRebuild(): void {
@@ -1294,7 +1313,11 @@ function requestDatabaseRebuild(): void {
   startRefresh();
 }
 
-function visibilityClause(paths: readonly string[], includeOrigin: boolean): { sql: string; values: string[] } {
+function visibilityClause(
+  paths: readonly string[],
+  includeOrigin: boolean,
+  excludedSessionIds: readonly string[],
+): { sql: string; values: string[] } {
   const clauses: string[] = [];
   const values: string[] = [];
   if (includeOrigin) clauses.push("b.dcode_origin=1");
@@ -1302,7 +1325,13 @@ function visibilityClause(paths: readonly string[], includeOrigin: boolean): { s
     clauses.push(`b.canonical_cwd IN (${paths.map(() => "?").join(",")})`);
     values.push(...paths);
   }
-  return { sql: clauses.length > 0 ? `(${clauses.join(" OR ")})` : "0", values };
+  const visible = clauses.length > 0 ? `(${clauses.join(" OR ")})` : "0";
+  if (excludedSessionIds.length === 0) return { sql: visible, values };
+  values.push(...excludedSessionIds);
+  return {
+    sql: `${visible} AND s.session_id NOT IN (${excludedSessionIds.map(() => "?").join(",")})`,
+    values,
+  };
 }
 
 function snippet(body: string, query: string): string {
@@ -1336,7 +1365,11 @@ function queryIndex(
   projectPaths: readonly string[],
   filterPaths: readonly string[] | undefined,
 ): SessionSearchResult[] {
-  const visibility = visibilityClause(filterPaths ?? projectPaths, filterPaths === undefined);
+  const visibility = visibilityClause(
+    filterPaths ?? projectPaths,
+    filterPaths === undefined,
+    params.excludedSessionIds ?? [],
+  );
   const trimmed = params.query.trim();
   if (!trimmed) {
     const rows = database.prepare(`
@@ -1436,8 +1469,10 @@ async function search(params: SessionSearchParams): Promise<SessionSearchRespons
     : requestedFilterPaths.every((path) => projectPathSet.has(path))
       ? requestedFilterPaths
       : [];
-  const scopeKey = projectPaths.join("\n");
+  const excludedSessionIds = [...new Set(params.excludedSessionIds ?? [])].sort();
+  const scopeKey = `${projectPaths.join("\n")}\n--excluded--\n${excludedSessionIds.join("\n")}`;
   requestedScope = projectPaths;
+  requestedExcludedSessionIds = excludedSessionIds;
   requestedScopeKey = scopeKey;
   if (params.refresh) {
     if (status.state === "failed") forceDatabaseRebuild = true;

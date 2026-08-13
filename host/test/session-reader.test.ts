@@ -69,6 +69,30 @@ test("list and inspect retain stable session identity without writing", async ()
   }
 });
 
+test("inspect treats incomplete legacy assistant model metadata as unknown", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-test-"));
+  try {
+    const path = await createSessionFixture(root, "legacy-model");
+    const entries = (await readFile(path, "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistant = entries.find((entry) => entry.id === "assistant-one") as {
+      message: Record<string, unknown>;
+    };
+    delete assistant.message.provider;
+    delete assistant.message.model;
+    await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const inspection = await new SessionReader(root).inspect("legacy-model");
+
+    assert.equal(inspection.context.model, null);
+    assert.equal(inspection.context.messageCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("list filters and sorts sessions", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-test-"));
   try {
@@ -163,6 +187,76 @@ test("D Code origin filtering happens before pagination and rejects inherited ma
     assert.ok(project.some((session) => session.id === "external-0"));
     assert.ok(project.some((session) => session.id === "copied"));
     assert.ok(project.some((session) => session.id === "late-marker"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archived session exclusions are applied before Recent and Project pagination", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-exclusion-test-"));
+  try {
+    const cwd = join(root, "source");
+    await mkdir(cwd, { recursive: true });
+    const archivedIds: string[] = [];
+    for (let index = 0; index < 12; index += 1) {
+      const id = `archived-${index}`;
+      archivedIds.push(id);
+      await createSessionFixture(root, id, 20_000 + index, cwd, id);
+    }
+    const visibleIds: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      const id = `visible-${index}`;
+      visibleIds.push(id);
+      await createSessionFixture(root, id, index, cwd, id);
+    }
+    const expected = [...visibleIds].reverse();
+    const reader = new SessionReader(root);
+    const recent = await reader.list({
+      origin: "dcode",
+      excludedSessionIds: archivedIds,
+      limit: 11,
+    });
+    assert.deepEqual(recent.map((session) => session.id), expected);
+    const project = await reader.list({
+      cwdScope: { match: "exact", paths: [cwd] },
+      excludedSessionIds: archivedIds,
+      limit: 11,
+    });
+    assert.deepEqual(project.map((session) => session.id), expected);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("inspection enumerates real terminal paths and can select a historical leaf without writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-path-test-"));
+  try {
+    const directory = join(root, "project-branch");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "branch.jsonl");
+    const timestamp = new Date().toISOString();
+    const entries = [
+      { type: "session", version: 3, id: "branch-session", timestamp, cwd: "/tmp/branch" },
+      { type: "message", id: "user-root", parentId: null, timestamp, message: { role: "user", content: "root question", timestamp: Date.now() } },
+      { type: "message", id: "assistant-a", parentId: "user-root", timestamp, message: { role: "assistant", content: "answer A", timestamp: Date.now() } },
+      { type: "message", id: "user-a", parentId: "assistant-a", timestamp, message: { role: "user", content: "follow A", timestamp: Date.now() } },
+      { type: "message", id: "assistant-b", parentId: "user-root", timestamp, message: { role: "assistant", content: "answer B", timestamp: Date.now() } },
+    ];
+    await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const before = digest(await readFile(path));
+    const reader = new SessionReader(root);
+    const current = await reader.inspect("branch-session");
+    assert.equal(current.leafId, "assistant-b");
+    assert.equal(current.currentPathId, "leaf:assistant-b");
+    assert.deepEqual(current.paths.map((item) => item.id).sort(), ["leaf:assistant-b", "leaf:user-a"]);
+    const historicalSummary = current.paths.find((item) => item.id === "leaf:user-a");
+    assert.equal(historicalSummary?.branchFromEntryId, "user-root");
+    assert.equal(historicalSummary?.branchFromPreview, "root question");
+
+    const historical = await reader.inspect("branch-session", "user-a");
+    assert.equal(historical.selectedPathId, "leaf:user-a");
+    assert.deepEqual(historical.entries.map((entry) => entry.id), ["user-root", "assistant-a", "user-a"]);
+    assert.equal(digest(await readFile(path)), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

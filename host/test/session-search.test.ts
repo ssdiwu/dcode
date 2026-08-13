@@ -712,6 +712,67 @@ test("source-folder filtering is applied before the result limit", async () => {
   }
 });
 
+test("archived exclusions are applied before empty-query and FTS result limits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-search-archive-limit-test-"));
+  const sessions = join(root, "sessions");
+  const cache = join(root, "cache");
+  const project = join(root, "project");
+  await Promise.all([sessions, project].map((path) => mkdir(path, { recursive: true })));
+  const archivedPath = join(sessions, "archived.jsonl");
+  const visiblePath = join(sessions, "visible.jsonl");
+  await writeSession(archivedPath, [
+    header("archived", project),
+    message("archived-user", null, "user", "归档排除共同词"),
+  ]);
+  await writeSession(visiblePath, [
+    header("visible", project),
+    message("visible-user", null, "user", "归档排除共同词"),
+  ]);
+  await utimes(visiblePath, new Date("2026-08-11T08:00:00.000Z"), new Date("2026-08-11T08:00:00.000Z"));
+  await utimes(archivedPath, new Date("2026-08-11T09:00:00.000Z"), new Date("2026-08-11T09:00:00.000Z"));
+  const statuses: SessionSearchIndexStatus[] = [];
+  const index = new SessionSearchIndex({
+    sessionsDirectory: sessions,
+    cacheDirectory: cache,
+    emit: (event, value) => {
+      if (event === "session.searchIndexChanged") statuses.push(value as SessionSearchIndexStatus);
+    },
+  });
+  try {
+    await index.search({
+      query: "",
+      requestToken: "archive-limit-build",
+      limit: 1,
+      projectSourceFolders: [project],
+      excludedSessionIds: ["archived"],
+      refresh: true,
+    });
+    await waitForReady(statuses);
+    const empty = await index.search({
+      query: "",
+      requestToken: "archive-limit-empty",
+      limit: 1,
+      projectSourceFolders: [project],
+      excludedSessionIds: ["archived"],
+      refresh: false,
+    });
+    assert.deepEqual(empty.results.map((row) => row.sessionId), ["visible"]);
+
+    const fullText = await index.search({
+      query: "归档排除共同词",
+      requestToken: "archive-limit-fts",
+      limit: 1,
+      projectSourceFolders: [project],
+      excludedSessionIds: ["archived"],
+      refresh: false,
+    });
+    assert.deepEqual(fullText.results.map((row) => row.sessionId), ["visible"]);
+  } finally {
+    await index.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("document limit is applied after exact per-session grouping and match counting", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-search-group-limit-test-"));
   const sessions = join(root, "sessions");

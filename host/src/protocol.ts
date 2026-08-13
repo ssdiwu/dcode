@@ -7,6 +7,8 @@ export const HOST_METHODS = [
   "session.inspect",
   "session.refresh",
   "session.create",
+  "session.copy",
+  "session.trash",
   "session.open",
   "session.close",
   "session.prompt",
@@ -223,7 +225,6 @@ export function parseRequest(value: unknown): HostRequest {
 export function validateMethodParams(method: HostMethod, params: Record<string, unknown>): void {
   switch (method) {
     case "host.hello":
-    case "session.close":
     case "session.abort":
     case "session.getState":
     case "session.getCommands":
@@ -232,11 +233,23 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.refresh":
     case "host.shutdown":
       return;
+    case "session.close": {
+      const expectedSessionId = optionalString(params, "expectedSessionId");
+      if (expectedSessionId !== undefined && (expectedSessionId.length === 0 || expectedSessionId.length > 4_096)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.expectedSessionId to be a non-empty string up to 4096 characters",
+        );
+      }
+      return;
+    }
     case "session.list":
       optionalString(params, "query");
       optionalInteger(params, "limit", 1, 10_000);
       optionalCwdScope(params);
       optionalSessionOrigin(params);
+      requireStringArray(params, "sessionIds", 10_000, true);
+      requireStringArray(params, "excludedSessionIds", 10_000, true);
       return;
     case "session.search": {
       const query = requireString(params, "query", { allowEmpty: true });
@@ -250,6 +263,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       optionalInteger(params, "limit", 1, 100);
       const projectSourceFolders = requireStringArray(params, "projectSourceFolders", 1_024) ?? [];
       const filterSourceFolders = requireStringArray(params, "filterSourceFolders", 1_024, true);
+      requireStringArray(params, "excludedSessionIds", 10_000, true);
       if (filterSourceFolders) {
         const projectSet = new Set(projectSourceFolders);
         if (filterSourceFolders.some((path) => !projectSet.has(path))) {
@@ -269,9 +283,22 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     }
     case "session.inspect":
       requireString(params, "sessionId");
+      if (params.pathId !== undefined) {
+        const pathId = requireString(params, "pathId");
+        if (pathId.length > 160) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.pathId to be at most 160 characters");
+        }
+      }
       return;
     case "session.create":
       requireString(params, "cwd");
+      return;
+    case "session.copy":
+      requireString(params, "sessionId");
+      requireString(params, "targetCwd");
+      return;
+    case "session.trash":
+      requireString(params, "sessionId");
       return;
     case "session.open": {
       requireString(params, "sessionId");
@@ -305,6 +332,12 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if (params.preserveActive !== undefined && typeof params.preserveActive !== "boolean") {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.preserveActive to be a boolean");
       }
+      if (params.pathId !== undefined) {
+        const pathId = requireString(params, "pathId");
+        if (pathId.length > 160) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.pathId to be at most 160 characters");
+        }
+      }
       if (mode === "writable" && params.writeIntent !== true) {
         throw new ProtocolValidationError(
           "INVALID_PARAMS",
@@ -320,7 +353,10 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     }
     case "session.prompt": {
-      requireString(params, "message", { allowEmpty: true });
+      const message = requireString(params, "message", { allowEmpty: true });
+      if (message.trim().length === 0) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.message to contain non-whitespace text");
+      }
       const promptId = requireString(params, "promptId");
       if (promptId.length > 128) {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");
@@ -330,6 +366,25 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
           "INVALID_PARAMS",
           "Queued streaming prompts are not part of D Code Protocol v1",
         );
+      }
+      if (params.pathAction !== undefined) {
+        if (!isRecord(params.pathAction)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.pathAction to be an object");
+        }
+        const kind = params.pathAction.kind;
+        if (kind !== "editUser" && kind !== "continueAssistant" && kind !== "continuePath") {
+          throw new ProtocolValidationError(
+            "INVALID_PARAMS",
+            'Expected params.pathAction.kind to be "editUser", "continueAssistant", or "continuePath"',
+          );
+        }
+        const entryId = params.pathAction.entryId;
+        if (typeof entryId !== "string" || entryId.length === 0 || entryId.length > 128) {
+          throw new ProtocolValidationError(
+            "INVALID_PARAMS",
+            "Expected params.pathAction.entryId to be a non-empty string up to 128 characters",
+          );
+        }
       }
       return;
     }

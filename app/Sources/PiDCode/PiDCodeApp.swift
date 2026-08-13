@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class PiDCodeAppDelegate: NSObject, NSApplicationDelegate {
     static weak var model: AppModel?
+    private var terminationInFlight = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         let stored = UserDefaults.standard.string(forKey: AppAppearance.storageKey)
@@ -12,6 +13,17 @@ final class PiDCodeAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Self.model?.emergencyStop()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationInFlight { return .terminateLater }
+        guard let model = Self.model else { return .terminateNow }
+        terminationInFlight = true
+        Task {
+            await model.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 
@@ -40,7 +52,11 @@ struct PiDCodeApp: App {
             CommandGroup(after: .sidebar) {
                 Button("搜索会话…") { model.presentSearch() }
                     .keyboardShortcut("k", modifiers: .command)
-                    .disabled(!model.canUseHostSessions || model.isOpeningSession)
+                    .disabled(
+                        !model.canUseHostSessions
+                            || model.isOpeningSession
+                            || model.isPromptTransactionActive
+                    )
             }
         }
 

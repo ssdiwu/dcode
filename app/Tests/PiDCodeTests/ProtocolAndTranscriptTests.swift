@@ -74,6 +74,20 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             staleSearchResult.localizedDescription,
             "这条搜索结果已不在当前会话路径中。搜索窗口已保留，请刷新结果后重试。"
         )
+
+        let hasDescendants = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "SESSION_HAS_DESCENDANTS",
+            message: "The session has descendants",
+            details: nil
+        ))
+        XCTAssertTrue(hasDescendants.localizedDescription.contains("请改用归档"))
+
+        let restoreFailed = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "SESSION_TRASH_RESTORE_FAILED",
+            message: "The preserved session could not be restored",
+            details: nil
+        ))
+        XCTAssertTrue(restoreFailed.localizedDescription.contains("仍被完整保留"))
     }
 
     func testRequestEncodingIsOneJSONLine() throws {
@@ -155,6 +169,238 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         }
         XCTAssertEqual(result.content, "32 passed")
         XCTAssertFalse(result.isError)
+        XCTAssertEqual(
+            transcript[0].persistedAt,
+            try Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse("2026-01-01T00:00:00.000Z")
+        )
+        XCTAssertEqual(transcript[0].timestamp, Date(timeIntervalSince1970: 1))
+    }
+
+    func testConversationRoundHidesIntermediateWorkAndKeepsFinalAnswer() throws {
+        let source = #"""
+        [
+          {"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T10:00:00.000Z","message":{"role":"user","content":"检查项目","timestamp":1767261600000}},
+          {"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先读取"},{"type":"text","text":"我先检查。"},{"type":"toolCall","id":"call-read","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse","timestamp":1767261601000}},
+          {"type":"message","id":"r1","parentId":"a1","timestamp":"2026-01-01T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-read","toolName":"read","content":[{"type":"text","text":"[README.md#A1B2C3D4]\\n1:# D Code"}],"isError":false,"timestamp":1767261603000}},
+          {"type":"message","id":"a2","parentId":"r1","timestamp":"2026-01-01T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"已经确认"},{"type":"text","text":"项目状态正常。"}],"stopReason":"stop","timestamp":1767261604000}}
+        ]
+        """#
+        let entries = try JSONDecoder().decode([JSONValue].self, from: Data(source.utf8))
+        let rounds = ConversationRoundProjector.project(TranscriptParser.parse(entries: entries))
+
+        let round = try XCTUnwrap(rounds.first)
+        XCTAssertEqual(round.user?.id, "u1")
+        XCTAssertEqual(round.finalAssistant?.id, "a2")
+        XCTAssertEqual(round.finalAssistant?.plainText, "项目状态正常。")
+        XCTAssertEqual(round.processItems.map(\.id), ["a1", "r1", "a2-process"])
+        XCTAssertFalse(round.entryIDs.contains("a2-process"))
+        XCTAssertEqual(round.toolCount, 1)
+        XCTAssertEqual(try XCTUnwrap(round.duration), 5, accuracy: 0.001)
+        XCTAssertEqual(ConversationTimingFormatter.durationText(round.duration), "5 秒")
+    }
+
+    func testMarkdownPresentationPreservesParagraphsAndListMarkers() {
+        let source = """
+        第一段。
+
+        **链接已重建：**
+        - 第一项
+        - 第二项
+
+        **两点提示：**
+        1. 甲
+        2. 乙
+        """
+
+        let presented = MarkdownPresentation.attributedString(for: source)
+        let characters = String(presented.characters)
+
+        XCTAssertTrue(characters.contains("第一段。\n\n链接已重建：\n- 第一项\n- 第二项"))
+        XCTAssertTrue(characters.contains("\n\n两点提示：\n1. 甲\n2. 乙"))
+
+        let inline = MarkdownPresentation.attributedString(
+            for: "**粗体** [链接](https://example.com) `代码`"
+        )
+        let runs = inline.runs.map { run in
+            (
+                text: String(inline[run.range].characters),
+                intent: run.inlinePresentationIntent,
+                link: run.link
+            )
+        }
+        XCTAssertNotNil(runs.first(where: { $0.text == "粗体" })?.intent)
+        XCTAssertEqual(runs.first(where: { $0.text == "链接" })?.link?.absoluteString, "https://example.com")
+        XCTAssertNotNil(runs.first(where: { $0.text == "代码" })?.intent)
+    }
+
+    func testConversationRoundDoesNotPromoteToolUseNarrationToFinalAnswer() {
+        let user = TranscriptItem(
+            id: "user",
+            role: .user,
+            timestamp: Date(timeIntervalSince1970: 0),
+            persistedAt: Date(timeIntervalSince1970: 0),
+            blocks: [.text(id: "user-text", value: "run")]
+        )
+        let intermediate = TranscriptItem(
+            id: "assistant",
+            role: .assistant,
+            timestamp: Date(timeIntervalSince1970: 1),
+            persistedAt: Date(timeIntervalSince1970: 1),
+            blocks: [
+                .text(id: "narration", value: "I will inspect."),
+                .toolCall(id: "call", value: ToolCallPresentation(id: "call", name: "read", arguments: "{}")),
+            ],
+            assistantStopReason: "toolUse"
+        )
+
+        let round = ConversationRoundProjector.project([user, intermediate]).first
+        XCTAssertNil(round?.finalAssistant)
+        XCTAssertEqual(round?.processItems.map(\.id), ["assistant"])
+        XCTAssertNil(round?.completedAt)
+    }
+
+    func testConversationNavigationUsesRoundQuestionAndFinalAnswerPreviews() throws {
+        let transcript = [
+            TranscriptItem(
+                id: "user-1",
+                role: .user,
+                timestamp: nil,
+                blocks: [.text(id: "user-text", value: "  为什么\n会卡住？  ")]
+            ),
+            TranscriptItem(
+                id: "assistant-1",
+                role: .assistant,
+                timestamp: nil,
+                blocks: [.text(id: "assistant-text", value: "已经定位并修复。")],
+                assistantStopReason: "stop"
+            ),
+        ]
+        let round = try XCTUnwrap(ConversationRoundProjector.project(transcript).first)
+        let item = try XCTUnwrap(ConversationNavigation.items(from: [round]).first)
+
+        XCTAssertEqual(item.id, "user-1")
+        XCTAssertEqual(item.anchorID, "round-nav:user-1")
+        XCTAssertEqual(item.questionPreview, "为什么 会卡住？")
+        XCTAssertEqual(item.answerPreview, "已经定位并修复。")
+        XCTAssertFalse(item.hasError)
+    }
+
+    func testConversationNavigationMapsPointerPositionToNearestRound() {
+        XCTAssertNil(ConversationNavigation.index(at: 10, height: 100, count: 0))
+        XCTAssertEqual(ConversationNavigation.index(at: 0, height: 100, count: 5), 0)
+        XCTAssertEqual(ConversationNavigation.index(at: 50, height: 100, count: 5), 2)
+        XCTAssertEqual(ConversationNavigation.index(at: 100, height: 100, count: 5), 4)
+        XCTAssertEqual(ConversationNavigation.yPosition(for: 2, height: 100, count: 5), 50, accuracy: 0.001)
+    }
+
+    func testConversationNavigationSamplesDenseRailsAndKeepsBothEnds() {
+        let indices = ConversationNavigation.renderedIndices(count: 1_000, height: 300)
+        XCTAssertEqual(indices.first, 0)
+        XCTAssertEqual(indices.last, 999)
+        XCTAssertLessThan(indices.count, 1_000)
+        XCTAssertFalse(ConversationNavigation.shouldShowPersistentRail(width: 639, roundCount: 2))
+        XCTAssertFalse(ConversationNavigation.shouldShowPersistentRail(width: 640, roundCount: 1))
+        XCTAssertTrue(ConversationNavigation.shouldShowPersistentRail(width: 640, roundCount: 2))
+    }
+
+    func testConversationNavigationIdentityChangesWithSessionOrPath() {
+        XCTAssertEqual(
+            ConversationNavigation.presentationIdentity(sessionID: "session-a", pathID: "leaf:one"),
+            "session-a:leaf:one"
+        )
+        XCTAssertNotEqual(
+            ConversationNavigation.presentationIdentity(sessionID: "session-a", pathID: "leaf:one"),
+            ConversationNavigation.presentationIdentity(sessionID: "session-a", pathID: "leaf:two")
+        )
+        XCTAssertNotEqual(
+            ConversationNavigation.presentationIdentity(sessionID: "session-a", pathID: "leaf:one"),
+            ConversationNavigation.presentationIdentity(sessionID: "session-b", pathID: "leaf:one")
+        )
+    }
+
+    func testConversationNavigationBoundsPreviewWorkForLargeMessageBodies() {
+        let source = String(repeating: "a", count: 1_000_000)
+        let preview = ConversationNavigation.compactPreview(source, fallback: "fallback")
+        XCTAssertEqual(preview.count, 181)
+        XCTAssertTrue(preview.hasSuffix("…"))
+    }
+
+    func testConversationTimingFormatterUsesReadableChineseUnits() {
+        XCTAssertEqual(ConversationTimingFormatter.durationText(0), "0 秒")
+        XCTAssertEqual(ConversationTimingFormatter.durationText(83), "1 分钟 23 秒")
+        XCTAssertEqual(ConversationTimingFormatter.durationText(3_720), "1 小时 2 分钟")
+        XCTAssertNil(ConversationTimingFormatter.durationText(nil))
+    }
+
+    func testDHashlineToolPresentationUsesSafeNativeSummaries() throws {
+        let write = ToolCallPresentation(
+            id: "write",
+            name: "write",
+            arguments: #"{"path":"Sources/Secret.swift","content":"let token = \"secret-value\"\n"}"#
+        )
+        let writeDescriptor = ToolPresentationFormatter.callDescriptor(write)
+        XCTAssertEqual(writeDescriptor.title, "创建 Sources/Secret.swift")
+        XCTAssertEqual(writeDescriptor.subtitle, "1 行")
+        let expanded = ToolPresentationFormatter.expandedCallDetails(write)
+        XCTAssertFalse(expanded.contains("secret-value"))
+        XCTAssertTrue(expanded.contains("正文默认隐藏"))
+
+        let edit = ToolCallPresentation(
+            id: "edit",
+            name: "edit",
+            arguments: #"{"input":"[Sources/Secret.swift#A1B2C3D4]\nSWAP 1:\n+let token = \"secret-value\""}"#
+        )
+        let expandedEdit = ToolPresentationFormatter.expandedCallDetails(edit)
+        XCTAssertTrue(expandedEdit.contains("替换第 1 行"))
+        XCTAssertTrue(expandedEdit.contains("修改正文默认隐藏"))
+        XCTAssertFalse(expandedEdit.contains("secret-value"))
+
+        let read = ToolResultPresentation(
+            id: "read",
+            name: "read",
+            content: "[Sources/App.swift#a1b2c3d4]\n1:import SwiftUI\n2:struct App {}",
+            details: nil,
+            isError: false
+        )
+        let descriptor = ToolPresentationFormatter.resultDescriptor(read)
+        XCTAssertEqual(descriptor.title, "已读取 Sources/App.swift")
+        XCTAssertEqual(descriptor.subtitle, "2 行 · tag A1B2C3D4")
+        let section = try XCTUnwrap(ToolPresentationFormatter.anchorSections(from: read.content).first)
+        XCTAssertEqual(section.path, "Sources/App.swift")
+        XCTAssertEqual(section.lines.map(\.number), [1, 2])
+
+        let longRead = ToolPresentationFormatter.anchorSections(from: """
+        [Sources/App.swift#A1B2C3D4]
+        1:first
+        2:secret middle
+        3:last
+        """).first
+        let visibleReadLines = ToolPresentationFormatter.visibleAnchorLines(
+            toolName: "read",
+            section: try XCTUnwrap(longRead)
+        )
+        XCTAssertEqual(visibleReadLines.map(\.number), [1, 3])
+        XCTAssertFalse(visibleReadLines.map(\.text).contains("secret middle"))
+    }
+
+    func testDHashlineSearchPresentationCountsOnlyMarkedMatches() {
+        let content = """
+        [a.swift#A1B2C3D4]
+        *4:needle
+         5:context
+
+        [b.swift#11223344]
+        *8:needle
+        """
+        let result = ToolResultPresentation(
+            id: "search",
+            name: "search",
+            content: content,
+            details: nil,
+            isError: false
+        )
+        let descriptor = ToolPresentationFormatter.resultDescriptor(result)
+        XCTAssertEqual(descriptor.subtitle, "2 个文件 · 2 处匹配")
     }
 
     func testTranscriptParserPromotesFencedMermaidAndCodeBlocks() throws {
@@ -306,6 +552,70 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(WorkbenchWidthClass.classify(879), .compact)
     }
 
+    func testWorkbenchLayoutKeepsInspectorInlineWithoutShrinkingConversationBelowMinimum() {
+        func policy(_ width: CGFloat) -> WorkbenchLayoutPolicy {
+            WorkbenchLayoutPolicy(
+                width: width,
+                sidebarUserHidden: false,
+                inspectorUserHidden: false,
+                hasInspectorScope: true,
+                sidebarOverlayRequested: false,
+                inspectorOverlayRequested: false
+            )
+        }
+
+        XCTAssertTrue(policy(1_280).inlineSidebar)
+        XCTAssertTrue(policy(1_280).inlineInspector)
+        XCTAssertTrue(policy(1_106).inlineSidebar)
+        XCTAssertTrue(policy(1_106).inlineInspector)
+        XCTAssertEqual(policy(1_106).conversationWidth, 480)
+        XCTAssertFalse(policy(1_105).inlineSidebar)
+        XCTAssertTrue(policy(1_105).inlineInspector)
+        XCTAssertEqual(policy(1_105).conversationWidth, 765)
+        XCTAssertFalse(policy(880).inlineSidebar)
+        XCTAssertTrue(policy(880).inlineInspector)
+        XCTAssertEqual(policy(880).conversationWidth, 540)
+        XCTAssertFalse(policy(879).inlineSidebar)
+        XCTAssertFalse(policy(879).inlineInspector)
+    }
+
+    func testInlineInspectorNeverDimsSiblingColumns() {
+        let policy = WorkbenchLayoutPolicy(
+            width: 1_000,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: true
+        )
+        XCTAssertTrue(policy.inlineInspector)
+        XCTAssertFalse(policy.inspectorOverlay)
+        XCTAssertFalse(policy.dimsBackground)
+    }
+
+    func testCompactPanelsRemainModalOverlays() {
+        let sidebar = WorkbenchLayoutPolicy(
+            width: 879,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: true,
+            inspectorOverlayRequested: false
+        )
+        let inspector = WorkbenchLayoutPolicy(
+            width: 879,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: true
+        )
+        XCTAssertTrue(sidebar.sidebarOverlay)
+        XCTAssertTrue(sidebar.dimsBackground)
+        XCTAssertTrue(inspector.inspectorOverlay)
+        XCTAssertTrue(inspector.dimsBackground)
+    }
+
     func testProjectSelectionPreservesCurrentSessionTranscriptAndDraft() async {
         let model = AppModel(projectStore: ProjectStore(fileURL: temporaryURL("projects.json")))
         let project = DCodeProject(name: "D Code", sourceFolders: [])
@@ -364,6 +674,16 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertNil(state.fastMode)
     }
 
+    func testSessionOpenDecodesUnknownModelAsNull() throws {
+        let source = #"{"mode":"readOnly","snapshot":{"summary":{"path":"/tmp/s.jsonl","id":"s","cwd":"/tmp","created":"2026-01-01T00:00:00.000Z","modified":"2026-01-01T00:00:01.000Z","messageCount":0,"firstMessage":""},"header":{"type":"session","version":3,"id":"s","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"},"leafId":null,"currentPathId":"root","selectedPathId":"root","paths":[],"entries":[],"context":{"messageCount":0,"model":null,"thinkingLevel":"off"},"activePlan":null},"state":{"mode":"readOnly","sessionId":"s","sessionFile":"/tmp/s.jsonl","cwd":"/tmp","model":null,"thinkingLevel":"off","activePlan":null,"isStreaming":false,"contextUsage":null,"fastMode":null,"writable":false,"conflict":null}}"#
+
+        let opened = try JSONDecoder().decode(SessionOpenResult.self, from: Data(source.utf8))
+
+        XCTAssertNil(opened.snapshot.context.model)
+        XCTAssertNil(opened.state?.model)
+        XCTAssertNil(opened.state?.contextUsage)
+    }
+
     func testHostStateDecodesRealContextUsageAndFastModeShape() throws {
         let source = #"{"mode":"writable","sessionId":"s","sessionFile":"/tmp/s.jsonl","sessionName":"Demo","cwd":"/tmp","model":{"provider":"openai-codex","id":"gpt-5.6-sol","name":"GPT-5.6 Sol","reasoning":true,"contextWindow":256000,"maxTokens":128000},"thinkingLevel":"xhigh","activePlan":null,"isStreaming":false,"pendingMessageCount":0,"contextUsage":{"tokens":128000,"contextWindow":256000,"percent":50},"fastMode":{"enabled":true,"active":true,"provider":"openai-codex","model":"gpt-5.6-sol","requestedServiceTier":"priority","reason":"supported"},"writable":true,"conflict":null}"#
         let state = try JSONDecoder().decode(HostState.self, from: Data(source.utf8))
@@ -386,12 +706,16 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionExternalSync"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("dcodeSessionOrigin"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionSearch"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionPaths"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionCopy"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionTrash"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionVisibilityExclusions"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.2",
+            hostVersion: "0.0.3",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -412,7 +736,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.2",
+            hostVersion: "0.0.3",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -465,6 +789,25 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(model.streamingText, "")
         XCTAssertEqual(model.streamingThinking, "")
         XCTAssertEqual(model.streamingTools.map(\.id), ["running"])
+    }
+
+    func testRetryingAgentEndDoesNotHideTheCurrentActivityBeforeSettled() {
+        let model = AppModel()
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("agent_start"),
+        ])))
+        XCTAssertTrue(model.isStreaming)
+
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("agent_end"),
+            "willRetry": .bool(true),
+        ])))
+        XCTAssertTrue(model.isStreaming)
+
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("agent_settled"),
+        ])))
+        XCTAssertFalse(model.isStreaming)
     }
 
     func testHostLocatorHonorsExplicitOverrides() throws {
@@ -570,6 +913,321 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let listed: SessionListResult = try await client.request("session.list", params: ["limit": .number(1)])
         XCTAssertTrue(listed.sessions.isEmpty)
         await client.shutdown()
+    }
+
+    func testProjectSessionLoadCancellationIsSilentAndPreservesCachedSessions() async throws {
+        let root = temporaryURL("project-session-cancellation")
+        let sourceFolder = root.appending(path: "source", directoryHint: .isDirectory)
+        let agentDirectory = root.appending(path: "agent", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sourceFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let project = DCodeProject(
+            name: "Cancellation",
+            sourceFolders: [SourceFolder(path: sourceFolder.path)]
+        )
+        let projectStore = ProjectStore(fileURL: root.appending(path: "projects.json"))
+        try await projectStore.save([project])
+
+        let script = root.appending(path: "delayed-host.py")
+        let source = #"""
+        import json, os, sys, time
+
+        capabilities = {
+            "sessionLease": True,
+            "onDemandWrite": True,
+            "structuredPlan": True,
+            "mermaidUnicode": True,
+            "projectCwdScope": True,
+            "contextUsage": True,
+            "fastMode": True,
+            "sessionExternalSync": True,
+            "dcodeSessionOrigin": True,
+            "sessionSearch": True,
+            "sessionPaths": True,
+            "sessionCopy": True,
+            "sessionTrash": True,
+            "sessionVisibilityExclusions": True,
+        }
+        marker = os.path.join(sys.argv[2], "project-list-started")
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            method = request["method"]
+            params = request.get("params", {})
+            if method == "host.hello":
+                result = {
+                    "protocolVersion": 1,
+                    "hostVersion": "0.0.3",
+                    "piVersion": "0.84.1",
+                    "nodeVersion": "test",
+                    "capabilities": capabilities,
+                }
+            elif method == "session.list":
+                if params.get("origin") != "dcode":
+                    open(marker, "w").close()
+                    time.sleep(0.4)
+                result = {"sessions": []}
+            else:
+                result = {"shuttingDown": True}
+            print(json.dumps({
+                "version": 1,
+                "type": "response",
+                "id": request["id"],
+                "method": method,
+                "ok": True,
+                "result": result,
+            }), flush=True)
+            if method == "host.shutdown":
+                break
+        """#
+        try source.write(to: script, atomically: true, encoding: .utf8)
+
+        let model = AppModel(
+            projectStore: projectStore,
+            sessionDraftStore: SessionDraftStore(fileURL: root.appending(path: "drafts.json")),
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            hostConfiguration: HostLaunchConfiguration(
+                nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
+                hostEntryURL: script,
+                agentDirectoryURL: agentDirectory
+            )
+        )
+        await model.start()
+        XCTAssertEqual(model.connectionState, .ready)
+
+        let cached = SessionSummary(
+            path: root.appending(path: "cached.jsonl").path,
+            id: "cached-session",
+            cwd: sourceFolder.path,
+            name: "Cached",
+            parentSessionPath: nil,
+            created: "2026-08-12T00:00:00.000Z",
+            modified: "2026-08-12T00:00:00.000Z",
+            messageCount: 1,
+            firstMessage: "Cached"
+        )
+        model.projectSessions[project.id] = [cached]
+
+        let loadTask = Task { await model.reloadProjectSessions(project.id) }
+        let marker = agentDirectory.appending(path: "project-list-started")
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: marker.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertTrue(model.loadingProjectIDs.contains(project.id))
+
+        loadTask.cancel()
+        await loadTask.value
+
+        XCTAssertNil(model.projectSessionErrors[project.id])
+        XCTAssertNil(model.issue)
+        XCTAssertFalse(model.loadingProjectIDs.contains(project.id))
+        XCTAssertEqual(model.projectSessions[project.id], [cached])
+        await model.shutdown()
+    }
+
+    func testCreatedSessionAppearsBeforeThePreviousRuntimeFinishesOpeningIt() async throws {
+        let root = temporaryURL("create-before-open")
+        let workspace = root.appending(path: "workspace", directoryHint: .isDirectory)
+        let agentDirectory = root.appending(path: "agent", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let script = root.appending(path: "create-host.py")
+        let source = #"""
+        import json, os, sys, threading, time
+
+        capabilities = {
+            "sessionLease": True,
+            "onDemandWrite": True,
+            "structuredPlan": True,
+            "mermaidUnicode": True,
+            "projectCwdScope": True,
+            "contextUsage": True,
+            "fastMode": True,
+            "sessionExternalSync": True,
+            "dcodeSessionOrigin": True,
+            "sessionSearch": True,
+            "sessionPaths": True,
+            "sessionCopy": True,
+            "sessionTrash": True,
+            "sessionVisibilityExclusions": True,
+        }
+        agent_dir = sys.argv[2]
+        open_marker = os.path.join(agent_dir, "open-started")
+        open_gate = os.path.join(agent_dir, "allow-open")
+        stale_list_marker = os.path.join(agent_dir, "stale-list-started")
+        stale_list_gate = os.path.join(agent_dir, "allow-stale-list")
+        created = None
+        dcode_list_count = 0
+        output_lock = threading.Lock()
+
+        def emit(request, result):
+            with output_lock:
+                print(json.dumps({
+                    "version": 1,
+                    "type": "response",
+                    "id": request["id"],
+                    "method": request["method"],
+                    "ok": True,
+                    "result": result,
+                }), flush=True)
+
+        def emit_stale_list(request):
+            deadline = time.time() + 2.0
+            while not os.path.exists(stale_list_gate) and time.time() < deadline:
+                time.sleep(0.01)
+            emit(request, {"sessions": []})
+
+        def summary(cwd):
+            return {
+                "path": os.path.join(cwd, "created-session.jsonl"),
+                "id": "created-session",
+                "cwd": cwd,
+                "created": "2026-08-12T00:00:00.000Z",
+                "modified": "2026-08-12T00:00:00.000Z",
+                "messageCount": 0,
+                "firstMessage": "",
+            }
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            method = request["method"]
+            params = request.get("params", {})
+            if method == "host.hello":
+                result = {
+                    "protocolVersion": 1,
+                    "hostVersion": "0.0.3",
+                    "piVersion": "0.84.1",
+                    "nodeVersion": "test",
+                    "capabilities": capabilities,
+                }
+            elif method == "session.list":
+                dcode_list_count += 1
+                if dcode_list_count == 2:
+                    open(stale_list_marker, "w").close()
+                    threading.Thread(target=emit_stale_list, args=(request,), daemon=True).start()
+                    continue
+                result = {"sessions": [] if created is None else [created]}
+            elif method == "session.create":
+                created = summary(params["cwd"])
+                result = {"created": True, "session": created, "activation": {"status": "created"}}
+            elif method == "session.open":
+                open(open_marker, "w").close()
+                deadline = time.time() + 2.0
+                while not os.path.exists(open_gate) and time.time() < deadline:
+                    time.sleep(0.01)
+                result = {
+                    "mode": "readOnly",
+                    "snapshot": {
+                        "summary": created,
+                        "header": {"type": "session", "version": 3, "id": created["id"], "cwd": created["cwd"]},
+                        "parentSessionId": None,
+                        "leafId": None,
+                        "currentPathId": created["id"],
+                        "selectedPathId": created["id"],
+                        "paths": [],
+                        "entries": [],
+                        "context": {"messageCount": 0, "model": None, "thinkingLevel": "off"},
+                        "activePlan": None,
+                    },
+                    "state": {
+                        "mode": "readOnly",
+                        "sessionId": created["id"],
+                        "sessionFile": created["path"],
+                        "sessionName": None,
+                        "cwd": created["cwd"],
+                        "model": None,
+                        "thinkingLevel": "off",
+                        "activePlan": None,
+                        "isStreaming": False,
+                        "pendingMessageCount": 0,
+                        "contextUsage": None,
+                        "fastMode": None,
+                        "writable": False,
+                        "conflict": None,
+                    },
+                    "extensions": None,
+                }
+            elif method == "session.trash":
+                trashed = created
+                created = None
+                result = {
+                    "trashed": True,
+                    "sessionId": trashed["id"],
+                    "originalPath": trashed["path"],
+                    "trashPath": os.path.join(agent_dir, "Trash", "created-session.jsonl"),
+                }
+            elif method == "session.getModels":
+                result = {"models": []}
+            elif method == "session.getThinkingLevels":
+                result = {"levels": ["off"]}
+            else:
+                result = {"shuttingDown": True}
+            emit(request, result)
+            if method == "host.shutdown":
+                break
+        """#
+        try source.write(to: script, atomically: true, encoding: .utf8)
+
+        let draftStore = SessionDraftStore(fileURL: root.appending(path: "drafts.json"))
+        let model = AppModel(
+            projectStore: ProjectStore(fileURL: root.appending(path: "projects.json")),
+            sessionDraftStore: draftStore,
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            hostConfiguration: HostLaunchConfiguration(
+                nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
+                hostEntryURL: script,
+                agentDirectoryURL: agentDirectory
+            )
+        )
+        await model.start()
+        XCTAssertEqual(model.connectionState, .ready)
+
+        let staleReloadTask = Task { await model.reloadRecentSessions() }
+        let staleListMarker = agentDirectory.appending(path: "stale-list-started")
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: staleListMarker.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staleListMarker.path))
+
+        let createTask = Task { await model.createSession(at: workspace) }
+        let marker = agentDirectory.appending(path: "open-started")
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: marker.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertTrue(model.recentSessions.contains(where: { $0.id == "created-session" }))
+        XCTAssertTrue(model.isCreatingSession)
+        XCTAssertTrue(model.isOpeningSession)
+
+        try Data().write(to: agentDirectory.appending(path: "allow-stale-list"))
+        await staleReloadTask.value
+        XCTAssertTrue(model.recentSessions.contains(where: { $0.id == "created-session" }))
+
+        try Data().write(to: agentDirectory.appending(path: "allow-open"))
+        await createTask.value
+        XCTAssertEqual(model.selectedSessionID, "created-session")
+        XCTAssertFalse(model.isCreatingSession)
+
+        let createdSummary = try XCTUnwrap(model.recentSessions.first(where: { $0.id == "created-session" }))
+        model.updateComposerText("尚未发送的草稿")
+        model.requestTrashSession(createdSummary)
+        XCTAssertEqual(model.pendingTrashSession?.id, createdSummary.id)
+        model.pendingTrashSession = nil
+        await model.trashSession(createdSummary)
+        XCTAssertFalse(model.recentSessions.contains(where: { $0.id == createdSummary.id }))
+        XCTAssertNil(model.selectedSessionID)
+        XCTAssertNil(model.issue)
+
+        await model.shutdown()
+        let savedDrafts = try await draftStore.load()
+        XCTAssertFalse(savedDrafts.records.contains(where: { $0.target.sessionID == createdSummary.id }))
     }
 
     func testDiagnosticSanitizerRedactsCommonCredentialShapes() {

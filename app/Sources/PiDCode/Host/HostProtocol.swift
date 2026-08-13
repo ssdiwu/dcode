@@ -72,6 +72,16 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "Pi 会话文件已被替换为不同身份。D Code 已保留上一次完整历史；请重新打开 D Code 后再继续。"
             case "SEARCH_TARGET_STALE":
                 "这条搜索结果已不在当前会话路径中。搜索窗口已保留，请刷新结果后重试。"
+            case "SESSION_TRASH_NOT_ALLOWED":
+                "当前版本只允许把由 D Code 创建的空会话移到废纸篓。既有 Pi 会话仍保持不变。"
+            case "SESSION_TRASH_NOT_EMPTY":
+                "这个会话已经包含消息。当前版本不会删除有内容的 Pi 会话；可以改用归档。"
+            case "SESSION_HAS_DESCENDANTS":
+                "这个会话仍被复制或分叉会话引用。为保留谱系，请改用归档。"
+            case "SESSION_TRASH_RESTORE_FAILED":
+                "会话文件仍被完整保留，但无法放回原位置。请先不要继续操作，并从错误详情中的保留路径恢复。"
+            case "SESSION_BUSY":
+                "会话仍在运行、执行工具或持有可写状态。请等待它结束后重试。"
             case "INVALID_SESSION":
                 "Pi 会话包含未完成或损坏的记录。D Code 已保留上一次完整历史；请等待 Pi 完成写入，持续出现时再检查会话文件。"
             default:

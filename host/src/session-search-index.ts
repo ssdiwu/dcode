@@ -19,6 +19,7 @@ export interface SessionSearchParams {
   limit: number;
   projectSourceFolders: string[];
   filterSourceFolders?: string[];
+  excludedSessionIds?: string[];
   refresh: boolean;
   probe?: boolean;
 }

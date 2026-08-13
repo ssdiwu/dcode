@@ -17,6 +17,7 @@ struct SidebarView: View {
             List {
                 recentSection
                 projectsSection
+                archiveSection
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -68,7 +69,11 @@ struct SidebarView: View {
                 .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
                 .buttonStyle(.plain)
                 .dCodeAccessibleButton("搜索会话")
-                .disabled(model.connectionState != .ready || model.isOpeningSession)
+                .disabled(
+                    model.connectionState != .ready
+                        || model.isOpeningSession
+                        || model.isPromptTransactionActive
+                )
                 Button("新建会话", systemImage: "square.and.pencil", action: newGlobalSession)
                 .labelStyle(.iconOnly)
                 .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
@@ -77,7 +82,13 @@ struct SidebarView: View {
                 .accessibilityRepresentation {
                     Button("新建会话", action: newGlobalSession)
                 }
-                .disabled(model.connectionState != .ready || model.isOpeningSession || model.isStreaming)
+                .disabled(
+                    model.connectionState != .ready
+                        || model.isCreatingSession
+                        || model.isOpeningSession
+                        || model.isStreaming
+                        || model.isPromptTransactionActive
+                )
             }
             Button {
                 editProject(nil)
@@ -102,12 +113,16 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(model.recentSessions) { session in
-                Button { selectSession(session.id) } label: {
-                    SessionNavigationRow(session: session, subtitlePrefix: nil)
-                }
-                .buttonStyle(.plain)
-                .dCodeAccessibleButton("\(session.displayTitle)，\(session.messageCount) 条消息")
-                .disabled(model.connectionState != .ready || model.isStreaming || model.isOpeningSession)
+                SessionNavigationItem(
+                    session: session,
+                    subtitlePrefix: nil,
+                    leadingInset: 0,
+                    selectionDisabled: model.connectionState != .ready
+                        || model.isStreaming
+                        || model.isOpeningSession
+                        || model.isPromptTransactionActive,
+                    select: { selectSession(session.id) }
+                )
                 .listRowBackground(model.selectedSessionID == session.id ? Color.accentColor.opacity(0.14) : Color.clear)
                 .help("\(session.cwd)\n会话 ID：\(session.id)")
             }
@@ -171,6 +186,24 @@ struct SidebarView: View {
         .frame(minHeight: 48)
     }
 
+    private var archiveSection: some View {
+        Section {
+            Button {
+                model.archivedSessionsPresented = true
+            } label: {
+                Label(
+                    model.archivedSessions.isEmpty && model.pendingArchiveRetry == nil
+                        ? "已归档会话"
+                        : "已归档会话（\(model.archivedSessions.count + (model.pendingArchiveRetry == nil ? 0 : 1))）",
+                    systemImage: "archivebox"
+                )
+                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+            }
+            .buttonStyle(.plain)
+            .dCodeAccessibleButton("查看已归档会话")
+        }
+    }
+
     private var connectionColor: Color {
         switch model.connectionState {
         case .ready: .green
@@ -226,12 +259,15 @@ private struct ProjectNavigationView: View {
                         .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .accessibilityLabel("在 \(project.name) 新建会话")
                 .disabled(
                     model.connectionState != .ready
                         || project.sourceFolders.isEmpty
+                        || model.isCreatingSession
                         || model.isOpeningSession
                         || model.isStreaming
+                        || model.isPromptTransactionActive
                 )
 
                 Button {
@@ -284,18 +320,16 @@ private struct ProjectNavigationView: View {
                         .padding(.vertical, 4)
                 }
                 ForEach(sessions) { session in
-                    Button { selectSession(session.id) } label: {
-                        SessionNavigationRow(
-                            session: session,
-                            subtitlePrefix: "源文件夹：\(model.sourceFolderName(for: session, in: project))"
-                        )
-                        .padding(.leading, 24)
-                    }
-                    .buttonStyle(.plain)
-                    .dCodeAccessibleButton(
-                        "\(session.displayTitle)，源文件夹 \(model.sourceFolderName(for: session, in: project))"
+                    SessionNavigationItem(
+                        session: session,
+                        subtitlePrefix: "源文件夹：\(model.sourceFolderName(for: session, in: project))",
+                        leadingInset: 24,
+                        selectionDisabled: model.connectionState != .ready
+                            || model.isStreaming
+                            || model.isOpeningSession
+                            || model.isPromptTransactionActive,
+                        select: { selectSession(session.id) }
                     )
-                    .disabled(model.connectionState != .ready || model.isStreaming || model.isOpeningSession)
                     .listRowBackground(model.selectedSessionID == session.id ? Color.accentColor.opacity(0.14) : Color.clear)
                 }
                 if model.projectHasMore[project.id] == true {
@@ -312,6 +346,110 @@ private struct ProjectNavigationView: View {
             guard model.expandedProjectIDs.contains(project.id), model.projectSessions[project.id] == nil else { return }
             await model.reloadProjectSessions(project.id)
         }
+    }
+}
+
+private struct SessionNavigationItem: View {
+    private enum FocusedControl: Hashable {
+        case selection
+        case pin
+        case archive
+    }
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let session: SessionSummary
+    let subtitlePrefix: String?
+    let leadingInset: CGFloat
+    let selectionDisabled: Bool
+    let select: () -> Void
+
+    @State private var hovering = false
+    @FocusState private var focusedControl: FocusedControl?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: select) {
+                SessionNavigationRow(session: session, subtitlePrefix: subtitlePrefix)
+                    .padding(.leading, leadingInset)
+            }
+            .buttonStyle(.plain)
+            .focused($focusedControl, equals: .selection)
+            .dCodeAccessibleButton(selectionAccessibilityLabel)
+            .disabled(selectionDisabled)
+
+            HStack(spacing: 0) {
+                Button {
+                    Task { await model.togglePinnedSession(session) }
+                } label: {
+                    Image(systemName: isPinned ? "pin.fill" : "pin")
+                        .frame(
+                            width: PiDCodeMetrics.minimumTarget,
+                            height: PiDCodeMetrics.minimumTarget,
+                            alignment: .top
+                        )
+                }
+                .buttonStyle(IconActionStyle())
+                .focused($focusedControl, equals: .pin)
+                .opacity(showsActions || isPinned ? 1 : 0)
+                .allowsHitTesting(showsActions || isPinned)
+                .disabled(!model.canToggleSessionPin(session))
+                .dCodeAccessibleButton(pinLabel)
+                .help(isPinned ? "取消置顶" : "置顶")
+
+                Button {
+                    Task { await model.archiveSession(session) }
+                } label: {
+                    Image(systemName: "archivebox")
+                        .frame(
+                            width: PiDCodeMetrics.minimumTarget,
+                            height: PiDCodeMetrics.minimumTarget,
+                            alignment: .top
+                        )
+                }
+                .buttonStyle(IconActionStyle())
+                .focused($focusedControl, equals: .archive)
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
+                .disabled(!model.canArchiveSession(session))
+                .dCodeAccessibleButton("归档 \(session.displayTitle)")
+                .accessibilityHint("只从 D Code 普通导航隐藏；Pi 会话与草稿均保留")
+                .help("归档会话")
+            }
+            .frame(width: PiDCodeMetrics.minimumTarget * 2)
+        }
+        .onHover { hovering = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsActions)
+        .contextMenu {
+            Button(pinLabel) {
+                Task { await model.togglePinnedSession(session) }
+            }
+            .disabled(!model.canToggleSessionPin(session))
+
+            Button("归档会话") {
+                Task { await model.archiveSession(session) }
+            }
+            .disabled(!model.canArchiveSession(session))
+
+            if model.canTrashSession(session) {
+                Divider()
+                Button("移到废纸篓…", role: .destructive) {
+                    model.requestTrashSession(session)
+                }
+            }
+        }
+    }
+
+    private var isPinned: Bool { model.isSessionPinned(session.id) }
+    private var showsActions: Bool { hovering || focusedControl != nil }
+    private var pinLabel: String {
+        "\(isPinned ? "取消置顶" : "置顶") \(session.displayTitle)"
+    }
+    private var selectionAccessibilityLabel: String {
+        if let subtitlePrefix {
+            return "\(session.displayTitle)，\(subtitlePrefix)"
+        }
+        return "\(session.displayTitle)，\(session.messageCount) 条消息"
     }
 }
 
