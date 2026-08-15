@@ -18,6 +18,7 @@ export const HOST_METHODS = [
   "session.getModels",
   "session.getThinkingLevels",
   "session.setModel",
+  "session.setName",
   "session.setThinking",
   "session.setFastMode",
   "extension.respond",
@@ -392,6 +393,16 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireString(params, "provider");
       requireString(params, "modelId");
       return;
+    case "session.setName": {
+      const name = requireString(params, "name", { allowEmpty: true });
+      if (name.length > 200 || /[\r\n\0]/u.test(name)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.name to be a single-line string up to 200 characters",
+        );
+      }
+      return;
+    }
     case "session.setThinking": {
       const level = requireString(params, "level");
       const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);

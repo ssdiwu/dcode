@@ -21,34 +21,46 @@ struct ConversationView: View {
             pathID: model.inspection?.selectedPathId
         )
         GeometryReader { geometry in
+            let showsEmptyState = model.transcript.isEmpty
+                && model.optimisticUserMessage == nil
+                && !model.isStreaming
             let showsPersistentRail = ConversationNavigation.shouldShowPersistentRail(
                 width: geometry.size.width,
                 roundCount: rounds.count
             )
-            ScrollViewReader { proxy in
-                ZStack(alignment: .leading) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            if model.transcript.isEmpty, model.optimisticUserMessage == nil, !model.isStreaming {
-                                ContentUnavailableView(
-                                    "空会话",
-                                    systemImage: "text.bubble",
-                                    description: Text("在下方输入第一条消息。")
-                                )
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 80)
-                            }
+            if showsEmptyState {
+                ContentUnavailableView(
+                    "空会话",
+                    systemImage: "text.bubble",
+                    description: Text("在下方输入第一条消息。")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ZStack(alignment: .leading) {
+                        List {
+                            Color.clear
+                                .frame(height: 15)
+                                .conversationListRow(showsPersistentRail: showsPersistentRail)
+
                             ForEach(rounds) { round in
                                 ConversationRoundView(
                                     round: round,
+                                    collapsesUserMessage: UserMessagePresentation.roundIsInactive(
+                                        round,
+                                        latestRoundID: rounds.last?.id
+                                    ),
                                     expanded: expansionBinding(for: round.id),
                                     highlightedEntryID: highlightedEntryID,
                                     highlighted: highlightedRoundID == round.id,
                                     pathActionDisabled: pathActionDisabled,
                                     pathAction: model.beginPathDraft
                                 )
+                                .padding(.vertical, 9)
+                                .conversationListRow(showsPersistentRail: showsPersistentRail)
                                 .id(ConversationNavigation.anchorID(for: round.id))
                             }
+
                             if let message = model.optimisticUserMessage {
                                 MessageRow(item: TranscriptItem(
                                     id: "optimistic-user",
@@ -57,125 +69,184 @@ struct ConversationView: View {
                                     blocks: [.text(id: "optimistic-user-text", value: message)]
                                 ))
                                 .opacity(0.78)
+                                .padding(.vertical, 9)
+                                .conversationListRow(showsPersistentRail: showsPersistentRail)
                             }
+
                             if model.isStreaming || !model.streamingText.isEmpty || !model.streamingThinking.isEmpty {
                                 StreamingResponseView()
+                                    .padding(.vertical, 9)
+                                    .conversationListRow(showsPersistentRail: showsPersistentRail)
                             }
-                            Color.clear.frame(height: 1).id(bottomID)
-                        }
-                        .frame(maxWidth: PiDCodeMetrics.contentMaxWidth)
-                        .padding(.leading, showsPersistentRail ? 72 : 28)
-                        .padding(.trailing, 28)
-                        .padding(.vertical, 24)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .id(presentationIdentity)
 
-                    if showsPersistentRail {
-                        ConversationRoundRail(
-                            items: navigationItems,
-                            currentID: selectedNavigationRoundID ?? rounds.last?.id,
-                            onNavigate: { navigate(to: $0, using: proxy) }
-                        )
+                            Color.clear
+                                .frame(height: 15)
+                                .conversationListRow(showsPersistentRail: showsPersistentRail)
+                                .id(bottomID)
+                        }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .environment(\.defaultMinListRowHeight, 0)
                         .id(presentationIdentity)
-                        .padding(.leading, 4)
-                        .padding(.vertical, 20)
-                        .zIndex(2)
-                    }
+                        .task(id: "\(presentationIdentity):\(rounds.count)") {
+                            await Task.yield()
+                            await Task.yield()
+                            guard followsLatest, model.conversationTarget == nil else { return }
+                            scrollToBottom(proxy, animated: false)
+                        }
+                        .accessibilityScrollAction { edge in
+                            accessibilityScroll(
+                                toward: edge,
+                                items: navigationItems,
+                                using: proxy
+                            )
+                        }
 
-                    if !followsLatest {
-                        Button {
-                            returnToLatest(using: proxy)
-                        } label: {
-                            Label("回到最新", systemImage: "arrow.down.to.line")
-                                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                        if showsPersistentRail {
+                            ConversationRoundRail(
+                                items: navigationItems,
+                                currentID: selectedNavigationRoundID ?? rounds.last?.id,
+                                onNavigate: { navigate(to: $0, using: proxy) }
+                            )
+                            .id(presentationIdentity)
+                            .padding(.leading, 4)
+                            .padding(.vertical, 20)
+                            .zIndex(2)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("恢复自动跟随最新回复")
-                        .accessibilityHint("跳到会话末尾，并在新回复出现时继续自动跟随")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                        .padding(16)
-                        .zIndex(3)
+
+                        if !followsLatest {
+                            Button {
+                                returnToLatest(using: proxy)
+                            } label: {
+                                Label("回到最新", systemImage: "arrow.down.to.line")
+                                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("恢复自动跟随最新回复")
+                            .accessibilityHint("跳到会话末尾，并在新回复出现时继续自动跟随")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .padding(16)
+                            .zIndex(3)
+                        }
                     }
-                }
-                .onChange(of: presentationIdentity) { _, _ in
-                    followsLatest = true
-                    selectedNavigationRoundID = nil
-                    highlightedRoundID = nil
-                    highlightedEntryID = nil
-                    expandedRoundIDs.removeAll()
-                    navigationHighlightToken = UUID()
-                    Task { @MainActor in
-                        await Task.yield()
-                        scrollToBottom(proxy)
-                    }
-                }
-                .onChange(of: navigationItems.map(\.id)) { _, ids in
-                    if let selectedNavigationRoundID, !ids.contains(selectedNavigationRoundID) {
-                        self.selectedNavigationRoundID = nil
+                    .onChange(of: presentationIdentity) { _, _ in
                         followsLatest = true
-                    }
-                }
-                .onChange(of: model.transcript.count) { _, count in
-                    if count > 6, followsLatest, model.conversationTarget == nil { scrollToBottom(proxy) }
-                }
-                .onChange(of: model.streamingText) { _, _ in
-                    if followsLatest, model.conversationTarget == nil { scrollToBottom(proxy) }
-                }
-                .onChange(of: model.streamingThinking) { _, _ in
-                    if followsLatest, model.conversationTarget == nil { scrollToBottom(proxy) }
-                }
-                .onChange(of: model.streamingTools) { _, _ in
-                    if followsLatest, model.conversationTarget == nil { scrollToBottom(proxy) }
-                }
-                .task(id: model.conversationTarget?.token) {
-                    guard let target = model.conversationTarget else {
+                        selectedNavigationRoundID = nil
+                        highlightedRoundID = nil
                         highlightedEntryID = nil
-                        return
-                    }
-                    defer {
-                        if highlightedEntryID == target.entryID { highlightedEntryID = nil }
-                        model.clearConversationTarget(target.token)
-                    }
-                    guard target.sessionID == model.selectedSessionID,
-                          model.transcript.contains(where: { $0.id == target.entryID }) else { return }
-                    if let round = rounds.first(where: { $0.entryIDs.contains(target.entryID) }) {
-                        if round.processEntryIDs.contains(target.entryID) {
-                            expandedRoundIDs.insert(round.id)
+                        expandedRoundIDs.removeAll()
+                        navigationHighlightToken = UUID()
+                        Task { @MainActor in
+                            await Task.yield()
+                            await Task.yield()
+                            scrollToBottom(proxy, animated: false)
                         }
-                        followsLatest = false
-                        selectedNavigationRoundID = round.id
                     }
-                    highlightedEntryID = target.entryID
-                    await Task.yield()
-                    if reduceMotion {
-                        proxy.scrollTo(target.entryID, anchor: .center)
-                    } else {
-                        withAnimation(.smooth(duration: 0.28)) {
+                    .onChange(of: navigationItems.map(\.id)) { _, ids in
+                        if let selectedNavigationRoundID, !ids.contains(selectedNavigationRoundID) {
+                            self.selectedNavigationRoundID = nil
+                            followsLatest = true
+                        }
+                    }
+                    .onChange(of: model.transcript.count) { _, count in
+                        if count > 6 { scrollToBottomAfterLayout(proxy) }
+                    }
+                    .onChange(of: model.streamingText) { _, _ in
+                        scrollToBottomAfterLayout(proxy)
+                    }
+                    .onChange(of: model.streamingThinking) { _, _ in
+                        scrollToBottomAfterLayout(proxy)
+                    }
+                    .onChange(of: model.streamingTools) { _, _ in
+                        scrollToBottomAfterLayout(proxy)
+                    }
+                    .task(id: model.conversationTarget?.token) {
+                        guard let target = model.conversationTarget else {
+                            highlightedEntryID = nil
+                            return
+                        }
+                        defer {
+                            if highlightedEntryID == target.entryID { highlightedEntryID = nil }
+                            model.clearConversationTarget(target.token)
+                        }
+                        guard target.sessionID == model.selectedSessionID,
+                              model.transcript.contains(where: { $0.id == target.entryID }) else { return }
+                        if let round = rounds.first(where: { $0.entryIDs.contains(target.entryID) }) {
+                            if round.processEntryIDs.contains(target.entryID) {
+                                expandedRoundIDs.insert(round.id)
+                            }
+                            followsLatest = false
+                            selectedNavigationRoundID = round.id
+                            proxy.scrollTo(
+                                ConversationNavigation.anchorID(for: round.id),
+                                anchor: .center
+                            )
+                        }
+                        highlightedEntryID = target.entryID
+                        await Task.yield()
+                        await Task.yield()
+                        if reduceMotion {
                             proxy.scrollTo(target.entryID, anchor: .center)
+                        } else {
+                            withAnimation(.smooth(duration: 0.28)) {
+                                proxy.scrollTo(target.entryID, anchor: .center)
+                            }
                         }
-                    }
-                    try? await Task.sleep(for: .seconds(1.6))
-                    guard !Task.isCancelled else { return }
-                    if reduceMotion { highlightedEntryID = nil }
-                    else {
-                        withAnimation(.easeOut(duration: 0.25)) { highlightedEntryID = nil }
+                        try? await Task.sleep(for: .seconds(1.6))
+                        guard !Task.isCancelled else { return }
+                        if reduceMotion { highlightedEntryID = nil }
+                        else {
+                            withAnimation(.easeOut(duration: 0.25)) { highlightedEntryID = nil }
+                        }
                     }
                 }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        if reduceMotion {
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        if reduceMotion || !animated {
             proxy.scrollTo(bottomID, anchor: .bottom)
         } else {
             withAnimation(.smooth(duration: 0.2)) {
                 proxy.scrollTo(bottomID, anchor: .bottom)
             }
         }
+    }
+
+    private func scrollToBottomAfterLayout(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            await Task.yield()
+            guard followsLatest, model.conversationTarget == nil else { return }
+            scrollToBottom(proxy)
+        }
+    }
+
+    private func accessibilityScroll(
+        toward edge: Edge,
+        items: [ConversationNavigationItem],
+        using proxy: ScrollViewProxy
+    ) {
+        guard !items.isEmpty else { return }
+        let lastIndex = items.count - 1
+        let currentIndex = selectedNavigationRoundID
+            .flatMap { selected in items.firstIndex(where: { $0.id == selected }) }
+            ?? (followsLatest ? lastIndex : 0)
+        let pageStep = min(5, max(1, items.count / 8))
+        let targetIndex: Int
+        switch edge {
+        case .top:
+            targetIndex = max(0, currentIndex - pageStep)
+        case .bottom:
+            targetIndex = min(lastIndex, currentIndex + pageStep)
+        default:
+            return
+        }
+        let target = items[targetIndex]
+        followsLatest = targetIndex == lastIndex
+        selectedNavigationRoundID = followsLatest ? nil : target.id
+        proxy.scrollTo(target.anchorID, anchor: .center)
     }
 
     private func navigate(to item: ConversationNavigationItem, using proxy: ScrollViewProxy) {
@@ -230,8 +301,21 @@ struct ConversationView: View {
     }
 }
 
+private extension View {
+    func conversationListRow(showsPersistentRail: Bool) -> some View {
+        frame(maxWidth: PiDCodeMetrics.contentMaxWidth)
+            .padding(.leading, showsPersistentRail ? 72 : 28)
+            .padding(.trailing, 28)
+            .frame(maxWidth: .infinity)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
 private struct ConversationRoundView: View {
     let round: ConversationRound
+    let collapsesUserMessage: Bool
     @Binding var expanded: Bool
     let highlightedEntryID: String?
     let highlighted: Bool
@@ -241,13 +325,23 @@ private struct ConversationRoundView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let user = round.user {
-                row(user)
+                row(user, collapsesCompletedUserMessage: collapsesUserMessage)
             }
-            if round.completedAt != nil || !round.processItems.isEmpty || round.hasError {
+            if !round.processItems.isEmpty || (round.hasError && round.finalAssistant == nil) {
                 activitySummary
             }
             if let finalAssistant = round.finalAssistant {
-                row(finalAssistant)
+                row(
+                    finalAssistant,
+                    completionMetadata: ConversationTimingFormatter.completionText(
+                        duration: round.duration,
+                        completedAt: round.completedAt,
+                        didFail: finalAssistant.blocks.contains(where: { block in
+                            if case .error = block { return true }
+                            return false
+                        })
+                    )
+                )
             }
         }
         .background(
@@ -265,7 +359,7 @@ private struct ConversationRoundView: View {
     @ViewBuilder
     private var activitySummary: some View {
         if round.processItems.isEmpty {
-            Label(summaryText, systemImage: round.hasError ? "exclamationmark.triangle.fill" : "clock")
+            Label(summaryText, systemImage: round.hasError ? "exclamationmark.triangle.fill" : "ellipsis.circle")
                 .font(.callout)
                 .foregroundStyle(round.hasError ? Color.red : Color.secondary)
                 .padding(.leading, 36)
@@ -280,7 +374,7 @@ private struct ConversationRoundView: View {
                 .padding(.top, 10)
                 .padding(.leading, 6)
             } label: {
-                Label(summaryText, systemImage: round.hasError ? "exclamationmark.triangle.fill" : "clock")
+                Label(summaryText, systemImage: round.hasError ? "exclamationmark.triangle.fill" : "ellipsis.circle")
                     .font(.callout)
                     .foregroundStyle(round.hasError ? Color.red : Color.secondary)
             }
@@ -294,15 +388,10 @@ private struct ConversationRoundView: View {
         var parts: [String] = []
         if round.hasError, round.finalAssistant == nil {
             parts.append("执行失败")
-        } else if let duration = ConversationTimingFormatter.durationText(round.duration) {
-            parts.append("耗时 \(duration)")
         } else {
             parts.append("中间过程")
         }
         if round.toolCount > 0 { parts.append("\(round.toolCount) 个工具") }
-        if let completedAt = round.completedAt {
-            parts.append("\(completedAt.formatted(date: .omitted, time: .shortened)) 完成")
-        }
         return parts.joined(separator: " · ")
     }
 
@@ -310,9 +399,16 @@ private struct ConversationRoundView: View {
         "本轮\(summaryText)"
     }
 
-    private func row(_ item: TranscriptItem, allowsPathAction: Bool = true) -> some View {
+    private func row(
+        _ item: TranscriptItem,
+        allowsPathAction: Bool = true,
+        collapsesCompletedUserMessage: Bool = false,
+        completionMetadata: String? = nil
+    ) -> some View {
         MessageRow(
             item: item,
+            collapsesCompletedUserMessage: collapsesCompletedUserMessage,
+            completionMetadata: completionMetadata,
             pathActionDisabled: pathActionDisabled,
             pathAction: allowsPathAction
                 && (item.role == .assistant || (item.role == .user && item.editableText != nil))
@@ -336,16 +432,27 @@ private struct ConversationRoundView: View {
 }
 
 private struct MessageRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: TranscriptItem
+    var collapsesCompletedUserMessage = false
+    var completionMetadata: String?
     var pathActionDisabled = false
     var pathAction: (() -> Void)?
+    @State private var userMessageExpanded = false
+    @State private var hovering = false
+    @State private var contentControlFocused = false
+    @FocusState private var footerFocused: Bool
 
     init(
         item: TranscriptItem,
+        collapsesCompletedUserMessage: Bool = false,
+        completionMetadata: String? = nil,
         pathActionDisabled: Bool = false,
         pathAction: (() -> Void)? = nil
     ) {
         self.item = item
+        self.collapsesCompletedUserMessage = collapsesCompletedUserMessage
+        self.completionMetadata = completionMetadata
         self.pathActionDisabled = pathActionDisabled
         self.pathAction = pathAction
     }
@@ -354,25 +461,88 @@ private struct MessageRow: View {
         HStack(alignment: .top, spacing: 10) {
             if item.role == .user { Spacer(minLength: 80) }
             if item.role != .user { roleIcon }
+            VStack(alignment: item.role == .user ? .trailing : .leading, spacing: 0) {
+                messageSurface
+                    .padding(.vertical, item.role == .user ? 8 : 0)
+                    .padding(.horizontal, item.role == .user ? 12 : 0)
+                    .background {
+                        if item.role == .user {
+                            RoundedRectangle(cornerRadius: PiDCodeMetrics.messageRadius, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.08))
+                        }
+                    }
+
+                footerRow
+            }
+            if item.role != .user { Spacer(minLength: 44) }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onDisappear {
+            hovering = false
+            footerFocused = false
+            contentControlFocused = false
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var messageSurface: some View {
+        if userMessageCollapsible, !userMessageExpanded {
+            Button(action: toggleUserMessageExpansion) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(MarkdownPresentation.attributedString(for: UserMessagePresentation.preview(for: item)))
+                        .font(.body)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 560, alignment: .leading)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(minHeight: 24)
+            }
+            .buttonStyle(.plain)
+            .help("展开完整用户消息")
+            .accessibilityLabel("已收起的用户消息：\(UserMessagePresentation.preview(for: item))")
+            .accessibilityHint("展开完整内容")
+        } else {
             VStack(alignment: item.role == .user ? .trailing : .leading, spacing: item.role == .user ? 4 : 9) {
                 ForEach(item.blocks) { block in
                     blockView(block, expands: item.role != .user)
                 }
-                if let timestamp = item.timestamp {
-                    Text(timestamp.formatted(date: .omitted, time: .shortened))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var footerRow: some View {
+        if userMessageExpanded || pathActionAvailable || metadataText != nil {
+            HStack(spacing: 10) {
+                if item.role == .user { Spacer(minLength: 8) }
+
+                if userMessageCollapsible, userMessageExpanded {
+                    Button(action: toggleUserMessageExpansion) {
+                        Label("收起", systemImage: "chevron.up")
+                            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+                    }
+                    .buttonStyle(.plain)
+                    .focused($footerFocused)
+                    .help("收起用户消息")
+                    .accessibilityLabel("收起完整用户消息")
                 }
-                if let pathAction,
-                   item.role == .assistant || (item.role == .user && item.editableText != nil) {
+
+                if pathActionAvailable, let pathAction {
                     Button(action: pathAction) {
                         Label(
                             item.role == .user ? "编辑并重走" : "从这里继续",
                             systemImage: "arrow.triangle.branch"
                         )
-                        .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                        .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                     }
                     .buttonStyle(.plain)
+                    .focused($footerFocused)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(
@@ -380,19 +550,61 @@ private struct MessageRow: View {
                     )
                     .disabled(pathActionDisabled)
                 }
-            }
-            .padding(.vertical, item.role == .user ? 8 : 0)
-            .padding(.horizontal, item.role == .user ? 12 : 0)
-            .background {
-                if item.role == .user {
-                    RoundedRectangle(cornerRadius: PiDCodeMetrics.messageRadius, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.08))
+
+                if item.role != .user { Spacer(minLength: 8) }
+
+                if let metadataText {
+                    Text(metadataText)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(Color.secondary.opacity(showsMetadata ? 0.72 : 0))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsMetadata)
+                        .accessibilityLabel(metadataAccessibilityLabel)
                 }
             }
-            if item.role != .user { Spacer(minLength: 44) }
+            .frame(
+                maxWidth: .infinity,
+                minHeight: userMessageExpanded || pathActionAvailable
+                    ? PiDCodeMetrics.compactControlHeight
+                    : 16,
+                alignment: item.role == .user ? .trailing : .leading
+            )
+            .padding(.horizontal, item.role == .user ? 4 : 0)
         }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .contain)
+    }
+
+    private var pathActionAvailable: Bool {
+        pathAction != nil
+            && (item.role == .assistant || (item.role == .user && item.editableText != nil))
+    }
+
+    private var metadataText: String? {
+        completionMetadata ?? ConversationTimingFormatter.timestampText(item.timestamp)
+    }
+
+    private var metadataAccessibilityLabel: String {
+        guard let metadataText else { return "" }
+        return completionMetadata == nil
+            ? "消息发送于 \(metadataText)"
+            : "本轮\(metadataText)"
+    }
+
+    private var showsMetadata: Bool { hovering || footerFocused || contentControlFocused }
+
+    private var userMessageCollapsible: Bool {
+        UserMessagePresentation.shouldCollapse(
+            item,
+            roundIsInactive: collapsesCompletedUserMessage
+        )
+    }
+
+    private func toggleUserMessageExpansion() {
+        if reduceMotion {
+            userMessageExpanded.toggle()
+        } else {
+            withAnimation(.smooth(duration: 0.2)) {
+                userMessageExpanded.toggle()
+            }
+        }
     }
 
     private var roleIcon: some View {
@@ -408,11 +620,18 @@ private struct MessageRow: View {
     private func blockView(_ block: TranscriptBlock, expands: Bool) -> some View {
         switch block {
         case let .text(_, value):
-            CopyableMarkdownText(value: value, expands: expands)
+            CopyableMarkdownText(
+                value: value,
+                expands: expands,
+                rendersBlocks: expands,
+                focusChanged: { contentControlFocused = $0 }
+            )
         case let .code(_, language, source):
             CodeBlockView(language: language, source: source)
         case let .mermaid(_, source):
             MermaidDiagramView(source: source)
+        case let .image(_, image):
+            TranscriptImageView(presentation: image)
         case let .thinking(_, value):
             DisclosureGroup {
                 Text(value)
@@ -443,6 +662,8 @@ private struct MessageRow: View {
 private struct CopyableMarkdownText: View {
     let value: String
     var expands = true
+    var rendersBlocks = true
+    var focusChanged: ((Bool) -> Void)? = nil
     @State private var copied = false
     @State private var hovering = false
     @FocusState private var copyFocused: Bool
@@ -471,19 +692,25 @@ private struct CopyableMarkdownText: View {
             }
         }
         .onHover { hovering = $0 }
+        .onChange(of: copyFocused) { _, focused in focusChanged?(focused) }
+        .onDisappear { focusChanged?(false) }
     }
 
     @ViewBuilder
     private var messageText: some View {
-        if expands {
-            Text(markdown)
+        if rendersBlocks {
+            MarkdownDocumentView(document: MarkdownDocument.cached(value))
+                .padding(.trailing, PiDCodeMetrics.iconActionTarget + 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if expands {
+            Text(value)
                 .font(.body)
                 .lineSpacing(3)
                 .textSelection(.enabled)
-                .padding(.trailing, PiDCodeMetrics.minimumTarget + 6)
+                .padding(.trailing, PiDCodeMetrics.iconActionTarget + 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            Text(markdown)
+            Text(MarkdownPresentation.attributedString(for: value))
                 .font(.body)
                 .lineSpacing(3)
                 .textSelection(.enabled)
@@ -500,9 +727,6 @@ private struct CopyableMarkdownText: View {
         return min(560, max(20, ceil(bounds.width)))
     }
 
-    private var markdown: AttributedString {
-        MarkdownPresentation.attributedString(for: value)
-    }
 }
 
 private struct TranscriptErrorView: View {
@@ -790,7 +1014,7 @@ private struct StreamingResponseView: View {
                         }
                     }
                 } else if !model.streamingText.isEmpty {
-                    CopyableMarkdownText(value: model.streamingText)
+                    CopyableMarkdownText(value: model.streamingText, rendersBlocks: false)
                 } else {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)

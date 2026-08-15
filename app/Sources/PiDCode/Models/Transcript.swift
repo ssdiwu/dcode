@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 enum TranscriptRole: String, Sendable {
     case user
@@ -21,6 +22,57 @@ struct ToolResultPresentation: Sendable, Equatable {
     let isError: Bool
 }
 
+struct TranscriptImagePresentation: Sendable, Equatable {
+    static let maximumEncodedCharacters = 16 * 1_024 * 1_024
+    static let maximumDecodedBytes = 12 * 1_024 * 1_024
+    static let maximumPixelDimension = 16_384
+    static let maximumPixelCount = 80_000_000
+
+    let data: Data
+    let mimeType: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+
+    static func decode(data encoded: String, mimeType rawMimeType: String) -> TranscriptImagePresentation? {
+        let mimeType = rawMimeType.lowercased()
+        guard supportedMimeTypes.contains(mimeType),
+              !encoded.isEmpty,
+              encoded.utf8.count <= maximumEncodedCharacters,
+              let data = Data(base64Encoded: encoded),
+              !data.isEmpty,
+              data.count <= maximumDecodedBytes,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0,
+              height > 0,
+              width <= maximumPixelDimension,
+              height <= maximumPixelDimension,
+              width <= maximumPixelCount / height else {
+            return nil
+        }
+        return TranscriptImagePresentation(
+            data: data,
+            mimeType: mimeType,
+            pixelWidth: width,
+            pixelHeight: height
+        )
+    }
+
+    private static let supportedMimeTypes: Set<String> = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/tiff",
+        "image/heic",
+        "image/heif",
+        "image/bmp",
+    ]
+}
+
 enum TranscriptBlock: Identifiable, Sendable, Equatable {
     case text(id: String, value: String)
     case code(id: String, language: String?, source: String)
@@ -29,13 +81,14 @@ enum TranscriptBlock: Identifiable, Sendable, Equatable {
     case toolCall(id: String, value: ToolCallPresentation)
     case toolResult(id: String, value: ToolResultPresentation)
     case error(id: String, value: String)
+    case image(id: String, value: TranscriptImagePresentation)
     case attachment(id: String, label: String)
 
     var id: String {
         switch self {
         case let .text(id, _), let .code(id, _, _), let .mermaid(id, _),
              let .thinking(id, _), let .toolCall(id, _), let .toolResult(id, _),
-             let .error(id, _), let .attachment(id, _):
+             let .error(id, _), let .image(id, _), let .attachment(id, _):
             id
         }
     }
@@ -80,13 +133,15 @@ struct TranscriptItem: Identifiable, Sendable, Equatable {
 
 enum MarkdownPresentation {
     static func attributedString(for value: String) -> AttributedString {
-        (try? AttributedString(
+        var attributed = (try? AttributedString(
             markdown: value,
             options: .init(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace,
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
         )) ?? AttributedString(value)
+        MarkdownLinkPolicy.sanitizeLinks(in: &attributed)
+        return attributed
     }
 }
 
@@ -142,6 +197,7 @@ enum TranscriptParser {
                 timestamp: timestamp,
                 persistedAt: persistedAt,
                 blocks: [.toolResult(id: "\(id)-result", value: result)]
+                    + imageBlocks(message["content"], entryID: id)
             )
         default:
             let blocks = contentBlocks(message["content"], entryID: id, includeTools: false)
@@ -177,12 +233,30 @@ enum TranscriptParser {
                     arguments: object["arguments"]?.prettyPrinted ?? "{}"
                 )))
             case "image":
-                blocks.append(.attachment(id: blockID, label: "图片附件"))
+                blocks.append(imageBlock(from: object, id: blockID))
             default:
                 continue
             }
         }
         return blocks
+    }
+
+    private static func imageBlocks(_ content: JSONValue?, entryID: String) -> [TranscriptBlock] {
+        guard let parts = content?.arrayValue else { return [] }
+        return parts.enumerated().compactMap { index, part in
+            guard let object = part.objectValue,
+                  object["type"]?.stringValue == "image" else { return nil }
+            return imageBlock(from: object, id: "\(entryID)-\(index)")
+        }
+    }
+
+    private static func imageBlock(from object: [String: JSONValue], id: String) -> TranscriptBlock {
+        guard let encoded = object["data"]?.stringValue,
+              let mimeType = object["mimeType"]?.stringValue,
+              let presentation = TranscriptImagePresentation.decode(data: encoded, mimeType: mimeType) else {
+            return .attachment(id: id, label: "无法显示图片")
+        }
+        return .image(id: id, value: presentation)
     }
 
     private static func fencedBlocks(in text: String, baseID: String) -> [TranscriptBlock] {
@@ -239,7 +313,6 @@ enum TranscriptParser {
         return parts.compactMap { part in
             guard let object = part.objectValue else { return nil }
             if object["type"]?.stringValue == "text" { return object["text"]?.stringValue }
-            if object["type"]?.stringValue == "image" { return "[图片]" }
             return nil
         }.joined(separator: "\n")
     }

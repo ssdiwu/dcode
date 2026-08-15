@@ -14,6 +14,14 @@ enum GitRepositoryState: Hashable, Sendable {
     case failed(String)
 }
 
+enum GitBranchLookupState: Hashable, Sendable {
+    case idle
+    case loading
+    case ready(String)
+    case notRepository
+    case failed
+}
+
 struct GitRepositorySnapshot: Hashable, Identifiable, Sendable {
     let rootPath: String
     let sourceFolderNames: [String]
@@ -32,6 +40,20 @@ enum GitChangesReader {
         let inputs = sourceFolders.map { ($0.path, $0.displayName) }
         return await Task.detached(priority: .utility) {
             readSynchronously(inputs: inputs)
+        }.value
+    }
+
+    static func readBranch(at directoryPath: String) async -> GitBranchLookupState {
+        await Task.detached(priority: .utility) {
+            switch runGit(["-c", "core.fsmonitor=false", "-C", directoryPath, "branch", "--show-current"]) {
+            case let .success(data):
+                let branch = removingLineEnding(String(decoding: data, as: UTF8.self))
+                return .ready(branch.isEmpty ? "游离 HEAD" : branch)
+            case let .failure(message):
+                return message.localizedCaseInsensitiveContains("not a git repository")
+                    ? .notRepository
+                    : .failed
+            }
         }.value
     }
 
@@ -148,5 +170,36 @@ enum GitChangesReader {
             try? FileManager.default.removeItem(at: captureDirectory)
             return .failure(error.localizedDescription)
         }
+    }
+}
+
+actor GitBranchCache {
+    static let shared = GitBranchCache()
+
+    private struct Entry {
+        let state: GitBranchLookupState
+        let loadedAt: Date
+    }
+
+    private let freshness: TimeInterval = 5
+    private var entries: [String: Entry] = [:]
+    private var inFlight: [String: Task<GitBranchLookupState, Never>] = [:]
+
+    func read(at directoryPath: String) async -> GitBranchLookupState {
+        let canonicalPath = URL(fileURLWithPath: directoryPath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        if let entry = entries[canonicalPath], Date().timeIntervalSince(entry.loadedAt) < freshness {
+            return entry.state
+        }
+        if let task = inFlight[canonicalPath] { return await task.value }
+
+        let task = Task { await GitChangesReader.readBranch(at: canonicalPath) }
+        inFlight[canonicalPath] = task
+        let state = await task.value
+        inFlight.removeValue(forKey: canonicalPath)
+        entries[canonicalPath] = Entry(state: state, loadedAt: Date())
+        return state
     }
 }

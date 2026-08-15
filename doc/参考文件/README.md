@@ -27,13 +27,14 @@
 | REF-008 | pi-messenger | Pi Extension（Pi 扩展） | [nicobailon/pi-messenger](https://github.com/nicobailon/pi-messenger) | 多智能体协作机制参考 |
 | REF-009 | Todos | Agent Team Workspace（智能体团队工作空间） | [todos.dev](https://todos.dev/) | Work Map、Run 历史与人工门禁参考 |
 | REF-010 | pi-dteam | Pi Extension（Pi 扩展） | [ssdiwu/pi-dteam](https://github.com/ssdiwu/pi-dteam) | D Team 执行层机制参考 |
+| REF-011 | Codex Taskboard | Local-first Taskboard（本地优先任务看板） | [chuspeeism/dashi-taskboard@9b2aeb53](https://github.com/chuspeeism/dashi-taskboard/tree/9b2aeb53bfe8d40eb5d65feecdfc2cc235928066) | 外部状态流转与会话关联参考，未进入版本路线 |
 
 ## REF-001 OpenAI Codex 桌面端
 
 **D Code 借鉴**：
 
 - 左侧 Project（项目）与 Session（会话）导航、中央工作空间、按宽度自然出现的右侧检查器；
-- 对话优先，中央第一个标签固定为对话，后续标签承载文件或产物；
+- 对话是唯一会话主页面且不建立冗余标签，文件或产物真实打开后才按需出现内容标签；
 - 覆盖当前工作台的轻量全文搜索浮层；
 - 在 Composer（输入区）集中模型、思考强度、极速模式与上下文占用；
 - 把外观、布局等应用级偏好放入独立 Settings（设置）空间；D Code `0.0.1` 先落系统/浅色/深色与真实布局偏好，设置项增长后再引入分类侧栏；
@@ -58,12 +59,12 @@
 - 对话仍是任务主空间，本机文件、变更与运行信息作为可并行操作的上下文，不用模态蒙版切断左栏和中央对话；
 - Project 文件树和助手正文中的文件、目录、代码行引用可在 D Code 自有 Workspace Tab 中打开并定位；
 - Goal 在输入区附近持续显示阶段、耗时、证据、阻塞与人工控制，但不取代 D Code 的耐久 Work Map；
-- Agent Profile 与 Team Member Run 分离；`0.0.7` 先呈现档案职责 / 模型路由与当次成员实际工具授予、状态、当前活动、卡住 / 重试、请求和结构化报告，`0.0.9` 再加入版本化 Skill 引用与权限策略；
+- Agent Profile 与 Team Member Run 继续分离，但 Profile / D Team 已移至 `0.3.x` 候选方向；`0.1.0` 前只在 `0.0.7` 建立独立于 Skill 的动作权限，在 `0.0.11–0.0.12` 建立一次性资源调用与本机 Skill / Prompt / Command / Extension 管理，在 `0.0.13–0.0.14` 建立 Pi 模型目录、启用范围与自定义供应商管理；
 - 权限请求显示动作、目标、风险理由与作用范围；上下文和用量只呈现 Pi 能提供的真实本地数据。
 
 **明确不借鉴**：不复制 Electron 架构或视觉皮肤，不照搬固定 Coder / Verifier / General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。Remote Control、IM、云端 / 定时任务、账号积分与签到、在线部署、Chrome Cookie 导入、BYOK、Skill 市场和增长反馈入口均不进入 D Code 本机版本路线。
 
-**产品边界**：MiniMax Code 只提供本地信息层级与交互参考。D Code 继续使用 SwiftUI / AppKit、Pi 配置与 Session 权威、固定“对话”首标签、耐久 Work Map、显式 Team Run 与主智能体有界中转，不接入 MiniMax Runtime。
+**产品边界**：MiniMax Code 只提供本地信息层级与交互参考。D Code 继续使用 SwiftUI / AppKit、Pi 配置与 Session 权威、无冗余标签的唯一会话主页面、按需内容标签、耐久 Work Map、显式 Team Run 与主智能体有界中转，不接入 MiniMax Runtime。
 
 ## REF-004 PiDeck
 
@@ -122,7 +123,15 @@
 
 **明确不借鉴**：不把当前进程内 Worker Runtime 伪装成耐久 Work Map，不声称 Worker P2P，不自动调度工作项依赖，不持久化完整 Worker Transcript 或隐藏 Thinking，不解析 `/dteam` TUI 作为产品界面。
 
-**当前定位**：pi-dteam 是 `0.0.7` D Team Execution Plane（执行层）的机制与可复用实现来源；D Code 自己拥有 Work Item / Team Run / Member / Event / Report 的产品合同、Host IPC、持久化边界和 SwiftUI 原生呈现，不要求用户另外安装该扩展。
+**当前定位**：pi-dteam 是 `0.3.x` D Team Execution Plane（执行层）的机制与可复用实现来源；D Code 自己拥有 Work Item / Team Run / Member / Event / Report 的产品合同、Host IPC、持久化边界和 SwiftUI 原生呈现，不要求用户另外安装该扩展。
+
+## REF-011 Codex Taskboard
+
+**已核实边界**：本次固定参考 `chuspeeism/dashi-taskboard@9b2aeb53`。它的卡片是产品自有、保存在 Taskboard SQLite 中的 Task / Issue（工作项），不是 GitHub Issue，也不是 Codex Conversation。一个工作项可关联多个会话，会话内的 Run 状态与看板阶段分开；普通 Run 结束不自动进入待确认或已完成。
+
+**D Code 参考点**：保留 Work Item 与 Session / Run 分层、执行状态与人工验收分离、原会话不因组织操作被复制或迁移等调查结论。
+
+**明确不纳入**：会话拖入 Kanban、四列看板、自动移列和 Taskboard 运行时均未进入 D Code 当前版本路线。对应的离线原型只用于保存已完成的研究；未来若重新立项，必须另行进入版本 PRD，不从参考文件自动升级为产品需求。
 
 ## 技术上游，不属于竞品参考
 

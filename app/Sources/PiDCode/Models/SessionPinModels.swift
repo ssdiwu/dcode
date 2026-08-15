@@ -7,6 +7,52 @@ struct PinnedSessionRecord: Codable, Identifiable, Hashable, Sendable {
     let pinnedAt: String
 }
 
+struct PinnedSessionPresentation: Identifiable, Hashable, Sendable {
+    var id: String { summary.id }
+
+    let summary: SessionSummary
+    let isRecent: Bool
+    let projectIDs: Set<UUID>
+}
+
+enum PinnedSessionPresentationBuilder {
+    static func build(
+        recentSessions: [SessionSummary],
+        projectSessions: [SessionSummary],
+        projects: [DCodeProject],
+        pinnedRecords: [PinnedSessionRecord]
+    ) -> [PinnedSessionPresentation] {
+        let pinnedIDs = Set(pinnedRecords.map(\.sessionID))
+        let recentIDs = Set(recentSessions.map(\.id))
+        let projectCandidateIDs = Set(projectSessions.map(\.id))
+        let summaries = SessionPinOrdering.mergedAndOrdered(
+            [recentSessions, projectSessions],
+            pinnedRecords: pinnedRecords
+        ).filter { pinnedIDs.contains($0.id) }
+
+        return summaries.map { summary in
+            let canonicalCwd = canonicalPath(summary.cwd)
+            let projectIDs = Set(projects.compactMap { project in
+                project.sourceFolders.contains(where: { canonicalPath($0.path) == canonicalCwd })
+                    ? project.id
+                    : nil
+            })
+            return PinnedSessionPresentation(
+                summary: summary,
+                isRecent: recentIDs.contains(summary.id),
+                projectIDs: projectCandidateIDs.contains(summary.id) ? projectIDs : []
+            )
+        }
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+    }
+}
+
 struct SessionPinDocument: Codable, Equatable, Sendable {
     static let currentVersion = 1
 

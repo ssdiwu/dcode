@@ -17,12 +17,14 @@
 - 将完整已持久化 Session 以新 ID、新 `cwd` 和源谱系复制到目标 Source Folder：隐藏暂存中逐行校验，源稳定后用 hard link 原子发布；归档 ID 在 Recent、Project 与 Search 的分页、排序和结果上限前排除；
 - 在 Pi cwd-scoped 目录创建新会话，将 Header 与 D Code 创建来源标记一次写入初始 JSONL；该文档发布即为创建提交点并立即返回，不扫描全库、不取得新 Lease，也不等待旧 Runtime 关闭；App 再以独立打开请求切换观察对象；
 - 对空的 D Code 创建会话提供可恢复的 `session.trash`：唯一 ID 解析、D Code 来源、零消息、无子会话、非可写和 Lease 复核全部成立后才移入用户废纸篓；失败不回退为永久删除；
+- 通过 Pi SDK 持久修改当前 Session Name，同一名称供 Pi、D Code 左栏、搜索与窗口顶部使用；空名称恢复 Pi 的自动标题；
 - 既有会话先以共享观察态打开：Host 只轮询当前文件身份，变化时通知 App 从已知路径刷新；发送或修改运行设置时再以写入意图取得 Session Lease，并持续检测外部写入；
 - 使用固定 Pi SDK 加载现有 settings、模型、会话、流式事件及可兼容的结构化扩展能力；
+- 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；
 - 通过精确固定的 `grok-mermaid` 提供原生 Unicode Mermaid 渲染，并对不支持的类型返回结构化失败；
-- `116/116` 临时目录自动测试（含快速创建的隐藏暂存与原子发布、空会话隔离复核/失败恢复/废纸篓安全边界、路径选择与回滚、完整流式复制、record 语义损坏拒绝、临时租约释放、提交前 Busy 复核、归档前置排除、无模型旧会话观察，以及 `0.0.2` 搜索、`0.0.1` Project/Recent、观察、冲突、极速、扩展与进程生命周期回归）；真实 `~/.pi` 只读 smoke test 不改原会话。
+- 临时目录自动测试覆盖快速创建的隐藏暂存与原子发布、空会话隔离复核/失败恢复/废纸篓安全边界、路径选择与回滚、完整流式复制、record 语义损坏拒绝、临时租约释放、提交前 Busy 复核、归档前置排除、无模型旧会话观察，以及搜索、Project/Recent、观察、冲突、极速、扩展与进程生命周期回归；精确测试数量和版本验证记录见[版本实施方案](../doc/40-版本实施方案/README.md)，真实 `~/.pi` 只读 smoke test 不改原会话。
 
 ## 命令
 
@@ -40,6 +42,7 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/session-reader.ts`：安全会话扫描、快照和 Active Plan 恢复。
 - `src/session-copy.ts`：完整会话的有界流式校验、隐藏暂存与原子发布。
 - `src/session-origin.ts`：D Code 创建来源标记的共享协议常量。
+- `src/session-change.ts`：DHashline-compatible 工具结果到会话变更元数据的有界、安全投影。
 - `src/session-search-index.ts`：搜索 Worker 生命周期、请求关联、失败恢复与缓存位置。
 - `src/session-search-worker.ts`：可见范围发现、当前路径解析、SQLite FTS5 索引和查询。
 - `src/dcode-fast.ts`：D Code 自有极速状态、会话持久化与 Provider Request 注入边界。

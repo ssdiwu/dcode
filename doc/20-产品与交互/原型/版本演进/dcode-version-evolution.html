@@ -927,7 +927,16 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.7&quot; aria-pressed=&quot;false&quot;&gt;0.0.7&lt;/button&gt;
     &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.8&quot; aria-pressed=&quot;false&quot;&gt;0.0.8&lt;/button&gt;
     &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.9&quot; aria-pressed=&quot;false&quot;&gt;0.0.9&lt;/button&gt;
-    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;1.0.0&quot; aria-pressed=&quot;false&quot;&gt;1.0.0&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.10&quot; aria-pressed=&quot;false&quot;&gt;0.0.10&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.11&quot; aria-pressed=&quot;false&quot;&gt;0.0.11&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.12&quot; aria-pressed=&quot;false&quot;&gt;0.0.12&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.13&quot; aria-pressed=&quot;false&quot;&gt;0.0.13&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.14&quot; aria-pressed=&quot;false&quot;&gt;0.0.14&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.15&quot; aria-pressed=&quot;false&quot;&gt;0.0.15&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.16&quot; aria-pressed=&quot;false&quot;&gt;0.0.16&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.17&quot; aria-pressed=&quot;false&quot;&gt;0.0.17&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.0.18+&quot; aria-pressed=&quot;false&quot;&gt;0.0.18+&lt;/button&gt;
+    &lt;button class=&quot;btn&quot; type=&quot;button&quot; data-version=&quot;0.1.0&quot; aria-pressed=&quot;false&quot;&gt;0.1.0&lt;/button&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;de-version-copy&quot; aria-live=&quot;polite&quot;&gt;
@@ -1029,9 +1038,9 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;/div&gt;
 
         &lt;div class=&quot;de-runtime-strip&quot; id=&quot;de-runtime-strip&quot; hidden&gt;
-          &lt;span&gt;配额：充足&lt;/span&gt;
-          &lt;span&gt;分支：main&lt;/span&gt;
-          &lt;span&gt;MCP：已连接&lt;/span&gt;
+          &lt;span&gt;运行：执行中&lt;/span&gt;
+          &lt;span&gt;队列：2&lt;/span&gt;
+          &lt;span&gt;等待：无&lt;/span&gt;
         &lt;/div&gt;
 
         &lt;nav class=&quot;de-workspace-tabs&quot; id=&quot;de-workspace-tabs&quot; aria-label=&quot;中央工作区标签页&quot; role=&quot;tablist&quot; hidden&gt;
@@ -2000,97 +2009,251 @@ html&gt;body{padding:0}&lt;/style&gt;
           projectInspector: true,
           sessionRight: &#x27;overview&#x27;,
           paths: true,
-          messageHeading: &#x27;对话与本机文件共用中央标签页&#x27;,
-          messageBody: &#x27;对话始终是第一个标签；文件从第二个标签开始只读打开，切换后会话路径、滚动、草稿与已开文件保持。&#x27;
+          messageHeading: &#x27;会话主页面与本机文件共用中央工作区&#x27;,
+          messageBody: &#x27;对话不建立冗余标签；真实打开文件后才按需出现只读标签，回到主页面后会话路径、滚动、草稿与已开文件保持。&#x27;
         },
         &#x27;0.0.5&#x27;: {
-          title: &#x27;Markdown 与 HTML 即时预览&#x27;,
-          summary: &#x27;两种预览都跟随未保存编辑内容；刷新阈值由实作验证决定。&#x27;,
+          title: &#x27;后续消息队列&#x27;,
+          summary: &#x27;当前 Agent 运行时继续接收意图；尚未派发的消息有明确顺序且可调整或撤回。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          milestoneTitle: &#x27;Follow-up Queue · 2 条待派发&#x27;,
+          milestoneBody: &#x27;当前回合继续运行；后续消息只排队，不伪装成已执行。&#x27;,
+          milestoneBoundary: &#x27;不引入多 Agent 或长期工作项。&#x27;,
+          messageHeading: &#x27;运行中也能继续表达下一步&#x27;,
+          messageBody: &#x27;后续消息进入可见队列；当前回合安全结束后才按顺序继续，不用打断正在完成的工作。&#x27;
+        },
+        &#x27;0.0.6&#x27;: {
+          title: &#x27;运行状态与交互坞&#x27;,
+          summary: &#x27;当前活动、后续队列、等待输入、停止与重试集中到 Composer 附近的连续控制面。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Interaction Dock · 正在验证&#x27;,
+          milestoneBody: &#x27;当前活动、队列和等待用户输入使用不同状态，不再分散到多个临时提示。&#x27;,
+          milestoneBoundary: &#x27;仍是当前 Session 的运行控制，不是 Goal 调度器。&#x27;,
+          messageHeading: &#x27;始终看得懂现在发生了什么&#x27;,
+          messageBody: &#x27;当前动作、下一条消息、停止原因和可执行控制形成一条连续状态，而不是只剩“正在运行”。&#x27;
+        },
+        &#x27;0.0.7&#x27;: {
+          title: &#x27;项目信任与动作权限&#x27;,
+          summary: &#x27;写入、命令和外部副作用按项目、目标、风险与有效范围请求真实授权。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Project Trust · 已信任当前根目录&#x27;,
+          milestoneBody: &#x27;下一项外部副作用需要本次确认；允许范围和撤回入口保持可见。&#x27;,
+          milestoneBoundary: &#x27;Skill 说明如何做，不自行授予权限。&#x27;,
+          messageHeading: &#x27;权限与动作绑定，而不是与 Agent 名称绑定&#x27;,
+          messageBody: &#x27;D Code 在执行前说明动作、目标与风险，并区分本次允许、当前范围允许和拒绝。&#x27;
+        },
+        &#x27;0.0.8&#x27;: {
+          title: &#x27;精确 Git 差异&#x27;,
+          summary: &#x27;从 Changes 数量进入逐文件、逐变更块和行级净差异核对，保持暂存语义真实。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Exact Diff · 5 个文件&#x27;,
+          milestoneBody: &#x27;逐 hunk 核对当前工作树；staged 与 unstaged 分开呈现。&#x27;,
+          milestoneBoundary: &#x27;本版只读，不开放 stage、discard、commit 或 push。&#x27;,
+          messageHeading: &#x27;会话活动与 Git 净差异各自诚实&#x27;,
+          messageBody: &#x27;会话账本回答本会话观察到什么；Exact Diff 回答工作树现在真正差了什么，两者不混算。&#x27;
+        },
+        &#x27;0.0.9&#x27;: {
+          title: &#x27;结构化验证证据&#x27;,
+          summary: &#x27;命令、退出状态、时间、revision、环境与覆盖范围成为可回到真实运行的验证记录。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Verification · Swift 110/110&#x27;,
+          milestoneBody: &#x27;记录 revision、工作区状态、命令、环境、退出状态与实际覆盖范围。&#x27;,
+          milestoneBoundary: &#x27;测试、构建、人工验收、提交与发布仍分别成立。&#x27;,
+          messageHeading: &#x27;“通过”必须能回到证据&#x27;,
+          messageBody: &#x27;Agent 的总结不是验证本身；D Code 把真实运行结果组织成可复核、不过度外推的记录。&#x27;
+        },
+        &#x27;0.0.10&#x27;: {
+          title: &#x27;首次自构建闭环&#x27;,
+          summary: &#x27;在 D Code 会话内完成自身改动、验证、候选构建、受控重启并回到原任务。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Self-build · 候选 App 已生成&#x27;,
+          milestoneBody: &#x27;重启请求、旧版本退出、新版本启动与原 Session 恢复形成受控事务。&#x27;,
+          milestoneBoundary: &#x27;一次成功不等于稳定自迭代，也不自动提交或发布。&#x27;,
+          messageHeading: &#x27;D Code 第一次用自己构建自己&#x27;,
+          messageBody: &#x27;主开发闭环留在当前工作台；底层仍调用真实 Git、Swift 工具链和 Pi，不复制第二套事实。&#x27;
+        },
+        &#x27;0.0.11&#x27;: {
+          title: &#x27;Composer 一次性资源调用&#x27;,
+          summary: &#x27;通过 + 与 / 为当次消息选择本机 Skill、Prompt 或 Command，并显示实际采用来源。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;本次消息 · 2 个资源&#x27;,
+          milestoneBody: &#x27;507-prd Skill 与 release-check Prompt 只绑定当前调用，来源和解析结果可见。&#x27;,
+          milestoneBoundary: &#x27;不直接暴露 Pi TUI 命令，也不建立在线市场。&#x27;,
+          messageHeading: &#x27;资源先服务一次明确意图&#x27;,
+          messageBody: &#x27;Composer 可以为当前消息装配能力，但不会因此悄悄改写永久配置或扩大权限。&#x27;
+        },
+        &#x27;0.0.12&#x27;: {
+          title: &#x27;本机资源设置&#x27;,
+          summary: &#x27;在 Settings 中管理本机 Skill、Prompt、Command 与 Extension 的来源、兼容性、启停和持久配置。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Local Resources · 18 项&#x27;,
+          milestoneBody: &#x27;配置、资源重载与结构化工具注册接通 Pi 真实合同；来源、状态、兼容性与失败原因可见。&#x27;,
+          milestoneBoundary: &#x27;~/.pi/agent 仍是唯一权威；Prompt 描述不能冒充可调用工具。&#x27;,
+          messageHeading: &#x27;一次调用之后，才进入长期资源管理&#x27;,
+          messageBody: &#x27;设置负责持久状态；Composer 负责当次选择，两条路径使用同一真实配置合同。&#x27;
+        },
+        &#x27;0.0.13&#x27;: {
+          title: &#x27;Pi 模型目录与启用范围&#x27;,
+          summary: &#x27;按供应商展示 Pi 最新目录与缓存状态，用 enabledModels 管理 D Code 模型选择范围。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Models · 5 个供应商&#x27;,
+          milestoneBody: &#x27;在线刷新、最后可用缓存、默认模型与“在 D Code 中启用”状态分开呈现。&#x27;,
+          milestoneBoundary: &#x27;关闭只影响选择与快捷切换，不撤销认证或改写当前会话历史。&#x27;,
+          messageHeading: &#x27;模型选择复用 Pi 的真实目录&#x27;,
+          messageBody: &#x27;D Code 不维护静态模型白名单；启用规则保留 Pi 通配语义，刷新失败时也不会把空结果说成没有模型。&#x27;
+        },
+        &#x27;0.0.14&#x27;: {
+          title: &#x27;自定义模型供应商&#x27;,
+          summary: &#x27;通过 Pi models.json 合同添加、校验并重载 Pi 支持的供应商与模型定义。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Custom Provider · 已验证&#x27;,
+          milestoneBody: &#x27;合法定义进入对应供应商分组；认证状态与入口继续来自 Pi。&#x27;,
+          milestoneBoundary: &#x27;校验失败保留上一份可用配置；D Code 不显示或保存凭据正文。&#x27;,
+          messageHeading: &#x27;原生管理，不新建配置权威&#x27;,
+          messageBody: &#x27;设置页只是 Pi 模型合同的安全原生入口，不建立第二份供应商目录、认证文件或任意 API 适配层。&#x27;
+        },
+        &#x27;0.0.15&#x27;: {
+          title: &#x27;Markdown 源码与预览&#x27;,
+          summary: &#x27;Markdown 从只读进入编辑缓冲区、源码 / 预览切换、冲突识别与安全保存。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;files&#x27;,
           projectFiles: true,
           projectInspector: true,
-          sessionRight: &#x27;overview&#x27;,
+          sessionRight: &#x27;milestone&#x27;,
           paths: true,
-          livePreview: true,
-          messageHeading: &#x27;文件编辑与预览进入同一工作台&#x27;,
-          messageBody: &#x27;Markdown 与 HTML 同时完成才算交付；打开与编辑仍不会自动加入模型上下文。&#x27;
-        },
-        &#x27;0.0.6&#x27;: {
-          title: &#x27;目标与工作地图&#x27;,
-          summary: &#x27;稳定工作项记录结果、范围、依赖、验收证据与人工门禁；Goal 控制明确启动的执行。&#x27;,
-          mode: &#x27;conversation&#x27;,
-          right: &#x27;goal&#x27;,
-          projectFiles: true,
-          projectInspector: true,
-          sessionRight: &#x27;goal&#x27;,
-          paths: true,
-          livePreview: true,
-          goal: true,
-          messageHeading: &#x27;目标成为可恢复、可控制的工作地图&#x27;,
-          messageBody: &#x27;当前阶段、耗时、最近证据与阻塞保持可见；暂停执行不会把工作项误标为完成。&#x27;
-        },
-        &#x27;0.0.7&#x27;: {
-          title: &#x27;智能体档案与 D Team&#x27;,
-          summary: &#x27;可复用档案与当次成员执行分开；复杂任务显式组队，主智能体中转并综合报告。&#x27;,
-          mode: &#x27;conversation&#x27;,
-          right: &#x27;agents&#x27;,
-          projectFiles: true,
-          projectInspector: true,
-          sessionRight: &#x27;agents&#x27;,
-          paths: true,
-          livePreview: true,
-          goal: true,
-          messageHeading: &#x27;档案定义默认能力，成员记录当次执行&#x27;,
-          messageBody: &#x27;右栏查看档案版本、实际模型、工具授予、状态与当前活动；中央查看请求、发现、验证退回与结构化报告。&#x27;
-        },
-        &#x27;0.0.8&#x27;: {
-          title: &#x27;跨会话交接与通信&#x27;,
-          summary: &#x27;以耐久工作项为锚点，保留消息来源、目标、送达、已读、失败与重试。&#x27;,
-          mode: &#x27;conversation&#x27;,
-          right: &#x27;communication&#x27;,
-          projectFiles: true,
-          projectInspector: true,
-          sessionRight: &#x27;communication&#x27;,
-          paths: true,
-          livePreview: true,
-          goal: true,
-          communication: true,
-          messageHeading: &#x27;跨会话协作以工作项为锚点&#x27;,
-          messageBody: &#x27;交接先可靠送达；只有接收方或用户明确采纳后才启动新会话或执行，且不伪装恢复已经销毁的工作智能体。&#x27;
-        },
-        &#x27;0.0.9&#x27;: {
-          title: &#x27;本机能力、安全与恢复&#x27;,
-          summary: &#x27;收口 Skill、权限策略、有效授予、审计、用量与异常恢复，不增加在线市场或平行配置。&#x27;,
-          mode: &#x27;conversation&#x27;,
-          right: &#x27;abilities&#x27;,
-          projectFiles: true,
-          projectInspector: true,
-          sessionRight: &#x27;abilities&#x27;,
-          paths: true,
-          livePreview: true,
-          goal: true,
-          communication: true,
           runtime: true,
-          messageHeading: &#x27;本机能力进入可信的原生控制面&#x27;,
-          messageBody: &#x27;Skill 不等于权限；Profile 策略在运行时解析为有效授予，审计与报告只做脱敏持久化。&#x27;
+          markdownEditing: true,
+          messageHeading: &#x27;Markdown 先建立可信编辑缓冲区&#x27;,
+          messageBody: &#x27;预览跟随未保存内容；磁盘、缓冲区和保存结果各自可辨认，不把预览冒充写盘成功。&#x27;
         },
-        &#x27;1.0.0&#x27;: {
-          title: &#x27;完整版本&#x27;,
-          summary: &#x27;界面不再突然变化；候选版通过会话、恢复、原生能力边界与日常工作流验收后晋升。&#x27;,
+        &#x27;0.0.16&#x27;: {
+          title: &#x27;隔离 HTML 即时预览&#x27;,
+          summary: &#x27;HTML 编辑缓冲区与隔离预览并排呈现，本机、网络与脚本能力默认受限。&#x27;,
           mode: &#x27;conversation&#x27;,
-          right: &#x27;abilities&#x27;,
+          right: &#x27;files&#x27;,
           projectFiles: true,
           projectInspector: true,
-          sessionRight: &#x27;abilities&#x27;,
+          sessionRight: &#x27;milestone&#x27;,
           paths: true,
-          livePreview: true,
-          goal: true,
-          communication: true,
           runtime: true,
+          markdownEditing: true,
+          htmlPreview: true,
+          messageHeading: &#x27;HTML 预览建立在隔离边界上&#x27;,
+          messageBody: &#x27;未保存产物可以即时核对，但预览不能借机读取相邻文件、执行任意脚本或访问网络。&#x27;
+        },
+        &#x27;0.0.17&#x27;: {
+          title: &#x27;失败与恢复加固&#x27;,
+          summary: &#x27;Host、构建、重启、权限与写入中断后，辨认已完成、未完成和未知状态并安全继续。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          markdownEditing: true,
+          htmlPreview: true,
+          milestoneTitle: &#x27;Recovery · 从安全点继续&#x27;,
+          milestoneBody: &#x27;原动作状态已核对；可安全重试 2 项，另有 1 项需要用户决定。&#x27;,
+          milestoneBoundary: &#x27;未知副作用不会被“重试成功”覆盖。&#x27;,
+          messageHeading: &#x27;恢复不是重新来一遍&#x27;,
+          messageBody: &#x27;D Code 先辨认真实边界，再从最近安全点继续，并保留需要人工判断的不确定状态。&#x27;
+        },
+        &#x27;0.0.18+&#x27;: {
+          title: &#x27;连续自用缺口版本&#x27;,
+          summary: &#x27;版本数量不封顶；每次只修复一个由真实 dogfood 暴露、可独立验收的闭环缺口。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          markdownEditing: true,
+          htmlPreview: true,
+          milestoneTitle: &#x27;Dogfood Gap · 等待真实复现&#x27;,
+          milestoneBody: &#x27;只有真实任务暴露缺口后才创建具体 0.0.x PRD 与完成信号。&#x27;,
+          milestoneBoundary: &#x27;不为赶 0.1.0 预装空入口或合并多个大系统。&#x27;,
+          messageHeading: &#x27;版本号服从真实缺口&#x27;,
+          messageBody: &#x27;如果 0.0.18 之后仍有核心断点，就继续新的 0.0.x，而不是把问题藏进晋升版本。&#x27;
+        },
+        &#x27;0.1.0&#x27;: {
+          title: &#x27;自迭代基线晋升&#x27;,
+          summary: &#x27;连续自构建、证据、权限、差异和失败恢复通过后晋升；本版不突然增加主功能。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          markdownEditing: true,
+          htmlPreview: true,
           complete: true,
-          messageHeading: &#x27;D Code 已承接完整日常工作流&#x27;,
-          messageBody: &#x27;会话、项目、搜索、路径、目标、智能体、跨会话通信、文件与预览在同一套中文界面中协作。&#x27;
+          milestoneTitle: &#x27;Promotion Gate · 全部成立&#x27;,
+          milestoneBody: &#x27;至少连续三个版本由 D Code 完成主要开发闭环，并有一次中断恢复证据。&#x27;,
+          milestoneBoundary: &#x27;Goal、D Team 与跨 Session 编排进入 0.2.x 之后。&#x27;,
+          messageHeading: &#x27;D Code 已经可以持续迭代 D Code&#x27;,
+          messageBody: &#x27;需求、运行、权限、差异、验证、构建、重启与恢复形成稳定闭环；晋升只确认事实，不制造新表面。&#x27;
         }
       };
 
@@ -2109,6 +2272,11 @@ html&gt;body{padding:0}&lt;/style&gt;
             &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;活动计划&lt;/strong&gt;&lt;small&gt;梳理 D Code 版本界面 · 进行中&lt;/small&gt;&lt;/section&gt;&#x27; +
             &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;能力边界&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;标准结构化交互&lt;/span&gt;&lt;small&gt;原生&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
         }
+        if (kind === &#x27;milestone&#x27;) {
+          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;版本能力&lt;/span&gt;&lt;span&gt;文件&lt;/span&gt;&lt;span&gt;变更&lt;/span&gt;&lt;/div&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;&#x27; + state.milestoneTitle + &#x27;&lt;/strong&gt;&lt;small&gt;&#x27; + state.milestoneBody + &#x27;&lt;/small&gt;&lt;/section&gt;&#x27; +
+            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;本版边界&lt;/strong&gt;&lt;small&gt;&#x27; + state.milestoneBoundary + &#x27;&lt;/small&gt;&lt;/section&gt;&#x27;;
+        }
         if (kind === &#x27;files&#x27;) {
           var fileButtonState = state.projectInspector ? &#x27;&#x27; : &#x27; disabled aria-disabled=&quot;true&quot;&#x27;;
           return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;文件&lt;/span&gt;&lt;span&gt;变更&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
@@ -2124,27 +2292,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             &#x27;&lt;button class=&quot;de-tree-row is-grandchild de-tree-file&quot; type=&quot;button&quot; data-file-preview=&quot;dgoal-index&quot; aria-pressed=&quot;false&quot;&#x27; + fileButtonState + &#x27;&gt;&lt;i data-lucide=&quot;file-code-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;index.ts&lt;/button&gt;&lt;/section&gt;&#x27; +
             &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;版本变化&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;app/Sources&lt;/span&gt;&lt;small&gt;3 项&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;host/src&lt;/span&gt;&lt;small&gt;2 项&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
         }
-        if (kind === &#x27;goal&#x27;) {
-          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span class=&quot;is-active&quot;&gt;目标&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;定义 D Code 1.0&lt;/strong&gt;&lt;small&gt;阶段 3 · 已耗时 42 分钟 · 最近证据：版本边界复核&lt;/small&gt;&lt;div class=&quot;de-progress&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;工作地图&lt;/strong&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;确定版本规则&lt;/span&gt;&lt;small&gt;完成 · 证据 2&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;核对能力矩阵&lt;/span&gt;&lt;small&gt;进行中 · 依赖 1&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;逐版确认界面&lt;/span&gt;&lt;small&gt;需要验收&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;当前控制&lt;/strong&gt;&lt;small&gt;继续执行 · 暂停 · 编辑 Goal · 清除活动呈现&lt;/small&gt;&lt;/section&gt;&#x27;;
-        }
-        if (kind === &#x27;agents&#x27;) {
-          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;智能体&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;D Team · 3 位成员&lt;/strong&gt;&lt;small&gt;显式启动 · 来源路径：智能体团队方案 · 已运行 8 分钟&lt;/small&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;智能体档案&lt;/strong&gt;&lt;small&gt;产品结构 · 档案 v3 · 高级模型 · 只读工具&lt;/small&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;产品结构&lt;/span&gt;&lt;small&gt;已报告 · 3 分钟&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;Pi 语义&lt;/span&gt;&lt;small&gt;运行中 · 正在核对 Skill 边界&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;验证复核&lt;/span&gt;&lt;small&gt;等待回应 · 需确认范围&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;主智能体中转&lt;/strong&gt;&lt;small&gt;Request：是否把 Skill 权限管理留到 0.0.9？ · 查看结构化报告&lt;/small&gt;&lt;/section&gt;&#x27;;
-        }
-        if (kind === &#x27;communication&#x27;) {
-          return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;通信&lt;/span&gt;&lt;span&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;跨会话交接&lt;/strong&gt;&lt;small&gt;工作项、来源、目标与送达状态均可恢复&lt;/small&gt;&lt;/section&gt;&#x27; +
-            &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;扩展协议研究&lt;/span&gt;&lt;small&gt;已读&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;目标工作地图&lt;/span&gt;&lt;small&gt;已送达&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;界面版本演进&lt;/span&gt;&lt;small&gt;失败 · 可重试&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
-        }
-        return scopeSwitch + &#x27;&lt;div class=&quot;de-tabs&quot;&gt;&lt;span&gt;目标&lt;/span&gt;&lt;span&gt;智能体&lt;/span&gt;&lt;span&gt;通信&lt;/span&gt;&lt;span class=&quot;is-active&quot;&gt;上下文&lt;/span&gt;&lt;/div&gt;&#x27; +
-          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;能力状态&lt;/strong&gt;&lt;small&gt;按产品语义汇总，不按扩展逐个堆入口&lt;/small&gt;&lt;/section&gt;&#x27; +
-          &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;本机 Skill&lt;/span&gt;&lt;small&gt;来源与兼容性可见&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;权限策略 → 有效授予&lt;/span&gt;&lt;small&gt;本次运行快照&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;D Team 审计与恢复&lt;/span&gt;&lt;small&gt;脱敏事件 / 报告&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;上下文与用量&lt;/span&gt;&lt;small&gt;仅本机真实来源&lt;/small&gt;&lt;/div&gt;&lt;div class=&quot;de-inspector-row&quot;&gt;&lt;i class=&quot;de-dot&quot;&gt;&lt;/i&gt;&lt;span&gt;TUI 自定义交互&lt;/span&gt;&lt;small&gt;不支持&lt;/small&gt;&lt;/div&gt;&lt;/section&gt;&#x27;;
+        return scopeSwitch + &#x27;&lt;section class=&quot;de-inspector-section&quot;&gt;&lt;strong&gt;暂无该版本视图&lt;/strong&gt;&lt;small&gt;该能力尚未进入当前原型。&lt;/small&gt;&lt;/section&gt;&#x27;;
       }
 
       var currentVersion = &#x27;0.0.1&#x27;;
@@ -2274,7 +2422,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             &#x27;- 打开文件不会自动加入模型上下文&#x27;,
             &#x27;&#x27;,
             &#x27;```text&#x27;,
-            &#x27;对话 → 文件 / 产物 / 编辑器标签&#x27;,
+            &#x27;会话主页面 + 按需文件 / 产物 / 编辑器标签&#x27;,
             &#x27;```&#x27;
           ].join(&#x27;\n&#x27;)
         },
@@ -2717,25 +2865,22 @@ html&gt;body{padding:0}&lt;/style&gt;
         markdownWorkspace.hidden = true;
         htmlPreview.hidden = true;
         fileViewModes.hidden = true;
-        if (!versions[currentVersion].livePreview) {
-          filePreviewStatus.textContent = &#x27;只读文件&#x27;;
-          filePreviewCode.textContent = getWorkspaceFileBuffer(fileId);
-          codePreview.hidden = false;
-        } else if (file.kind === &#x27;markdown&#x27;) {
+        if (file.kind === &#x27;markdown&#x27; &amp;&amp; versions[currentVersion].markdownEditing) {
           markdownSourceInput.value = getWorkspaceFileBuffer(fileId);
           renderMarkdown(getWorkspaceFileBuffer(fileId));
           markdownWorkspace.hidden = false;
           fileViewModes.hidden = false;
           setMarkdownViewMode(activeFileViewMode);
           syncWorkspaceEditState(fileId);
-        } else if (file.kind === &#x27;html&#x27;) {
+        } else if (file.kind === &#x27;html&#x27; &amp;&amp; versions[currentVersion].htmlPreview) {
           htmlSourceInput.value = getWorkspaceFileBuffer(fileId);
           htmlPreviewFrame.srcdoc = getWorkspaceFileBuffer(fileId);
           lastHtmlRenderAt = window.performance.now();
           htmlPreview.hidden = false;
           syncWorkspaceEditState(fileId);
         } else {
-          filePreviewCode.textContent = file.content;
+          filePreviewStatus.textContent = &#x27;只读文件&#x27;;
+          filePreviewCode.textContent = getWorkspaceFileBuffer(fileId);
           codePreview.hidden = false;
         }
         renderWorkspaceTabs();
@@ -3112,8 +3257,8 @@ html&gt;body{padding:0}&lt;/style&gt;
           showInspector(state.right, state);
         }
 
-        root.querySelector(&#x27;#de-session-context&#x27;).textContent = state.complete ? &#x27;完整版本 · 原生能力边界已通过验收&#x27; : &#x27;当前会话 · 当前路径：智能体团队方案&#x27;;
-        composerMeta.textContent = state.complete ? &#x27;中文界面 · 原生能力收口&#x27; : &#x27;当前路径 · 智能体团队方案&#x27;;
+        root.querySelector(&#x27;#de-session-context&#x27;).textContent = state.complete ? &#x27;自迭代基线 · 晋升门禁已成立&#x27; : &#x27;当前会话 · 当前路径：智能体团队方案&#x27;;
+        composerMeta.textContent = state.complete ? &#x27;连续自构建 · 可恢复闭环&#x27; : &#x27;当前路径 · 智能体团队方案&#x27;;
 
         if (window.lucide) window.lucide.createIcons({ attrs: { width: 16, height: 16 } });
         if (isSearch) {

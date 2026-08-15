@@ -1,0 +1,1746 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>D Code · 外部参考 · 会话任务看板原型</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --window: light-dark(#f5f5f7, #1a1a1c);
+      --toolbar: light-dark(rgb(246 246 248 / 94%), rgb(39 39 43 / 94%));
+      --sidebar: light-dark(#eeeef1, #202023);
+      --canvas: light-dark(#fafafd, #18181a);
+      --panel: light-dark(#f2f2f5, #202023);
+      --surface: light-dark(#ffffff, #29292d);
+      --surface-hover: light-dark(#f7f7f9, #303035);
+      --surface-selected: light-dark(#eef5ff, #252f3d);
+      --text: light-dark(#1d1d1f, #f2f2f5);
+      --text-secondary: light-dark(#66666d, #a6a6ad);
+      --text-tertiary: light-dark(#8b8b93, #77777f);
+      --separator: light-dark(rgb(18 18 20 / 10%), rgb(255 255 255 / 9%));
+      --separator-strong: light-dark(rgb(18 18 20 / 17%), rgb(255 255 255 / 16%));
+      --accent: light-dark(#1676d2, #70b5ff);
+      --accent-soft: light-dark(#e8f2ff, #182b3d);
+      --blue: light-dark(#1676d2, #70b5ff);
+      --green: light-dark(#16804b, #55c98a);
+      --purple: light-dark(#7650bd, #b69af0);
+      --red: light-dark(#c83c35, #ff817b);
+      --shadow: 0 14px 42px rgb(0 0 0 / 18%);
+      --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+      --radius-sm: 8px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --sidebar-width: 286px;
+      --inspector-width: 340px;
+    }
+
+    :root[data-theme="light"] { color-scheme: light; }
+    :root[data-theme="dark"] { color-scheme: dark; }
+
+    * { box-sizing: border-box; }
+
+    [hidden] { display: none !important; }
+
+    html, body {
+      min-width: 640px;
+      min-height: 620px;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: #111;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+
+    button {
+      color: inherit;
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    [tabindex]:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .app-window {
+      display: grid;
+      grid-template-rows: 52px minmax(0, 1fr);
+      width: 100vw;
+      height: 100vh;
+      background: var(--window);
+    }
+
+    .titlebar {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+      align-items: center;
+      min-width: 0;
+      border-bottom: 1px solid var(--separator);
+      background: var(--toolbar);
+      backdrop-filter: blur(24px) saturate(150%);
+      -webkit-app-region: drag;
+    }
+
+    .titlebar-left,
+    .titlebar-center,
+    .titlebar-right {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      height: 100%;
+    }
+
+    .titlebar-left { gap: 14px; padding: 0 16px; }
+    .titlebar-center { justify-content: center; color: var(--text-secondary); font-size: 13px; }
+    .titlebar-right { justify-content: flex-end; padding: 0 12px; }
+
+    .traffic-lights { display: flex; gap: 8px; }
+    .traffic-light { width: 12px; height: 12px; border-radius: 50%; }
+    .traffic-light.red { background: #ff5f57; }
+    .traffic-light.yellow { background: #febc2e; }
+    .traffic-light.green { background: #28c840; }
+
+    .app-mark {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+
+    .titlebar button { -webkit-app-region: no-drag; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .app-window.inspector-closed .titlebar {
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 52px;
+    }
+
+    .app-window.inspector-closed .workspace {
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
+    }
+
+    .app-window.inspector-closed .inspector {
+      display: none;
+    }
+
+    .icon-button {
+      display: grid;
+      place-items: center;
+      flex: 0 0 40px;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border-radius: 10px;
+      color: var(--text-secondary);
+      background: transparent;
+    }
+
+    .icon-button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+    .icon-button:active { transform: scale(.96); }
+    .icon-button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
+    .icon {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.65;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    .sidebar {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      border-right: 1px solid var(--separator);
+      background: var(--sidebar);
+      scrollbar-width: thin;
+    }
+
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 64px;
+      padding: 12px 12px 12px 18px;
+    }
+
+    .sidebar-account { min-width: 0; margin-right: auto; }
+    .sidebar-account strong { display: block; font-size: 15px; }
+    .sidebar-account span { display: block; margin-top: 1px; color: var(--text-tertiary); font-size: 12px; }
+
+    .sidebar-section { padding: 8px; }
+    .sidebar-section + .sidebar-section { border-top: 1px solid var(--separator); }
+
+    .nav-row,
+    .session-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 40px;
+      padding: 0 8px;
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      background: transparent;
+      text-align: left;
+    }
+
+    .nav-row { gap: 10px; }
+    .nav-row:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+    .nav-row.selected { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); font-weight: 600; }
+    .nav-row .nav-label { flex: 1; }
+    .nav-row .nav-count { color: var(--text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+    .section-title {
+      padding: 12px 10px 6px;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .session-row {
+      position: relative;
+      min-height: 58px;
+      padding: 6px 2px 6px 10px;
+      color: var(--text);
+      cursor: grab;
+    }
+
+    .session-row:hover,
+    .session-row.flash { background: color-mix(in srgb, var(--text) 7%, transparent); }
+    .session-row.dragging { opacity: .5; cursor: grabbing; }
+    .session-row[data-active-work="true"] { background: var(--surface-selected); }
+
+    .session-row-main {
+      min-width: 0;
+      flex: 1;
+      padding: 3px 8px 3px 0;
+    }
+
+    .session-row-title {
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 560;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .session-row-meta {
+      overflow: hidden;
+      margin-top: 3px;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .session-board-action {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .session-row:hover .session-board-action,
+    .session-row:focus-within .session-board-action,
+    .session-board-action.is-placed {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .session-board-action.is-placed { color: var(--accent); }
+
+    .board-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      background: var(--canvas);
+    }
+
+    .board-shell.session-drag-active .board-explainer {
+      border-color: var(--accent);
+      color: var(--text);
+      background: var(--accent-soft);
+      box-shadow: var(--focus);
+    }
+
+    .board-header {
+      position: relative;
+      z-index: 6;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--separator);
+      background: color-mix(in srgb, var(--canvas) 94%, transparent);
+      backdrop-filter: blur(18px);
+    }
+
+    .board-title-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .board-heading { min-width: 0; margin-right: auto; }
+    .board-heading h1 { margin: 0; font-size: 22px; line-height: 1.25; letter-spacing: -0.02em; }
+    .board-heading p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; }
+
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+
+    .primary-button,
+    .secondary-button,
+    .ghost-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .primary-button { color: white; background: #1676d2; }
+    .primary-button:hover { background: #1d82e4; }
+    .primary-button:active { transform: scale(.98); }
+    .secondary-button { border: 1px solid var(--separator-strong); background: var(--surface); }
+    .secondary-button:hover { background: var(--surface-hover); }
+    .ghost-button { color: var(--text-secondary); background: transparent; }
+    .ghost-button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+
+    .button-icon { width: 17px; height: 17px; }
+
+    .board-explainer {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-top: 14px;
+      padding: 9px 12px;
+      border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--separator));
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
+      font-size: 12px;
+    }
+
+    .board-explainer strong { color: var(--text); font-weight: 620; }
+
+    .board-scroll {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 18px 20px 24px;
+      scrollbar-width: thin;
+    }
+
+    .board-columns {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(244px, 1fr));
+      align-items: start;
+      gap: 14px;
+      min-width: 1026px;
+      min-height: 100%;
+    }
+
+    .board-column {
+      min-width: 0;
+      min-height: 220px;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--panel) 58%, transparent);
+      transition: border-color 120ms ease, background-color 120ms ease;
+    }
+
+    .board-column.drag-over {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent-soft) 40%, var(--panel));
+    }
+
+    .board-column.suggested-drop {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent-soft) 54%, var(--panel));
+      box-shadow: var(--focus);
+    }
+
+    .column-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 48px;
+      padding: 8px 10px 8px 13px;
+      border-bottom: 1px solid var(--separator);
+    }
+
+    .column-marker { width: 8px; height: 8px; border-radius: 50%; background: var(--column-color); }
+    .column-title { font-weight: 650; }
+    .column-count {
+      display: grid;
+      place-items: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      border-radius: 999px;
+      color: var(--text-secondary);
+      background: color-mix(in srgb, var(--text) 7%, transparent);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .column-add { margin-left: auto; }
+
+    .card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 154px;
+      padding: 10px;
+    }
+
+    .session-card {
+      position: relative;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+      cursor: grab;
+      transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    }
+
+    .session-card:hover { border-color: var(--separator-strong); background: var(--surface-hover); box-shadow: 0 7px 20px rgb(0 0 0 / 9%); transform: translateY(-1px); }
+    .session-card[data-selected="true"] { border-color: var(--accent); background: var(--surface-selected); box-shadow: var(--focus); }
+    .session-card.dragging { opacity: .52; cursor: grabbing; transform: scale(.985); }
+
+    .session-card.drop-before::before,
+    .session-card.drop-after::after {
+      position: absolute;
+      right: 8px;
+      left: 8px;
+      height: 2px;
+      border-radius: 999px;
+      background: var(--accent);
+      content: "";
+    }
+
+    .session-card.drop-before::before { top: -6px; }
+    .session-card.drop-after::after { bottom: -6px; }
+
+    .card-topline { display: flex; align-items: center; min-height: 26px; gap: 8px; }
+    .card-grip { color: var(--text-tertiary); }
+    .card-grip .icon { width: 14px; height: 14px; }
+
+    .runtime-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: var(--badge-color, var(--text-secondary));
+      background: color-mix(in srgb, var(--badge-color, var(--text-secondary)) 11%, transparent);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .runtime-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; }
+    .runtime-badge.running .runtime-dot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent); animation: pulse 1.8s ease-in-out infinite; }
+
+    .gate-badge {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: var(--green);
+      background: color-mix(in srgb, var(--green) 12%, transparent);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .card-menu-button {
+      margin: -7px -8px -7px auto;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .session-card:hover .card-menu-button,
+    .session-card:focus-within .card-menu-button,
+    .session-card[data-selected="true"] .card-menu-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .card-title {
+      margin: 8px 0 0;
+      overflow: hidden;
+      font-size: 14px;
+      font-weight: 650;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .card-activity {
+      margin-top: 7px;
+      overflow: hidden;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .card-project {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      margin-top: 11px;
+      color: var(--text-tertiary);
+      font-size: 11px;
+    }
+
+    .card-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid var(--separator);
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card-footer-item { display: inline-flex; align-items: center; gap: 4px; }
+    .card-footer .updated { margin-left: auto; }
+    .card-footer .icon, .card-project .icon { width: 13px; height: 13px; }
+
+    .empty-column {
+      display: grid;
+      place-items: center;
+      min-height: 128px;
+      padding: 20px;
+      border: 1px dashed var(--separator-strong);
+      border-radius: var(--radius-md);
+      color: var(--text-tertiary);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .inspector {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      border-left: 1px solid var(--separator);
+      background: var(--panel);
+      scrollbar-width: thin;
+    }
+
+    .inspector-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-height: 74px;
+      padding: 16px 12px 14px 18px;
+      border-bottom: 1px solid var(--separator);
+    }
+
+    .inspector-header-copy { min-width: 0; margin-right: auto; }
+    .inspector-eyebrow { color: var(--text-tertiary); font-size: 11px; font-weight: 650; letter-spacing: .03em; }
+    .inspector-header h2 { margin: 4px 0 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .inspector-body { padding: 18px; }
+    .inspector-empty { display: grid; place-items: center; height: 100%; padding: 32px; color: var(--text-tertiary); text-align: center; }
+    .inspector-empty .icon { width: 32px; height: 32px; margin-bottom: 12px; }
+
+    .inspector-section + .inspector-section { margin-top: 22px; }
+    .inspector-section h3 { margin: 0 0 10px; font-size: 12px; font-weight: 650; }
+
+    .stage-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .stage-button {
+      min-height: 36px;
+      padding: 0 9px;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      background: var(--surface);
+      text-align: left;
+      font-size: 12px;
+    }
+    .stage-button:hover { color: var(--text); background: var(--surface-hover); }
+    .stage-button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+
+    .detail-list { display: grid; gap: 10px; margin: 0; }
+    .detail-row { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 10px; align-items: start; }
+    .detail-row dt { color: var(--text-tertiary); }
+    .detail-row dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+    .detail-row code { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+
+    .scope-note {
+      padding: 11px 12px;
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      background: color-mix(in srgb, var(--text) 5%, transparent);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .scope-note strong { color: var(--text); }
+
+    .inspector-actions { display: grid; gap: 8px; }
+    .inspector-actions button { width: 100%; }
+    .remove-button { color: var(--text-secondary); }
+    .remove-button:hover { color: var(--text); }
+
+    .run-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .run-actions button { min-height: 40px; }
+
+    .conversation-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+      background: var(--canvas);
+    }
+
+    .conversation-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 74px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--separator);
+      background: color-mix(in srgb, var(--canvas) 94%, transparent);
+    }
+
+    .conversation-heading { min-width: 0; }
+    .conversation-heading h1 { margin: 0; overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-heading p { margin: 4px 0 0; overflow: hidden; color: var(--text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .conversation-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 34px max(28px, calc((100% - 720px) / 2));
+    }
+
+    .conversation-note {
+      max-width: 720px;
+      padding: 16px;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius-lg);
+      color: var(--text-secondary);
+      background: var(--surface);
+      line-height: 1.6;
+    }
+    .conversation-note strong { color: var(--text); }
+    .conversation-note + .conversation-note { margin-top: 14px; }
+
+    .conversation-status {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .mock-composer {
+      margin: 0 max(20px, calc((100% - 760px) / 2)) 18px;
+      padding: 12px;
+      border: 1px solid var(--separator-strong);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      box-shadow: 0 6px 24px rgb(0 0 0 / 8%);
+    }
+
+    .work-context {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 10px;
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+    .work-context strong { color: var(--accent); }
+
+    .mock-composer textarea {
+      width: 100%;
+      min-height: 76px;
+      resize: vertical;
+      border: 0;
+      outline: 0;
+      color: var(--text);
+      background: transparent;
+      line-height: 1.5;
+    }
+
+    .composer-footer {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .composer-state { min-width: 0; margin-right: auto; color: var(--text-tertiary); font-size: 11px; }
+
+    .popover,
+    .context-menu {
+      position: fixed;
+      z-index: 30;
+      display: none;
+      border: 1px solid var(--separator-strong);
+      border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--surface) 96%, transparent);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px) saturate(160%);
+    }
+
+    .popover.open,
+    .context-menu.open { display: block; }
+
+    .add-popover { top: 112px; right: calc(var(--inspector-width) + 24px); width: 340px; padding: 10px; }
+    .popover-header { padding: 7px 8px 10px; }
+    .popover-header strong { display: block; }
+    .popover-header span { display: block; margin-top: 3px; color: var(--text-tertiary); font-size: 11px; }
+
+    .popover-search {
+      width: 100%;
+      height: 36px;
+      margin-bottom: 8px;
+      padding: 0 11px;
+      border: 1px solid var(--separator-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: color-mix(in srgb, var(--text) 4%, transparent);
+    }
+
+    .session-picker-list { display: grid; gap: 3px; max-height: 324px; overflow: auto; }
+    .session-picker-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 40px;
+      align-items: center;
+      min-height: 54px;
+      padding: 3px 0 3px 10px;
+      border-radius: var(--radius-md);
+      background: transparent;
+      text-align: left;
+    }
+    .session-picker-item:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+    .session-picker-item:disabled { cursor: default; opacity: .7; }
+    .session-picker-copy { min-width: 0; }
+    .session-picker-copy strong, .session-picker-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-picker-copy strong { font-size: 12px; }
+    .session-picker-copy span { margin-top: 3px; color: var(--text-tertiary); font-size: 11px; }
+    .picker-state { display: grid; place-items: center; width: 40px; height: 40px; color: var(--text-tertiary); }
+    .session-picker-item.is-placed .picker-state { color: var(--accent); }
+
+    .context-menu { width: 210px; padding: 6px; }
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      min-height: 34px;
+      padding: 0 9px;
+      border-radius: 7px;
+      background: transparent;
+      text-align: left;
+      font-size: 12px;
+    }
+    .menu-item:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+    .menu-item:disabled { color: var(--text-tertiary); cursor: default; }
+    .menu-item .icon { width: 16px; height: 16px; }
+    .menu-separator { height: 1px; margin: 5px 4px; background: var(--separator); }
+
+    .toast {
+      position: fixed;
+      z-index: 40;
+      left: 50%;
+      bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: min(560px, calc(100vw - 40px));
+      min-height: 44px;
+      padding: 8px 10px 8px 14px;
+      border: 1px solid var(--separator-strong);
+      border-radius: 12px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--surface) 97%, transparent);
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 10px);
+      transition: opacity 150ms ease, transform 150ms ease;
+    }
+    .toast.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+    .toast-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .toast-action { flex: 0 0 auto; min-height: 32px; padding: 0 9px; border-radius: 7px; color: var(--accent); background: transparent; font-weight: 650; }
+    .toast-action:hover { background: var(--accent-soft); }
+
+    .mobile-sidebar-toggle { display: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .45; }
+    }
+
+    @media (max-width: 1105px) {
+      .titlebar { grid-template-columns: 52px minmax(0, 1fr) var(--inspector-width); }
+      .titlebar-left { justify-content: center; padding: 0; }
+      .titlebar-left .traffic-lights, .titlebar-left .app-mark { display: none; }
+      .mobile-sidebar-toggle { display: grid; }
+      .workspace { grid-template-columns: minmax(0, 1fr) var(--inspector-width); }
+      .sidebar {
+        position: fixed;
+        z-index: 22;
+        top: 52px;
+        bottom: 0;
+        left: 0;
+        width: var(--sidebar-width);
+        box-shadow: 16px 0 42px rgb(0 0 0 / 24%);
+        transform: translateX(-102%);
+        transition: transform 170ms ease;
+      }
+      .sidebar.open { transform: translateX(0); }
+      .add-popover { right: calc(var(--inspector-width) + 20px); }
+      .app-window.inspector-closed .titlebar { grid-template-columns: 52px minmax(0, 1fr) 52px; }
+      .app-window.inspector-closed .workspace { grid-template-columns: minmax(0, 1fr) 0; }
+      .app-window.inspector-closed .add-popover { right: 20px; }
+    }
+
+    @media (max-width: 879px) {
+      .titlebar { grid-template-columns: 52px minmax(0, 1fr) 52px; }
+      .workspace { display: block; }
+      .board-shell { height: 100%; }
+      .inspector {
+        position: fixed;
+        z-index: 21;
+        top: 52px;
+        right: 0;
+        bottom: 0;
+        width: min(var(--inspector-width), calc(100vw - 56px));
+        box-shadow: -16px 0 42px rgb(0 0 0 / 24%);
+        transform: translateX(102%);
+        transition: transform 170ms ease;
+      }
+      .inspector.open { transform: translateX(0); }
+      .add-popover { top: 106px; right: 18px; width: min(340px, calc(100vw - 36px)); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition-duration: 0.001ms !important; }
+    }
+
+    @media (prefers-contrast: more) {
+      :root { --separator: light-dark(rgb(0 0 0 / 28%), rgb(255 255 255 / 26%)); --separator-strong: light-dark(rgb(0 0 0 / 48%), rgb(255 255 255 / 46%)); }
+    }
+  </style>
+</head>
+<body>
+  <svg class="sr-only" aria-hidden="true">
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/></symbol>
+    <symbol id="i-compose" viewBox="0 0 24 24"><path d="M5 19h4L19 9l-4-4L5 15v4Z"/><path d="m13.5 6.5 4 4M5 8V5h3"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 17.5A7.5 7.5 0 1 1 18 19l-5 2-5-2.2"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5h7l2-2h4.5A3.5 3.5 0 0 1 20 9v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7.5Z"/></symbol>
+    <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M15 4v16M5.5 8h1M11.5 8h1M17.5 8h1"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 7h16v12H4zM3 4h18v3H3zM9 11h6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="8" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="17" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="17" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M5 18.5A8 8 0 1 1 19 17l-5 3-5-1"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M13 5h6v6M19 5l-9 9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></symbol>
+    <symbol id="i-remove" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </svg>
+
+  <main class="app-window inspector-closed" id="appWindow" aria-label="D Code 外部参考会话任务看板原型">
+    <header class="titlebar">
+      <div class="titlebar-left">
+        <button class="icon-button mobile-sidebar-toggle" id="sidebarToggle" aria-label="显示侧栏"><svg class="icon"><use href="#i-sidebar"/></svg></button>
+        <div class="traffic-lights" aria-hidden="true"><span class="traffic-light red"></span><span class="traffic-light yellow"></span><span class="traffic-light green"></span></div>
+        <div class="app-mark"><svg class="icon"><use href="#i-board"/></svg><span>D Code</span></div>
+      </div>
+      <div class="titlebar-center">外部参考 · 会话任务看板原型</div>
+      <div class="titlebar-right">
+        <button class="icon-button" id="themeToggle" aria-label="切换浅色或深色外观" aria-pressed="false"><svg class="icon"><use href="#i-moon"/></svg></button>
+        <button class="icon-button" id="inspectorToggle" aria-label="显示或隐藏检查器" aria-pressed="false"><svg class="icon"><use href="#i-sidebar"/></svg></button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" id="sidebar" aria-label="D Code 侧栏">
+        <div class="sidebar-header">
+          <div class="sidebar-account"><strong>D Code</strong><span>diwu</span></div>
+          <button class="icon-button" aria-label="搜索"><svg class="icon"><use href="#i-search"/></svg></button>
+          <button class="icon-button" aria-label="新建会话"><svg class="icon"><use href="#i-compose"/></svg></button>
+        </div>
+        <nav class="sidebar-section" aria-label="主要导航">
+          <button class="nav-row"><svg class="icon"><use href="#i-chat"/></svg><span class="nav-label">最近会话</span><span class="nav-count">12</span></button>
+          <button class="nav-row"><svg class="icon"><use href="#i-folder"/></svg><span class="nav-label">项目</span><span class="nav-count">3</span></button>
+          <button class="nav-row selected" id="boardNavButton" aria-current="page"><svg class="icon"><use href="#i-board"/></svg><span class="nav-label">任务看板</span><span class="nav-count" id="boardNavCount">6</span></button>
+          <button class="nav-row"><svg class="icon"><use href="#i-archive"/></svg><span class="nav-label">已归档会话</span></button>
+        </nav>
+        <section class="sidebar-section" aria-labelledby="recentHeading">
+          <div class="section-title" id="recentHeading">最近会话</div>
+          <div id="recentSessions"></div>
+        </section>
+        <section class="sidebar-section" aria-labelledby="projectHeading">
+          <div class="section-title" id="projectHeading">项目</div>
+          <button class="nav-row"><svg class="icon"><use href="#i-folder"/></svg><span class="nav-label">D Code</span><span class="nav-count">8</span></button>
+          <button class="nav-row"><svg class="icon"><use href="#i-folder"/></svg><span class="nav-label">pi-dteam</span><span class="nav-count">4</span></button>
+        </section>
+      </aside>
+
+      <section class="board-shell" id="boardShell" aria-labelledby="boardTitle">
+        <header class="board-header">
+          <div class="board-title-row">
+            <div class="board-heading"><h1 id="boardTitle">任务看板</h1><p>外部参考原型，未进入 D Code 版本计划。从左侧拖入现有会话；卡片点击后回到原会话并激活关联工作项。</p></div>
+            <div class="header-actions">
+              <button class="icon-button" aria-label="筛选任务看板"><svg class="icon"><use href="#i-filter"/></svg></button>
+              <button class="primary-button" id="addSessionButton" aria-haspopup="dialog" aria-expanded="false" aria-controls="addPopover"><svg class="icon button-icon"><use href="#i-plus"/></svg>加入会话</button>
+            </div>
+          </div>
+          <div class="board-explainer"><svg class="icon button-icon"><use href="#i-info"/></svg><span><strong>拖入只建立工作项引用。</strong>真实运行中自动进“进行中”，其他默认进“待处理”；原 Session、cwd 与 Project 均不改变。</span></div>
+        </header>
+        <div class="board-scroll" id="boardScroll">
+          <div class="board-columns" id="boardColumns" aria-label="会话工作阶段"></div>
+        </div>
+      </section>
+
+      <section class="conversation-shell" id="conversationShell" aria-labelledby="conversationTitle" hidden>
+        <header class="conversation-header">
+          <button class="secondary-button" id="backToBoard">← 返回任务看板</button>
+          <div class="conversation-heading"><h1 id="conversationTitle">原会话</h1><p id="conversationMeta"></p></div>
+        </header>
+        <div class="conversation-body" id="conversationBody"></div>
+        <form class="mock-composer" id="mockComposer">
+          <div class="work-context" id="workContext"></div>
+          <label class="sr-only" for="mockComposerInput">给原会话输入内容</label>
+          <textarea id="mockComposerInput" placeholder="在关联工作项上下文中继续这个会话…"></textarea>
+          <div class="composer-footer"><span class="composer-state" id="composerState"></span><button class="primary-button" type="submit">发送</button></div>
+        </form>
+      </section>
+
+      <aside class="inspector" id="inspector" aria-label="会话看板检查器">
+        <div id="inspectorContent"></div>
+      </aside>
+    </div>
+  </main>
+
+  <section class="popover add-popover" id="addPopover" role="dialog" aria-modal="false" aria-labelledby="addPopoverTitle">
+    <div class="popover-header"><strong id="addPopoverTitle">从现有会话加入</strong><span>选择后只创建看板位置，原会话继续保留。</span></div>
+    <label class="sr-only" for="sessionSearch">搜索会话</label>
+    <input class="popover-search" id="sessionSearch" type="search" placeholder="搜索标题或项目">
+    <div class="session-picker-list" id="sessionPickerList"></div>
+  </section>
+
+  <div class="context-menu" id="cardMenu" role="menu" aria-label="会话卡片操作"></div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span class="toast-message" id="toastMessage"></span>
+    <button class="toast-action" id="toastAction" hidden>撤销</button>
+  </div>
+
+  <script>
+    const icons = {
+      board: '<svg class="icon"><use href="#i-board"/></svg>',
+      check: '<svg class="icon"><use href="#i-check"/></svg>',
+      clock: '<svg class="icon"><use href="#i-clock"/></svg>',
+      folder: '<svg class="icon"><use href="#i-folder"/></svg>',
+      grip: '<svg class="icon"><use href="#i-grip"/></svg>',
+      info: '<svg class="icon"><use href="#i-info"/></svg>',
+      left: '<svg class="icon"><use href="#i-left"/></svg>',
+      message: '<svg class="icon"><use href="#i-message"/></svg>',
+      more: '<svg class="icon"><use href="#i-more"/></svg>',
+      open: '<svg class="icon"><use href="#i-open"/></svg>',
+      plus: '<svg class="icon"><use href="#i-plus"/></svg>',
+      remove: '<svg class="icon"><use href="#i-remove"/></svg>',
+      right: '<svg class="icon"><use href="#i-right"/></svg>',
+      x: '<svg class="icon"><use href="#i-x"/></svg>'
+    };
+
+    const columns = [
+      { id: 'backlog', title: '待处理', color: 'var(--purple)', hint: '已收录，尚无活动 Run' },
+      { id: 'doing', title: '进行中', color: 'var(--blue)', hint: '排队、规划或执行中' },
+      { id: 'review', title: '待确认', color: 'var(--green)', hint: '等待确认计划或验收结果' },
+      { id: 'done', title: '已完成', color: 'var(--text-tertiary)', hint: '仅在人工验收成立后进入' }
+    ];
+
+    const SESSION_DRAG_TYPE = 'application/x-dcode-session-ref';
+    const PLACEMENT_DRAG_TYPE = 'application/x-dcode-board-placement';
+
+    const sessions = [
+      { id: '019ff2bc-a041-7f26-9e82-1a01', title: '0.0.4 Workspace Tab 只读文件工作流', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 126, updated: '刚刚', duration: '24 分钟', runtime: 'running', runtimeLabel: '正在运行', activity: '正在验证文件引用与标签切换' },
+      { id: '019ff19b-8b4d-70ad-9537-8842', title: '任务看板与现有会话的关系', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 32, updated: '6 分钟前', duration: '11 分钟', runtime: 'attention', runtimeLabel: '等待你', activity: '等待确认“加入看板”是否足够直观' },
+      { id: '019fef4f-cd03-79bb-bdf1-19b7', title: 'Markdown 文档块级渲染与链接安全', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 84, updated: '1 小时前', duration: '38 分钟', runtime: 'idle', runtimeLabel: '空闲', activity: '已完成标题、列表、引用与表格呈现' },
+      { id: '019fee86-5fa2-7b11-aca0-32f0', title: '整理 Agent Team 版本路线', project: 'pi-dteam', source: 'pi-dteam', cwd: '/Users/diwu/Workspace/Codes/Githubs/pi-dteam', messages: 58, updated: '昨天', duration: '42 分钟', runtime: 'idle', runtimeLabel: '空闲', activity: '已明确主智能体有界中转边界' },
+      { id: '019fec20-78bf-7628-a05b-e821', title: '会话侧栏 Hover 与图标对齐', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 47, updated: '昨天', duration: '29 分钟', runtime: 'error', runtimeLabel: '运行失败', activity: '保留原工作阶段，等待重试' },
+      { id: '019fe92a-3dce-702e-9087-aaa5', title: '0.0.3 路径与复制归档验收', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 213, updated: '2 天前', duration: '1 小时 14 分钟', runtime: 'idle', runtimeLabel: '空闲', activity: '本地回归标签已固定' },
+      { id: '019fe6a1-17f0-7a51-b30c-0a3b', title: 'pi-dhashline 原生工具摘要', project: 'pi-dhashline', source: 'pi-dhashline', cwd: '/Users/diwu/Workspace/Codes/Githubs/pi-dhashline', messages: 65, updated: '3 天前', duration: '31 分钟', runtime: 'idle', runtimeLabel: '空闲', activity: 'read / edit / write / search 已完成梳理' },
+      { id: '019fe1c4-903c-78e5-ae93-2ffd', title: '搜索浮层非活动会话刷新', project: 'D Code', source: 'dcode', cwd: '/Users/diwu/Workspace/Codes/Apps/dcode', messages: 91, updated: '4 天前', duration: '51 分钟', runtime: 'idle', runtimeLabel: '空闲', activity: '等待下一次搜索回归' }
+    ];
+
+    let placements = [
+      { id: 'placement-1', workItemID: 'work-1', sessionID: sessions[1].id, column: 'backlog', order: 0, stageRevision: 0, activeRunID: null, automaticRevision: null, gate: null, outcome: null },
+      { id: 'placement-2', workItemID: 'work-2', sessionID: sessions[6].id, column: 'backlog', order: 1, stageRevision: 0, activeRunID: null, automaticRevision: null, gate: null, outcome: null },
+      { id: 'placement-3', workItemID: 'work-3', sessionID: sessions[0].id, column: 'doing', order: 0, stageRevision: 0, activeRunID: 'run-live', automaticRevision: 0, gate: null, outcome: null },
+      { id: 'placement-4', workItemID: 'work-4', sessionID: sessions[4].id, column: 'doing', order: 1, stageRevision: 0, activeRunID: null, automaticRevision: null, gate: null, outcome: 'failed' },
+      { id: 'placement-5', workItemID: 'work-5', sessionID: sessions[2].id, column: 'review', order: 0, stageRevision: 0, activeRunID: null, automaticRevision: null, gate: 'result', outcome: 'succeeded' },
+      { id: 'placement-6', workItemID: 'work-6', sessionID: sessions[5].id, column: 'done', order: 0, stageRevision: 1, activeRunID: null, automaticRevision: null, gate: null, outcome: 'accepted' }
+    ];
+
+    let selectedPlacementID = null;
+    let activeWorkItemPlacementID = null;
+    let draggedPlacementID = null;
+    let draggedSessionID = null;
+    let menuPlacementID = null;
+    let menuTrigger = null;
+    let addPopoverTrigger = null;
+    let removedSnapshot = null;
+    let toastTimer = null;
+    let runCounter = 1;
+
+    const $ = selector => document.querySelector(selector);
+    const sessionFor = placement => sessions.find(session => session.id === placement.sessionID);
+    const placementForSession = sessionID => placements.find(placement => placement.sessionID === sessionID);
+    const columnFor = columnID => columns.find(column => column.id === columnID);
+
+    function suggestedColumnForSession(session) {
+      return session?.runtime === 'running' ? 'doing' : 'backlog';
+    }
+
+    function gateLabel(gate) {
+      return gate === 'plan' ? '确认计划' : gate === 'result' ? '验收结果' : null;
+    }
+
+    function setSessionRuntime(session, runtime, runtimeLabel, activity) {
+      session.runtime = runtime;
+      session.runtimeLabel = runtimeLabel;
+      session.activity = activity;
+      session.updated = '刚刚';
+    }
+
+    function escapeHTML(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+    }
+
+    function runtimeColor(runtime) {
+      return runtime === 'running' ? 'var(--blue)' : runtime === 'attention' ? 'var(--purple)' : runtime === 'error' ? 'var(--red)' : 'var(--text-tertiary)';
+    }
+
+    function normalizeOrders(columnID) {
+      placements.filter(item => item.column === columnID).sort((a, b) => a.order - b.order).forEach((item, index) => { item.order = index; });
+    }
+
+    function focusCardAfterRender(placementID) {
+      requestAnimationFrame(() => document.querySelector(`[data-placement-id="${CSS.escape(placementID)}"]`)?.focus());
+    }
+
+    function setInspectorOpen(open) {
+      if (open && window.innerWidth < 880) $('#sidebar').classList.remove('open');
+      $('#appWindow').classList.toggle('inspector-closed', !open);
+      $('#inspector').classList.toggle('open', open);
+      $('#inspectorToggle').setAttribute('aria-pressed', String(open));
+    }
+
+    function openInspectorFor(placementID, focusAfter = false) {
+      selectedPlacementID = placementID;
+      setInspectorOpen(true);
+      renderAll();
+      if (focusAfter) focusCardAfterRender(placementID);
+    }
+
+    function renderAll() {
+      renderSidebar();
+      renderBoard();
+      renderInspector();
+      renderPicker();
+      renderConversation();
+      $('#boardNavCount').textContent = placements.length;
+    }
+
+    function renderSidebar() {
+      const recent = sessions.slice(0, 6).map(session => {
+        const placed = placementForSession(session.id);
+        const label = placed ? `已在任务看板的“${columnFor(placed.column).title}”` : `将“${session.title}”加入任务看板，并按真实运行状态归类`;
+        return `<div class="session-row" draggable="true" tabindex="0" data-session-id="${session.id}" data-active-work="${placed?.id === activeWorkItemPlacementID}" aria-label="${escapeHTML(session.title)}，拖入任务看板将自动归类">
+          <div class="session-row-main"><div class="session-row-title">${escapeHTML(session.title)}</div><div class="session-row-meta">${escapeHTML(session.project)} · ${session.messages} 条消息 · ${escapeHTML(session.updated)}</div></div>
+          <button class="icon-button session-board-action ${placed ? 'is-placed' : ''}" data-add-session="${session.id}" aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}">${placed ? icons.check : icons.plus}</button>
+        </div>`;
+      }).join('');
+      $('#recentSessions').innerHTML = recent;
+      document.querySelectorAll('.session-row[draggable="true"]').forEach(row => {
+        row.addEventListener('dragstart', event => {
+          if (event.target.closest('button')) {
+            event.preventDefault();
+            return;
+          }
+          draggedSessionID = row.dataset.sessionId;
+          row.classList.add('dragging');
+          $('#boardShell').classList.add('session-drag-active');
+          event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData(SESSION_DRAG_TYPE, draggedSessionID);
+        });
+        row.addEventListener('dragend', () => {
+          draggedSessionID = null;
+          row.classList.remove('dragging');
+          $('#boardShell').classList.remove('session-drag-active');
+          document.querySelectorAll('.suggested-drop,.drag-over').forEach(element => element.classList.remove('suggested-drop', 'drag-over'));
+        });
+      });
+      document.querySelectorAll('[data-add-session]').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        const sessionID = button.dataset.addSession;
+        const existing = placementForSession(sessionID);
+        if (existing) {
+          openInspectorFor(existing.id);
+          showToast(`“${sessionFor(existing).title}”已在「${columnFor(existing.column).title}」`);
+          return;
+        }
+        addSession(sessionID);
+      }));
+    }
+
+    function renderBoard() {
+      $('#boardColumns').innerHTML = columns.map(column => {
+        const items = placements.filter(item => item.column === column.id).sort((a, b) => a.order - b.order);
+        const cards = items.length ? items.map(renderCard).join('') : `<div class="empty-column">拖入会话，或点击上方“加入会话”</div>`;
+        return `<section class="board-column" data-column-id="${column.id}" style="--column-color:${column.color}" aria-labelledby="column-${column.id}">
+          <header class="column-header"><span class="column-marker" aria-hidden="true"></span><span class="column-title" id="column-${column.id}">${column.title}</span><span class="column-count">${items.length}</span><button class="icon-button column-add" data-add-to-column="${column.id}" aria-label="向“${column.title}”加入会话" aria-haspopup="dialog" aria-expanded="false" aria-controls="addPopover">${icons.plus}</button></header>
+          <div class="card-list" data-drop-column="${column.id}">${cards}</div>
+        </section>`;
+      }).join('');
+
+      document.querySelectorAll('.session-card').forEach(card => {
+        card.addEventListener('click', event => {
+          if (event.target.closest('button')) return;
+          const placement = placements.find(item => item.id === card.dataset.placementId);
+          if (placement) openOriginalSession(placement.sessionID, placement.id);
+        });
+        card.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            const placement = placements.find(item => item.id === card.dataset.placementId);
+            if (placement) openOriginalSession(placement.sessionID, placement.id);
+          }
+          if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+            event.preventDefault();
+            moveRelative(card.dataset.placementId, event.key === 'ArrowRight' ? 1 : -1);
+          }
+        });
+        card.addEventListener('dragstart', event => {
+          draggedPlacementID = card.dataset.placementId;
+          card.classList.add('dragging');
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData(PLACEMENT_DRAG_TYPE, draggedPlacementID);
+        });
+        card.addEventListener('dragend', () => {
+          draggedPlacementID = null;
+          document.querySelectorAll('.dragging,.drag-over,.drop-before,.drop-after').forEach(element => element.classList.remove('dragging', 'drag-over', 'drop-before', 'drop-after'));
+        });
+        card.addEventListener('dragover', event => {
+          if (!draggedPlacementID || draggedPlacementID === card.dataset.placementId) return;
+          event.preventDefault();
+          event.stopPropagation();
+          document.querySelectorAll('.drop-before,.drop-after').forEach(element => element.classList.remove('drop-before', 'drop-after'));
+          const rect = card.getBoundingClientRect();
+          card.classList.add(event.clientY >= rect.top + rect.height / 2 ? 'drop-after' : 'drop-before');
+          card.closest('.board-column').classList.add('drag-over');
+        });
+        card.addEventListener('drop', event => {
+          if (!draggedPlacementID || draggedPlacementID === card.dataset.placementId) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const targetColumnID = card.closest('[data-column-id]').dataset.columnId;
+          const targetItems = placements.filter(item => item.column === targetColumnID && item.id !== draggedPlacementID).sort((a, b) => a.order - b.order);
+          const targetIndex = targetItems.findIndex(item => item.id === card.dataset.placementId) + (card.classList.contains('drop-after') ? 1 : 0);
+          reorderPlacement(draggedPlacementID, targetColumnID, targetIndex);
+        });
+      });
+
+      document.querySelectorAll('[data-card-menu]').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        openCardMenu(button.dataset.cardMenu, button.getBoundingClientRect(), event.currentTarget);
+      }));
+
+      document.querySelectorAll('[data-drop-column]').forEach(list => {
+        list.addEventListener('dragover', event => {
+          event.preventDefault();
+          const sessionID = event.dataTransfer.getData(SESSION_DRAG_TYPE) || draggedSessionID;
+          if (sessionID) {
+            document.querySelectorAll('.suggested-drop,.drag-over').forEach(element => element.classList.remove('suggested-drop', 'drag-over'));
+            const session = sessions.find(item => item.id === sessionID);
+            document.querySelector(`[data-column-id="${suggestedColumnForSession(session)}"]`)?.classList.add('suggested-drop');
+            return;
+          }
+          list.closest('.board-column').classList.add('drag-over');
+        });
+        list.addEventListener('dragleave', event => { if (!list.contains(event.relatedTarget)) list.closest('.board-column').classList.remove('drag-over'); });
+        list.addEventListener('drop', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          document.querySelectorAll('.suggested-drop,.drag-over').forEach(element => element.classList.remove('suggested-drop', 'drag-over'));
+          const sessionID = event.dataTransfer.getData(SESSION_DRAG_TYPE) || draggedSessionID;
+          if (sessionID) {
+            addSession(sessionID);
+            draggedSessionID = null;
+            $('#boardShell').classList.remove('session-drag-active');
+            return;
+          }
+          const placementID = event.dataTransfer.getData(PLACEMENT_DRAG_TYPE) || draggedPlacementID;
+          const targetColumnID = list.dataset.dropColumn;
+          const targetIndex = placements.filter(item => item.column === targetColumnID && item.id !== placementID).length;
+          reorderPlacement(placementID, targetColumnID, targetIndex);
+        });
+      });
+
+      document.querySelectorAll('[data-add-to-column]').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        openAddPopover(button.dataset.addToColumn, event.currentTarget);
+      }));
+    }
+
+    function renderCard(placement) {
+      const session = sessionFor(placement);
+      const selected = placement.id === selectedPlacementID;
+      const gate = gateLabel(placement.gate);
+      return `<article class="session-card" role="group" tabindex="0" draggable="true" data-placement-id="${placement.id}" data-selected="${selected}" aria-current="${selected}" aria-label="${escapeHTML(session.title)}，${columnFor(placement.column).title}，${session.runtimeLabel}${gate ? `，${gate}` : ''}。按回车打开原会话，按 Shift 加左右方向键移动阶段">
+        <div class="card-topline"><span class="card-grip" aria-hidden="true">${icons.grip}</span><span class="runtime-badge ${session.runtime}" style="--badge-color:${runtimeColor(session.runtime)}"><span class="runtime-dot"></span>${escapeHTML(session.runtimeLabel)}</span>${gate ? `<span class="gate-badge">${escapeHTML(gate)}</span>` : ''}<button class="icon-button card-menu-button" data-card-menu="${placement.id}" aria-label="${escapeHTML(session.title)}的看板操作" aria-haspopup="menu" aria-expanded="false" aria-controls="cardMenu">${icons.more}</button></div>
+        <h3 class="card-title">${escapeHTML(session.title)}</h3>
+        <div class="card-activity">${escapeHTML(session.activity)}</div>
+        <div class="card-project">${icons.folder}<span>${escapeHTML(session.project)} · ${escapeHTML(session.source)}</span></div>
+        <footer class="card-footer"><span class="card-footer-item">${icons.message}${session.messages}</span><span class="card-footer-item">${icons.clock}${escapeHTML(session.duration)}</span><span class="updated">${escapeHTML(session.updated)}</span></footer>
+      </article>`;
+    }
+
+    function renderInspector() {
+      const placement = placements.find(item => item.id === selectedPlacementID);
+      if (!placement) {
+        $('#inspectorContent').innerHTML = `<div class="inspector-empty">${icons.board}<div><strong>打开卡片菜单查看详情</strong><br><span>卡片主点击会直接回到原会话。</span></div></div>`;
+        return;
+      }
+      const session = sessionFor(placement);
+      const gate = gateLabel(placement.gate);
+      const runButtons = session.runtime === 'running'
+        ? `<button class="secondary-button" data-run-action="settle">模拟普通 Run 结束</button><button class="secondary-button" data-run-action="plan-gate">提交计划等待确认</button><button class="secondary-button" data-run-action="review-ready">完成自验并提交</button><button class="secondary-button" data-run-action="fail">模拟运行失败</button><button class="secondary-button" data-run-action="block">标记无法继续</button>`
+        : placement.column === 'review'
+          ? (placement.gate === 'plan'
+            ? `<button class="primary-button" data-run-action="approve-plan">批准计划并开始</button><button class="secondary-button" data-run-action="restart">要求修改计划</button>`
+            : placement.gate === 'result'
+              ? `<button class="primary-button" data-run-action="confirm">验收结果并完成</button><button class="secondary-button" data-run-action="restart">要求修改</button>`
+              : `<span class="scope-note">当前只是人工放置在待确认，尚无计划或结果门禁，不能验收完成。</span><button class="secondary-button" data-run-action="start">启动新的 Run</button>`)
+          : `<button class="secondary-button" data-run-action="start">模拟 Host 接受 Run</button>`;
+      $('#inspectorContent').innerHTML = `<header class="inspector-header"><div class="inspector-header-copy"><div class="inspector-eyebrow">工作项与原会话</div><h2 title="${escapeHTML(session.title)}">${escapeHTML(session.title)}</h2></div><button class="icon-button" id="closeInspector" aria-label="关闭检查器">${icons.x}</button></header>
+        <div class="inspector-body">
+          <section class="inspector-section"><h3>工作阶段</h3><div class="stage-picker">${columns.map(column => `<button class="stage-button ${placement.column === column.id ? 'active' : ''}" data-set-stage="${column.id}">${column.title}</button>`).join('')}</div></section>
+          <section class="inspector-section"><h3>自动流转模拟</h3><div class="run-actions">${runButtons}</div></section>
+          <section class="inspector-section"><h3>身份与信号</h3><dl class="detail-list">
+            <div class="detail-row"><dt>工作项</dt><dd><code>${escapeHTML(placement.workItemID)}</code></dd></div>
+            <div class="detail-row"><dt>运行状态</dt><dd><span class="runtime-badge ${session.runtime}" style="--badge-color:${runtimeColor(session.runtime)}"><span class="runtime-dot"></span>${escapeHTML(session.runtimeLabel)}</span></dd></div>
+            <div class="detail-row"><dt>人工门禁</dt><dd>${gate ? escapeHTML(gate) : '无'}</dd></div>
+            <div class="detail-row"><dt>Project</dt><dd>${escapeHTML(session.project)}</dd></div>
+            <div class="detail-row"><dt>工作目录</dt><dd><code>${escapeHTML(session.cwd)}</code></dd></div>
+            <div class="detail-row"><dt>Session ID</dt><dd><code>${escapeHTML(session.id)}</code></dd></div>
+            <div class="detail-row"><dt>消息</dt><dd>${session.messages} 条</dd></div>
+          </dl></section>
+          <section class="inspector-section"><div class="scope-note"><strong>Run 结束不等于可验收。</strong><br>普通结束只让 Runtime 回到空闲，卡片留在原阶段；只有“确认计划”或“完成自验并提交”才进入待确认。</div></section>
+          <section class="inspector-section inspector-actions"><button class="primary-button" id="openOriginal">${icons.open}打开原会话</button><button class="secondary-button remove-button" id="removePlacement">${icons.remove}移出任务看板</button></section>
+        </div>`;
+
+      document.querySelectorAll('[data-set-stage]').forEach(button => button.addEventListener('click', () => movePlacement(placement.id, button.dataset.setStage, false, true)));
+      document.querySelectorAll('[data-run-action]').forEach(button => button.addEventListener('click', () => applyRunAction(placement.id, button.dataset.runAction)));
+      $('#openOriginal').addEventListener('click', () => openOriginalSession(session.id, placement.id));
+      $('#removePlacement').addEventListener('click', () => removePlacement(placement.id));
+      $('#closeInspector').addEventListener('click', () => setInspectorOpen(false));
+    }
+
+    function renderConversation() {
+      const placement = placements.find(item => item.id === activeWorkItemPlacementID);
+      if (!placement) return;
+      const session = sessionFor(placement);
+      const gate = gateLabel(placement.gate);
+      $('#conversationTitle').textContent = session.title;
+      $('#conversationMeta').textContent = `${session.project} · ${session.cwd}`;
+      $('#workContext').innerHTML = `${icons.board}<span>当前工作项：<strong>${escapeHTML(placement.workItemID)}</strong> · ${escapeHTML(columnFor(placement.column).title)}</span>`;
+      $('#composerState').textContent = session.runtime === 'running'
+        ? '当前 Run 正在执行；继续发送将作为跟进消息'
+        : '非空内容被 Host 接受后，工作项才进入“进行中”';
+      const terminalActions = session.runtime === 'running'
+        ? `<div class="conversation-status"><button class="secondary-button" data-conversation-action="settle">普通结束（不提交验收）</button><button class="secondary-button" data-conversation-action="plan-gate">提交计划等待确认</button><button class="primary-button" data-conversation-action="review-ready">完成自验并提交</button><button class="secondary-button" data-conversation-action="fail">运行失败</button></div>`
+        : placement.column === 'review'
+          ? (placement.gate === 'plan'
+            ? `<div class="conversation-status"><button class="primary-button" data-conversation-action="approve-plan">批准计划并开始</button><button class="secondary-button" data-conversation-action="restart">要求修改计划</button></div>`
+            : placement.gate === 'result'
+              ? `<div class="conversation-status"><button class="primary-button" data-conversation-action="confirm">验收通过，标记完成</button><button class="secondary-button" data-conversation-action="restart">要求修改</button></div>`
+              : `<div class="conversation-status"><span class="scope-note">尚无结构化门禁，不能验收完成。</span><button class="secondary-button" data-conversation-action="start">启动新的 Run</button></div>`)
+          : '';
+      $('#conversationBody').innerHTML = `<div class="conversation-note"><strong>已打开原 Session。</strong><br>这里没有复制会话或更改 cwd；看板卡只把 <code>${escapeHTML(placement.workItemID)}</code> 关联到 <code>${escapeHTML(session.id)}</code>。</div>
+        <div class="conversation-note"><strong>当前阶段：${escapeHTML(columnFor(placement.column).title)}</strong><br>${escapeHTML(columnFor(placement.column).hint)}。${gate ? ` 当前门禁是“${escapeHTML(gate)}”。` : ''}普通 Run 结束只改变 Runtime，不会自动猜测为可验收。${terminalActions}</div>`;
+      document.querySelectorAll('[data-conversation-action]').forEach(button => button.addEventListener('click', () => applyRunAction(placement.id, button.dataset.conversationAction)));
+    }
+
+    function startRun(placementID, note = '新内容已被 Host 接受', expectedStageRevision = null) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement) return;
+      const session = sessionFor(placement);
+      const automaticRevision = expectedStageRevision ?? placement.stageRevision;
+      const automaticMoveAllowed = placement.stageRevision === automaticRevision;
+      placement.activeRunID = `run-${Date.now()}-${runCounter++}`;
+      placement.automaticRevision = automaticRevision;
+      placement.pendingStartRevision = null;
+      placement.gate = null;
+      placement.outcome = null;
+      setSessionRuntime(session, 'running', '正在运行', note);
+      if (automaticMoveAllowed && placement.column !== 'doing') movePlacement(placement.id, 'doing', false, false);
+      renderAll();
+      showToast(automaticMoveAllowed
+        ? '消息已被 Host 接受；关联工作项已进入「进行中」'
+        : '消息已被 Host 接受；你已手动改变阶段，本次只更新 Runtime');
+    }
+
+    function activeRunMatches(placement, runID) {
+      return Boolean(placement?.activeRunID && runID && placement.activeRunID === runID);
+    }
+
+    function settleRun(placementID, runID) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!activeRunMatches(placement, runID)) return false;
+      const session = sessionFor(placement);
+      placement.activeRunID = null;
+      placement.outcome = 'settled';
+      setSessionRuntime(session, 'idle', '已暂停', 'Run 已结束，但尚未提交验收');
+      renderAll();
+      showToast('Run 已结束；未收到可验收信号，卡片保留在原阶段');
+      return true;
+    }
+
+    function submitReviewGate(placementID, runID, gate = 'result') {
+      const placement = placements.find(item => item.id === placementID);
+      if (!activeRunMatches(placement, runID)) return false;
+      const session = sessionFor(placement);
+      const automaticMoveAllowed = placement.column === 'doing' && placement.automaticRevision === placement.stageRevision;
+      const shouldMove = automaticMoveAllowed;
+      placement.activeRunID = null;
+      placement.outcome = shouldMove ? (gate === 'plan' ? 'plan-ready' : 'succeeded') : 'result-after-manual-move';
+      placement.gate = shouldMove ? gate : null;
+      setSessionRuntime(session, 'attention', shouldMove ? '等待你' : '有新结果', shouldMove ? (gate === 'plan' ? '等待确认计划' : '已完成自验，等待验收结果') : '用户已手动改变阶段，未自动移列');
+      if (shouldMove) movePlacement(placement.id, 'review', false, false);
+      renderAll();
+      showToast(shouldMove
+        ? `已提交「${gateLabel(gate)}」；工作项进入「待确认」`
+        : '你已手动改变阶段；迟到的 Run 结果不会覆盖你的选择');
+      return true;
+    }
+
+    function failRun(placementID, runID, blocked = false) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!activeRunMatches(placement, runID)) return false;
+      const session = sessionFor(placement);
+      placement.activeRunID = null;
+      placement.outcome = blocked ? 'blocked' : 'failed';
+      setSessionRuntime(session, blocked ? 'attention' : 'error', blocked ? '需要介入' : '运行失败', blocked ? '明确无法继续，等待人工处理' : '本次 Run 失败，工作阶段未改变');
+      renderAll();
+      showToast(blocked ? '已标记需要介入；首版以徽标表达，不新增第五列' : '运行失败；工作项保留在原阶段');
+      return true;
+    }
+
+    function confirmWorkItem(placementID) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement || placement.column !== 'review' || placement.gate !== 'result') return;
+      const session = sessionFor(placement);
+      placement.gate = null;
+      placement.outcome = 'accepted';
+      setSessionRuntime(session, 'idle', '已验收', '用户已明确确认完成');
+      movePlacement(placement.id, 'done', false, true);
+      renderAll();
+      showToast('你已验收结果；工作项进入「已完成」');
+    }
+
+    function applyRunAction(placementID, action) {
+      const placement = placements.find(item => item.id === placementID);
+      const runID = placement?.activeRunID ?? null;
+      if (action === 'start' || action === 'restart') startRun(placementID, action === 'restart' ? '修改请求已被 Host 接受' : undefined);
+      if (action === 'approve-plan') startRun(placementID, '计划已被人工批准，Host 已启动执行');
+      if (action === 'settle') settleRun(placementID, runID);
+      if (action === 'review-ready') submitReviewGate(placementID, runID, 'result');
+      if (action === 'plan-gate') submitReviewGate(placementID, runID, 'plan');
+      if (action === 'fail') failRun(placementID, runID, false);
+      if (action === 'block') failRun(placementID, runID, true);
+      if (action === 'confirm') confirmWorkItem(placementID);
+    }
+
+    function renderPicker(filter = '') {
+      const normalized = filter.trim().toLowerCase();
+      const items = sessions.filter(session => !normalized || `${session.title} ${session.project} ${session.source}`.toLowerCase().includes(normalized));
+      $('#sessionPickerList').innerHTML = items.map(session => {
+        const placed = placementForSession(session.id);
+        const explicitTarget = $('#addPopover').dataset.explicitTarget === 'true' ? $('#addPopover').dataset.targetColumn : null;
+        const suggested = columnFor(explicitTarget || suggestedColumnForSession(session)).title;
+        const state = placed ? `已在${columnFor(placed.column).title}` : `默认加入${suggested}`;
+        return `<button class="session-picker-item ${placed ? 'is-placed' : ''}" data-picker-session="${session.id}" ${placed ? 'disabled' : ''}><span class="session-picker-copy"><strong>${escapeHTML(session.title)}</strong><span>${escapeHTML(session.project)} · ${session.messages} 条消息 · ${escapeHTML(session.updated)}</span></span><span class="picker-state" aria-label="${state}">${placed ? icons.check : icons.plus}</span></button>`;
+      }).join('') || `<div class="empty-column">没有匹配的会话</div>`;
+      document.querySelectorAll('[data-picker-session]:not(:disabled)').forEach(button => button.addEventListener('click', () => {
+        const target = $('#addPopover').dataset.explicitTarget === 'true' ? $('#addPopover').dataset.targetColumn : null;
+        addSession(button.dataset.pickerSession, target);
+        closeAddPopover(false);
+      }));
+    }
+
+    function addSession(sessionID, columnID = null) {
+      const existing = placementForSession(sessionID);
+      if (existing) {
+        selectedPlacementID = existing.id;
+        renderAll();
+        showToast(`该会话已在「${columnFor(existing.column).title}」`);
+        return;
+      }
+      const session = sessions.find(item => item.id === sessionID);
+      if (!session) return;
+      const targetColumnID = columnID || suggestedColumnForSession(session);
+      const identity = Date.now();
+      const placement = { id: `placement-${identity}`, workItemID: `work-${identity}`, sessionID, column: targetColumnID, order: placements.filter(item => item.column === targetColumnID).length, stageRevision: 0, activeRunID: session.runtime === 'running' ? `observed-${identity}` : null, automaticRevision: session.runtime === 'running' ? 0 : null, gate: null, outcome: null };
+      placements.push(placement);
+      selectedPlacementID = placement.id;
+      renderAll();
+      showToast(`已按当前运行事实加入「${columnFor(targetColumnID).title}」；原会话与工作目录未变`);
+    }
+
+    function reorderPlacement(placementID, targetColumnID, targetIndex, focusAfter = false, manualStageChange = true) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement || !columnFor(targetColumnID)) return;
+      const oldColumn = placement.column;
+      const targetItems = placements
+        .filter(item => item.column === targetColumnID && item.id !== placementID)
+        .sort((a, b) => a.order - b.order);
+      const insertionIndex = Math.max(0, Math.min(targetItems.length, targetIndex));
+      placement.column = targetColumnID;
+      if (manualStageChange && oldColumn !== targetColumnID) {
+        placement.stageRevision += 1;
+        placement.automaticRevision = null;
+        placement.gate = null;
+        placement.outcome = targetColumnID === 'done' ? 'accepted' : (oldColumn === 'done' ? null : placement.outcome);
+        if (oldColumn === 'done' && targetColumnID !== 'done') {
+          const session = sessionFor(placement);
+          if (session.runtime !== 'running') setSessionRuntime(session, 'idle', '空闲', '用户已重新打开工作项');
+        }
+      }
+      targetItems.splice(insertionIndex, 0, placement);
+      targetItems.forEach((item, index) => { item.order = index; });
+      if (oldColumn !== targetColumnID) normalizeOrders(oldColumn);
+      selectedPlacementID = placementID;
+      renderAll();
+      if (focusAfter) focusCardAfterRender(placementID);
+      const message = oldColumn === targetColumnID
+        ? `已调整「${columnFor(targetColumnID).title}」中的顺序；原会话未变`
+        : `已移至「${columnFor(targetColumnID).title}」；原会话与工作目录未变`;
+      showToast(message);
+    }
+
+    function movePlacement(placementID, targetColumnID, focusAfter = false, manualStageChange = true) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement || placement.column === targetColumnID) return;
+      const targetIndex = placements.filter(item => item.column === targetColumnID && item.id !== placementID).length;
+      reorderPlacement(placementID, targetColumnID, targetIndex, focusAfter, manualStageChange);
+    }
+
+    function moveRelative(placementID, delta) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement) return;
+      const currentIndex = columns.findIndex(column => column.id === placement.column);
+      const nextIndex = Math.max(0, Math.min(columns.length - 1, currentIndex + delta));
+      if (nextIndex === currentIndex) {
+        focusCardAfterRender(placementID);
+        return;
+      }
+      movePlacement(placementID, columns[nextIndex].id, true);
+    }
+
+    function removePlacement(placementID) {
+      const index = placements.findIndex(item => item.id === placementID);
+      if (index < 0) return;
+      const placement = placements[index];
+      const session = sessionFor(placement);
+      const wasSelected = selectedPlacementID === placementID;
+      removedSnapshot = { placement: { ...placement }, index };
+      placements.splice(index, 1);
+      normalizeOrders(placement.column);
+      if (wasSelected) {
+        selectedPlacementID = null;
+        setInspectorOpen(false);
+      }
+      if (activeWorkItemPlacementID === placementID) {
+        activeWorkItemPlacementID = null;
+        showBoard();
+      }
+      renderAll();
+      showToast(`已将“${session.title}”移出看板；原会话仍保留`, true);
+    }
+
+    function restoreRemoved() {
+      if (!removedSnapshot) return;
+      placements.splice(Math.min(removedSnapshot.index, placements.length), 0, removedSnapshot.placement);
+      selectedPlacementID = removedSnapshot.placement.id;
+      normalizeOrders(removedSnapshot.placement.column);
+      const restoredPlacementID = removedSnapshot.placement.id;
+      removedSnapshot = null;
+      openInspectorFor(restoredPlacementID);
+      showToast('已恢复看板位置；原会话始终没有改变');
+    }
+
+    function openOriginalSession(sessionID, placementID = placementForSession(sessionID)?.id) {
+      const session = sessions.find(item => item.id === sessionID);
+      if (!session || !placementID) return;
+      activeWorkItemPlacementID = placementID;
+      selectedPlacementID = placementID;
+      $('#boardShell').hidden = true;
+      $('#conversationShell').hidden = false;
+      $('#boardNavButton').classList.remove('selected');
+      $('#boardNavButton').removeAttribute('aria-current');
+      $('.titlebar-center').textContent = session.title;
+      renderAll();
+      const row = document.querySelector(`[data-session-id="${CSS.escape(sessionID)}"]`);
+      if (row) {
+        row.classList.add('flash');
+        row.scrollIntoView({ block: 'nearest' });
+        setTimeout(() => row.classList.remove('flash'), 1200);
+      }
+      showToast(`已打开同一个 Session，并激活工作项 ${placements.find(item => item.id === placementID)?.workItemID}`);
+      requestAnimationFrame(() => $('#mockComposerInput').focus());
+    }
+
+    function showBoard() {
+      $('#conversationShell').hidden = true;
+      $('#boardShell').hidden = false;
+      $('#boardNavButton').classList.add('selected');
+      $('#boardNavButton').setAttribute('aria-current', 'page');
+      $('.titlebar-center').textContent = '外部参考 · 会话任务看板原型';
+      renderAll();
+      if (activeWorkItemPlacementID) focusCardAfterRender(activeWorkItemPlacementID);
+    }
+
+    function openAddPopover(targetColumn = null, trigger = $('#addSessionButton')) {
+      const popover = $('#addPopover');
+      if (addPopoverTrigger && addPopoverTrigger !== trigger) addPopoverTrigger.setAttribute('aria-expanded', 'false');
+      addPopoverTrigger = trigger;
+      popover.dataset.targetColumn = targetColumn || '';
+      popover.dataset.explicitTarget = String(Boolean(targetColumn));
+      popover.classList.add('open');
+      addPopoverTrigger?.setAttribute('aria-expanded', 'true');
+      renderPicker($('#sessionSearch').value);
+      requestAnimationFrame(() => $('#sessionSearch').focus());
+    }
+
+    function closeAddPopover(returnFocus = false) {
+      if (!$('#addPopover').classList.contains('open')) return;
+      $('#addPopover').classList.remove('open');
+      addPopoverTrigger?.setAttribute('aria-expanded', 'false');
+      const trigger = addPopoverTrigger;
+      addPopoverTrigger = null;
+      if (returnFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+    }
+
+    function closeCardMenu(returnFocus = false) {
+      const menu = $('#cardMenu');
+      if (!menu.classList.contains('open')) return;
+      menu.classList.remove('open');
+      menuTrigger?.setAttribute('aria-expanded', 'false');
+      const trigger = menuTrigger;
+      menuTrigger = null;
+      menuPlacementID = null;
+      menu.onkeydown = null;
+      if (returnFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+    }
+
+    function openCardMenu(placementID, rect, trigger) {
+      const placement = placements.find(item => item.id === placementID);
+      if (!placement) return;
+      closeCardMenu(false);
+      menuPlacementID = placementID;
+      menuTrigger = trigger;
+      menuTrigger.setAttribute('aria-expanded', 'true');
+      const session = sessionFor(placement);
+      const index = columns.findIndex(column => column.id === placement.column);
+      const menu = $('#cardMenu');
+      menu.innerHTML = `<button class="menu-item" data-menu-action="open" role="menuitem">${icons.open}打开原会话</button><button class="menu-item" data-menu-action="inspect" role="menuitem">${icons.info || icons.board}查看工作项详情</button><div class="menu-separator"></div><button class="menu-item" data-menu-action="left" role="menuitem" ${index === 0 ? 'disabled' : ''}>${icons.left}移到上一阶段</button><button class="menu-item" data-menu-action="right" role="menuitem" ${index === columns.length - 1 ? 'disabled' : ''}>${icons.right}移到下一阶段</button><div class="menu-separator"></div><button class="menu-item" data-menu-action="remove" role="menuitem">${icons.remove}移出任务看板</button>`;
+      menu.style.left = `${Math.min(window.innerWidth - 226, Math.max(8, rect.right - 210))}px`;
+      menu.style.top = `${Math.min(window.innerHeight - 232, rect.bottom + 4)}px`;
+      menu.classList.add('open');
+      menu.querySelectorAll('[data-menu-action]').forEach(button => button.addEventListener('click', () => {
+        const action = button.dataset.menuAction;
+        if (action === 'open') {
+          closeCardMenu(true);
+          openOriginalSession(session.id, placementID);
+        }
+        if (action === 'inspect') {
+          closeCardMenu(false);
+          openInspectorFor(placementID, true);
+        }
+        if (action === 'left') {
+          closeCardMenu(false);
+          moveRelative(placementID, -1);
+        }
+        if (action === 'right') {
+          closeCardMenu(false);
+          moveRelative(placementID, 1);
+        }
+        if (action === 'remove') {
+          closeCardMenu(false);
+          removePlacement(placementID);
+        }
+      }));
+      menu.onkeydown = event => {
+        const items = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+        const currentIndex = Math.max(0, items.indexOf(document.activeElement));
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const delta = event.key === 'ArrowDown' ? 1 : -1;
+          items[(currentIndex + delta + items.length) % items.length]?.focus();
+        }
+        if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault();
+          items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          closeCardMenu(true);
+        }
+      };
+      requestAnimationFrame(() => menu.querySelector('[role="menuitem"]:not(:disabled)')?.focus());
+    }
+
+    function showToast(message, undo = false) {
+      clearTimeout(toastTimer);
+      $('#toastMessage').textContent = message;
+      $('#toastAction').hidden = !undo;
+      $('#toast').classList.add('show');
+      toastTimer = setTimeout(() => $('#toast').classList.remove('show'), undo ? 5200 : 3400);
+    }
+
+    $('#addSessionButton').addEventListener('click', event => {
+      event.stopPropagation();
+      $('#addPopover').classList.contains('open') ? closeAddPopover(true) : openAddPopover(null, event.currentTarget);
+    });
+    $('#boardNavButton').addEventListener('click', showBoard);
+    $('#backToBoard').addEventListener('click', showBoard);
+    $('#mockComposer').addEventListener('submit', event => {
+      event.preventDefault();
+      const input = $('#mockComposerInput');
+      const message = input.value.trim();
+      const placement = placements.find(item => item.id === activeWorkItemPlacementID);
+      if (!placement || !message) {
+        showToast('输入内容仍不会直接改变阶段；请先输入非空内容');
+        return;
+      }
+      const session = sessionFor(placement);
+      const expectedStageRevision = placement.stageRevision;
+      placement.pendingStartRevision = expectedStageRevision;
+      setSessionRuntime(session, 'attention', '正在启动', '等待 Host 接受本次 Run');
+      input.value = '';
+      renderAll();
+      showToast('内容已提交；只有 Host 真正接受后才会自动流转');
+      setTimeout(() => startRun(placement.id, `已接受：${message.slice(0, 44)}${message.length > 44 ? '…' : ''}`, expectedStageRevision), 360);
+    });
+    $('#sessionSearch').addEventListener('input', event => renderPicker(event.target.value));
+    $('#toastAction').addEventListener('click', restoreRemoved);
+    $('#themeToggle').addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      $('#themeToggle').setAttribute('aria-pressed', String(next === 'light'));
+    });
+    $('#sidebarToggle').addEventListener('click', () => {
+      const open = $('#sidebar').classList.toggle('open');
+      if (open && window.innerWidth < 880) {
+        $('#inspector').classList.remove('open');
+        $('#appWindow').classList.add('inspector-closed');
+        $('#inspectorToggle').setAttribute('aria-pressed', 'false');
+      }
+    });
+    $('#inspectorToggle').addEventListener('click', () => {
+      const willOpen = $('#appWindow').classList.contains('inspector-closed');
+      setInspectorOpen(willOpen);
+    });
+    document.addEventListener('click', event => {
+      if (!event.target.closest('#addPopover') && !event.target.closest('#addSessionButton') && !event.target.closest('[data-add-to-column]')) closeAddPopover(false);
+      if (!event.target.closest('#cardMenu') && !event.target.closest('[data-card-menu]')) closeCardMenu(false);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        closeAddPopover(true);
+        closeCardMenu(true);
+      }
+    });
+
+    window.__dcodeTaskboardPrototype = {
+      snapshot: () => ({ placements: placements.map(item => ({ ...item })), sessions: sessions.map(item => ({ ...item })), sessionCount: sessions.length, selectedPlacementID, activeWorkItemPlacementID }),
+      add: sessionID => addSession(sessionID),
+      addAuto: sessionID => addSession(sessionID),
+      move: (placementID, columnID) => movePlacement(placementID, columnID),
+      reorder: (placementID, columnID, targetIndex) => reorderPlacement(placementID, columnID, targetIndex),
+      open: placementID => {
+        const placement = placements.find(item => item.id === placementID);
+        if (placement) openOriginalSession(placement.sessionID, placement.id);
+      },
+      startRun: placementID => startRun(placementID),
+      settleRun: (placementID, runID) => settleRun(placementID, runID),
+      reviewReady: (placementID, runID) => submitReviewGate(placementID, runID, 'result'),
+      submitPlan: (placementID, runID) => submitReviewGate(placementID, runID, 'plan'),
+      failRun: (placementID, runID) => failRun(placementID, runID, false),
+      confirm: placementID => confirmWorkItem(placementID),
+      remove: placementID => removePlacement(placementID),
+      reset: () => location.reload()
+    };
+
+    renderAll();
+  </script>
+</body>
+</html>

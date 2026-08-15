@@ -29,6 +29,52 @@ struct DCodeProject: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+enum ProjectSessionCreationRoute: Equatable, Sendable {
+    case unavailable
+    case direct(SourceFolder)
+    case choose([SourceFolder])
+
+    static func resolve(for project: DCodeProject) -> Self {
+        switch project.sourceFolders.count {
+        case 0:
+            return .unavailable
+        case 1:
+            return .direct(project.sourceFolders[0])
+        default:
+            return .choose(project.sourceFolders)
+        }
+    }
+}
+
+struct ProjectSessionOwnership: Equatable, Sendable {
+    let project: DCodeProject
+    let sourceFolder: SourceFolder
+}
+
+enum ProjectSessionOwnershipResolver {
+    static func resolve(
+        cwd: String,
+        projects: [DCodeProject]
+    ) -> ProjectSessionOwnership? {
+        let canonicalCwd = canonicalPath(cwd)
+        for project in projects {
+            if let sourceFolder = project.sourceFolders.first(where: {
+                canonicalPath($0.path) == canonicalCwd
+            }) {
+                return ProjectSessionOwnership(project: project, sourceFolder: sourceFolder)
+            }
+        }
+        return nil
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+    }
+}
+
 struct ProjectFolderConflict: Hashable, Identifiable, Sendable {
     let path: String
     let projectID: UUID

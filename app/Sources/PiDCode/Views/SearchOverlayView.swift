@@ -73,12 +73,12 @@ struct SearchOverlayView: View {
                 model.dismissSearch()
                 return .handled
             }
-            Button("关闭搜索", systemImage: "xmark") {
+            Button {
                 model.dismissSearch()
+            } label: {
+                IconActionGlyph(systemName: "xmark")
             }
-            .labelStyle(.iconOnly)
-            .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-            .buttonStyle(.plain)
+            .buttonStyle(IconActionStyle())
             .dCodeAccessibleButton("关闭搜索")
             .disabled(model.isOpeningSession || model.isPromptTransactionActive)
         }
@@ -102,7 +102,7 @@ struct SearchOverlayView: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .frame(maxWidth: 220, minHeight: PiDCodeMetrics.minimumTarget, alignment: .leading)
+            .frame(maxWidth: 220, minHeight: PiDCodeMetrics.compactControlHeight, alignment: .leading)
             .contentShape(Rectangle())
             .accessibilityLabel("项目筛选")
             .disabled(model.isOpeningSession || model.isPromptTransactionActive)
@@ -121,7 +121,7 @@ struct SearchOverlayView: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .frame(maxWidth: 220, minHeight: PiDCodeMetrics.minimumTarget, alignment: .leading)
+            .frame(maxWidth: 220, minHeight: PiDCodeMetrics.compactControlHeight, alignment: .leading)
             .contentShape(Rectangle())
             .disabled(selectedProject == nil || model.isOpeningSession || model.isPromptTransactionActive)
             .accessibilityLabel("源文件夹筛选")
@@ -144,7 +144,7 @@ struct SearchOverlayView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottom) {
                 Button("重新建立索引") { model.presentSearch() }
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                     .padding(.bottom, 18)
             }
         } else if model.isSearchQuerying {
@@ -176,12 +176,12 @@ struct SearchOverlayView: View {
                             .font(.callout)
                             .lineLimit(2)
                         Spacer(minLength: 8)
-                        Button("关闭提示", systemImage: "xmark") {
+                        Button {
                             model.clearSearchOpenError()
+                        } label: {
+                            IconActionGlyph(systemName: "xmark")
                         }
-                        .labelStyle(.iconOnly)
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-                        .buttonStyle(.plain)
+                        .buttonStyle(IconActionStyle())
                         .accessibilityLabel("关闭打开错误")
                     }
                     .padding(.leading, 14)

@@ -1,57 +1,78 @@
 import SwiftUI
 
 struct ActivePlanView: View {
-    let plan: ActivePlanPresentation
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded = false
+    let plan: ActivePlanPresentation?
+    let changes: SessionChangeSummary?
+    let isRunning: Bool
+    @State private var presented = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button(action: toggleExpanded) {
-                HStack(spacing: 10) {
-                    Image(systemName: "checklist")
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 24)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(plan.objective)
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text(plan.currentLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 12)
-                    if plan.totalCount > 0 {
-                        ProgressView(value: plan.progress)
-                            .progressViewStyle(.linear)
-                            .frame(width: 88)
-                            .accessibilityLabel("Plan 进度")
-                            .accessibilityValue("\(plan.completedCount) / \(plan.totalCount)")
-                        Text("\(plan.completedCount)/\(plan.totalCount)")
-                            .font(.caption.monospacedDigit())
+        HStack {
+            Spacer(minLength: PiDCodeMetrics.spacingSection)
+            Button {
+                presented.toggle()
+            } label: {
+                HStack(spacing: PiDCodeMetrics.spacingStandard) {
+                    if isRunning {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: statusSymbol)
                             .foregroundStyle(.secondary)
                     }
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                    if let plan, plan.totalCount > 0 {
+                        Text("第 \(currentStepNumber(plan))/\(plan.totalCount) 步")
+                            .monospacedDigit()
+                    }
+                    if plan?.totalCount ?? 0 > 0, changes != nil {
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let changes {
+                        Text("\(changes.fileCount) 个文件")
+                        Text("+\(changes.additions)")
+                            .foregroundStyle(.green)
+                            .monospacedDigit()
+                        Text("-\(changes.deletions)")
+                            .foregroundStyle(.red)
+                            .monospacedDigit()
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                .accessibilityElement(children: .ignore)
-                .padding(.horizontal, 18)
-                .frame(minHeight: 52)
-                .contentShape(Rectangle())
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, PiDCodeMetrics.spacingGroup)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("活动 Plan：\(plan.objective)")
-            .accessibilityValue("当前步骤 \(plan.currentLabel)，\(plan.completedCount) / \(plan.totalCount)")
-            .accessibilityHint(expanded ? "收起 Plan" : "展开 Plan")
+            .background(.regularMaterial, in: Capsule())
+            .overlay { Capsule().strokeBorder(Color.primary.opacity(0.1)) }
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+            .popover(isPresented: $presented, arrowEdge: .bottom) {
+                details
+            }
+            .dCodeAccessibleButton(accessibilityLabel)
+            .accessibilityIdentifier("session-work-summary")
+            .accessibilityHint("显示当前路径 Plan 和会话已确认变更")
+            Spacer(minLength: PiDCodeMetrics.spacingSection)
+        }
+        .padding(.top, PiDCodeMetrics.spacingTight)
+    }
 
-            if expanded {
-                Divider()
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
+    private var details: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingSection) {
+                if let plan {
+                    VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingStandard) {
+                        Text("当前路径 Plan")
+                            .font(.headline)
+                        Text(plan.objective)
+                            .font(.callout.weight(.semibold))
+                        Text("第 \(currentStepNumber(plan))/\(max(plan.totalCount, 1)) 步 · \(plan.currentLabel)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if !plan.rootItems.isEmpty {
                             PlanItemGroup(title: nil, status: nil, items: plan.rootItems, currentItemID: plan.currentItem?.id)
                         }
@@ -64,22 +85,95 @@ struct ActivePlanView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
                 }
-                .frame(maxHeight: 270)
+                if plan != nil, changes != nil { Divider() }
+                if let changes {
+                    VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingStandard) {
+                        HStack {
+                            Text("会话已确认变更")
+                                .font(.headline)
+                            Spacer()
+                            Text("\(changes.runCount) 个 Run")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("结构化工具已确认 · 覆盖可能不完整 · 不是 Git 净差异")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(changes.files) { file in
+                            SessionChangedFileRow(file: file)
+                        }
+                    }
+                }
             }
+            .padding(PiDCodeMetrics.spacingSection)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .overlay(alignment: .top) { Divider() }
+        .frame(width: 430)
+        .frame(maxHeight: 430)
     }
 
-    private func toggleExpanded() {
-        if reduceMotion {
-            expanded.toggle()
-        } else {
-            withAnimation(.smooth(duration: 0.2)) { expanded.toggle() }
+    private var accessibilityLabel: String {
+        var parts: [String] = []
+        if let plan, plan.totalCount > 0 {
+            parts.append("当前路径 Plan 第 \(currentStepNumber(plan)) 步，共 \(plan.totalCount) 步")
         }
+        if let changes {
+            parts.append("会话已确认 \(changes.fileCount) 个文件，增加 \(changes.additions) 行，删除 \(changes.deletions) 行，覆盖可能不完整")
+        }
+        return parts.joined(separator: "；")
+    }
+
+    private var statusSymbol: String {
+        guard let plan, plan.totalCount > 0 else { return "checkmark.circle" }
+        return plan.completedCount == plan.totalCount ? "checkmark.circle" : "circle.dashed"
+    }
+
+    private func currentStepNumber(_ plan: ActivePlanPresentation) -> Int {
+        guard plan.totalCount > 0 else { return 0 }
+        if let currentID = plan.currentItem?.id,
+           let index = plan.allItems.firstIndex(where: { $0.id == currentID }) {
+            return index + 1
+        }
+        return min(plan.completedCount + 1, plan.totalCount)
+    }
+}
+
+private struct SessionChangedFileRow: View {
+    let file: SessionChangedFileSummary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: PiDCodeMetrics.spacingStandard) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+                .frame(width: PiDCodeMetrics.actionGlyphBox)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(URL(fileURLWithPath: file.filePath).lastPathComponent)
+                    .font(.callout.weight(.medium))
+                Text(detail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(file.filePath)
+            }
+            Spacer(minLength: PiDCodeMetrics.spacingStandard)
+            Text("+\(file.additions)")
+                .foregroundStyle(.green)
+                .monospacedDigit()
+            Text("-\(file.deletions)")
+                .foregroundStyle(.red)
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(file.filePath)，增加 \(file.additions) 行，删除 \(file.deletions) 行，\(file.mutationCount) 次已确认变更")
+    }
+
+    private var detail: String {
+        var parts = [file.filePath]
+        if let line = file.firstChangedLine { parts.append("首个变更行 \(line)") }
+        if file.mutationCount > 1 { parts.append("\(file.mutationCount) 次变更") }
+        return parts.joined(separator: " · ")
     }
 }
 

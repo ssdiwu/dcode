@@ -26,11 +26,11 @@ struct CodeBlockView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                 .accessibilityLabel(copied ? "代码已复制" : "复制代码")
             }
             .padding(.horizontal, 12)
-            .frame(minHeight: 40)
+            .frame(minHeight: 36)
             .background(Color.primary.opacity(0.035))
             Divider()
             ScrollView(.horizontal) {
@@ -132,7 +132,7 @@ struct MermaidDiagramView: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 4)
-        .frame(minHeight: 44)
+        .frame(minHeight: 36)
         .background(Color.primary.opacity(0.035))
     }
 
@@ -282,6 +282,125 @@ private struct MermaidArtView: View {
         case "none": .clear
         default: .primary
         }
+    }
+}
+
+struct TranscriptImageView: View {
+    let presentation: TranscriptImagePresentation
+    private let image: NSImage?
+    @State private var showingPreview = false
+
+    init(presentation: TranscriptImagePresentation) {
+        self.presentation = presentation
+        image = NSImage(data: presentation.data)
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Button {
+                    showingPreview = true
+                } label: {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: 104, height: 104)
+                        .clipped()
+                        .background(Color.primary.opacity(0.035))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help("查看原图")
+                .accessibilityLabel("图片，\(presentation.pixelWidth) × \(presentation.pixelHeight) 像素")
+                .accessibilityHint("打开原图预览")
+                .sheet(isPresented: $showingPreview) {
+                    TranscriptImagePreview(
+                        image: image,
+                        pixelWidth: presentation.pixelWidth,
+                        pixelHeight: presentation.pixelHeight,
+                        dismiss: { showingPreview = false }
+                    )
+                }
+            } else {
+                Label("无法显示图片", systemImage: "photo.badge.exclamationmark")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct TranscriptImagePreview: View {
+    let image: NSImage
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let dismiss: () -> Void
+    @State private var zoom = 1.0
+
+    private var fittedSize: CGSize {
+        let width = max(CGFloat(pixelWidth), 1)
+        let height = max(CGFloat(pixelHeight), 1)
+        let scale = min(1, 720 / width, 520 / height)
+        return CGSize(width: width * scale, height: height * scale)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: PiDCodeMetrics.spacingTight) {
+                Text("原图预览")
+                    .font(.headline)
+                Text("\(pixelWidth) × \(pixelHeight)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: PiDCodeMetrics.spacingSection)
+                Button {
+                    zoom = max(0.5, zoom - 0.25)
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .buttonStyle(IconActionStyle())
+                .disabled(zoom <= 0.5)
+                .help("缩小图片")
+                Text(zoom, format: .percent.precision(.fractionLength(0)))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44)
+                Button {
+                    zoom = min(4, zoom + 0.25)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .buttonStyle(IconActionStyle())
+                .disabled(zoom >= 4)
+                .help("放大图片")
+                Button("完成", action: dismiss)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, PiDCodeMetrics.spacingSection)
+            .frame(minHeight: 52)
+
+            Divider()
+
+            ScrollView([.horizontal, .vertical]) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(
+                        width: fittedSize.width * zoom,
+                        height: fittedSize.height * zoom
+                    )
+                    .padding(PiDCodeMetrics.spacingSection)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(Color.black.opacity(0.92))
+        }
+        .frame(minWidth: 680, minHeight: 520)
+        .accessibilityElement(children: .contain)
     }
 }
 

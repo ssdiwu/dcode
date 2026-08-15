@@ -176,6 +176,117 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(transcript[0].timestamp, Date(timeIntervalSince1970: 1))
     }
 
+    func testTranscriptParserPromotesSupportedPiImageBlocksWithoutCopyingThem() throws {
+        let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let entry: JSONValue = .object([
+            "type": .string("message"),
+            "id": .string("assistant-image"),
+            "timestamp": .string("2026-01-01T00:00:00.000Z"),
+            "message": .object([
+                "role": .string("assistant"),
+                "content": .array([
+                    .object([
+                        "type": .string("image"),
+                        "data": .string(encoded),
+                        "mimeType": .string("image/png"),
+                    ]),
+                ]),
+                "timestamp": .number(1_000),
+            ]),
+        ])
+
+        let blocks = try XCTUnwrap(TranscriptParser.parse(entries: [entry]).first?.blocks)
+        XCTAssertEqual(blocks.count, 1)
+        guard case let .image(_, image) = blocks[0] else {
+            return XCTFail("Expected a Pi image block")
+        }
+        XCTAssertEqual(image.mimeType, "image/png")
+        XCTAssertEqual(image.pixelWidth, 1)
+        XCTAssertEqual(image.pixelHeight, 1)
+        XCTAssertEqual(image.data.base64EncodedString(), encoded)
+    }
+
+    func testTranscriptParserKeepsToolResultTextAndPromotesItsImage() throws {
+        let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let entry: JSONValue = .object([
+            "type": .string("message"),
+            "id": .string("tool-image"),
+            "timestamp": .string("2026-01-01T00:00:00.000Z"),
+            "message": .object([
+                "role": .string("toolResult"),
+                "toolCallId": .string("call-image"),
+                "toolName": .string("view_image"),
+                "content": .array([
+                    .object(["type": .string("text"), "text": .string("已查看图片")]),
+                    .object([
+                        "type": .string("image"),
+                        "data": .string(encoded),
+                        "mimeType": .string("image/png"),
+                    ]),
+                ]),
+                "isError": .bool(false),
+                "timestamp": .number(1_000),
+            ]),
+        ])
+
+        let blocks = try XCTUnwrap(TranscriptParser.parse(entries: [entry]).first?.blocks)
+        XCTAssertEqual(blocks.count, 2)
+        guard case let .toolResult(_, result) = blocks[0] else {
+            return XCTFail("Expected the tool result summary first")
+        }
+        XCTAssertEqual(result.content, "已查看图片")
+        guard case .image = blocks[1] else {
+            return XCTFail("Expected the structured image after the tool result")
+        }
+    }
+
+    func testTranscriptParserFallsBackSafelyForInvalidOrUnsupportedPiImages() throws {
+        let content: JSONValue = .array([
+            .object([
+                "type": .string("image"),
+                "data": .string("not-base64"),
+                "mimeType": .string("image/png"),
+            ]),
+            .object([
+                "type": .string("image"),
+                "data": .string("aGVsbG8="),
+                "mimeType": .string("image/svg+xml"),
+            ]),
+        ])
+        let entry: JSONValue = .object([
+            "type": .string("message"),
+            "id": .string("assistant-invalid-images"),
+            "timestamp": .string("2026-01-01T00:00:00.000Z"),
+            "message": .object([
+                "role": .string("assistant"),
+                "content": content,
+                "timestamp": .number(1_000),
+            ]),
+        ])
+
+        let blocks = try XCTUnwrap(TranscriptParser.parse(entries: [entry]).first?.blocks)
+        XCTAssertEqual(blocks.count, 2)
+        for block in blocks {
+            guard case let .attachment(_, label) = block else {
+                return XCTFail("Invalid image data must remain a safe placeholder")
+            }
+            XCTAssertEqual(label, "无法显示图片")
+        }
+    }
+
+    func testAboutMetadataUsesBundleVersionAndCanonicalGitHubLinks() {
+        XCTAssertEqual(
+            AboutAppMetadata.versionText(infoDictionary: [
+                "CFBundleShortVersionString": "0.0.4",
+                "CFBundleVersion": "4",
+            ]),
+            "版本 0.0.4（4）"
+        )
+        XCTAssertEqual(AboutAppMetadata.versionText(infoDictionary: [:]), "版本未知")
+        XCTAssertEqual(AboutAppMetadata.authorURL.absoluteString, "https://github.com/ssdiwu")
+        XCTAssertEqual(AboutAppMetadata.projectURL.absoluteString, "https://github.com/ssdiwu/dcode")
+    }
+
     func testConversationRoundHidesIntermediateWorkAndKeepsFinalAnswer() throws {
         let source = #"""
         [
@@ -231,6 +342,152 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertNotNil(runs.first(where: { $0.text == "粗体" })?.intent)
         XCTAssertEqual(runs.first(where: { $0.text == "链接" })?.link?.absoluteString, "https://example.com")
         XCTAssertNotNil(runs.first(where: { $0.text == "代码" })?.intent)
+    }
+
+    func testMarkdownDocumentBuildsNativeBlocksAndSanitizesLinks() throws {
+        let source = """
+        # 调查结论
+
+        第一段包含 **粗体**、[网页](https://example.com)、[本地文件](file:///tmp/secret#L7) 和 [危险链接](javascript:alert(1))。
+
+        - 第一项
+          - 第二层
+
+        1. 第一步
+        2. 第二步
+
+        > 注意事项
+
+        ---
+
+        | 名称 | 状态 |
+        | :--- | ---: |
+        | D Code | 完成 |
+        """
+
+        let document = MarkdownDocument.parse(source)
+        XCTAssertFalse(document.usesPlainTextFallback)
+        XCTAssertEqual(document.rawSource, source)
+
+        let textBlocks = document.blocks.compactMap { block -> MarkdownTextBlock? in
+            guard case let .text(text) = block else { return nil }
+            return text
+        }
+        XCTAssertEqual(textBlocks.first?.style, .heading(level: 1))
+        XCTAssertEqual(textBlocks.first?.plainText, "调查结论")
+        XCTAssertTrue(textBlocks.contains(where: { $0.marker == "•" && $0.plainText == "第一项" }))
+        XCTAssertTrue(textBlocks.contains(where: {
+            $0.marker == "•" && $0.listDepth == 2 && $0.plainText == "第二层"
+        }))
+        XCTAssertTrue(textBlocks.contains(where: { $0.marker == "1." && $0.plainText == "第一步" }))
+        XCTAssertTrue(textBlocks.contains(where: { $0.marker == "2." && $0.plainText == "第二步" }))
+        XCTAssertTrue(textBlocks.contains(where: { $0.quoteDepth == 1 && $0.plainText == "注意事项" }))
+        XCTAssertTrue(document.blocks.contains(where: { if case .rule = $0 { return true }; return false }))
+
+        let paragraph = try XCTUnwrap(textBlocks.first(where: { $0.plainText.contains("第一段") }))
+        let links = paragraph.content.runs.compactMap(\.link)
+        XCTAssertEqual(links.first?.absoluteString, "https://example.com")
+        let localTarget = try XCTUnwrap(links.dropFirst().first.flatMap(WorkspaceFileLink.decode))
+        XCTAssertEqual(localTarget, WorkspaceFileLink.Target(path: "/tmp/secret", line: 7))
+        XCTAssertEqual(links.count, 2)
+
+        let adjacentChinese = MarkdownDocument.parse(
+            "**API 模拟提交（form-submit）**对中文表单有字段映射限制"
+        )
+        let adjacentParagraph = try XCTUnwrap(adjacentChinese.blocks.compactMap { block -> MarkdownTextBlock? in
+            guard case let .text(text) = block else { return nil }
+            return text
+        }.first)
+        XCTAssertEqual(
+            adjacentParagraph.plainText,
+            "API 模拟提交（form-submit）对中文表单有字段映射限制"
+        )
+        XCTAssertTrue(adjacentParagraph.content.runs.contains(where: { run in
+            String(adjacentParagraph.content[run.range].characters) == "API 模拟提交（form-submit）"
+                && run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        let table = try XCTUnwrap(document.blocks.compactMap { block -> MarkdownTableBlock? in
+            guard case let .table(table) = block else { return nil }
+            return table
+        }.first)
+        XCTAssertEqual(table.rows.map { $0.cells.map { String($0.characters) } }, [
+            ["名称", "状态"],
+            ["D Code", "完成"],
+        ])
+        XCTAssertEqual(table.alignments, [.leading, .trailing])
+        XCTAssertTrue(table.rows[0].isHeader)
+    }
+
+    func testMarkdownDocumentFallsBackWithoutDroppingUnsupportedOrOversizedSource() {
+        let imageSource = "前文\n\n![预览](https://example.com/image.png)\n\n后文"
+        let imageDocument = MarkdownDocument.parse(imageSource)
+        XCTAssertTrue(imageDocument.usesPlainTextFallback)
+        XCTAssertEqual(imageDocument.blocks, [.fallback(id: 0, source: imageSource)])
+
+        let oversized = String(repeating: "a", count: MarkdownDocument.maximumRichTextBytes + 1)
+        let oversizedDocument = MarkdownDocument.parse(oversized)
+        XCTAssertTrue(oversizedDocument.usesPlainTextFallback)
+        XCTAssertEqual(oversizedDocument.rawSource, oversized)
+    }
+
+    func testMarkdownDocumentNormalizesOnlyTheCJKStrongBoundaryOutsideInlineCode() throws {
+        func paragraph(in source: String) throws -> MarkdownTextBlock {
+            try XCTUnwrap(MarkdownDocument.parse(source).blocks.compactMap { block -> MarkdownTextBlock? in
+                guard case let .text(text) = block else { return nil }
+                return text
+            }.first)
+        }
+
+        let cjkAdjacent = try paragraph(in: "**粗体（说明）**紧接中文")
+        XCTAssertEqual(cjkAdjacent.plainText, "粗体（说明）紧接中文")
+        XCTAssertTrue(cjkAdjacent.content.runs.contains(where: { run in
+            String(cjkAdjacent.content[run.range].characters) == "粗体（说明）"
+                && run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        let commonMarkControl = try paragraph(in: "**粗体（说明）** 紧接中文")
+        XCTAssertEqual(commonMarkControl.plainText, "粗体（说明） 紧接中文")
+        XCTAssertTrue(commonMarkControl.content.runs.contains(where: { run in
+            run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        let inlineCode = try paragraph(in: "`**粗体（说明）**紧接中文`")
+        XCTAssertEqual(inlineCode.plainText, "**粗体（说明）**紧接中文")
+        XCTAssertFalse(inlineCode.content.runs.contains(where: { run in
+            run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        let asciiAdjacent = try paragraph(in: "**bold!**next")
+        XCTAssertEqual(asciiAdjacent.plainText, "**bold!**next")
+        XCTAssertFalse(asciiAdjacent.content.runs.contains(where: { run in
+            run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        let linked = try paragraph(in: "[链接](https://example.com/**foo（x）**中文)")
+        XCTAssertEqual(linked.content.runs.compactMap(\.link).map(\.absoluteString), [
+            "https://example.com/**foo%EF%BC%88x%EF%BC%89**%E4%B8%AD%E6%96%87",
+        ])
+
+        let validCommonMark = try paragraph(in: "a**! x!**中文**")
+        XCTAssertEqual(validCommonMark.plainText, "a**! x!中文")
+        XCTAssertTrue(validCommonMark.content.runs.contains(where: { run in
+            String(validCommonMark.content[run.range].characters) == "中文"
+                && run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }))
+
+        for source in [
+            "**[链接](https://example.com)（说明）**中文",
+            "**<https://example.com>（说明）**中文",
+        ] {
+            let linkedStrong = try paragraph(in: source)
+            XCTAssertFalse(linkedStrong.plainText.contains("**"))
+            XCTAssertTrue(linkedStrong.content.runs.contains(where: { run in
+                run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+            }))
+            XCTAssertEqual(linkedStrong.content.runs.compactMap(\.link).first?.absoluteString, "https://example.com")
+            XCTAssertEqual(MarkdownDocument.parse(source).rawSource, source)
+        }
     }
 
     func testConversationRoundDoesNotPromoteToolUseNarrationToFinalAnswer() {
@@ -325,11 +582,113 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(preview.hasSuffix("…"))
     }
 
+    func testCompletedLongUserMessageUsesCompactPreviewUntilExpanded() {
+        let longMessage = TranscriptItem(
+            id: "user-long",
+            role: .user,
+            timestamp: nil,
+            blocks: [.text(
+                id: "user-long-text",
+                value: "基于 ../../Workspace/Codes/Githubs/pi-dusage 帮我做一个 xai grok 的查询？可以怎么做，而不是直接做"
+            )]
+        )
+        let shortMessage = TranscriptItem(
+            id: "user-short",
+            role: .user,
+            timestamp: nil,
+            blocks: [.text(id: "user-short-text", value: "hi")]
+        )
+        let multilineMessage = TranscriptItem(
+            id: "user-multiline",
+            role: .user,
+            timestamp: nil,
+            blocks: [.text(id: "user-multiline-text", value: "第一段\n第二段\n第三段")]
+        )
+
+        XCTAssertTrue(UserMessagePresentation.shouldCollapse(longMessage, roundIsInactive: true))
+        XCTAssertFalse(UserMessagePresentation.shouldCollapse(longMessage, roundIsInactive: false))
+        XCTAssertFalse(UserMessagePresentation.shouldCollapse(shortMessage, roundIsInactive: true))
+        XCTAssertTrue(UserMessagePresentation.shouldCollapse(multilineMessage, roundIsInactive: true))
+        XCTAssertEqual(
+            UserMessagePresentation.preview(for: multilineMessage),
+            "第一段 第二段 第三段"
+        )
+    }
+
+    func testEarlierSteeringMessageBecomesInactiveWithoutAStandaloneFinalAnswer() {
+        let firstRound = ConversationRound(
+            id: "user-first",
+            user: nil,
+            processItems: [],
+            finalAssistant: nil,
+            startedAt: nil,
+            completedAt: nil,
+            toolCount: 1,
+            hasError: false,
+            entryIDs: [],
+            processEntryIDs: []
+        )
+
+        XCTAssertTrue(
+            UserMessagePresentation.roundIsInactive(
+                firstRound,
+                latestRoundID: "user-follow-up"
+            )
+        )
+        XCTAssertFalse(
+            UserMessagePresentation.roundIsInactive(
+                firstRound,
+                latestRoundID: firstRound.id
+            )
+        )
+    }
+
     func testConversationTimingFormatterUsesReadableChineseUnits() {
         XCTAssertEqual(ConversationTimingFormatter.durationText(0), "0 秒")
         XCTAssertEqual(ConversationTimingFormatter.durationText(83), "1 分钟 23 秒")
         XCTAssertEqual(ConversationTimingFormatter.durationText(3_720), "1 小时 2 分钟")
         XCTAssertNil(ConversationTimingFormatter.durationText(nil))
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try! XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let reference = Date(timeIntervalSince1970: 1_786_233_600) // 2026-08-09 00:00 UTC
+        let sameYear = Date(timeIntervalSince1970: 1_786_297_260) // 2026-08-09 17:41 UTC
+        let priorYear = Date(timeIntervalSince1970: 1_767_225_540) // 2025-12-31 23:59 UTC
+
+        XCTAssertEqual(
+            ConversationTimingFormatter.completionText(
+                duration: 635,
+                completedAt: sameYear,
+                relativeTo: reference,
+                calendar: calendar
+            ),
+            "耗时 10 分钟 35 秒 · 8月9日 17:41 完成"
+        )
+        XCTAssertEqual(
+            ConversationTimingFormatter.completionText(
+                duration: nil,
+                completedAt: priorYear,
+                relativeTo: reference,
+                calendar: calendar
+            ),
+            "2025年12月31日 23:59 完成"
+        )
+        XCTAssertEqual(
+            ConversationTimingFormatter.completionText(
+                duration: 12,
+                completedAt: sameYear,
+                didFail: true,
+                relativeTo: reference,
+                calendar: calendar
+            ),
+            "耗时 12 秒 · 8月9日 17:41 失败"
+        )
+        XCTAssertNil(ConversationTimingFormatter.completionText(
+            duration: 12,
+            completedAt: nil,
+            relativeTo: reference,
+            calendar: calendar
+        ))
     }
 
     func testDHashlineToolPresentationUsesSafeNativeSummaries() throws {
@@ -566,17 +925,66 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         XCTAssertTrue(policy(1_280).inlineSidebar)
         XCTAssertTrue(policy(1_280).inlineInspector)
-        XCTAssertTrue(policy(1_106).inlineSidebar)
-        XCTAssertTrue(policy(1_106).inlineInspector)
-        XCTAssertEqual(policy(1_106).conversationWidth, 480)
-        XCTAssertFalse(policy(1_105).inlineSidebar)
-        XCTAssertTrue(policy(1_105).inlineInspector)
-        XCTAssertEqual(policy(1_105).conversationWidth, 765)
+        XCTAssertTrue(policy(1_166).inlineSidebar)
+        XCTAssertTrue(policy(1_166).inlineInspector)
+        XCTAssertEqual(policy(1_166).conversationWidth, 480)
+        XCTAssertFalse(policy(1_165).inlineSidebar)
+        XCTAssertTrue(policy(1_165).inlineInspector)
+        XCTAssertEqual(policy(1_165).conversationWidth, 765)
         XCTAssertFalse(policy(880).inlineSidebar)
         XCTAssertTrue(policy(880).inlineInspector)
-        XCTAssertEqual(policy(880).conversationWidth, 540)
+        XCTAssertEqual(policy(880).conversationWidth, 480)
         XCTAssertFalse(policy(879).inlineSidebar)
         XCTAssertFalse(policy(879).inlineInspector)
+    }
+
+    func testWorkbenchLayoutClampsAndUsesPersistedPanelWidths() {
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(120), 240)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(900), 420)
+        XCTAssertEqual(WorkbenchLayoutPolicy.defaultInspectorWidth, 400)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampInspectorWidth(120), 400)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampInspectorWidth(900), 520)
+
+        let formerlyNarrow = WorkbenchLayoutPolicy(
+            width: 1_400,
+            preferredInspectorWidth: 340,
+            sidebarUserHidden: true,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        XCTAssertEqual(formerlyNarrow.inspectorWidth, 400)
+
+        let roomy = WorkbenchLayoutPolicy(
+            width: 1_400,
+            preferredSidebarWidth: 400,
+            preferredInspectorWidth: 500,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        XCTAssertEqual(roomy.sidebarWidth, 400)
+        XCTAssertEqual(roomy.inspectorWidth, 500)
+        XCTAssertTrue(roomy.inlineSidebar)
+        XCTAssertTrue(roomy.inlineInspector)
+        XCTAssertEqual(roomy.conversationWidth, 500)
+
+        let constrained = WorkbenchLayoutPolicy(
+            width: 1_300,
+            preferredSidebarWidth: 400,
+            preferredInspectorWidth: 500,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        XCTAssertFalse(constrained.inlineSidebar)
+        XCTAssertTrue(constrained.inlineInspector)
+        XCTAssertEqual(constrained.conversationWidth, 800)
     }
 
     func testInlineInspectorNeverDimsSiblingColumns() {
@@ -591,6 +999,97 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(policy.inlineInspector)
         XCTAssertFalse(policy.inspectorOverlay)
         XCTAssertFalse(policy.dimsBackground)
+    }
+
+    func testTopBarNewSessionAppearsOnlyWhenTheSessionSidebarIsAbsent() {
+        let inline = WorkbenchLayoutPolicy(
+            width: 1_400,
+            sidebarUserHidden: false,
+            inspectorUserHidden: true,
+            hasInspectorScope: false,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        let hidden = WorkbenchLayoutPolicy(
+            width: 1_400,
+            sidebarUserHidden: true,
+            inspectorUserHidden: true,
+            hasInspectorScope: false,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        let compactClosed = WorkbenchLayoutPolicy(
+            width: 879,
+            sidebarUserHidden: false,
+            inspectorUserHidden: true,
+            hasInspectorScope: false,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        let compactOpen = WorkbenchLayoutPolicy(
+            width: 879,
+            sidebarUserHidden: false,
+            inspectorUserHidden: true,
+            hasInspectorScope: false,
+            sidebarOverlayRequested: true,
+            inspectorOverlayRequested: false
+        )
+
+        XCTAssertFalse(inline.showsTopBarNewSession)
+        XCTAssertTrue(hidden.showsTopBarNewSession)
+        XCTAssertTrue(compactClosed.showsTopBarNewSession)
+        XCTAssertFalse(compactOpen.showsTopBarNewSession)
+    }
+
+    func testWorkbenchChromeAndInspectorRailShareTheCanvasSurface() {
+        XCTAssertEqual(DCodeWorkbenchSurfacePolicy.windowChrome, .canvas)
+        XCTAssertEqual(DCodeWorkbenchSurfacePolicy.centralCanvas, .canvas)
+        XCTAssertEqual(DCodeWorkbenchSurfacePolicy.inspectorRail, .canvas)
+        XCTAssertEqual(DCodeWorkbenchSurfacePolicy.sidebar, .navigation)
+        XCTAssertEqual(DCodeWorkbenchSurfacePolicy.floatingSurface, .raised)
+    }
+
+    func testTopLevelPagesInheritOnePersistedNavigationWidth() {
+        let layout = WorkbenchLayoutPolicy(
+            width: 1_400,
+            preferredSidebarWidth: 376,
+            preferredInspectorWidth: 468,
+            sidebarUserHidden: false,
+            inspectorUserHidden: false,
+            hasInspectorScope: true,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        let workspace = WorkbenchSurfaceLayout(destination: .workspace, layout: layout)
+        let settings = WorkbenchSurfaceLayout(destination: .settings(.workbench), layout: layout)
+
+        XCTAssertEqual(workspace.navigationWidth, 376)
+        XCTAssertEqual(settings.navigationWidth, 376)
+        XCTAssertEqual(workspace.contentLeadingInset, 376)
+        XCTAssertEqual(settings.contentLeadingInset, 0)
+        XCTAssertTrue(workspace.canResizeNavigation)
+        XCTAssertTrue(settings.canResizeNavigation)
+        XCTAssertEqual(layout.inspectorWidth, 468)
+    }
+
+    func testHiddenWorkspaceStillHandsItsPersistedWidthToSettingsNavigation() {
+        let layout = WorkbenchLayoutPolicy(
+            width: 1_200,
+            preferredSidebarWidth: 352,
+            sidebarUserHidden: true,
+            inspectorUserHidden: true,
+            hasInspectorScope: false,
+            sidebarOverlayRequested: false,
+            inspectorOverlayRequested: false
+        )
+        let workspace = WorkbenchSurfaceLayout(destination: .workspace, layout: layout)
+        let settings = WorkbenchSurfaceLayout(destination: .settings(.appearance), layout: layout)
+
+        XCTAssertEqual(workspace.navigationWidth, 0)
+        XCTAssertFalse(workspace.mainWorkspaceIsWrappedByNavigation)
+        XCTAssertEqual(settings.navigationWidth, 352)
+        XCTAssertTrue(settings.mainWorkspaceIsWrappedByNavigation)
+        XCTAssertTrue(settings.canResizeNavigation)
     }
 
     func testCompactPanelsRemainModalOverlays() {
@@ -710,12 +1209,13 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionCopy"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionTrash"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionVisibilityExclusions"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRename"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.3",
+            hostVersion: "0.0.4",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -736,7 +1236,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.3",
+            hostVersion: "0.0.4",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -949,6 +1449,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionCopy": True,
             "sessionTrash": True,
             "sessionVisibilityExclusions": True,
+            "sessionChangeLedger": True,
+            "sessionRename": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -959,7 +1461,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.3",
+                    "hostVersion": "0.0.4",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -989,6 +1491,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionDraftStore: SessionDraftStore(fileURL: root.appending(path: "drafts.json")),
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -1056,6 +1559,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionCopy": True,
             "sessionTrash": True,
             "sessionVisibilityExclusions": True,
+            "sessionChangeLedger": True,
+            "sessionRename": True,
         }
         agent_dir = sys.argv[2]
         open_marker = os.path.join(agent_dir, "open-started")
@@ -1101,7 +1606,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.3",
+                    "hostVersion": "0.0.4",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1180,6 +1685,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionDraftStore: draftStore,
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -1406,6 +1912,62 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(conflicts.map(\.projectID), [project.id])
     }
 
+    func testProjectSessionOwnershipUsesTheExactCanonicalSourceFolder() throws {
+        let root = temporaryURL("project-session-ownership")
+        let source = root.appending(path: "source", directoryHint: .isDirectory)
+        let nested = source.appending(path: "nested", directoryHint: .isDirectory)
+        let alias = root.appending(path: "alias", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: source)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let project = DCodeProject(name: "D Code", sourceFolders: [SourceFolder(path: source.path)])
+        let ownership = try XCTUnwrap(ProjectSessionOwnershipResolver.resolve(
+            cwd: alias.path,
+            projects: [project]
+        ))
+
+        XCTAssertEqual(ownership.project.id, project.id)
+        XCTAssertEqual(ownership.sourceFolder.path, source.path)
+        XCTAssertNil(ProjectSessionOwnershipResolver.resolve(cwd: nested.path, projects: [project]))
+    }
+
+    func testProjectFileTreeLayoutFlattensOnlyOneSourceFolder() {
+        let first = SourceFolder(path: "/workspace/first")
+        let second = SourceFolder(path: "/workspace/second")
+
+        XCTAssertEqual(
+            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "Empty", sourceFolders: [])),
+            .empty
+        )
+        XCTAssertEqual(
+            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "One", sourceFolders: [first])),
+            .flattened(first)
+        )
+        XCTAssertEqual(
+            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "Many", sourceFolders: [first, second])),
+            .grouped([first, second])
+        )
+    }
+
+    func testProjectSessionCreationRouteSkipsChooserForOneSourceFolder() {
+        let first = SourceFolder(path: "/workspace/first")
+        let second = SourceFolder(path: "/workspace/second")
+
+        XCTAssertEqual(
+            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "Empty", sourceFolders: [])),
+            .unavailable
+        )
+        XCTAssertEqual(
+            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "One", sourceFolders: [first])),
+            .direct(first)
+        )
+        XCTAssertEqual(
+            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "Many", sourceFolders: [first, second])),
+            .choose([first, second])
+        )
+    }
+
     func testFileTreeReadsOneLevelAndNeverExpandsSymbolicLinks() async throws {
         let root = temporaryURL("file-tree")
         let child = root.appending(path: "child", directoryHint: .isDirectory)
@@ -1520,6 +2082,32 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(NSApplication.shared.appearance?.name, .darkAqua)
         AppAppearance.system.apply()
         XCTAssertNil(NSApplication.shared.appearance)
+    }
+
+    func testTitleBarDoubleClickActionRespectsTheMacOSPreference() {
+        XCTAssertEqual(WindowTitleBarDoubleClickAction.resolve("Maximize"), .zoom)
+        XCTAssertEqual(WindowTitleBarDoubleClickAction.resolve("Minimize"), .minimize)
+        XCTAssertEqual(WindowTitleBarDoubleClickAction.resolve("None"), .none)
+        XCTAssertEqual(WindowTitleBarDoubleClickAction.resolve(nil), .zoom)
+        XCTAssertEqual(WindowTitleBarDoubleClickAction.resolve("unexpected"), .zoom)
+    }
+
+    func testCompactIconActionsShareOneNavigationRowRhythm() {
+        XCTAssertEqual(PiDCodeMetrics.actionGlyphPointSize, 13)
+        XCTAssertEqual(PiDCodeMetrics.actionGlyphBox, 18)
+        XCTAssertEqual(PiDCodeMetrics.iconActionSurface, 28)
+        XCTAssertEqual(PiDCodeMetrics.iconActionTarget, 32)
+        XCTAssertEqual(PiDCodeMetrics.compactControlHeight, 32)
+        XCTAssertEqual(PiDCodeMetrics.navigationRowHeight, 36)
+        XCTAssertEqual(PiDCodeMetrics.toolbarIconTarget, 28)
+        XCTAssertEqual(PiDCodeMetrics.windowTopBarHeight, PiDCodeMetrics.navigationRowHeight)
+        XCTAssertEqual(PiDCodeMetrics.windowControlsReservedWidth, 88)
+        XCTAssertEqual(PiDCodeMetrics.prominentIconActionTarget, 36)
+        XCTAssertLessThan(PiDCodeMetrics.actionGlyphBox, PiDCodeMetrics.iconActionSurface)
+        XCTAssertLessThan(PiDCodeMetrics.iconActionSurface, PiDCodeMetrics.iconActionTarget)
+        XCTAssertLessThan(PiDCodeMetrics.iconActionTarget, PiDCodeMetrics.navigationRowHeight)
+        XCTAssertLessThan(PiDCodeMetrics.iconActionTarget, PiDCodeMetrics.minimumTarget)
+        XCTAssertLessThanOrEqual(PiDCodeMetrics.prominentIconActionTarget, PiDCodeMetrics.minimumTarget)
     }
 
     private func temporaryURL(_ name: String) -> URL {

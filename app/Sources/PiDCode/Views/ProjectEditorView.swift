@@ -37,7 +37,7 @@ struct ProjectEditorView: View {
                         .font(.headline)
                     Spacer()
                     Button("添加文件夹…", action: chooseFolders)
-                        .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                        .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                         .dCodeAccessibleButton("添加源文件夹")
                 }
                 if folderURLs.isEmpty {
@@ -64,10 +64,9 @@ struct ProjectEditorView: View {
                                     folderURLs.removeAll { $0.path == url.path }
                                     conflicts = []
                                 } label: {
-                                    Image(systemName: "minus.circle")
-                                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                                    IconActionGlyph(systemName: "minus.circle")
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(IconActionStyle())
                                 .dCodeAccessibleButton("移除源文件夹 \(url.lastPathComponent)")
                             }
                         }
@@ -100,7 +99,7 @@ struct ProjectEditorView: View {
 
             HStack {
                 Button("取消", role: .cancel) { dismiss() }
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                     .dCodeAccessibleButton("取消编辑项目")
                 Spacer()
                 Button(conflicts.isEmpty ? "保存" : "移动并保存") {
@@ -112,7 +111,7 @@ struct ProjectEditorView: View {
                         || folderURLs.isEmpty
                         || isSaving
                 )
-                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                 .dCodeAccessibleButton(conflicts.isEmpty ? "保存项目" : "移动源文件夹并保存项目")
             }
         }

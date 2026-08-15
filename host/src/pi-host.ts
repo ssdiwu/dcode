@@ -42,9 +42,10 @@ import { publishNewFileAtomically } from "./atomic-file.js";
 import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
 import { SessionCopier } from "./session-copy.js";
 import { SessionSearchIndex } from "./session-search-index.js";
+import { structuredToolChange } from "./session-change.js";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.3";
+const HOST_VERSION = "0.0.4";
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -91,6 +92,11 @@ interface WritableSession {
   activePlan: unknown;
   fastMode: DCodeFastController;
   closing: boolean;
+  currentRun?: {
+    id: string;
+    pathEntryId?: string;
+    toolCalls: Map<string, { toolName: string; args: unknown }>;
+  };
 }
 
 type ActiveSession = ReadOnlySession | WritableSession;
@@ -148,12 +154,25 @@ function sameSessionIdentity(left: SessionHeader, right: SessionHeader): boolean
     && (left.parentSession ?? null) === (right.parentSession ?? null);
 }
 
-function toWireEvent(event: AgentSessionEvent): unknown {
-  if (event.type !== "message_update") return event;
-  const assistantMessageEvent = event.assistantMessageEvent;
-  if (!("partial" in assistantMessageEvent)) return event;
-  const { partial: _partial, ...delta } = assistantMessageEvent;
-  return { type: "message_update", assistantMessageEvent: delta };
+function toWireEvent(active: WritableSession, event: AgentSessionEvent): unknown {
+  let wire: Record<string, unknown>;
+  if (event.type !== "message_update") {
+    wire = event as unknown as Record<string, unknown>;
+  } else {
+    const assistantMessageEvent = event.assistantMessageEvent;
+    if (!("partial" in assistantMessageEvent)) {
+      wire = event as unknown as Record<string, unknown>;
+    } else {
+      const { partial: _partial, ...delta } = assistantMessageEvent;
+      wire = { type: "message_update", assistantMessageEvent: delta };
+    }
+  }
+  return {
+    ...wire,
+    sessionId: active.session.sessionId,
+    ...(active.currentRun ? { runId: active.currentRun.id } : {}),
+    ...(active.currentRun?.pathEntryId ? { pathEntryId: active.currentRun.pathEntryId } : {}),
+  };
 }
 
 function safeModel(model: unknown): unknown {
@@ -310,6 +329,8 @@ export class PiHost {
             sessionCopy: true,
             sessionTrash: true,
             sessionVisibilityExclusions: true,
+            sessionChangeLedger: true,
+            sessionRename: true,
           },
         };
       case "session.list":
@@ -389,6 +410,8 @@ export class PiHost {
         return this.getThinkingLevels();
       case "session.setModel":
         return await this.setModel(params.provider as string, params.modelId as string);
+      case "session.setName":
+        return await this.setSessionName(params.name as string);
       case "session.setThinking": {
         const active = this.requireWritable();
         await this.beforeMutation(active);
@@ -776,6 +799,22 @@ export class PiHost {
       throw new PiHostError(
         "SESSION_BUSY",
         "请等待当前生成、工具、压缩或结构化交互结束后再切换会话路径",
+        { sessionId: active.session.sessionId },
+      );
+    }
+  }
+
+  private assertSessionMetadataIdle(active: WritableSession): void {
+    if (active.conflict
+      || active.session.isStreaming
+      || active.session.isCompacting
+      || active.session.pendingMessageCount > 0
+      || active.session.isBashRunning
+      || active.session.hasPendingBashMessages
+      || active.ui.hasPendingDialogs) {
+      throw new PiHostError(
+        "SESSION_BUSY",
+        "请等待当前生成、工具、压缩或结构化交互结束后再重命名会话",
         { sessionId: active.session.sessionId },
       );
     }
@@ -1338,6 +1377,10 @@ export class PiHost {
         throw error;
       }
     }
+    active.currentRun = {
+      id: promptId,
+      toolCalls: new Map(),
+    };
     return await new Promise((resolve, reject) => {
       let responded = false;
       const accept = (completed = false) => {
@@ -1364,10 +1407,12 @@ export class PiHost {
             outcome: "handled",
           });
         }
+        if (active.currentRun?.id === promptId) active.currentRun = undefined;
         accept(true);
       }).catch(async (error) => {
         if (call.confirmation) await call.confirmation;
         await this.rollbackPromptPath(call);
+        if (active.currentRun?.id === promptId) active.currentRun = undefined;
         if (!responded) reject(error);
         else this.options.emit("session.promptFailed", {
           sessionId: active.session.sessionId,
@@ -1497,6 +1542,18 @@ export class PiHost {
     return { model: safeModel(model) };
   }
 
+  private async setSessionName(name: string): Promise<unknown> {
+    const active = this.requireWritable();
+    this.assertSessionMetadataIdle(active);
+    await this.beforeMutation(active);
+    await this.withOwnedMutation(active, async () => {
+      active.session.setSessionName(name);
+    });
+    await this.refreshWritablePathSnapshot(active);
+    this.searchIndex.invalidate();
+    return { summary: active.inspection.summary };
+  }
+
   private async setFastMode(enabled: boolean): Promise<unknown> {
     const active = this.requireWritable();
     await this.beforeMutation(active);
@@ -1505,7 +1562,26 @@ export class PiHost {
 
   private onSessionEvent(active: WritableSession, event: AgentSessionEvent): void {
     if (this.active !== active || active.closing) return;
-    this.options.emit("session.event", toWireEvent(event));
+    if (event.type === "tool_execution_start" && active.currentRun) {
+      active.currentRun.toolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
+    }
+    if (event.type === "tool_execution_end" && active.currentRun) {
+      const call = active.currentRun.toolCalls.get(event.toolCallId);
+      active.currentRun.toolCalls.delete(event.toolCallId);
+      const change = structuredToolChange({
+        sessionId: active.session.sessionId,
+        runId: active.currentRun.id,
+        ...(active.currentRun.pathEntryId ? { pathEntryId: active.currentRun.pathEntryId } : {}),
+        cwd: active.session.sessionManager.getCwd(),
+        toolCallId: event.toolCallId,
+        toolName: call?.toolName ?? event.toolName,
+        args: call?.args,
+        result: event.result,
+        isError: event.isError,
+      });
+      if (change) this.options.emit("session.changeRecorded", change);
+    }
+    this.options.emit("session.event", toWireEvent(active, event));
     if (event.type === "entry_appended") {
       const plan = planFromEntry(event.entry);
       if (plan.matched) {
@@ -1539,6 +1615,7 @@ export class PiHost {
       const leaf = active.session.sessionManager.getLeafEntry();
       if (leaf?.type !== "message" || leaf.message !== event.message) return;
       call.persistedEntryId = leaf.id;
+      if (active.currentRun?.id === call.promptId) active.currentRun.pathEntryId = leaf.id;
       call.confirmation = this.synchronizeOwnedSnapshot(active).then(() => {
         if (active.conflict || call.confirmed) return;
         call.confirmed = true;

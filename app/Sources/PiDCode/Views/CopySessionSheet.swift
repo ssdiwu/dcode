@@ -29,7 +29,7 @@ struct CopySessionSheet: View {
                     Text("先创建 Project，再把会话复制到它的 Source Folder。")
                 } actions: {
                     Button("创建项目") { openProjectEditor(nil) }
-                        .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                        .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                         .disabled(model.isCopyingSession)
                 }
             } else {
@@ -61,7 +61,7 @@ struct CopySessionSheet: View {
                                     .foregroundStyle(.orange)
                                 Spacer()
                                 Button("修复 Source Folder") { openProjectEditor(selectedProject) }
-                                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                             }
                         }
                     }
@@ -71,18 +71,18 @@ struct CopySessionSheet: View {
                                 .foregroundStyle(.orange)
                             Spacer()
                             Button("添加 Source Folder") { openProjectEditor(selectedProject) }
-                                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                         }
                     } else if let selectedProject {
                         HStack {
                             Spacer()
                             Button("编辑目标项目…") { openProjectEditor(selectedProject) }
-                                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                         }
                     }
                     if mode == .copyAndArchive {
                         if model.pendingArchiveRetry != nil {
-                            Text("请先从“已归档会话”完成上一次待重试归档；普通复制仍可使用。")
+                            Text("请先前往“设置 > 会话 > 已归档会话”完成上一次待重试归档；普通复制仍可使用。")
                                 .font(.callout)
                                 .foregroundStyle(.orange)
                         }
@@ -103,7 +103,7 @@ struct CopySessionSheet: View {
             HStack {
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                     .disabled(model.isCopyingSession)
                 Spacer()
                 if model.isCopyingSession { ProgressView().controlSize(.small) }
@@ -118,7 +118,7 @@ struct CopySessionSheet: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                 .disabled(!canSubmit || model.isCopyingSession)
             }
         }

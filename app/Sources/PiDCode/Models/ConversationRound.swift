@@ -135,6 +135,48 @@ enum ConversationTimingFormatter {
             ? "\(hours) 小时"
             : "\(hours) 小时 \(remainingMinutes) 分钟"
     }
+
+    static func completionText(
+        duration: TimeInterval?,
+        completedAt: Date?,
+        didFail: Bool = false,
+        relativeTo referenceDate: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> String? {
+        guard let completedAt else { return nil }
+        var parts: [String] = []
+        if let duration = durationText(duration) { parts.append("耗时 \(duration)") }
+        let outcome = didFail ? "失败" : "完成"
+        parts.append("\(dateTimeText(completedAt, relativeTo: referenceDate, calendar: calendar)) \(outcome)")
+        return parts.joined(separator: " · ")
+    }
+
+    static func timestampText(
+        _ timestamp: Date?,
+        relativeTo referenceDate: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> String? {
+        guard let timestamp else { return nil }
+        return dateTimeText(timestamp, relativeTo: referenceDate, calendar: calendar)
+    }
+
+    private static func dateTimeText(
+        _ date: Date,
+        relativeTo referenceDate: Date,
+        calendar: Calendar
+    ) -> String {
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: referenceDate)
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let day = components.day ?? 0
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        let clock = String(format: "%02d:%02d", hour, minute)
+        return sameYear
+            ? "\(month)月\(day)日 \(clock)"
+            : "\(year)年\(month)月\(day)日 \(clock)"
+    }
 }
 
 private extension TranscriptBlock {

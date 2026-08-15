@@ -13,19 +13,17 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             sidebarHeader
-            Divider()
             List {
+                pinnedSection
                 recentSection
                 projectsSection
-                archiveSection
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .controlBackgroundColor))
-            Divider()
+            .background(Color.clear)
             connectionFooter
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .dCodeSidebarSurface()
         .confirmationDialog(
             "删除“\(projectToDelete?.name ?? "")”？",
             isPresented: Binding(
@@ -64,20 +62,20 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("搜索会话", systemImage: "magnifyingglass", action: searchSessions)
-                .labelStyle(.iconOnly)
-                .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-                .buttonStyle(.plain)
+                Button(action: searchSessions) {
+                    IconActionGlyph(systemName: "magnifyingglass")
+                }
+                .buttonStyle(IconActionStyle())
                 .dCodeAccessibleButton("搜索会话")
                 .disabled(
                     model.connectionState != .ready
                         || model.isOpeningSession
                         || model.isPromptTransactionActive
                 )
-                Button("新建会话", systemImage: "square.and.pencil", action: newGlobalSession)
-                .labelStyle(.iconOnly)
-                .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-                .buttonStyle(.plain)
+                Button(action: newGlobalSession) {
+                    IconActionGlyph(systemName: "plus.bubble")
+                }
+                .buttonStyle(IconActionStyle())
                 .dCodeAccessibleButton("新建会话")
                 .accessibilityRepresentation {
                     Button("新建会话", action: newGlobalSession)
@@ -90,41 +88,54 @@ struct SidebarView: View {
                         || model.isPromptTransactionActive
                 )
             }
+            .frame(height: PiDCodeMetrics.navigationRowHeight)
             Button {
                 editProject(nil)
             } label: {
                 Label("新建项目", systemImage: "folder.badge.plus")
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(height: PiDCodeMetrics.navigationRowHeight)
             }
             .buttonStyle(.borderless)
             .dCodeAccessibleButton("新建项目")
             .disabled(!model.canEditProjects)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, PiDCodeMetrics.spacingStandard)
+    }
+
+    @ViewBuilder
+    private var pinnedSection: some View {
+        if !model.pinnedSessionPresentations.isEmpty {
+            Section("置顶") {
+                ForEach(model.pinnedSessionPresentations) { presentation in
+                    SessionNavigationItem(
+                        session: presentation.summary,
+                        leadingInset: 0,
+                        selectionDisabled: sessionSelectionDisabled,
+                        select: { selectSession(presentation.id) }
+                    )
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var recentSection: some View {
         Section("最近会话") {
-            if model.recentSessions.isEmpty, !model.isLoadingRecentSessions {
+            if model.recentSessions.isEmpty,
+               !model.isLoadingRecentSessions,
+               !model.pinnedSessionPresentations.contains(where: \.isRecent) {
                 Text("还没有在 D Code 新建的会话")
                     .foregroundStyle(.secondary)
             }
             ForEach(model.recentSessions) { session in
                 SessionNavigationItem(
                     session: session,
-                    subtitlePrefix: nil,
                     leadingInset: 0,
-                    selectionDisabled: model.connectionState != .ready
-                        || model.isStreaming
-                        || model.isOpeningSession
-                        || model.isPromptTransactionActive,
+                    selectionDisabled: sessionSelectionDisabled,
                     select: { selectSession(session.id) }
                 )
-                .listRowBackground(model.selectedSessionID == session.id ? Color.accentColor.opacity(0.14) : Color.clear)
-                .help("\(session.cwd)\n会话 ID：\(session.id)")
             }
             if model.recentHasMore {
                 Button("查看更多") {
@@ -133,6 +144,13 @@ struct SidebarView: View {
                 .disabled(model.isLoadingRecentSessions)
             }
         }
+    }
+
+    private var sessionSelectionDisabled: Bool {
+        model.connectionState != .ready
+            || model.isStreaming
+            || model.isOpeningSession
+            || model.isPromptTransactionActive
     }
 
     @ViewBuilder
@@ -152,20 +170,22 @@ struct SidebarView: View {
 
     private var connectionFooter: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(connectionColor)
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
-            Text(model.connectionState.label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            SettingsLink {
-                Label("设置", systemImage: "gearshape")
-                    .labelStyle(.iconOnly)
-                    .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+            if let status = model.connectionState.sidebarLabel {
+                Circle()
+                    .fill(connectionColor)
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            Spacer()
+            Button {
+                model.presentSettings()
+            } label: {
+                IconActionGlyph(systemName: "gearshape")
+            }
+            .buttonStyle(IconActionStyle())
             .accessibilityLabel("打开设置")
             .help("打开设置")
             if model.isLoadingSessions {
@@ -174,34 +194,15 @@ struct SidebarView: View {
                 Button {
                     Task { await model.reloadAllSessionLists() }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                    IconActionGlyph(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconActionStyle())
                 .dCodeAccessibleButton("重新载入会话")
                 .disabled(model.connectionState != .ready)
             }
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 48)
-    }
-
-    private var archiveSection: some View {
-        Section {
-            Button {
-                model.archivedSessionsPresented = true
-            } label: {
-                Label(
-                    model.archivedSessions.isEmpty && model.pendingArchiveRetry == nil
-                        ? "已归档会话"
-                        : "已归档会话（\(model.archivedSessions.count + (model.pendingArchiveRetry == nil ? 0 : 1))）",
-                    systemImage: "archivebox"
-                )
-                .frame(minHeight: PiDCodeMetrics.minimumTarget)
-            }
-            .buttonStyle(.plain)
-            .dCodeAccessibleButton("查看已归档会话")
-        }
+        .frame(height: PiDCodeMetrics.navigationRowHeight)
     }
 
     private var connectionColor: Color {
@@ -235,7 +236,7 @@ private struct ProjectNavigationView: View {
                         Spacer()
                     }
                     .contentShape(Rectangle())
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(height: PiDCodeMetrics.navigationRowHeight)
                 }
                 .buttonStyle(.plain)
                 .dCodeAccessibleButton("打开项目 \(project.name)")
@@ -244,43 +245,21 @@ private struct ProjectNavigationView: View {
                     Button("删除项目…", role: .destructive, action: delete)
                 }
 
-                Menu {
-                    if project.sourceFolders.isEmpty {
-                        Text("请先添加源文件夹")
-                    } else {
-                        ForEach(project.sourceFolders) { folder in
-                            Button(folder.displayName) {
-                                Task { await model.createSession(at: folder.url) }
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .accessibilityLabel("在 \(project.name) 新建会话")
-                .disabled(
-                    model.connectionState != .ready
-                        || project.sourceFolders.isEmpty
-                        || model.isCreatingSession
-                        || model.isOpeningSession
-                        || model.isStreaming
-                        || model.isPromptTransactionActive
-                )
+                sessionCreationControl
 
                 Button {
                     model.toggleProject(project.id)
                 } label: {
-                    Image(systemName: model.expandedProjectIDs.contains(project.id) ? "chevron.down" : "chevron.right")
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                    IconActionGlyph(
+                        systemName: model.expandedProjectIDs.contains(project.id) ? "chevron.down" : "chevron.right"
+                    )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconActionStyle())
                 .dCodeAccessibleButton(
                     model.expandedProjectIDs.contains(project.id) ? "收起项目会话" : "展开项目会话"
                 )
             }
+            .frame(height: PiDCodeMetrics.navigationRowHeight)
             .padding(.horizontal, 2)
             .background(
                 model.selectedProjectID == project.id && model.inspectorScope == .project(project.id)
@@ -291,6 +270,9 @@ private struct ProjectNavigationView: View {
 
             if model.expandedProjectIDs.contains(project.id) {
                 let sessions = model.sessions(for: project)
+                let hasPinnedSessions = model.pinnedSessionPresentations.contains { presentation in
+                    presentation.projectIDs.contains(project.id)
+                }
                 if let error = model.projectSessionErrors[project.id] {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("读取会话失败")
@@ -304,7 +286,7 @@ private struct ProjectNavigationView: View {
                             Task { await model.reloadProjectSessions(project.id) }
                         } label: {
                             Label("重试", systemImage: "arrow.clockwise")
-                                .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                         }
                         .buttonStyle(.plain)
                         .disabled(model.loadingProjectIDs.contains(project.id))
@@ -312,7 +294,9 @@ private struct ProjectNavigationView: View {
                     .padding(.leading, 30)
                     .padding(.trailing, 8)
                     .padding(.vertical, 4)
-                } else if sessions.isEmpty, !model.loadingProjectIDs.contains(project.id) {
+                } else if sessions.isEmpty,
+                          !hasPinnedSessions,
+                          !model.loadingProjectIDs.contains(project.id) {
                     Text(project.sourceFolders.isEmpty ? "尚未添加源文件夹" : "没有关联的旧会话")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -322,7 +306,6 @@ private struct ProjectNavigationView: View {
                 ForEach(sessions) { session in
                     SessionNavigationItem(
                         session: session,
-                        subtitlePrefix: "源文件夹：\(model.sourceFolderName(for: session, in: project))",
                         leadingInset: 24,
                         selectionDisabled: model.connectionState != .ready
                             || model.isStreaming
@@ -330,7 +313,6 @@ private struct ProjectNavigationView: View {
                             || model.isPromptTransactionActive,
                         select: { selectSession(session.id) }
                     )
-                    .listRowBackground(model.selectedSessionID == session.id ? Color.accentColor.opacity(0.14) : Color.clear)
                 }
                 if model.projectHasMore[project.id] == true {
                     Button("查看更多") {
@@ -347,6 +329,55 @@ private struct ProjectNavigationView: View {
             await model.reloadProjectSessions(project.id)
         }
     }
+
+    private var sessionCreationDisabled: Bool {
+        model.connectionState != .ready
+            || model.isCreatingSession
+            || model.isOpeningSession
+            || model.isStreaming
+            || model.isPromptTransactionActive
+    }
+
+    @ViewBuilder
+    private var sessionCreationControl: some View {
+        switch ProjectSessionCreationRoute.resolve(for: project) {
+        case .unavailable:
+            Button {} label: {
+                IconActionGlyph(systemName: "plus")
+            }
+            .buttonStyle(IconActionStyle())
+            .disabled(true)
+            .dCodeAccessibleButton("在 \(project.name) 新建会话")
+            .help("请先为项目添加源文件夹")
+
+        case let .direct(folder):
+            Button {
+                Task { await model.createSession(at: folder.url) }
+            } label: {
+                IconActionGlyph(systemName: "plus")
+            }
+            .buttonStyle(IconActionStyle())
+            .disabled(sessionCreationDisabled)
+            .dCodeAccessibleButton("在 \(project.name) 新建会话")
+            .help("在 \(folder.displayName) 新建会话")
+
+        case let .choose(folders):
+            Menu {
+                ForEach(folders) { folder in
+                    Button(folder.displayName) {
+                        Task { await model.createSession(at: folder.url) }
+                    }
+                }
+            } label: {
+                IconActionGlyph(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: PiDCodeMetrics.iconActionTarget, height: PiDCodeMetrics.iconActionTarget)
+            .accessibilityLabel("在 \(project.name) 新建会话")
+            .disabled(sessionCreationDisabled)
+        }
+    }
 }
 
 private struct SessionNavigationItem: View {
@@ -359,53 +390,53 @@ private struct SessionNavigationItem: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: SessionSummary
-    let subtitlePrefix: String?
     let leadingInset: CGFloat
     let selectionDisabled: Bool
     let select: () -> Void
 
     @State private var hovering = false
+    @State private var metadataPresented = false
+    @State private var metadataPresentationTask: Task<Void, Never>?
+    @State private var branchTask: Task<Void, Never>?
+    @State private var branchState: GitBranchLookupState = .idle
     @FocusState private var focusedControl: FocusedControl?
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .center, spacing: 0) {
             Button(action: select) {
-                SessionNavigationRow(session: session, subtitlePrefix: subtitlePrefix)
+                SessionNavigationRow(session: session)
                     .padding(.leading, leadingInset)
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
             .focused($focusedControl, equals: .selection)
             .dCodeAccessibleButton(selectionAccessibilityLabel)
+            .accessibilityIdentifier("session-row.\(session.id).select")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .help("\(session.displayTitle)\n\(session.cwd)")
             .disabled(selectionDisabled)
 
-            HStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 0) {
                 Button {
                     Task { await model.togglePinnedSession(session) }
                 } label: {
-                    Image(systemName: isPinned ? "pin.fill" : "pin")
-                        .frame(
-                            width: PiDCodeMetrics.minimumTarget,
-                            height: PiDCodeMetrics.minimumTarget,
-                            alignment: .top
-                        )
+                    IconActionGlyph(systemName: isPinned ? "pin.fill" : "pin")
                 }
                 .buttonStyle(IconActionStyle())
                 .focused($focusedControl, equals: .pin)
-                .opacity(showsActions || isPinned ? 1 : 0)
-                .allowsHitTesting(showsActions || isPinned)
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
                 .disabled(!model.canToggleSessionPin(session))
                 .dCodeAccessibleButton(pinLabel)
+                .accessibilityIdentifier("session-row.\(session.id).pin")
                 .help(isPinned ? "取消置顶" : "置顶")
 
                 Button {
                     Task { await model.archiveSession(session) }
                 } label: {
-                    Image(systemName: "archivebox")
-                        .frame(
-                            width: PiDCodeMetrics.minimumTarget,
-                            height: PiDCodeMetrics.minimumTarget,
-                            alignment: .top
-                        )
+                    IconActionGlyph(systemName: "archivebox")
                 }
                 .buttonStyle(IconActionStyle())
                 .focused($focusedControl, equals: .archive)
@@ -413,13 +444,49 @@ private struct SessionNavigationItem: View {
                 .allowsHitTesting(showsActions)
                 .disabled(!model.canArchiveSession(session))
                 .dCodeAccessibleButton("归档 \(session.displayTitle)")
+                .accessibilityIdentifier("session-row.\(session.id).archive")
                 .accessibilityHint("只从 D Code 普通导航隐藏；Pi 会话与草稿均保留")
                 .help("归档会话")
             }
-            .frame(width: PiDCodeMetrics.minimumTarget * 2)
+            .frame(
+                width: PiDCodeMetrics.iconActionTarget * 2,
+                height: PiDCodeMetrics.iconActionTarget,
+                alignment: .center
+            )
         }
-        .onHover { hovering = $0 }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: PiDCodeMetrics.navigationRowHeight)
+        .padding(.horizontal, PiDCodeMetrics.spacingStandard)
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius)
+                .stroke(rowBorder, lineWidth: focusedControl == nil ? 1 : 2)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius))
+        .onHover {
+            hovering = $0
+            updateMetadataPresentation()
+        }
+        .onChange(of: focusedControl) { _, _ in updateMetadataPresentation() }
+        .popover(
+            isPresented: $metadataPresented,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .trailing
+        ) {
+            SessionNavigationMetadataPopover(
+                session: session,
+                projectName: ownership?.project.name,
+                sourceFolderName: ownership?.sourceFolder.displayName ?? fallbackFolderName,
+                branchState: branchState,
+                isPinned: isPinned
+            )
+        }
+        .onDisappear {
+            metadataPresentationTask?.cancel()
+            branchTask?.cancel()
+        }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsActions)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: visualState)
         .contextMenu {
             Button(pinLabel) {
                 Task { await model.togglePinnedSession(session) }
@@ -441,43 +508,170 @@ private struct SessionNavigationItem: View {
     }
 
     private var isPinned: Bool { model.isSessionPinned(session.id) }
+    private var isSelected: Bool { model.selectedSessionID == session.id }
     private var showsActions: Bool { hovering || focusedControl != nil }
+    private var visualState: Int {
+        if focusedControl != nil { return 3 }
+        if isSelected { return 2 }
+        if hovering { return 1 }
+        return 0
+    }
+    private var rowBackground: Color {
+        if isSelected { return Color.primary.opacity(0.10) }
+        if hovering || focusedControl != nil { return Color.primary.opacity(0.06) }
+        return .clear
+    }
+    private var rowBorder: Color {
+        if focusedControl != nil { return Color.accentColor.opacity(0.80) }
+        if hovering || isSelected { return Color.primary.opacity(0.10) }
+        return .clear
+    }
     private var pinLabel: String {
         "\(isPinned ? "取消置顶" : "置顶") \(session.displayTitle)"
     }
     private var selectionAccessibilityLabel: String {
-        if let subtitlePrefix {
-            return "\(session.displayTitle)，\(subtitlePrefix)"
+        let projectLabel = ownership?.project.name ?? "未归入项目"
+        let updatedLabel = session.modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "时间未知"
+        return "打开会话 \(session.displayTitle)，\(isPinned ? "已置顶" : "未置顶")，项目 \(projectLabel)，源文件夹 \(fallbackFolderName)，工作目录 \(session.cwd)，\(branchAccessibilityLabel)，更新时间 \(updatedLabel)"
+    }
+    private var ownership: ProjectSessionOwnership? { model.projectOwnership(for: session) }
+    private var fallbackFolderName: String {
+        let name = URL(fileURLWithPath: session.cwd, isDirectory: true).lastPathComponent
+        return name.isEmpty ? session.cwd : name
+    }
+    private var branchAccessibilityLabel: String {
+        switch branchState {
+        case .idle, .loading: "当前 Git 分支正在读取"
+        case let .ready(branch): "当前 Git 分支 \(branch)"
+        case .notRepository: "当前工作目录不是 Git 仓库"
+        case .failed: "当前 Git 分支无法读取"
         }
-        return "\(session.displayTitle)，\(session.messageCount) 条消息"
+    }
+    private func updateMetadataPresentation() {
+        metadataPresentationTask?.cancel()
+        if focusedControl != nil {
+            presentMetadata()
+        } else if hovering {
+            metadataPresentationTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, hovering else { return }
+                presentMetadata()
+            }
+        } else {
+            metadataPresented = false
+            branchTask?.cancel()
+            branchTask = nil
+        }
+    }
+    private func presentMetadata() {
+        metadataPresented = true
+        guard branchTask == nil else { return }
+        branchState = .loading
+        branchTask = Task { @MainActor in
+            let state = await GitBranchCache.shared.read(at: session.cwd)
+            guard !Task.isCancelled else { return }
+            branchState = state
+            branchTask = nil
+        }
     }
 }
 
 struct SessionNavigationRow: View {
     let session: SessionSummary
-    let subtitlePrefix: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(session.displayTitle)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            HStack(spacing: 4) {
-                if let subtitlePrefix { Text(subtitlePrefix) }
-                else { Text("\(session.messageCount) 条消息") }
-                if let date = session.modifiedDate {
-                    Text("·")
-                    Text(date.piDCodeRelativeLabel)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        Text(session.displayTitle)
+            .font(.body)
+            .foregroundStyle(.primary)
             .lineLimit(1)
-        }
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: PiDCodeMetrics.navigationRowHeight,
+                alignment: .leading
+            )
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SessionNavigationMetadataPopover: View {
+    let session: SessionSummary
+    let projectName: String?
+    let sourceFolderName: String
+    let branchState: GitBranchLookupState
+    let isPinned: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingGroup) {
+            HStack(alignment: .firstTextBaseline, spacing: PiDCodeMetrics.spacingStandard) {
+                Text(session.displayTitle)
+                    .font(.body.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: PiDCodeMetrics.spacingStandard)
+                if let date = session.modifiedDate {
+                    Text(date.piDCodeRelativeLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+            Divider()
+
+            metadataRow(icon: "folder", title: "项目") {
+                Text(projectName ?? "未归入项目")
+            }
+            metadataRow(icon: "folder.badge.gearshape", title: "源文件夹") {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sourceFolderName)
+                    Text(session.cwd)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+            metadataRow(icon: "point.topleft.down.curvedto.point.bottomright.up", title: "当前分支") {
+                HStack(spacing: PiDCodeMetrics.spacingTight) {
+                    if branchState == .loading || branchState == .idle {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(branchLabel)
+                }
+            }
+        }
+        .padding(PiDCodeMetrics.spacingGroup)
+        .frame(width: 340, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(isPinned ? "已置顶会话" : "会话") \(session.displayTitle)")
+    }
+
+    private var branchLabel: String {
+        switch branchState {
+        case .idle, .loading: "正在读取当前工作区"
+        case let .ready(branch): branch
+        case .notRepository: "非 Git 仓库"
+        case .failed: "无法读取当前分支"
+        }
+    }
+
+    private func metadataRow<Content: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .top, spacing: PiDCodeMetrics.spacingStandard) {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                content()
+            }
+            Spacer(minLength: 0)
+        }
     }
 }

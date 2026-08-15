@@ -16,6 +16,23 @@ struct ProjectFileNode: Hashable, Identifiable, Sendable {
     var isExpandable: Bool { kind == .directory }
 }
 
+enum ProjectFileTreeLayout: Equatable, Sendable {
+    case empty
+    case flattened(SourceFolder)
+    case grouped([SourceFolder])
+
+    static func resolve(for project: DCodeProject) -> ProjectFileTreeLayout {
+        switch project.sourceFolders.count {
+        case 0:
+            .empty
+        case 1:
+            .flattened(project.sourceFolders[0])
+        default:
+            .grouped(project.sourceFolders)
+        }
+    }
+}
+
 enum FileTreeReaderError: LocalizedError, Equatable {
     case outsideSourceFolder
     case symbolicLinkNotExpandable

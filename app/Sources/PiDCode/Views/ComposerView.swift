@@ -16,7 +16,6 @@ struct ComposerView: View {
                 set: { model.updateComposerText($0) }
             ))
         }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func composer(text: Binding<String>) -> some View {
@@ -42,7 +41,7 @@ struct ComposerView: View {
                         }
                         Spacer()
                         Button("取消") { model.cancelPathDraft() }
-                            .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                             .disabled(model.isSendingRequest || model.pendingPrompt != nil)
                     }
                     .accessibilityElement(children: .combine)
@@ -64,15 +63,7 @@ struct ComposerView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(
-                        focused ? Color.accentColor.opacity(0.58) : Color.primary.opacity(0.12),
-                        lineWidth: focused ? 1.5 : 1
-                    )
-            }
-            .shadow(color: .black.opacity(0.05), radius: 10, y: 4)
+            .dCodeFloatingSurface(cornerRadius: 16, accented: focused)
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
@@ -85,7 +76,7 @@ struct ComposerView: View {
             } label: {
                 Label(contextCompactLabel, systemImage: "chart.pie")
                     .lineLimit(1)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
             }
             .buttonStyle(.borderless)
             .popover(isPresented: $showingContext, arrowEdge: .bottom) {
@@ -100,7 +91,7 @@ struct ComposerView: View {
                 Label(fastLabel, systemImage: "bolt.fill")
                     .foregroundStyle(fastColor)
                     .lineLimit(1)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(fastAccessibilityLabel)
@@ -118,7 +109,10 @@ struct ComposerView: View {
                 } label: {
                     Image(systemName: "stop.fill")
                         .foregroundStyle(.white)
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                        .frame(
+                            width: PiDCodeMetrics.prominentIconActionTarget,
+                            height: PiDCodeMetrics.prominentIconActionTarget
+                        )
                         .background(Color.red, in: Circle())
                 }
                 .buttonStyle(.plain)
@@ -131,7 +125,10 @@ struct ComposerView: View {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.bold))
                         .foregroundStyle(.white)
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                        .frame(
+                            width: PiDCodeMetrics.prominentIconActionTarget,
+                            height: PiDCodeMetrics.prominentIconActionTarget
+                        )
                         .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
                 }
                 .buttonStyle(.plain)
@@ -188,7 +185,7 @@ struct ComposerView: View {
                 Text(thinkingLabel(model.hostState?.thinkingLevel))
                     .foregroundStyle(.purple)
             }
-            .frame(minHeight: PiDCodeMetrics.minimumTarget)
+            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()

@@ -14,11 +14,11 @@ enum HostConnectionState: Equatable {
     case ready
     case failed
 
-    var label: String {
+    var sidebarLabel: String? {
         switch self {
         case .idle: "未连接"
         case .connecting: "正在连接"
-        case .ready: "运行服务已就绪"
+        case .ready: nil
         case .failed: "连接失败"
         }
     }
@@ -65,6 +65,9 @@ final class AppModel {
     var selectedProjectID: UUID?
     var expandedProjectIDs: Set<UUID> = []
     var inspectorScope: InspectorScope?
+    var workbenchDestination: WorkbenchDestination = .workspace
+    var workspaceTabSelection: WorkspaceTabSelection = .conversation
+    var workspaceFileTabs: [WorkspaceFileTab] = []
     var selectedSessionID: String?
     var inspection: SessionInspection?
     var transcript: [TranscriptItem] = []
@@ -104,16 +107,18 @@ final class AppModel {
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
     var pinnedSessions: [PinnedSessionRecord] = []
+    var pinnedSessionPresentations: [PinnedSessionPresentation] = []
+    var sessionChangeSummary: SessionChangeSummary?
     var currentDraftTarget: SessionDraftTarget?
     var isCopyingSession = false
     var isTrashingSession = false
+    var isRenamingSession = false
     var isMutatingArchive = false
     var isMutatingPins = false
     var pendingArchiveRetry: ArchivedSessionRecord?
     var draftStoreIssue: String?
     var pathSheetPresented = false
     var copySheetMode: SessionCopyMode?
-    var archivedSessionsPresented = false
     var pendingTrashSession: SessionSummary?
 
     @ObservationIgnored private var client: PiHostClient?
@@ -125,19 +130,25 @@ final class AppModel {
     @ObservationIgnored private var mermaidCacheOrder: [String] = []
     @ObservationIgnored private var mermaidTasks: [String: Task<MermaidRenderResult, Never>] = [:]
     @ObservationIgnored private var didEndStreamingAssistantMessage = false
+    @ObservationIgnored private var workspaceFileLoadIDs: [String: UUID] = [:]
     var pendingPrompt: PendingPromptDraft?
     @ObservationIgnored private let projectStore: ProjectStore
     @ObservationIgnored private let sessionDraftStore: SessionDraftStore
     @ObservationIgnored private let sessionArchiveStore: SessionArchiveStore
     @ObservationIgnored private let sessionPinStore: SessionPinStore
+    @ObservationIgnored private let sessionChangeStore: SessionChangeStore
     @ObservationIgnored private let hostConfiguration: HostLaunchConfiguration?
     @ObservationIgnored private var projectStoreWritable = false
     @ObservationIgnored private var sessionDraftStoreWritable = false
     @ObservationIgnored private var sessionArchiveStoreWritable = false
     @ObservationIgnored private var sessionPinStoreWritable = false
+    @ObservationIgnored private var sessionChangeStoreWritable = false
     @ObservationIgnored private var draftDocument = SessionDraftDocument()
     @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
     @ObservationIgnored private var draftRevision = 0
+    @ObservationIgnored private var sessionChangeDocument = SessionChangeDocument()
+    @ObservationIgnored private var sessionChangeSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var sessionChangeRevision = 0
     @ObservationIgnored private var deferredComposerText: String?
     @ObservationIgnored private var visibilityGeneration = UUID()
     @ObservationIgnored private var recentWindow = SessionListWindow()
@@ -154,12 +165,14 @@ final class AppModel {
         sessionDraftStore: SessionDraftStore = SessionDraftStore(),
         sessionArchiveStore: SessionArchiveStore = SessionArchiveStore(),
         sessionPinStore: SessionPinStore = SessionPinStore(),
+        sessionChangeStore: SessionChangeStore = SessionChangeStore(),
         hostConfiguration: HostLaunchConfiguration? = nil
     ) {
         self.projectStore = projectStore
         self.sessionDraftStore = sessionDraftStore
         self.sessionArchiveStore = sessionArchiveStore
         self.sessionPinStore = sessionPinStore
+        self.sessionChangeStore = sessionChangeStore
         self.hostConfiguration = hostConfiguration
     }
 
@@ -196,7 +209,10 @@ final class AppModel {
 
     func canTrashSession(_ session: SessionSummary) -> Bool {
         session.messageCount == 0
-            && recentSessions.contains(where: { $0.id == session.id })
+            && (
+                recentSessions.contains(where: { $0.id == session.id })
+                    || pinnedSessionPresentations.first(where: { $0.id == session.id })?.isRecent == true
+            )
             && !archivedSessions.contains(where: { $0.sessionID == session.id })
             && !(selectedSessionID == session.id && hostState?.writable == true)
     }
@@ -225,10 +241,26 @@ final class AppModel {
             && isSessionVisible(session.id)
     }
 
+    var canRenameSelectedSession: Bool {
+        guard let selectedSessionID else { return false }
+        return readyClient != nil
+            && !isRenamingSession
+            && !isOpeningSession
+            && !isStreaming
+            && !isCopyingSession
+            && !isTrashingSession
+            && !isMutatingArchive
+            && !isPromptTransactionActive
+            && !archivedSessions.contains(where: { $0.sessionID == selectedSessionID })
+    }
+
     var selectedSummary: SessionSummary? {
         guard let selectedSessionID else { return nil }
         if inspection?.summary.id == selectedSessionID { return inspection?.summary }
         if let recent = recentSessions.first(where: { $0.id == selectedSessionID }) { return recent }
+        if let pinned = pinnedSessionPresentations.first(where: { $0.id == selectedSessionID }) {
+            return pinned.summary
+        }
         return projectSessions.values.lazy.flatMap { $0 }.first(where: { $0.id == selectedSessionID })
     }
 
@@ -259,6 +291,7 @@ final class AppModel {
 
     private func isSessionVisible(_ sessionID: String) -> Bool {
         recentSessions.contains(where: { $0.id == sessionID })
+            || pinnedSessionPresentations.contains(where: { $0.id == sessionID })
             || projectSessions.values.contains(where: { sessions in
                 sessions.contains(where: { $0.id == sessionID })
             })
@@ -269,6 +302,10 @@ final class AppModel {
         let sessionPath = URL(fileURLWithPath: session.cwd).standardizedFileURL.resolvingSymlinksInPath().path
         return project.sourceFolders.first(where: { $0.path == sessionPath })?.displayName
             ?? URL(fileURLWithPath: session.cwd).lastPathComponent
+    }
+
+    func projectOwnership(for session: SessionSummary) -> ProjectSessionOwnership? {
+        ProjectSessionOwnershipResolver.resolve(cwd: session.cwd, projects: projects)
     }
 
     var allProjectSourceFolderPaths: [String] {
@@ -309,10 +346,7 @@ final class AppModel {
             try HostCompatibility.validate(hello)
             hostHello = hello
             connectionState = .ready
-            await reloadRecentSessions()
-            for projectID in expandedProjectIDs {
-                await reloadProjectSessions(projectID)
-            }
+            await reloadAllSessionLists()
         } catch {
             connectionState = .failed
             present(error, title: "无法启动 D Code")
@@ -321,11 +355,64 @@ final class AppModel {
         }
     }
 
+    func reloadPinnedSessionPresentations() async {
+        let records = pinnedSessions
+        guard !records.isEmpty else {
+            pinnedSessionPresentations = []
+            return
+        }
+        guard let client = readyClient else { return }
+
+        let ids = records.map(\.sessionID).sorted()
+        let excludedSessionIDs = archivedSessionIDs
+        let sourcePaths = Array(Set(allProjectSourceFolderPaths)).sorted()
+        let projectSnapshot = projects
+        let generation = visibilityGeneration
+
+        do {
+            let recent: SessionListResult = try await client.request(
+                "session.list",
+                params: Self.recentSessionListParameters(
+                    limit: ids.count,
+                    excludedSessionIDs: excludedSessionIDs,
+                    sessionIDs: ids
+                )
+            )
+            var projectCandidates: [SessionSummary] = []
+            for chunkStart in stride(from: 0, to: sourcePaths.count, by: 64) {
+                try Task.checkCancellation()
+                let chunk = Array(sourcePaths[chunkStart..<min(chunkStart + 64, sourcePaths.count)])
+                let result: SessionListResult = try await client.request("session.list", params: [
+                    "limit": .number(Double(ids.count)),
+                    "cwdScope": .object([
+                        "match": .string("exact"),
+                        "paths": .array(chunk.map(JSONValue.string)),
+                    ]),
+                    "sessionIds": .array(ids.map(JSONValue.string)),
+                    "excludedSessionIds": .array(excludedSessionIDs.map(JSONValue.string)),
+                ])
+                projectCandidates.append(contentsOf: result.sessions)
+            }
+            try Task.checkCancellation()
+            guard generation == visibilityGeneration,
+                  projectSnapshot == projects,
+                  records == pinnedSessions else { return }
+            pinnedSessionPresentations = PinnedSessionPresentationBuilder.build(
+                recentSessions: recent.sessions,
+                projectSessions: projectCandidates,
+                projects: projectSnapshot,
+                pinnedRecords: records
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            present(error, title: "无法读取置顶会话")
+        }
+    }
+
     func reloadRecentSessions() async {
         guard let client = readyClient else { return }
-        let excludedSessionIDs = archivedSessionIDs
-        let pins = pinnedSessions
-        let pinnedSessionIDs = pins.map(\.sessionID).sorted()
+        let excludedSessionIDs = Array(Set(archivedSessionIDs + pinnedSessionIDs)).sorted()
         let generation = visibilityGeneration
         isLoadingRecentSessions = true
         defer { isLoadingRecentSessions = false }
@@ -337,24 +424,8 @@ final class AppModel {
                     excludedSessionIDs: excludedSessionIDs
                 )
             )
-            var pinnedResults: [SessionSummary] = []
-            if !pinnedSessionIDs.isEmpty {
-                let pinned: SessionListResult = try await client.request(
-                    "session.list",
-                    params: Self.recentSessionListParameters(
-                        limit: pinnedSessionIDs.count,
-                        excludedSessionIDs: excludedSessionIDs,
-                        sessionIDs: pinnedSessionIDs
-                    )
-                )
-                pinnedResults = pinned.sessions
-            }
             guard generation == visibilityGeneration else { return }
-            let ordered = SessionPinOrdering.mergedAndOrdered(
-                [result.sessions, pinnedResults],
-                pinnedRecords: pins
-            )
-            let page = recentWindow.page(from: ordered)
+            let page = recentWindow.page(from: result.sessions)
             recentSessions = page.items
             recentHasMore = page.hasMore
         } catch is CancellationError {
@@ -380,9 +451,7 @@ final class AppModel {
         }
         let window = projectWindows[projectID] ?? SessionListWindow()
         let sourcePaths = project.sourceFolders.map(\.path)
-        let excludedSessionIDs = archivedSessionIDs
-        let pins = pinnedSessions
-        let pinnedSessionIDs = pins.map(\.sessionID).sorted()
+        let excludedSessionIDs = Array(Set(archivedSessionIDs + pinnedSessionIDs)).sorted()
         let visibilityAtStart = visibilityGeneration
         let generation = UUID()
         projectLoadGenerations[projectID] = generation
@@ -411,27 +480,11 @@ final class AppModel {
                     if let existing = merged[session.id], existing.modified >= session.modified { continue }
                     merged[session.id] = session
                 }
-                if !pinnedSessionIDs.isEmpty {
-                    let pinned: SessionListResult = try await client.request("session.list", params: [
-                        "limit": .number(Double(pinnedSessionIDs.count)),
-                        "cwdScope": .object([
-                            "match": .string("exact"),
-                            "paths": .array(chunk.map(JSONValue.string)),
-                        ]),
-                        "sessionIds": .array(pinnedSessionIDs.map(JSONValue.string)),
-                        "excludedSessionIds": .array(excludedSessionIDs.map(JSONValue.string)),
-                    ])
-                    try Task.checkCancellation()
-                    for session in pinned.sessions {
-                        if let existing = merged[session.id], existing.modified >= session.modified { continue }
-                        merged[session.id] = session
-                    }
-                }
             }
             guard projectLoadGenerations[projectID] == generation,
                   visibilityGeneration == visibilityAtStart,
                   projects.first(where: { $0.id == projectID })?.sourceFolders.map(\.path) == sourcePaths else { return }
-            let ordered = SessionPinOrdering.ordered(Array(merged.values), pinnedRecords: pins)
+            let ordered = SessionPinOrdering.ordered(Array(merged.values), pinnedRecords: [])
             let page = window.page(from: ordered)
             projectSessions[projectID] = page.items
             projectHasMore[projectID] = page.hasMore
@@ -453,6 +506,7 @@ final class AppModel {
     }
 
     func reloadAllSessionLists() async {
+        await reloadPinnedSessionPresentations()
         await reloadRecentSessions()
         let reloadIDs = Set(projectSessions.keys).union(expandedProjectIDs)
         for project in projects where reloadIDs.contains(project.id) {
@@ -461,9 +515,28 @@ final class AppModel {
     }
 
     func selectProject(_ projectID: UUID) async {
+        workbenchDestination = .workspace
         selectedProjectID = projectID
         inspectorScope = .project(projectID)
         expandedProjectIDs.insert(projectID)
+    }
+
+    func presentArchivedSessions() {
+        dismissSearch()
+        workbenchDestination = .settings(.archivedSessions)
+    }
+
+    func dismissArchivedSessions() {
+        workbenchDestination = .settings(.appearance)
+    }
+
+    func presentSettings(_ page: SettingsPage = .appearance) {
+        dismissSearch()
+        workbenchDestination = .settings(page)
+    }
+
+    func dismissSettings() {
+        workbenchDestination = .workspace
     }
 
     func toggleProject(_ projectID: UUID) {
@@ -556,7 +629,7 @@ final class AppModel {
               !isOpeningSession,
               !isPromptTransactionActive else { return }
         guard !archivedSessions.contains(where: { $0.sessionID == result.sessionId }) else {
-            searchOpenError = "该会话刚刚被归档；请从“已归档会话”中查看或恢复显示。"
+            searchOpenError = "该会话刚刚被归档；请前往“设置 > 会话 > 已归档会话”查看或恢复显示。"
             return
         }
         searchOpenError = nil
@@ -579,6 +652,183 @@ final class AppModel {
     func clearConversationTarget(_ token: UUID) {
         guard conversationTarget?.token == token else { return }
         conversationTarget = nil
+    }
+
+    func selectWorkspaceFileTab(path: String) {
+        guard workspaceFileTabs.contains(where: { $0.path == path }) else { return }
+        workspaceTabSelection = .file(path)
+    }
+
+    func closeWorkspaceFileTab(path: String) {
+        workspaceTabSelection = WorkspaceTabNavigation.selectionAfterClosing(
+            path: path,
+            tabs: workspaceFileTabs,
+            current: workspaceTabSelection
+        )
+        workspaceFileTabs.removeAll(where: { $0.path == path })
+        workspaceFileLoadIDs.removeValue(forKey: path)
+    }
+
+    func openWorkspaceFile(
+        path: String,
+        sourceFolderPath: String,
+        line: Int? = nil
+    ) async {
+        let canonicalPath = WorkspaceFileReader.standardizedAbsolutePath(path)
+        guard let sourceFolder = WorkspaceFileAuthorization.registeredSourceFolder(
+            matching: sourceFolderPath,
+            projects: projects
+        ) else {
+            issue = AppIssue(
+                title: "无法打开文件",
+                message: "该来源文件夹已不在当前 D Code 项目中，未读取磁盘内容。"
+            )
+            return
+        }
+        let canonicalRoot = WorkspaceFileReader.standardizedAbsolutePath(sourceFolder.path)
+        guard WorkspaceFileReader.relativeComponents(of: canonicalPath, inside: canonicalRoot) != nil else {
+            issue = AppIssue(
+                title: "无法打开文件",
+                message: "该文件不在当前登记的来源文件夹内，已停止读取。"
+            )
+            return
+        }
+
+        if let index = workspaceFileTabs.firstIndex(where: { $0.path == canonicalPath }) {
+            workspaceFileTabs[index].requestedLine = line
+            workspaceTabSelection = .file(canonicalPath)
+            return
+        }
+
+        workspaceFileTabs.append(WorkspaceFileTab(
+            path: canonicalPath,
+            sourceFolderPath: canonicalRoot,
+            requestedLine: line,
+            snapshot: nil,
+            errorMessage: nil,
+            isLoading: true,
+            authorizationAvailable: true
+        ))
+        workspaceTabSelection = .file(canonicalPath)
+        await loadWorkspaceFile(path: canonicalPath)
+    }
+
+    func retryWorkspaceFile(path: String) async {
+        guard let tab = workspaceFileTabs.first(where: { $0.path == path }),
+              tab.authorizationAvailable else { return }
+        await loadWorkspaceFile(path: path)
+    }
+
+    func openWorkspaceURL(_ url: URL) async {
+        guard let target = WorkspaceFileLink.decode(url) else { return }
+        let resolvedPath: String
+        if target.path.hasPrefix("/") {
+            resolvedPath = WorkspaceFileReader.standardizedAbsolutePath(target.path)
+        } else if let cwd = inspection?.summary.cwd {
+            resolvedPath = WorkspaceFileReader.standardizedAbsolutePath(
+                URL(fileURLWithPath: cwd, isDirectory: true)
+                    .appendingPathComponent(target.path)
+                    .path
+            )
+        } else if let project = selectedProject, project.sourceFolders.count == 1 {
+            resolvedPath = WorkspaceFileReader.standardizedAbsolutePath(
+                URL(fileURLWithPath: project.sourceFolders[0].path, isDirectory: true)
+                    .appendingPathComponent(target.path)
+                    .path
+            )
+        } else {
+            issue = AppIssue(
+                title: "无法定位本机文件",
+                message: "该相对路径缺少唯一的会话工作目录或项目来源文件夹。"
+            )
+            return
+        }
+
+        guard let sourceFolder = WorkspaceFileAuthorization.registeredSourceFolder(
+            containing: resolvedPath,
+            projects: projects
+        ) else {
+            issue = AppIssue(
+                title: "无法打开本机文件",
+                message: "该路径不属于任何已登记的 D Code 项目来源文件夹，未交给系统或其他应用打开。"
+            )
+            return
+        }
+        await openWorkspaceFile(
+            path: resolvedPath,
+            sourceFolderPath: sourceFolder.path,
+            line: target.line
+        )
+    }
+
+    private func loadWorkspaceFile(path: String) async {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+              workspaceFileTabs[index].authorizationAvailable else { return }
+        let root = workspaceFileTabs[index].sourceFolderPath
+        guard WorkspaceFileAuthorization.registeredSourceFolder(
+            matching: root,
+            projects: projects
+        ) != nil else {
+            revokeWorkspaceFileAuthorization(path: path)
+            return
+        }
+
+        let loadID = UUID()
+        workspaceFileLoadIDs[path] = loadID
+        workspaceFileTabs[index].isLoading = true
+        workspaceFileTabs[index].errorMessage = nil
+        do {
+            let snapshot = try await WorkspaceFileReader.read(
+                path: path,
+                sourceFolderPath: root
+            )
+            guard workspaceFileLoadIDs[path] == loadID,
+                  let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }) else {
+                return
+            }
+            guard workspaceFileTabs[currentIndex].authorizationAvailable,
+                  WorkspaceFileAuthorization.registeredSourceFolder(
+                    matching: root,
+                    projects: projects
+                  ) != nil else {
+                revokeWorkspaceFileAuthorization(path: path)
+                return
+            }
+            workspaceFileTabs[currentIndex].snapshot = snapshot
+            workspaceFileTabs[currentIndex].errorMessage = nil
+            workspaceFileTabs[currentIndex].isLoading = false
+            workspaceFileLoadIDs.removeValue(forKey: path)
+        } catch {
+            guard workspaceFileLoadIDs[path] == loadID,
+                  let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }) else {
+                return
+            }
+            workspaceFileTabs[currentIndex].snapshot = nil
+            workspaceFileTabs[currentIndex].errorMessage = DiagnosticSanitizer.redact(error.localizedDescription)
+            workspaceFileTabs[currentIndex].isLoading = false
+            workspaceFileLoadIDs.removeValue(forKey: path)
+        }
+    }
+
+    private func reconcileWorkspaceFileAuthorizations() {
+        for tab in workspaceFileTabs where tab.authorizationAvailable {
+            if WorkspaceFileAuthorization.registeredSourceFolder(
+                matching: tab.sourceFolderPath,
+                projects: projects
+            ) == nil {
+                revokeWorkspaceFileAuthorization(path: tab.path)
+            }
+        }
+    }
+
+    private func revokeWorkspaceFileAuthorization(path: String) {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }) else { return }
+        workspaceFileLoadIDs.removeValue(forKey: path)
+        workspaceFileTabs[index].authorizationAvailable = false
+        workspaceFileTabs[index].isLoading = false
+        if workspaceFileTabs[index].snapshot == nil {
+            workspaceFileTabs[index].errorMessage = "来源授权已移除；该文件尚未读取，D Code 不会继续访问磁盘。"
+        }
     }
 
     func clearSearchOpenError() {
@@ -833,14 +1083,81 @@ final class AppModel {
         }
     }
 
+    private func recordSessionChange(_ data: JSONValue?) {
+        guard let data,
+              let record = try? data.decoded(SessionMutationRecord.self),
+              !sessionChangeDocument.records.contains(where: { $0.recordId == record.recordId }) else { return }
+        do {
+            try SessionChangeStore.validate(SessionChangeDocument(records: [record]))
+        } catch {
+            showNotice("Host 返回了无效的会话变更记录，本次未保存。", level: "warning")
+            return
+        }
+        guard sessionChangeDocument.records.count < 50_000 else {
+            sessionChangeStoreWritable = false
+            showNotice("会话变更账本已达到 50,000 条安全上限，本次停止继续写入。", level: "warning")
+            return
+        }
+        sessionChangeDocument.records.append(record)
+        if selectedSessionID == record.sessionId { updateSelectedSessionChangeSummary() }
+        scheduleSessionChangeSave()
+    }
+
+    private func updateSelectedSessionChangeSummary() {
+        guard let selectedSessionID else {
+            sessionChangeSummary = nil
+            return
+        }
+        let summary = SessionChangeSummary.build(
+            sessionID: selectedSessionID,
+            records: sessionChangeDocument.records
+        )
+        sessionChangeSummary = summary.isEmpty ? nil : summary
+    }
+
+    private func scheduleSessionChangeSave() {
+        guard sessionChangeStoreWritable else { return }
+        sessionChangeSaveTask?.cancel()
+        let document = sessionChangeDocument
+        sessionChangeRevision += 1
+        let revision = sessionChangeRevision
+        sessionChangeSaveTask = Task { [weak self] in
+            do {
+                guard !Task.isCancelled, let self else { return }
+                try await self.sessionChangeStore.save(document, revision: revision)
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.sessionChangeStoreWritable = false
+                self?.showNotice("会话变更账本保存失败；原文件已保留，本次停止继续写入。", level: "warning")
+            }
+        }
+    }
+
+    private func flushSessionChanges() async {
+        sessionChangeSaveTask?.cancel()
+        sessionChangeSaveTask = nil
+        guard sessionChangeStoreWritable else { return }
+        sessionChangeRevision += 1
+        do {
+            try await sessionChangeStore.save(sessionChangeDocument, revision: sessionChangeRevision)
+        } catch {
+            sessionChangeStoreWritable = false
+            showNotice("会话变更账本保存失败；原文件已保留，本次停止继续写入。", level: "warning")
+        }
+    }
+
     func selectSession(_ sessionID: String?) async {
         guard let sessionID else { return }
         guard !archivedSessions.contains(where: { $0.sessionID == sessionID }) else {
-            showNotice("该会话已归档，请从“已归档会话”中查看或恢复显示。", level: "warning")
+            showNotice("该会话已归档，请前往“设置 > 会话 > 已归档会话”查看或恢复显示。", level: "warning")
             return
         }
         if sessionID == inspection?.summary.id {
+            workbenchDestination = .workspace
+            workspaceTabSelection = .conversation
             selectedSessionID = sessionID
+            updateSelectedSessionChangeSummary()
             inspectorScope = .session(sessionID)
             return
         }
@@ -882,7 +1199,7 @@ final class AppModel {
                 searchOpenError = nil
                 issue = AppIssue(
                     title: "会话已创建，但暂时无法打开",
-                    message: "它已经立即保存在最近会话中。旧运行时尚未安全结束或新会话暂时无法观察，请稍后从左栏重新打开。"
+                    message: "它已经立即保存在最近会话中。旧运行时尚未安全结束或新会话暂时无法观察，请稍后从会话栏重新打开。"
                 )
             }
         } catch {
@@ -895,12 +1212,51 @@ final class AppModel {
         pendingTrashSession = session
     }
 
+    func renameSelectedSession(to requestedName: String?) async {
+        guard canRenameSelectedSession,
+              let client = readyClient,
+              let sessionID = selectedSessionID else { return }
+        let name = requestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard requestedName == nil || !name.isEmpty else {
+            issue = AppIssue(title: "无法重命名会话", message: "会话名称不能为空；若要恢复自动名称，请使用“恢复自动名称”。")
+            return
+        }
+        guard name.utf16.count <= 200,
+              !name.contains("\n"),
+              !name.contains("\r") else {
+            issue = AppIssue(title: "无法重命名会话", message: "会话名称必须是 200 个字符以内的单行文字。")
+            return
+        }
+
+        isRenamingSession = true
+        defer { isRenamingSession = false }
+        guard await ensureWritable(), selectedSessionID == sessionID else { return }
+        do {
+            let result: SessionRenameResult = try await client.request(
+                "session.setName",
+                params: ["name": .string(name)]
+            )
+            guard selectedSessionID == sessionID else { return }
+            replaceVisibleSummary(result.summary)
+            await refreshSnapshot()
+            Task { [weak self] in await self?.reloadAllSessionLists() }
+            showNotice(requestedName == nil ? "已恢复自动会话名称。" : "会话已重命名。", level: "info")
+        } catch {
+            present(error, title: "无法重命名会话")
+        }
+    }
+
     func togglePinnedSession(_ session: SessionSummary) async {
         guard canToggleSessionPin(session) else { return }
         isMutatingPins = true
         defer { isMutatingPins = false }
 
         let wasPinned = isSessionPinned(session.id)
+        let existingPresentation = pinnedSessionPresentations.first(where: { $0.id == session.id })
+        let wasRecent = recentSessions.contains(where: { $0.id == session.id })
+        let visibleProjectIDs = Set(projectSessions.compactMap { projectID, sessions in
+            sessions.contains(where: { $0.id == session.id }) ? projectID : nil
+        })
         var updated = pinnedSessions.filter { $0.sessionID != session.id }
         if !wasPinned {
             updated.append(PinnedSessionRecord(
@@ -912,12 +1268,30 @@ final class AppModel {
             try await sessionPinStore.save(updated)
             pinnedSessions = updated
             visibilityGeneration = UUID()
-            recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: updated)
-            for projectID in Array(projectSessions.keys) {
-                projectSessions[projectID] = SessionPinOrdering.ordered(
-                    projectSessions[projectID, default: []],
-                    pinnedRecords: updated
-                )
+            if wasPinned {
+                pinnedSessionPresentations.removeAll(where: { $0.id == session.id })
+                if existingPresentation?.isRecent == true {
+                    recentSessions.append(session)
+                    recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: [])
+                }
+                for projectID in existingPresentation?.projectIDs ?? [] where projectSessions[projectID] != nil {
+                    projectSessions[projectID, default: []].append(session)
+                    projectSessions[projectID] = SessionPinOrdering.ordered(
+                        projectSessions[projectID, default: []],
+                        pinnedRecords: []
+                    )
+                }
+            } else {
+                pinnedSessionPresentations.append(PinnedSessionPresentation(
+                    summary: session,
+                    isRecent: wasRecent,
+                    projectIDs: visibleProjectIDs.union(projectIDs(for: session))
+                ))
+                orderPinnedSessionPresentations(using: updated)
+                recentSessions.removeAll(where: { $0.id == session.id })
+                for projectID in Array(projectSessions.keys) {
+                    projectSessions[projectID]?.removeAll(where: { $0.id == session.id })
+                }
             }
             Task { [weak self] in await self?.reloadAllSessionLists() }
             showNotice(wasPinned ? "会话已取消置顶。" : "会话已置顶。", level: "info")
@@ -1008,6 +1382,7 @@ final class AppModel {
                 throw PiHostClientError.invalidEnvelope("session.trash 未确认请求的 Session ID")
             }
             visibilityGeneration = UUID()
+            pinnedSessionPresentations.removeAll(where: { $0.id == session.id })
             recentSessions.removeAll(where: { $0.id == session.id })
             for projectID in Array(projectSessions.keys) {
                 projectSessions[projectID]?.removeAll(where: { $0.id == session.id })
@@ -1041,7 +1416,7 @@ final class AppModel {
         if archiveSource, pendingArchiveRetry != nil {
             issue = AppIssue(
                 title: "请先完成上一次归档",
-                message: "已有一个复制成功但尚未归档的原会话。请从“已归档会话”重试归档后再使用“复制并归档”；普通复制不受影响。"
+                message: "已有一个复制成功但尚未归档的原会话。请前往“设置 > 会话 > 已归档会话”重试归档后再使用“复制并归档”；普通复制不受影响。"
             )
             return false
         }
@@ -1104,7 +1479,7 @@ final class AppModel {
                     pendingArchiveRetry = record
                     issue = AppIssue(
                         title: "复制成功，归档未完成",
-                        message: "目标会话已保留并打开，但归档资料当前不可写；原会话继续显示。可从左栏“已归档会话”重试。"
+                        message: "目标会话已保留并打开，但归档资料当前不可写；原会话继续显示。可前往“设置 > 会话 > 已归档会话”重试。"
                     )
                     await reloadAllSessionLists()
                     return true
@@ -1126,7 +1501,7 @@ final class AppModel {
                     pendingArchiveRetry = record
                     issue = AppIssue(
                         title: "复制成功，归档未完成",
-                        message: "目标会话已保留并打开，原会话继续显示。可从左栏“已归档会话”重试。\n\n\(DiagnosticSanitizer.redact(error.localizedDescription))"
+                        message: "目标会话已保留并打开，原会话继续显示。可前往“设置 > 会话 > 已归档会话”重试。\n\n\(DiagnosticSanitizer.redact(error.localizedDescription))"
                     )
                     await reloadAllSessionLists()
                 }
@@ -1209,6 +1584,7 @@ final class AppModel {
 
     private func refreshSessionVisibility() async {
         visibilityGeneration = UUID()
+        pinnedSessionPresentations = []
         recentSessions = []
         projectSessions.removeAll()
         if searchPresented { scheduleSearch(refresh: true) }
@@ -1217,6 +1593,7 @@ final class AppModel {
 
     private func hideArchivedSessionFromOrdinaryNavigation(_ sessionID: String) {
         visibilityGeneration = UUID()
+        pinnedSessionPresentations.removeAll(where: { $0.id == sessionID })
         recentSessions.removeAll(where: { $0.id == sessionID })
         for projectID in Array(projectSessions.keys) {
             projectSessions[projectID]?.removeAll(where: { $0.id == sessionID })
@@ -1413,6 +1790,7 @@ final class AppModel {
         try await projectStore.save(result.projects)
         projects = result.projects
         reconcileSearchScope()
+        reconcileWorkspaceFileAuthorizations()
         selectedProjectID = result.savedProjectID
         expandedProjectIDs.insert(result.savedProjectID)
         inspectorScope = .project(result.savedProjectID)
@@ -1436,6 +1814,7 @@ final class AppModel {
         try await projectStore.save(updated)
         projects = updated
         reconcileSearchScope()
+        reconcileWorkspaceFileAuthorizations()
         projectSessions.removeValue(forKey: projectID)
         projectHasMore.removeValue(forKey: projectID)
         projectSessionErrors.removeValue(forKey: projectID)
@@ -1456,12 +1835,14 @@ final class AppModel {
         do {
             projects = try await projectStore.load()
             reconcileSearchScope()
+            reconcileWorkspaceFileAuthorizations()
             projectStoreWritable = true
             expandedProjectIDs = []
             projectSessionErrors.removeAll()
         } catch {
             projects = []
             reconcileSearchScope()
+            reconcileWorkspaceFileAuthorizations()
             projectStoreWritable = false
             projectSessionErrors.removeAll()
             issue = AppIssue(
@@ -1507,6 +1888,17 @@ final class AppModel {
             draftStoreIssue = "草稿资料未能安全载入；原文件已保留，本次不会覆盖：\(sessionDraftStore.fileURL.path)"
             showNotice(draftStoreIssue ?? "草稿资料未能载入。", level: "warning")
         }
+        do {
+            sessionChangeDocument = try await sessionChangeStore.load()
+            sessionChangeStoreWritable = true
+        } catch {
+            sessionChangeDocument = SessionChangeDocument()
+            sessionChangeStoreWritable = false
+            showNotice(
+                "会话变更账本未能安全载入；普通会话仍可使用，但本次不会覆盖原账本文件。",
+                level: "warning"
+            )
+        }
         return true
     }
 
@@ -1532,9 +1924,12 @@ final class AppModel {
         searchProbeTask = nil
         noticeTask?.cancel()
         draftSaveTask?.cancel()
+        sessionChangeSaveTask?.cancel()
+        await flushSessionChanges()
         resetExtensionUIState()
         await client?.shutdown()
         await flushCurrentDraft()
+        await flushSessionChanges()
         client = nil
         connectionState = .idle
     }
@@ -1636,8 +2031,12 @@ final class AppModel {
         }.value
         guard openGeneration == generation,
               snapshotCommitGeneration == commitGeneration else { return false }
+        let opensDifferentSession = selectedSessionID != result.snapshot.summary.id
         conversationTarget = nil
+        workbenchDestination = .workspace
+        if opensDifferentSession { workspaceTabSelection = .conversation }
         selectedSessionID = result.snapshot.summary.id
+        updateSelectedSessionChangeSummary()
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
         hostState = result.state
@@ -1718,6 +2117,7 @@ final class AppModel {
         snapshotCommitGeneration = UUID()
         conversationTarget = nil
         selectedSessionID = nil
+        sessionChangeSummary = nil
         inspection = nil
         setTranscript([])
         hostState = nil
@@ -1813,6 +2213,8 @@ final class AppModel {
             }
             restorePendingPrompt(for: sessionID)
             showNotice(event.data?["message"]?.stringValue ?? "本次输入未能完成，草稿仍保留。", level: "error")
+        case "session.changeRecorded":
+            recordSessionChange(event.data)
         case "session.conflict":
             guard let sessionID = event.data?["sessionId"]?.stringValue else { return }
             if pendingPrompt?.sessionID == sessionID { restorePendingPrompt(for: sessionID) }
@@ -2039,32 +2441,71 @@ final class AppModel {
         }
     }
 
+    private func projectIDs(for session: SessionSummary) -> Set<UUID> {
+        let canonicalCwd = URL(fileURLWithPath: session.cwd, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        return Set(projects.compactMap { project in
+            project.sourceFolders.contains(where: { folder in
+                folder.url.standardizedFileURL.resolvingSymlinksInPath().path == canonicalCwd
+            }) ? project.id : nil
+        })
+    }
+
+    private func orderPinnedSessionPresentations(using records: [PinnedSessionRecord]) {
+        let pinnedAt = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0.pinnedAt) })
+        pinnedSessionPresentations.sort { left, right in
+            let leftPinnedAt = pinnedAt[left.id] ?? ""
+            let rightPinnedAt = pinnedAt[right.id] ?? ""
+            if leftPinnedAt != rightPinnedAt { return leftPinnedAt > rightPinnedAt }
+            return left.id < right.id
+        }
+    }
+
     private func replaceVisibleSummary(_ summary: SessionSummary) {
+        if let index = pinnedSessionPresentations.firstIndex(where: { $0.id == summary.id }) {
+            let existing = pinnedSessionPresentations[index]
+            pinnedSessionPresentations[index] = PinnedSessionPresentation(
+                summary: summary,
+                isRecent: existing.isRecent,
+                projectIDs: existing.projectIDs
+            )
+        }
         if let index = recentSessions.firstIndex(where: { $0.id == summary.id }) {
             recentSessions[index] = summary
-            recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: pinnedSessions)
+            recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: [])
         }
         for projectID in Array(projectSessions.keys) {
             guard let index = projectSessions[projectID]?.firstIndex(where: { $0.id == summary.id }) else { continue }
             projectSessions[projectID]?[index] = summary
             projectSessions[projectID] = SessionPinOrdering.ordered(
                 projectSessions[projectID, default: []],
-                pinnedRecords: pinnedSessions
+                pinnedRecords: []
             )
         }
     }
 
     private func upsertCreatedSession(_ summary: SessionSummary) {
+        if let index = pinnedSessionPresentations.firstIndex(where: { $0.id == summary.id }) {
+            let existing = pinnedSessionPresentations[index]
+            pinnedSessionPresentations[index] = PinnedSessionPresentation(
+                summary: summary,
+                isRecent: true,
+                projectIDs: existing.projectIDs.union(projectIDs(for: summary))
+            )
+            return
+        }
         recentSessions.removeAll(where: { $0.id == summary.id })
         recentSessions.append(summary)
-        recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: pinnedSessions)
+        recentSessions = SessionPinOrdering.ordered(recentSessions, pinnedRecords: [])
         for project in projects where project.sourceFolders.contains(where: { $0.path == summary.cwd }) {
             var sessions = projectSessions[project.id] ?? []
             sessions.removeAll(where: { $0.id == summary.id })
             sessions.append(summary)
             projectSessions[project.id] = SessionPinOrdering.ordered(
                 sessions,
-                pinnedRecords: pinnedSessions
+                pinnedRecords: []
             )
         }
     }

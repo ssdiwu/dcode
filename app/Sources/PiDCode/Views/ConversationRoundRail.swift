@@ -120,13 +120,10 @@ struct ConversationRoundRail: View {
                 var path = Path()
                 path.move(to: CGPoint(x: 4, y: y))
                 path.addLine(to: CGPoint(x: 4 + length, y: y))
-                let color: Color
-                if items[index].hasError {
-                    color = .orange
-                } else if isCurrent || isHovered {
-                    color = .primary
+                let color: Color = if isCurrent || isHovered {
+                    .primary
                 } else {
-                    color = .secondary.opacity(0.46)
+                    .secondary.opacity(0.46)
                 }
                 context.stroke(
                     path,
@@ -205,7 +202,7 @@ private struct ConversationRoundPreviewCard: View {
                 .lineLimit(2)
             Text(item.answerPreview)
                 .font(.callout)
-                .foregroundStyle(item.hasError ? Color.orange : Color.secondary)
+                .foregroundStyle(.secondary)
                 .lineLimit(3)
         }
         .frame(width: 320, alignment: .leading)

@@ -5,83 +5,85 @@ struct WorkInspectorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            inspectorHeader
-            Divider()
             switch model.inspectorScope {
             case let .project(projectID):
                 if let project = model.projects.first(where: { $0.id == projectID }) {
-                    ProjectInspectorView(project: project)
+                    ProjectInspectorView(project: project, sessionInspection: nil)
                 } else {
                     ContentUnavailableView("项目不存在", systemImage: "folder.badge.questionmark")
                 }
             case .session:
-                SessionInspectorView()
+                if let inspection = model.inspection,
+                   let ownership = model.projectOwnership(for: inspection.summary) {
+                    ProjectInspectorView(
+                        project: ownership.project,
+                        sessionInspection: inspection
+                    )
+                } else {
+                    SessionOnlyInspectorView()
+                }
             case nil:
                 ContentUnavailableView("没有可检查的内容", systemImage: "sidebar.right")
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    private var inspectorHeader: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(headerTitle)
-                .font(.headline)
-                .lineLimit(1)
-            Text(headerSubtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-        .padding(.horizontal, 14)
-    }
-
-    private var headerTitle: String {
-        switch model.inspectorScope {
-        case let .project(id): model.projects.first(where: { $0.id == id })?.name ?? "项目"
-        case .session: model.inspection?.summary.displayTitle ?? "会话"
-        case nil: "工作检查器"
-        }
-    }
-
-    private var headerSubtitle: String {
-        switch model.inspectorScope {
-        case .project: "当前项目"
-        case .session: "当前会话"
-        case nil: ""
-        }
+        .dCodeFloatingSurface()
     }
 }
 
 private struct ProjectInspectorView: View {
     enum Tab: String, CaseIterable, Identifiable {
+        case session = "会话"
         case files = "文件"
         case changes = "变更"
         var id: String { rawValue }
     }
 
     let project: DCodeProject
+    let sessionInspection: SessionInspection?
     @State private var tab: Tab = .files
+
+    private var availableTabs: [Tab] {
+        sessionInspection == nil ? [.files, .changes] : [.session, .files, .changes]
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("项目检查范围", selection: $tab) {
-                ForEach(Tab.allCases) { tab in Text(tab.rawValue).tag(tab) }
+            Picker(selection: $tab) {
+                ForEach(availableTabs) { tab in Text(tab.rawValue).tag(tab) }
+            } label: {
+                EmptyView()
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("信息检查器范围")
             .padding(12)
-
-            Divider()
 
             switch tab {
             case .files:
                 ProjectFilesView(project: project)
             case .changes:
                 ProjectChangesView(project: project)
+            case .session:
+                SessionInspectorView()
             }
         }
-        .id(project.id)
+        .id("\(project.id.uuidString):\(sessionInspection?.summary.id ?? "project")")
+    }
+}
+
+private struct SessionOnlyInspectorView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker(selection: .constant("会话")) {
+                Text("会话").tag("会话")
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("信息检查器范围")
+            .padding(12)
+
+            SessionInspectorView()
+        }
     }
 }
 
@@ -89,16 +91,20 @@ private struct ProjectFilesView: View {
     let project: DCodeProject
 
     var body: some View {
-        if project.sourceFolders.isEmpty {
+        switch ProjectFileTreeLayout.resolve(for: project) {
+        case .empty:
             ContentUnavailableView(
                 "没有源文件夹",
                 systemImage: "folder.badge.plus",
                 description: Text("编辑项目并添加源文件夹后，这里会显示真实文件树。")
             )
-        } else {
+        case let .flattened(folder):
+            FlattenedFileTreeRoot(folder: folder)
+                .id(folder.path)
+        case let .grouped(folders):
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(project.sourceFolders) { folder in
+                    ForEach(folders) { folder in
                         FileTreeBranch(
                             rootPath: folder.path,
                             node: ProjectFileNode(path: folder.path, name: folder.displayName, kind: .directory),
@@ -115,7 +121,65 @@ private struct ProjectFilesView: View {
     }
 }
 
+private struct FlattenedFileTreeRoot: View {
+    let folder: SourceFolder
+
+    @State private var loading = true
+    @State private var children: [ProjectFileNode] = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Group {
+            if loading {
+                ProgressView("正在读取文件…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorMessage {
+                ContentUnavailableView(
+                    "无法读取文件",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(errorMessage)
+                )
+            } else if children.isEmpty {
+                ContentUnavailableView("文件夹为空", systemImage: "folder")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(children) { child in
+                            FileTreeBranch(
+                                rootPath: folder.path,
+                                node: child,
+                                depth: 0,
+                                isRoot: false
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                }
+                .accessibilityLabel("\(folder.displayName) 文件树")
+            }
+        }
+        .task(id: folder.path) {
+            loading = true
+            errorMessage = nil
+            do {
+                children = try await FileTreeReader.children(
+                    rootPath: folder.path,
+                    directoryPath: folder.path
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                children = []
+                errorMessage = DiagnosticSanitizer.redact(error.localizedDescription)
+            }
+            loading = false
+        }
+    }
+}
+
 private struct FileTreeBranch: View {
+    @Environment(AppModel.self) private var model
     let rootPath: String
     let node: ProjectFileNode
     let depth: Int
@@ -134,6 +198,19 @@ private struct FileTreeBranch: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(expanded ? "收起" : "展开") \(node.name)")
+            } else if node.kind == .file || node.kind == .symbolicLink {
+                Button {
+                    Task {
+                        await model.openWorkspaceFile(
+                            path: node.path,
+                            sourceFolderPath: rootPath
+                        )
+                    }
+                } label: {
+                    rowLabel
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("打开只读文件 \(node.name)")
             } else {
                 rowLabel
                     .accessibilityElement(children: .combine)
@@ -241,15 +318,13 @@ private struct ProjectChangesView: View {
                 Button {
                     refreshID = UUID()
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: PiDCodeMetrics.minimumTarget, height: PiDCodeMetrics.minimumTarget)
+                    IconActionGlyph(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconActionStyle())
                 .accessibilityLabel("刷新 Git 变更")
                 .disabled(loading)
             }
             .padding(.horizontal, 12)
-            Divider()
 
             if loading, snapshots.isEmpty {
                 ProgressView("正在读取 Git 状态…")
@@ -361,7 +436,12 @@ private struct SessionInspectorView: View {
                         LabeledContent("会话 ID") {
                             Text(inspection.summary.id)
                                 .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .allowsTightening(true)
+                                .layoutPriority(1)
                                 .textSelection(.enabled)
+                                .help(inspection.summary.id)
                         }
                     }
                     inspectorSection("工作目录") {

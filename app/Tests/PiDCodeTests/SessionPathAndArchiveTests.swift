@@ -4,6 +4,34 @@ import XCTest
 
 final class SessionPathAndArchiveTests: XCTestCase {
     @MainActor
+    func testSettingsAndArchivedSessionsUseTheWorkbenchNavigationStack() async {
+        let model = AppModel()
+
+        XCTAssertEqual(model.workbenchDestination, .workspace)
+        model.presentSettings()
+        XCTAssertEqual(model.workbenchDestination, .settings(.appearance))
+
+        model.presentArchivedSessions()
+        XCTAssertEqual(model.workbenchDestination, .settings(.archivedSessions))
+        model.dismissArchivedSessions()
+        XCTAssertEqual(model.workbenchDestination, .settings(.appearance))
+
+        model.presentSettings(.about)
+        XCTAssertEqual(model.workbenchDestination, .settings(.about))
+
+        await model.selectProject(UUID())
+        XCTAssertEqual(model.workbenchDestination, .workspace)
+    }
+
+    @MainActor
+    func testHealthyHostStateDoesNotOccupyTheSessionSidebarFooter() {
+        XCTAssertNil(HostConnectionState.ready.sidebarLabel)
+        XCTAssertEqual(HostConnectionState.idle.sidebarLabel, "未连接")
+        XCTAssertEqual(HostConnectionState.connecting.sidebarLabel, "正在连接")
+        XCTAssertEqual(HostConnectionState.failed.sidebarLabel, "连接失败")
+    }
+
+    @MainActor
     func testOnlyEmptyVisibleDCodeSessionsOfferRecoverableTrash() {
         let model = AppModel()
         let empty = sessionSummary(id: "empty", messageCount: 0)
@@ -35,7 +63,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
         let model = AppModel(
             sessionDraftStore: store,
             sessionArchiveStore: archiveStore,
-            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json"))
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -65,7 +94,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
         let model = AppModel(
             sessionDraftStore: store,
             sessionArchiveStore: archiveStore,
-            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json"))
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -323,7 +353,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
         let model = AppModel(
             sessionDraftStore: SessionDraftStore(fileURL: draftURL),
             sessionArchiveStore: archiveStore,
-            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json"))
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -367,7 +398,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
         let model = AppModel(
             sessionDraftStore: draftStore,
             sessionArchiveStore: archiveStore,
-            sessionPinStore: pinStore
+            sessionPinStore: pinStore,
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)

@@ -54,7 +54,7 @@ NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.3 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.4 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
@@ -119,7 +119,7 @@ cat > "${RESOURCES_DIR}/build-info.txt" <<EOF
 D Code local build
 Node: ${NODE_VERSION}
 Architecture: arm64
-Host package: @pi-dcode/host 0.0.3
+Host package: @pi-dcode/host 0.0.4
 EOF
 
 printf '==> Validating bundle metadata and embedded Host\n'

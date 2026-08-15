@@ -96,6 +96,16 @@ test("method parameter validation rejects invalid values", () => {
     () => validateMethodParams("session.setFastMode", { enabled: "yes" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("session.setName", { name: "新的会话名称" }));
+  assert.doesNotThrow(() => validateMethodParams("session.setName", { name: "" }));
+  assert.throws(
+    () => validateMethodParams("session.setName", { name: "第一行\n第二行" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.setName", { name: "x".repeat(201) }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.doesNotThrow(() => validateMethodParams("session.prompt", { message: "hello", promptId: "prompt-1" }));
   assert.doesNotThrow(() => validateMethodParams("session.prompt", {
     message: "rewrite",
@@ -134,6 +144,7 @@ test("method parameter validation rejects invalid values", () => {
   assert.equal(isHostMethod("extension.customResize"), false);
   assert.equal(HOST_METHODS.includes("extension.respond"), true);
   assert.equal(HOST_METHODS.includes("session.setFastMode"), true);
+  assert.equal(HOST_METHODS.includes("session.setName"), true);
   assert.equal(isHostMethod("session.refresh"), true);
   assert.doesNotThrow(() => validateMethodParams("session.refresh", {}));
   assert.doesNotThrow(() => validateMethodParams("session.search", {

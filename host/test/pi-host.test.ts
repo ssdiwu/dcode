@@ -109,7 +109,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.3");
+    assert.equal(hello.hostVersion, "0.0.4");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -121,6 +121,8 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal(hello.capabilities.dcodeSessionOrigin, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionSearch, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionTrash, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionChangeLedger, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionRename, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
@@ -343,6 +345,77 @@ test("path actions roll back before persistence and stay committed after the use
     assert.notEqual(manager.getLeafId(), "assistant");
     assert.equal(manager.getLeafEntry()?.type, "message");
     active.session.prompt = originalPrompt;
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("structured tool completion emits a scoped metadata-only session change", async () => {
+  const f = await fixture();
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  type WritableInternals = {
+    session: { sessionId: string };
+    currentRun?: {
+      id: string;
+      pathEntryId?: string;
+      toolCalls: Map<string, { toolName: string; args: unknown }>;
+    };
+  };
+  const internals = host as unknown as {
+    active?: WritableInternals;
+    onSessionEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    active.currentRun = { id: "run-structured", pathEntryId: "user", toolCalls: new Map() };
+    internals.onSessionEvent(active, {
+      type: "tool_execution_start",
+      toolCallId: "tool-structured",
+      toolName: "edit",
+      args: { input: "[src/demo.swift#AABBCCDD]\nSWAP 1:\n+private-token" },
+    } as AgentSessionEvent);
+    internals.onSessionEvent(active, {
+      type: "tool_execution_end",
+      toolCallId: "tool-structured",
+      toolName: "edit",
+      result: {
+        content: [{ type: "text", text: "Updated src/demo.swift" }],
+        details: {
+          patch: "--- a/src/demo.swift\n+++ b/src/demo.swift\n@@ -3,1 +3,2 @@\n-old\n+new\n+next\n",
+          firstChangedLine: 3,
+        },
+      },
+      isError: false,
+    } as AgentSessionEvent);
+
+    const change = emitted.find(({ event }) => event === "session.changeRecorded");
+    assert.ok(change);
+    assert.deepEqual(change.data, {
+      recordId: `${f.sessionId}:run-structured:tool-structured`,
+      sessionId: f.sessionId,
+      runId: "run-structured",
+      pathEntryId: "user",
+      toolCallId: "tool-structured",
+      operation: "edit",
+      filePath: join(f.root, "src", "demo.swift"),
+      firstChangedLine: 3,
+      additions: 2,
+      deletions: 1,
+      occurredAt: (change.data as { occurredAt: string }).occurredAt,
+      source: "structured-tool-v1",
+    });
+    const wire = JSON.stringify(change.data);
+    assert.equal(wire.includes("private-token"), false);
+    assert.equal(wire.includes("@@ -3,1"), false);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
@@ -1036,6 +1109,47 @@ test("writable open requires explicit write intent and releases its lease", asyn
     assert.equal(updatedState.fastMode.enabled, true);
     assert.ok(events.some((entry) => entry.event === "session.opened"));
     await host.handle("session.close", {});
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a writable session rename persists through Pi session_info and can restore the automatic title", async () => {
+  const f = await fixture();
+  const events: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseAgentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => events.push({ event, data }),
+  });
+  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  try {
+    await host.handle("session.open", {
+      sessionId: f.sessionId,
+      mode: "writable",
+      writeIntent: true,
+    });
+    const renamed = await host.handle("session.setName", { name: "真实会话名称" }) as {
+      summary: { id: string; name?: string };
+    };
+    assert.equal(renamed.summary.id, f.sessionId);
+    assert.equal(renamed.summary.name, "真实会话名称");
+    const state = await host.handle("session.getState", {}) as { sessionName?: string };
+    assert.equal(state.sessionName, "真实会话名称");
+    const persisted = (await readFile(sessionPath, "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type?: string; name?: string });
+    assert.ok(persisted.some((entry) => entry.type === "session_info" && entry.name === "真实会话名称"));
+    assert.ok(events.some((entry) => entry.event === "session.event"));
+
+    const cleared = await host.handle("session.setName", { name: "" }) as {
+      summary: { name?: string };
+    };
+    assert.equal(cleared.summary.name, undefined);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });

@@ -17,7 +17,7 @@ struct SessionPathSheet: View {
                 Spacer()
                 Button("完成") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
             }
 
             if let paths = model.inspection?.paths, !paths.isEmpty {

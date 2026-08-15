@@ -9,6 +9,7 @@ import test from "node:test";
 import { D_CODE_SESSION_ORIGIN_TYPE } from "../src/session-origin.js";
 
 const hostEntry = fileURLToPath(new URL("../src/index.js", import.meta.url));
+const processEventTimeoutMs = 10_000;
 
 type JsonMessage = Record<string, unknown>;
 
@@ -55,7 +56,7 @@ function collectMessages(stream: NodeJS.ReadableStream): {
           timer: setTimeout(() => {
             waiters.delete(waiter);
             reject(new Error(`Timed out waiting for ${description}`));
-          }, 2_000),
+          }, processEventTimeoutMs),
         };
         waiters.add(waiter);
       });

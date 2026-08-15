@@ -1,111 +1,53 @@
-# D Code Design System
+# D Code Design
 
-> Status: current native component rules plus explicitly labelled Target Reference（目标参考）. `PRODUCT.md` defines product intent; unlabelled component rules in this file describe the running SwiftUI slice.
+> Status: design entry point（设计入口）. It describes D Code's character and routes every design question to one authority; it is not a second component specification.
 
 ## Character
 
-Calm, precise, capable. The interface should feel like a focused macOS workbench rather than a browser dashboard: one primary conversation, a restrained session sidebar, honest runtime state, and progressive disclosure for technical depth.
+Calm, precise, capable.
 
-## Foundations
+D Code should feel like a focused native macOS workbench: the current task is obvious, technical depth is available without dominating the reading surface, and every visible state corresponds to a real product fact. It must not become a browser dashboard, a terminal skin, or a decorative imitation of another Agent product.
 
-- Use semantic macOS colors (`windowBackgroundColor`, `textBackgroundColor`, `controlBackgroundColor`, `primary`, `secondary`, `accentColor`) rather than fixed light/dark palettes.
-- Use system typography. Technical paths, IDs, JSON, timestamps, code, and diagnostic payloads use monospaced variants; counts use tabular digits.
-- Avoid decorative gradients, glass stacks, large marketing type, and repeated card grids.
-- Current density is deliberate: compact enough for engineering history, with at least `40 × 40 pt` interactive targets.
+The workbench has three stable regions: Session Sidebar（会话栏）on the left, Main Workspace（主工作区）in the center, and Information Inspector（信息检查器）on the right. Settings（设置）and Archived Sessions（已归档会话）are Workbench Pages（工作台页面）inside the Main Workspace, not separate windows or names for the surrounding regions.
 
-## Layout
+Each logical rail owns one Shared Rail Geometry（共享栏位几何）across the whole window. Settings navigation inherits the Session Sidebar's actual width, and the Information Inspector keeps one actual width across every scope and page; changing either rail anywhere updates every surface that displays it.
 
-- Default window: `1360 × 860 pt`; minimum: `640 × 620 pt`.
-- Left sidebar: fixed `286 pt`. It is inline when the window can preserve the center; at `880–1105 pt` with an inline inspector it becomes a transient leading overlay, and below `880 pt` it remains a mutually exclusive overlay. Hidden columns leave hit-testing and accessibility.
-- Work Inspector: fixed `340 pt`, inline and non-modal at `≥880 pt` whenever a scope exists and the user has not hidden it. It never dims or disables the sidebar/conversation. At `<880 pt` it becomes a mutually exclusive trailing overlay.
-- Conversation content: centered, maximum `820 pt`, with `28 pt` horizontal and `24 pt` vertical breathing room.
-- Conversation navigation: a `44 pt` leading interaction rail is reserved only when the central conversation itself is at least `640 pt` wide and contains at least two rounds. Its preview may float toward the reading canvas without a backdrop and without intercepting message interaction.
-- Session header and composer stay outside the scrolling transcript, separated by native hairlines.
-- Long paths truncate in the middle and expose the full value through help text or selection.
+## Principles
+
+- **Hierarchy before decoration**：先用布局、排版和渐进披露建立层级，再考虑表面效果。
+- **Container before offset**：由容器、共同中心线和共享尺寸决定几何；页面不得用逐图标 `offset`（偏移）修补布局。
+- **Native before custom**：优先使用 macOS 语义色、系统字体、真实 `Button`（按钮）、键盘焦点和 VoiceOver（旁白）语义。
+- **Stable before animated**：Hover（悬停）、选中、焦点、按下和禁用只改变反馈，不推动标题、图标或相邻控件。
+- **One geometry per rail**：同一逻辑栏位只有一份持久化实际宽度；页面可以改变内容或响应式呈现，但不能建立自己的宽度副本。
+- **Result before process**：对话默认突出最终结果；thinking（思考）、工具和诊断过程按需展开。
+- **Truth before reassurance**：只把已验证的状态显示为成功；活动、限制、失败和 destructive（破坏性）操作分别表达。
+- **Accessible by construction**：视觉 glyph（字形）、组件表面和 hit target（命中区）分层设计；不能事后用透明层补可访问性。
+
+## Authority
+
+| Question | Authority |
+|---|---|
+| 当前 App 的视觉、组件几何、状态矩阵与验收规则 | [D Code 原生界面设计系统](doc/10-架构与运行/0002-D-Code-原生界面设计系统.md) |
+| 当前 Host、Protocol 与运行边界 | [架构与运行](doc/10-架构与运行/README.md) |
+| 跨版本最终产品行为 | [产品与交互](doc/20-产品与交互/README.md) |
+| 当前版本承诺与验收 | [版本实施方案](doc/40-版本实施方案/README.md) |
+| 外部产品只提供什么参考 | [外部产品与仓库参考](doc/参考文件/README.md) |
+| 可执行 token（令牌）与共享 primitive（基础组件） | [`DesignSystem.swift`](app/Sources/PiDCode/Views/DesignSystem.swift) |
+
+The design document defines semantic rules and observable results. Shared code owns concrete reusable values. Feature views consume those primitives; they do not become independent design authorities.
 
 ## Reference boundary
 
-> Target Reference（目标参考）：响应式工作台和 Project Files/Changes 已进入 `0.0.1`；中央文件标签、Goal / Work Map、Agent Profile / Team Run、本机 Skill 与权限仍是后续目标，不表示已经实现。
+Codex informs workbench structure, MiniMax Code informs visible local Goal / Agent Team / permission and activity hierarchy, Curio informs design-document governance and container-driven geometry, ZCode informs information density, and Orca informs tabs and previews. D Code translates useful patterns into its own SwiftUI / AppKit components and Pi-backed product model.
 
-The maintained reference index is [`doc/参考文件/README.md`](doc/参考文件/README.md). Codex provides the primary workbench structure, ZCode informs information hierarchy, MiniMax Code informs visible local Goal, Agent Team, permission, and activity presentation, `pi-dteam` informs bounded execution semantics, and Orca informs tabs and previews. D Code translates those patterns into native macOS controls rather than copying visual skins or adopting another product's runtime. Remote control, cloud tasks, account growth, online marketplaces, and BYOK are outside this reference boundary. The left sidebar is open by default. The right inspector stays inline and non-modal at `≥880 pt`; only below that threshold does it become an explicit overlay.
+References never authorize copying another product's brand, visual skin, assets, runtime, cloud authority, account system, remote control, or hidden implementation. Confirmed future behavior remains in `doc/20-产品与交互/`; it does not enter the current design-system document until the native component is implemented and verified.
 
-## Type and spacing
+## Change discipline
 
-- Session and message body: system body.
-- Primary labels: semibold body/headline, never oversized.
-- Secondary metadata: caption; timestamps and counts use monospaced digits.
-- Reusable radii: `8 pt` compact, `10 pt` controls and tool surfaces, `14 pt` user messages.
-- Transcript rhythm: `18 pt` between semantic messages, `4–10 pt` within one message or tool unit.
+When a shared visual or interaction contract changes:
 
-## Components
-
-### Session sidebar
-
-The sidebar starts with the latest ten sessions created by D Code and loads ten more on demand without opening transcript content. It does not expose every Pi session under the macOS home directory. D Code Project is the navigation object; after a Source Folder is associated, all Pi Sessions whose normalized `cwd` exactly matches that folder appear as one cross-folder recency list rather than folder groups. Each project session shows its Source Folder as secondary text. The same D Code-created session may appear in Recent and its Project with one stable ID. The Project row selects project Files/Changes; its separate chevron expands sessions, and its plus menu creates a Session in one registered Source Folder. Selecting a Session alone opens its history and offers direct continuation. Connection and reload state stay in the quiet footer.
-
-Each Recent or Project session row separates selection from its trailing actions. Pointer hover or keyboard focus reveals sibling `pin` and `archivebox` controls without changing row height or title position; an active pin remains visible as `pin.fill`. Both controls keep `40 pt` targets, object-specific VoiceOver labels, and equivalent context-menu/session-menu actions. Pinning only reorders sessions inside an already-valid Recent or Project projection and is applied before pagination. Direct archive is a reversible D Code visibility action, not a destructive Pi operation; it preserves the Pi JSONL, per-path drafts, and pin state.
-
-### Search overlay
-
-The sidebar search action and global `Command-K` open one centered native overlay without replacing the workbench. The search field owns initial focus; Project and Source Folder filters remain compact but keep `40 pt` targets. Empty input shows the latest visible sessions. Results combine title, best snippet, role, match count, time, Project/Source Folder ownership, and full-path help while remaining one selectable row per stable Session ID. The covered workbench and toolbar leave hit-testing and the accessibility tree until the overlay closes. Index build, rebuild, query failure, no-result, and target-open failure are distinct states; an open failure preserves the result list so another row can be chosen. `Escape` restores the prior responder, and a successful Entry ID result scrolls to and briefly highlights the same persisted message.
-
-### Conversation
-
-- User text uses a content-sized accent-tinted bubble aligned to the trailing edge; short prompts never expand into full-width cards.
-- Assistant content remains uncontained on the reading canvas; its copy action appears on hover or keyboard focus.
-- Assistant Markdown preserves source paragraph breaks, blank lines, ordered and unordered list markers while still applying inline emphasis, links, and code. Copy actions always use the original source text rather than presentation-normalized characters.
-- Persisted entries are projected into a product round from one user message to the next. A completed round shows its final assistant answer and one collapsed summary containing elapsed time, tool count, and persisted completion time.
-- When the central conversation is at least `640 pt` wide and the selected Session Path contains multiple rounds, a leading-edge conversation rail maps one proportional tick to each round. Hover previews the user question and final answer; click or keyboard adjustment only scrolls and briefly highlights that round. Navigating history pauses automatic tail-following until the explicit “回到最新” action restores it.
-- Thinking, intermediate assistant narration, tool calls, and tool results live inside that round-level disclosure. Recognized read/edit/write/search results use D Code-owned native anchor/diff presenters; unknown tools retain a generic safe disclosure.
-- While a round is active, only the current thinking excerpt or currently running tool is shown. A completed step is replaced in place instead of accumulating permanent cards; `agent_end(willRetry=true)` remains active until `agent_settled`.
-- A persisted assistant message replaces its streaming presentation without hiding an active tool run. Historical completion time is the last accepted JSONL persistence time, not a claim of exact provider or `agent_settled` completion.
-- Provider errors show a concise failure summary first and preserve raw technical detail in an expandable disclosure.
-
-### Native content blocks
-
-Fenced code uses a quiet native surface with language label, horizontal scrolling, selectable monospaced text, and a copy action. Mermaid fences render as selectable Unicode diagrams with semantic system colors, bounded two-axis scrolling, `60–200%` zoom, source/image copy, and PNG export. The header always names the detected diagram kind. Advisory warnings remain visible; unsupported or failed diagrams must show an explicit error and the original source instead of a blank or false success. PNG export uses a deterministic light canvas at `2×` scale.
-
-### Active Plan
-
-An active Goal/Plan is a D Code-owned component anchored between transcript and composer. The current implementation can project recognized dgoal state into it, but the component contract is not owned by the extension. The collapsed state shows objective, current step, progress bar, and tabular count; expansion reveals phase and item status in a bounded scroll area. Completed or abandoned goals disappear entirely rather than becoming permanent chrome.
-
-### Composer
-
-A fixed native text editor supports multiline input, `Command-Return` send, Return newline, explicit stop while streaming, slash-command suggestions, and Session runtime controls. Model, thinking, Fast, and context usage remain in the Composer; raw extension status or Pi footer concepts never become permanent product chrome. Existing Pi sessions keep the same editor while D Code observes external persisted updates. Sending or changing runtime controls acquires write ownership on demand; failure preserves the exact draft and reports the real conflict without replacing the composer with a generic read-only state. A sent draft is cleared when the source-bounded, call-local RPC user record has joined the verified Pi session snapshot; nested extension prompts run behind a separate source boundary and cannot confirm the outer RPC input. An extension-handled command with no RPC user record clears only when that exact Host prompt call completes. Neither path borrows an unrelated user-message event.
-
-### Structured UI boundary
-
-Standard `select`, `confirm`, `input`, and `editor` requests become native sheets. Enabled extensions may still register and execute headless tools through Pi SDK; D Code never calls their `renderCall` / `renderResult` TUI components. Recognized structured tool output is projected through D Code-owned native presenters and unknown output uses a generic fallback. D Code does not render `pi-tui`, terminal frames, arbitrary extension widgets, headers, footers, custom editor components or other custom components. Calls that require an unavailable user interaction fail explicitly; presentation-only hints may be ignored diagnostically without interrupting the user. Tool-expansion queries follow Pi RPC's neutral collapsed/no-op behavior rather than masquerading as a product failure.
-
-## State and feedback
-
-- Streaming, actual write conflict, loading, and Host failure are visually distinct and exposed to accessibility; the internal observation implementation is not presented as a user-facing read-only mode.
-- Use green only for verified ready/writable/completed state, orange for active work or explicit limitations, and red for errors or destructive stop.
-- Empty, loading, and failure states name the next available action.
-- Notifications are transient material banners; blocked extension interactions and other blocking failures use native alerts, while ignored presentation hints remain diagnostic only.
-
-## Motion and accessibility
-
-- Motion is limited to short state transitions, press feedback, banners, and transcript auto-scroll.
-- Respect Reduce Motion by removing animated transcript scrolling; semantic state must never depend on motion.
-- The conversation rail is one keyboard-focusable and VoiceOver-adjustable control with a minimum `40 pt` target. It announces round index, total, and question preview; its visual hover card is hidden from the accessibility tree.
-- Semantic system colors support Dark Mode, Increase Contrast, and Reduce Transparency fallbacks.
-- Preserve native keyboard focus, full keyboard navigation, selectable technical values, and combined VoiceOver labels for session rows and state controls.
-- Do not put essential actions below `40 × 40 pt` or communicate error/success by color alone.
-
-## Source of truth
-
-Concrete tokens and components live in:
-
-- `app/Sources/PiDCode/Views/DesignSystem.swift`
-- `app/Sources/PiDCode/Views/RootView.swift`
-- `app/Sources/PiDCode/Views/SearchOverlayView.swift`
-- `app/Sources/PiDCode/Models/ConversationNavigation.swift`
-- `app/Sources/PiDCode/Views/ConversationView.swift`
-- `app/Sources/PiDCode/Views/ConversationRoundRail.swift`
-- `app/Sources/PiDCode/Views/ActivePlanView.swift`
-- `app/Sources/PiDCode/Views/ComposerView.swift`
-- `app/Sources/PiDCode/Views/ExtensionViews.swift`
-- `app/Sources/PiDCode/Views/ContentBlockViews.swift`
-
-Update unlabelled component rules only when a verified component changes the shared visual or interaction contract. Confirmed future rules must stay inside an explicit Target Reference section.
+1. update the current design-system document;
+2. update the shared token or primitive when the rule is reusable;
+3. keep feature code free of duplicated magic values and per-glyph layout patches;
+4. verify geometry, pointer, keyboard, VoiceOver, Dark Mode, Increase Contrast and Reduce Motion as applicable;
+5. record version scope separately from design truth.

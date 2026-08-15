@@ -75,7 +75,7 @@ enum ConversationNavigation {
         compactPreview(sources: source.map { [$0] } ?? [], fallback: fallback, limit: limit)
     }
 
-    private static func compactPreview(
+    static func compactPreview(
         _ item: TranscriptItem?,
         fallback: String,
         limit: Int = 180
@@ -83,6 +83,7 @@ enum ConversationNavigation {
         let sources = item?.blocks.compactMap { block -> String? in
             switch block {
             case let .text(_, value), let .code(_, _, value), let .mermaid(_, value): value
+            case .image: "图片"
             case let .attachment(_, label): label
             default: nil
             }
@@ -122,5 +123,55 @@ enum ConversationNavigation {
         guard !compact.isEmpty else { return fallback }
         guard compactCount > limit else { return compact }
         return "\(compact.prefix(limit).trimmingCharacters(in: .whitespacesAndNewlines))…"
+    }
+}
+
+enum UserMessagePresentation {
+    private static let collapseCharacterLimit = 64
+    private static let collapseLineBreakLimit = 2
+    private static let previewCharacterLimit = 140
+
+    static func shouldCollapse(_ item: TranscriptItem, roundIsInactive: Bool) -> Bool {
+        guard roundIsInactive, item.role == .user else { return false }
+        var characterCount = 0
+        var lineBreakCount = 0
+
+        for source in visibleSources(in: item) {
+            for character in source {
+                characterCount += 1
+                if character.isNewline { lineBreakCount += 1 }
+                if characterCount > collapseCharacterLimit || lineBreakCount >= collapseLineBreakLimit {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    static func roundIsInactive(_ round: ConversationRound, latestRoundID: String?) -> Bool {
+        round.id != latestRoundID || round.completedAt != nil || round.hasError
+    }
+
+    static func preview(for item: TranscriptItem) -> String {
+        ConversationNavigation.compactPreview(
+            item,
+            fallback: "用户消息",
+            limit: previewCharacterLimit
+        )
+    }
+
+    private static func visibleSources(in item: TranscriptItem) -> [String] {
+        item.blocks.compactMap { block in
+            switch block {
+            case let .text(_, value), let .code(_, _, value), let .mermaid(_, value):
+                value
+            case .image:
+                "图片"
+            case let .attachment(_, label):
+                label
+            default:
+                nil
+            }
+        }
     }
 }

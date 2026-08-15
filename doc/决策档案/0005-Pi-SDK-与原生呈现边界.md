@@ -10,6 +10,8 @@ Goal、Agent Team、跨会话通信等产品能力可以借鉴 dgoal、dteam、`
 
 已启用扩展可以经 Pi SDK 在 Host 中注册并执行 headless 工具；这与界面所有权是两条边界。D Code 不调用扩展的 `renderCall` / `renderResult` TUI 组件，而是将已识别的结构化工具结果投影为自有原生 presenter，未识别结构使用通用且安全的 fallback。例如 `pi-dhashline` 可以继续为模型提供带锚点的 read/edit/write/search 安全语义，但 D Code 的行锚点、边界行和 diff 界面由 SwiftUI 实现。“扩展已安装或已执行”不等于“D Code 使用了它的 `pi-tui` 界面”。
 
+D Code 自有能力需要由模型主动调用时，也必须把工具名称、说明、输入 schema（模式）与执行器注册进同一个 Pi SDK Agent Loop（智能体循环），并进入该轮真实 Active Tools（活动工具）；系统提示、Skill（技能）或其他 Prompt（提示词）只补充发现和选择线索，不能让未注册能力变得可调用。观察、请求策略、状态投影和纯界面能力不必注册为工具。D Code 不因吸收 `d` 开头扩展的机制而建立第二套 Agent Loop、工具调度器或产品对象权威。
+
 `@earendil-works/pi-coding-agent` 当前仍把 `pi-tui` 作为传递依赖安装。该文件可以存在于应用依赖闭包中，但 D Code 源码不得直接导入或调用它，也不得从打包目录强行删除 SDK 所需的私有依赖。未来上游如提供不含 TUI 的等价 headless SDK，可在不改变产品合同的前提下替换。
 
 这一选择牺牲了任意 Pi TUI 扩展的无损兼容，换取单一原生呈现路径、明确的产品所有权和更小的界面耦合。未适配能力必须诚实失败；不能以恢复旧兼容面为理由重新建立第二条产品 UI 路径。

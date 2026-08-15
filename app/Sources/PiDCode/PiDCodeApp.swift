@@ -46,9 +46,13 @@ struct PiDCodeApp: App {
                 }
         }
         .defaultSize(width: 1_360, height: 860)
-        .windowStyle(.automatic)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             SidebarCommands()
+            CommandGroup(replacing: .appSettings) {
+                Button("设置…") { model.presentSettings() }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(after: .sidebar) {
                 Button("搜索会话…") { model.presentSearch() }
                     .keyboardShortcut("k", modifiers: .command)
@@ -58,10 +62,6 @@ struct PiDCodeApp: App {
                             || model.isPromptTransactionActive
                     )
             }
-        }
-
-        Settings {
-            SettingsView()
         }
     }
 }

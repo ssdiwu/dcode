@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>D Code · 用量与费用专项探索原型</title>
+  <style>
+    :root { color-scheme: light dark; background: light-dark(#ededee, #141415); }
+    * { box-sizing: border-box; }
+    html, body { min-width: 620px; min-height: 100%; margin: 0; }
+    body {
+      padding: 18px;
+      color: light-dark(#242529, #ededf1);
+      background: light-dark(#ededee, #141415);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    }
+    .prototype-note {
+      width: min(100%, 1120px);
+      margin: 0 auto 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      color: light-dark(#62646a, #a6a6ad);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .prototype-note strong { color: light-dark(#292a2e, #eeeef2); font-weight: 600; }
+    .prototype-note span:last-child { text-align: right; }
+    #dcode-settings-usage { width: min(100%, 1120px) !important; margin: 0 auto; }
+    @media (max-width: 680px) {
+      body { padding: 10px; }
+      .prototype-note { display: block; }
+      .prototype-note span { display: block; }
+      .prototype-note span:last-child { margin-top: 3px; text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <header class="prototype-note" aria-label="原型边界">
+    <span><strong>专项探索原型</strong> · 设置 → 数据 → 用量与费用</span>
+    <span>模拟数据，仅验证入口、信息层级与交互；不读取本机 Pi 会话</span>
+  </header>
+<style>
+  #dcode-settings-usage {
+    color-scheme: light dark;
+    width: 100%;
+    background: transparent;
+    color: light-dark(#242529, #ededf1);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  }
+  #dcode-settings-usage * { box-sizing: border-box; }
+  #dcode-settings-usage button,
+  #dcode-settings-usage select { color: inherit; font: inherit; }
+
+  #dcode-settings-usage .dcs-window {
+    min-height: 760px;
+    overflow: hidden;
+    border: 1px solid light-dark(rgba(20, 22, 26, .16), rgba(255, 255, 255, .12));
+    border-radius: 14px;
+    background: light-dark(#f6f6f7, #1f1f20);
+    box-shadow: 0 18px 48px light-dark(rgba(19, 23, 30, .16), rgba(0, 0, 0, .38));
+  }
+
+  #dcode-settings-usage .dcs-titlebar {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding-left: 12px;
+    border-bottom: 1px solid light-dark(rgba(25, 27, 31, .06), rgba(255, 255, 255, .035));
+    background: light-dark(#f2f2f3, #1d1d1e);
+  }
+  #dcode-settings-usage .dcs-light { width: 11px; height: 11px; border-radius: 50%; }
+  #dcode-settings-usage .dcs-light:nth-child(1) { background: #ff5f57; }
+  #dcode-settings-usage .dcs-light:nth-child(2) { background: #febc2e; }
+  #dcode-settings-usage .dcs-light:nth-child(3) { background: #28c840; }
+
+  #dcode-settings-usage .dcs-shell {
+    min-height: 722px;
+    display: grid;
+    grid-template-columns: 184px minmax(0, 1fr);
+  }
+
+  #dcode-settings-usage .dcs-sidebar {
+    padding: 23px 12px 18px;
+    background: light-dark(#e9e9ea, #252526);
+  }
+  #dcode-settings-usage .dcs-back {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 7px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 12px;
+  }
+  #dcode-settings-usage .dcs-back-icon { font-size: 17px; font-weight: 400; }
+  #dcode-settings-usage .dcs-settings-title {
+    margin: 17px 8px 12px;
+    font-size: 17px;
+    font-weight: 500;
+  }
+  #dcode-settings-usage .dcs-group-label {
+    margin: 15px 9px 6px;
+    color: light-dark(#77787e, #717177);
+    font-size: 10px;
+    font-weight: 500;
+  }
+  #dcode-settings-usage .dcs-nav-item {
+    width: 100%;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    font-size: 12px;
+  }
+  #dcode-settings-usage .dcs-nav-item[aria-current="page"] {
+    background: light-dark(rgba(255, 255, 255, .84), rgba(255, 255, 255, .10));
+    box-shadow: 0 1px 2px light-dark(rgba(0, 0, 0, .075), rgba(0, 0, 0, .26));
+  }
+  #dcode-settings-usage .dcs-nav-icon {
+    width: 16px;
+    text-align: center;
+    color: light-dark(#60636a, #c0c0c6);
+  }
+  #dcode-settings-usage .dcs-count {
+    margin-left: auto;
+    color: light-dark(#7c7d83, #96969d);
+    font-size: 10px;
+  }
+
+  #dcode-settings-usage .dcs-main {
+    min-width: 0;
+    padding: 29px 31px 34px;
+    background: light-dark(#f7f7f8, #1f1f20);
+  }
+  #dcode-settings-usage .dcs-content { max-width: 780px; margin: 0 auto; }
+  #dcode-settings-usage .dcs-heading-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  #dcode-settings-usage .dcs-heading { margin: 0; font-size: 23px; font-weight: 500; }
+  #dcode-settings-usage .dcs-subheading {
+    margin-top: 4px;
+    color: light-dark(#77787e, #96969d);
+    font-size: 11px;
+  }
+  #dcode-settings-usage .dcs-source {
+    margin-top: 7px;
+    color: light-dark(#74757b, #9999a0);
+    font-size: 10px;
+  }
+  #dcode-settings-usage .dcs-source strong { font-weight: 500; color: light-dark(#4e5157, #d7d7dc); }
+
+  #dcode-settings-usage .dcs-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 7px;
+  }
+  #dcode-settings-usage .dcs-segmented {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 7px;
+    background: light-dark(rgba(0, 0, 0, .055), rgba(255, 255, 255, .07));
+  }
+  #dcode-settings-usage .dcs-segmented button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    padding: 4px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: light-dark(#64666c, #a7a7af);
+    font-size: 10px;
+  }
+  #dcode-settings-usage .dcs-segmented button[aria-pressed="true"] {
+    background: light-dark(#fff, #454549);
+    color: light-dark(#25262a, #f1f1f3);
+    box-shadow: 0 1px 2px light-dark(rgba(0, 0, 0, .1), rgba(0, 0, 0, .28));
+  }
+  #dcode-settings-usage .dcs-select {
+    height: 26px;
+    min-width: 92px;
+    border: 1px solid light-dark(rgba(25, 27, 31, .14), rgba(255, 255, 255, .12));
+    border-radius: 7px;
+    background: light-dark(#fff, #303033);
+    padding: 0 7px;
+    font-size: 10px;
+  }
+
+  #dcode-settings-usage .dcs-summary {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid light-dark(rgba(25, 27, 31, .11), rgba(255, 255, 255, .10));
+    border-radius: 11px;
+    background: light-dark(#fff, #262627);
+    box-shadow: 0 5px 18px light-dark(rgba(24, 28, 35, .045), rgba(0, 0, 0, .14));
+  }
+  #dcode-settings-usage .dcs-summary-cell { padding: 13px 14px 12px; min-width: 0; }
+  #dcode-settings-usage .dcs-summary-cell + .dcs-summary-cell {
+    border-left: 1px solid light-dark(rgba(25, 27, 31, .07), rgba(255, 255, 255, .07));
+  }
+  #dcode-settings-usage .dcs-summary-label { color: light-dark(#77787e, #98989f); font-size: 10px; }
+  #dcode-settings-usage .dcs-summary-value { margin-top: 4px; font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  #dcode-settings-usage .dcs-summary-note { margin-top: 2px; color: light-dark(#8b8c92, #87878e); font-size: 9px; }
+
+  #dcode-settings-usage .dcs-section {
+    margin-top: 13px;
+    border: 1px solid light-dark(rgba(25, 27, 31, .11), rgba(255, 255, 255, .10));
+    border-radius: 11px;
+    background: light-dark(#fff, #262627);
+    box-shadow: 0 5px 18px light-dark(rgba(24, 28, 35, .04), rgba(0, 0, 0, .12));
+  }
+  #dcode-settings-usage .dcs-section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 14px 0;
+  }
+  #dcode-settings-usage .dcs-section-title { font-size: 12px; font-weight: 500; }
+  #dcode-settings-usage .dcs-section-note { color: light-dark(#7c7d83, #96969d); font-size: 9px; }
+
+  #dcode-settings-usage .dcs-chart {
+    height: 158px;
+    display: grid;
+    grid-template-columns: repeat(14, minmax(6px, 1fr));
+    align-items: end;
+    gap: 5px;
+    margin: 6px 14px 12px;
+    padding: 10px 0 20px;
+    border-bottom: 1px solid light-dark(rgba(25, 27, 31, .07), rgba(255, 255, 255, .07));
+  }
+  #dcode-settings-usage .dcs-bar-wrap { height: 100%; display: flex; align-items: end; position: relative; }
+  #dcode-settings-usage .dcs-bar {
+    width: 100%;
+    min-height: 3px;
+    border-radius: 4px 4px 2px 2px;
+    background: light-dark(#5595cf, #61adf0);
+    opacity: .88;
+    transition: height .22s ease, opacity .14s ease;
+  }
+  #dcode-settings-usage .dcs-bar-wrap:hover .dcs-bar { opacity: 1; }
+  #dcode-settings-usage .dcs-day {
+    position: absolute;
+    left: 50%;
+    bottom: -16px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    color: light-dark(#8a8b91, #86868e);
+    font-size: 8px;
+  }
+
+  #dcode-settings-usage .dcs-table-wrap { overflow-x: auto; padding: 4px 14px 12px; }
+  #dcode-settings-usage .dcs-table { width: 100%; min-width: 430px; border-collapse: collapse; table-layout: fixed; font-size: 10px; }
+  #dcode-settings-usage .dcs-table th {
+    padding: 5px 7px 7px;
+    text-align: left;
+    font-weight: 400;
+    color: light-dark(#7d7e84, #96969e);
+  }
+  #dcode-settings-usage .dcs-table td {
+    padding: 8px 7px;
+    border-top: 1px solid light-dark(rgba(25, 27, 31, .065), rgba(255, 255, 255, .06));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #dcode-settings-usage .dcs-table .dcs-number { text-align: right; font-variant-numeric: tabular-nums; }
+  #dcode-settings-usage .dcs-session-row { cursor: pointer; }
+  #dcode-settings-usage .dcs-session-row:hover td { background: light-dark(rgba(42, 118, 180, .05), rgba(96, 176, 240, .06)); }
+  #dcode-settings-usage .dcs-session-row[aria-selected="true"] td { background: light-dark(rgba(42, 118, 180, .095), rgba(96, 176, 240, .10)); }
+  #dcode-settings-usage .dcs-session-name { font-weight: 500; }
+  #dcode-settings-usage .dcs-session-project { margin-top: 2px; color: light-dark(#7d7e84, #92929a); font-size: 9px; }
+  #dcode-settings-usage .dcs-unpriced { color: light-dark(#9a6a12, #e0bb6c); }
+
+  #dcode-settings-usage .dcs-detail {
+    display: grid;
+    grid-template-columns: minmax(150px, .9fr) minmax(0, 2fr);
+    gap: 16px;
+    padding: 13px 14px 15px;
+    border-top: 1px solid light-dark(rgba(25, 27, 31, .07), rgba(255, 255, 255, .07));
+  }
+  #dcode-settings-usage .dcs-detail-kicker { color: light-dark(#7d7e84, #96969e); font-size: 9px; }
+  #dcode-settings-usage .dcs-detail-title { margin-top: 3px; font-size: 12px; font-weight: 500; }
+  #dcode-settings-usage .dcs-detail-meta { margin-top: 3px; color: light-dark(#7d7e84, #96969e); font-size: 9px; }
+  #dcode-settings-usage .dcs-detail-cost { margin-top: 10px; font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  #dcode-settings-usage .dcs-detail-cost-label { margin-top: 1px; color: light-dark(#7d7e84, #96969e); font-size: 9px; }
+  #dcode-settings-usage .dcs-breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 13px; }
+  #dcode-settings-usage .dcs-breakdown-head { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; }
+  #dcode-settings-usage .dcs-track { margin-top: 5px; height: 5px; border-radius: 3px; overflow: hidden; background: light-dark(rgba(25, 27, 31, .07), rgba(255, 255, 255, .07)); }
+  #dcode-settings-usage .dcs-fill { height: 100%; border-radius: inherit; background: light-dark(#5595cf, #61adf0); }
+
+  #dcode-settings-usage .dcs-footnote {
+    margin-top: 12px;
+    color: light-dark(#7c7d83, #909097);
+    font-size: 9px;
+  }
+  #dcode-settings-usage .dcs-footnote strong { color: light-dark(#505158, #d1d1d6); font-weight: 500; }
+
+  @media (max-width: 680px) {
+    #dcode-settings-usage .dcs-shell { grid-template-columns: 58px minmax(0, 1fr); }
+    #dcode-settings-usage .dcs-sidebar { padding-left: 8px; padding-right: 8px; }
+    #dcode-settings-usage .dcs-back-text,
+    #dcode-settings-usage .dcs-settings-title,
+    #dcode-settings-usage .dcs-group-label,
+    #dcode-settings-usage .dcs-nav-text,
+    #dcode-settings-usage .dcs-count { display: none; }
+    #dcode-settings-usage .dcs-back,
+    #dcode-settings-usage .dcs-nav-item { justify-content: center; padding-left: 0; padding-right: 0; }
+    #dcode-settings-usage .dcs-main { padding: 24px 18px 28px; }
+    #dcode-settings-usage .dcs-heading-row { flex-direction: column; }
+    #dcode-settings-usage .dcs-controls { justify-content: flex-start; }
+    #dcode-settings-usage .dcs-summary { grid-template-columns: 1fr; }
+    #dcode-settings-usage .dcs-summary-cell + .dcs-summary-cell { border-left: 0; border-top: 1px solid light-dark(rgba(25, 27, 31, .07), rgba(255, 255, 255, .07)); }
+    #dcode-settings-usage .dcs-detail { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div id="dcode-settings-usage">
+  <div class="dcs-window" role="application" aria-label="D Code 设置中的用量与费用原型">
+    <div class="dcs-titlebar" aria-hidden="true">
+      <span class="dcs-light"></span><span class="dcs-light"></span><span class="dcs-light"></span>
+    </div>
+
+    <div class="dcs-shell">
+      <aside class="dcs-sidebar" aria-label="设置导航">
+        <button class="dcs-back" type="button"><span class="dcs-back-icon">←</span><span class="dcs-back-text">返回工作台</span></button>
+        <div class="dcs-settings-title">设置</div>
+
+        <div class="dcs-group-label">偏好</div>
+        <button class="dcs-nav-item" type="button"><span class="dcs-nav-icon">◐</span><span class="dcs-nav-text">外观</span></button>
+        <button class="dcs-nav-item" type="button"><span class="dcs-nav-icon">▦</span><span class="dcs-nav-text">工作台</span></button>
+
+        <div class="dcs-group-label">数据</div>
+        <button class="dcs-nav-item" type="button" aria-current="page"><span class="dcs-nav-icon">◒</span><span class="dcs-nav-text">用量与费用</span></button>
+
+        <div class="dcs-group-label">会话</div>
+        <button class="dcs-nav-item" type="button"><span class="dcs-nav-icon">▤</span><span class="dcs-nav-text">已归档会话</span><span class="dcs-count">1</span></button>
+      </aside>
+
+      <main class="dcs-main">
+        <div class="dcs-content">
+          <div class="dcs-heading-row">
+            <div>
+              <h1 class="dcs-heading">用量与费用</h1>
+              <div class="dcs-subheading">查看这台 Mac 上 Pi 会话的 Token 消耗与估算费用。</div>
+              <div class="dcs-source"><strong>本机数据</strong> · Pi JSONL · 不上传会话正文</div>
+            </div>
+            <div class="dcs-controls">
+              <div class="dcs-segmented" aria-label="指标">
+                <button type="button" data-metric="cost" aria-pressed="true">费用</button>
+                <button type="button" data-metric="tokens" aria-pressed="false">Token</button>
+              </div>
+              <select class="dcs-select" data-range aria-label="时间范围">
+                <option value="7">最近 7 天</option>
+                <option value="30" selected>最近 30 天</option>
+              </select>
+            </div>
+          </div>
+
+          <section class="dcs-summary" aria-label="用量摘要">
+            <div class="dcs-summary-cell">
+              <div class="dcs-summary-label">估算费用</div>
+              <div class="dcs-summary-value" data-total-cost>US$21.56</div>
+              <div class="dcs-summary-note">仅统计已定价模型</div>
+            </div>
+            <div class="dcs-summary-cell">
+              <div class="dcs-summary-label">累计 Token</div>
+              <div class="dcs-summary-value" data-total-tokens>8.42M</div>
+              <div class="dcs-summary-note">输入、输出与缓存活动</div>
+            </div>
+            <div class="dcs-summary-cell">
+              <div class="dcs-summary-label">缓存读取占比</div>
+              <div class="dcs-summary-value" data-cache-rate>87%</div>
+              <div class="dcs-summary-note">按已记录 Token 计算</div>
+            </div>
+          </section>
+
+          <section class="dcs-section" aria-label="用量趋势">
+            <div class="dcs-section-head">
+              <div class="dcs-section-title" data-chart-title>每日估算费用</div>
+              <div class="dcs-section-note" data-chart-note>US$ · 仅已定价模型</div>
+            </div>
+            <div class="dcs-chart" data-chart aria-label="最近 14 天每日估算费用柱状图"></div>
+          </section>
+
+          <section class="dcs-section" aria-label="会话用量">
+            <div class="dcs-section-head">
+              <div class="dcs-section-title">会话</div>
+              <div class="dcs-section-note">选择一行查看拆分</div>
+            </div>
+            <div class="dcs-table-wrap">
+              <table class="dcs-table">
+                <thead><tr><th style="width:42%">会话</th><th style="width:22%">模型</th><th class="dcs-number" style="width:18%">Token</th><th class="dcs-number" style="width:18%">估算费用</th></tr></thead>
+                <tbody data-session-rows></tbody>
+              </table>
+            </div>
+            <div class="dcs-detail">
+              <div>
+                <div class="dcs-detail-kicker">所选会话</div>
+                <div class="dcs-detail-title" data-detail-title></div>
+                <div class="dcs-detail-meta" data-detail-meta></div>
+                <div class="dcs-detail-cost" data-detail-cost></div>
+                <div class="dcs-detail-cost-label" data-detail-cost-label>估算费用</div>
+              </div>
+              <div class="dcs-breakdown" data-breakdown></div>
+            </div>
+          </section>
+
+          <div class="dcs-footnote"><strong>费用口径：</strong>沿用 Pi assistant usage 中记录的 cost；没有价格的模型显示“不可用”，不显示 US$0.00。</div>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const root = document.getElementById('dcode-settings-usage');
+  const daily = {
+    cost: [0.2, 0.3, 0.1, 0.4, 0.2, 0.5, 0.3, 0.2, 0.4, 0.1, 0.6, 0.3, 0.2, 0.5, 0.4, 0.2, 0.3, 0.4, 0.5, 0.3, 0.4, 0.45, 0.49, 1.1, 1.6, 1.8, 2.1, 1.7, 2.4, 3.12],
+    tokens: [80, 95, 70, 110, 85, 130, 90, 75, 120, 60, 145, 100, 85, 135, 115, 80, 95, 125, 140, 90, 120, 160, 119.7, 500, 650, 720, 830, 910, 1090, 1300]
+  };
+  const labels = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(2026, 6, 17 + index);
+    return `${date.getMonth() + 1}月${date.getDate()}日`;
+  });
+  const sessions = [
+    { id:'s1', daysAgo:2, title:'对齐 D Code 任务工作台方向', project:'dcode', model:'gpt-5.6-sol', tokens:'4.18M', cost:'US$13.52', priced:true, input:'355K', output:'71K', cache:'3.75M', reasoning:'22K', split:[86,7,100,4] },
+    { id:'s2', daysAgo:9, title:'规划版本 23 发布冲刺', project:'Curio', model:'gpt-5.6-sol', tokens:'2.21M', cost:'US$7.74', priced:true, input:'186K', output:'42K', cache:'1.98M', reasoning:'10K', split:[77,6,100,4] },
+    { id:'s3', daysAgo:1, title:'梳理开发主线并讨论统计', project:'dcode', model:'gpt-5.6-terra', tokens:'1.82M', cost:'US$0.30', priced:true, input:'410K', output:'80K', cache:'1.33M', reasoning:'33K', split:[83,7,10,5] },
+    { id:'s4', daysAgo:12, title:'阅读 STEPX Neo 竞赛资料', project:'STEPX Neo', model:'glm-5.3', tokens:'214.7K', cost:'不可用', priced:false, input:'66.2K', output:'2.5K', cache:'146.0K', reasoning:'807', split:[45,2,100,1] }
+  ];
+  let metric = 'cost';
+  let rangeDays = 30;
+  let selected = sessions[0];
+  const rows = root.querySelector('[data-session-rows]');
+
+  function visibleSessions() {
+    return sessions.filter(session => session.daysAgo < rangeDays);
+  }
+
+  function renderChart() {
+    const chart = root.querySelector('[data-chart]');
+    const values = daily[metric].slice(-rangeDays);
+    const visibleLabels = labels.slice(-rangeDays);
+    const maximum = Math.max(...values);
+    chart.setAttribute('style', `grid-template-columns: repeat(${values.length}, minmax(4px, 1fr))`);
+    chart.innerHTML = values.map((value, index) => {
+      const height = Math.max(4, Math.round(value / maximum * 100));
+      const spoken = metric === 'cost' ? `US$${value.toFixed(1)}` : `${value}K Token`;
+      const showLabel = rangeDays === 7 || index % 6 === 0 || index === values.length - 1;
+      const label = showLabel ? `<span class="dcs-day">${visibleLabels[index]}</span>` : '';
+      return `<div class="dcs-bar-wrap" aria-label="${visibleLabels[index]}，${spoken}"><div class="dcs-bar" style="height:${height}%"></div>${label}</div>`;
+    }).join('');
+    root.querySelector('[data-chart-title]').textContent = metric === 'cost' ? '每日估算费用' : '每日 Token 活动';
+    root.querySelector('[data-chart-note]').textContent = metric === 'cost' ? 'US$ · 仅已定价模型' : '千 Token · 包含缓存读取';
+  }
+
+  function renderRows() {
+    const currentSessions = visibleSessions();
+    rows.innerHTML = currentSessions.map(session => `
+      <tr class="dcs-session-row" data-session-id="${session.id}" aria-selected="${session.id === selected.id}">
+        <td><div class="dcs-session-name">${session.title}</div><div class="dcs-session-project">${session.project}</div></td>
+        <td>${session.model}</td>
+        <td class="dcs-number">${session.tokens}</td>
+        <td class="dcs-number ${session.priced ? '' : 'dcs-unpriced'}">${session.cost}</td>
+      </tr>`).join('');
+    root.querySelectorAll('[data-session-id]').forEach(row => {
+      row.addEventListener('click', () => {
+        selected = sessions.find(session => session.id === row.dataset.sessionId) || sessions[0];
+        renderRows();
+        renderDetail();
+      });
+    });
+  }
+
+  function renderDetail() {
+    root.querySelector('[data-detail-title]').textContent = selected.title;
+    root.querySelector('[data-detail-meta]').textContent = `${selected.project} · ${selected.model}`;
+    root.querySelector('[data-detail-cost]').textContent = selected.cost;
+    root.querySelector('[data-detail-cost-label]').textContent = selected.priced ? '估算费用' : '该模型没有可用价格';
+    const names = ['输入', '输出', '缓存读取', '推理'];
+    const values = [selected.input, selected.output, selected.cache, selected.reasoning];
+    root.querySelector('[data-breakdown]').innerHTML = names.map((name, index) => `
+      <div>
+        <div class="dcs-breakdown-head"><span>${name}</span><span>${values[index]}</span></div>
+        <div class="dcs-track"><div class="dcs-fill" style="width:${selected.split[index]}%"></div></div>
+      </div>`).join('');
+  }
+
+  root.querySelectorAll('[data-metric]').forEach(button => {
+    button.addEventListener('click', () => {
+      metric = button.dataset.metric;
+      root.querySelectorAll('[data-metric]').forEach(peer => peer.setAttribute('aria-pressed', String(peer === button)));
+      renderChart();
+    });
+  });
+
+  root.querySelector('[data-range]').addEventListener('change', event => {
+    rangeDays = Number(event.target.value);
+    const isSevenDays = rangeDays === 7;
+    const currentSessions = visibleSessions();
+    if (!currentSessions.some(session => session.id === selected.id)) selected = currentSessions[0];
+    root.querySelector('[data-total-cost]').textContent = isSevenDays ? 'US$13.82' : 'US$21.56';
+    root.querySelector('[data-total-tokens]').textContent = isSevenDays ? '6.00M' : '8.42M';
+    root.querySelector('[data-cache-rate]').textContent = isSevenDays ? '89%' : '87%';
+    renderChart();
+    renderRows();
+    renderDetail();
+  });
+
+  renderChart();
+  renderRows();
+  renderDetail();
+})();
+</script>
+</body>
+</html>
