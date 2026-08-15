@@ -18,6 +18,12 @@ struct SessionDetailView: View {
                     }
                     ComposerView()
                 }
+            } else if let directoryPath = model.newSessionDraftDirectoryPath {
+                VStack(spacing: 0) {
+                    newSessionHeader(directoryPath)
+                    ConversationView()
+                    ComposerView()
+                }
             } else {
                 emptyDetail
             }
@@ -32,6 +38,27 @@ struct SessionDetailView: View {
                 .accessibilityLabel("正在打开会话")
             }
         }
+    }
+
+    private func newSessionHeader(_ directoryPath: String) -> some View {
+        HStack(spacing: 10) {
+            Text(directoryPath)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(directoryPath)
+            Spacer(minLength: 8)
+            Text("尚未创建 Pi 会话")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Button("取消") { model.discardNewSessionDraft() }
+                .buttonStyle(.borderless)
+                .disabled(model.isCreatingSession || model.isSendingRequest)
+                .help("丢弃这个本地新会话草稿")
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: PiDCodeMetrics.minimumTarget)
     }
 
     private func sessionHeader(_ inspection: SessionInspection) -> some View {

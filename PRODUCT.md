@@ -1,6 +1,6 @@
 # Product
 
-本文件是供界面实现工具读取的派生设计上下文，不是第二份需求规格。当前新增范围以 [0.0.4 PRD](doc/40-版本实施方案/0005-0.0.4-工作区标签与只读文件预览产品需求.md) 为权威，[0.0.3 PRD](doc/40-版本实施方案/0004-0.0.3-会话路径与复制归档产品需求.md)、[0.0.2 PRD](doc/40-版本实施方案/0003-0.0.2-可见会话搜索产品需求.md)、[0.0.1 PRD](doc/40-版本实施方案/0002-0.0.1-用户首页与项目工作台产品需求.md)与[原生会话基线](doc/40-版本实施方案/0001-首个可日常使用版本产品需求.md)继续作为回归约束；发生冲突时以当前 PRD 和 ADR 为准。
+本文件是供界面实现工具读取的派生设计上下文，不是第二份需求规格。当前新增范围以 [0.0.5 PRD](doc/40-版本实施方案/0006-0.0.5-后续消息队列产品需求.md) 为权威，[0.0.4 PRD](doc/40-版本实施方案/0005-0.0.4-工作区标签与只读文件预览产品需求.md)、[0.0.3 PRD](doc/40-版本实施方案/0004-0.0.3-会话路径与复制归档产品需求.md)、[0.0.2 PRD](doc/40-版本实施方案/0003-0.0.2-可见会话搜索产品需求.md)、[0.0.1 PRD](doc/40-版本实施方案/0002-0.0.1-用户首页与项目工作台产品需求.md)与[原生会话基线](doc/40-版本实施方案/0001-首个可日常使用版本产品需求.md)继续作为回归约束；发生冲突时以当前 PRD 和 ADR 为准。
 
 ## Register
 
@@ -12,7 +12,7 @@ product
 
 ## Product Purpose
 
-`D Code` 把现有 Pi 会话与运行能力呈现为可信、原生、可日常使用的 macOS 工作台。User Home 只汇集由 D Code 创建的近期工作；用户以自有 Project 组织多个 Source Folder 后，对应的旧 Pi Session 才作为项目历史出现。Pi Session 继续作为唯一对话事实；用户能从正确的项目与会话关系继续工作、查看项目文件和 Git 状态，并在 App 与 CLI 之间安全切换。D Code 不建立竞争性的会话数据库；只有用户明确执行“复制到项目”时，Host 才创建拥有新身份、目标 `cwd` 与源谱系的新 Pi Session。
+`D Code` 把现有 Pi 会话与运行能力呈现为可信、原生、可日常使用的 macOS 工作台。User Home 只汇集由 D Code 创建的近期工作；用户以自有 Project 组织多个 Source Folder 后，对应的旧 Pi Session 才作为项目历史出现。Pi Session 继续作为唯一对话事实；用户能从正确的项目与会话关系继续工作、查看项目文件和 Git 状态，并在 App 与 CLI 之间安全切换。D Code 不建立竞争性的会话数据库；点击“新建会话”只进入本地会话前草稿，首次提交非空正文时 Host 才创建真实 Pi Session。“复制到项目”则始终创建拥有新身份、目标 `cwd` 与源谱系的独立 Pi Session。
 
 ## Brand Personality
 
@@ -35,6 +35,12 @@ product
 5. **结构化能力由产品拥有。** Plan、Mermaid、Goal 与 Agent Team 使用 D Code 自有数据合同和原生组件；标准结构化扩展交互可以复用，无法原生表达的 TUI 交互必须明确阻止或忽略，不建立终端兼容界面。
 
 会话工作摘要同样遵循作用域诚实：Plan 只描述当前 Session Path；文件数和增删行只聚合整个稳定 Session ID 内被结构化工具确认的变更活动，并明确标注覆盖可能不完整。该摘要不替代 Project Git Changes，也不把工具活动冒充 Git 净差异。
+
+`0.0.5` 的连续工作只增加当前 Session / Path 的 Follow-up Queue（后续消息队列）：当前 Session Run 继续执行，用户提交的普通文本先作为可查看、编辑、调整顺序或撤回的本机 Queue Item（队列项）留在 Composer 附近；它在经 Host 交给 Pi 并取得匹配的持久化证据前不是会话消息，也不得显示成已发送或已执行。只有前一 Run 正常收口且身份、路径和写入条件仍成立时才按顺序派发；失败、中止、等待用户输入、等待权限或结果未知都会保留队列并停止自动派发。完整 Run State（运行状态）、停止、重试与等待输入控制面属于 `0.0.6` Interaction Dock（交互坞），不提前塞入本版。
+
+新会话遵循同一事实边界：按钮只打开没有 Session ID 的本地会话前草稿，空白草稿不进入资料并在离开时消失；非空正文可以在本机恢复，但直到首次发送都不是 Pi Session 或消息。首次发送才创建真实 Session 并转入普通 Prompt transaction；若创建已提交而打开或发送失败，Recent 保留真实对象，正文转为该 Session 草稿，不自动删除或伪装成未创建。
+
+`0.0.6` 在会话栏增加 Activity View（活动视图），但不替换默认置顶 / Recent / Project 导航：铃铛只切换同一可见 Session 集合的投影，优先显示可靠的等待、当前运行与带蓝点的新完成结果，其余按最后可证明活动时间排列。蓝点是“最新完成结果尚未在 Conversation 成功呈现”的 User Attention（用户关注态），不是成功、未读消息或运行中；当前单活动 Session 架构也不得被画成多个后台 Agent。同时，当前 Session 的活动、队列、等待输入、停止与安全重试在 Composer 附近收敛为 Interaction Dock。
 
 工作台层级也必须连续：Session Sidebar（会话栏）是比 Main Workspace（主工作区）更低的导航 surface，Information Inspector（信息检查器）与 Composer 是可同时操作的 raised surfaces。Project 只有一个 Source Folder 时直接平铺根内容；打开属于 Project 的 Session 后，信息检查器仍保留该 Project 的 Files / Changes，并叠加会话概览。
 

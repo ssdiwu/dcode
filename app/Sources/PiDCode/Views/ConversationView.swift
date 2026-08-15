@@ -30,9 +30,13 @@ struct ConversationView: View {
             )
             if showsEmptyState {
                 ContentUnavailableView(
-                    "空会话",
+                    model.isNewSessionDraftActive ? "新会话" : "空会话",
                     systemImage: "text.bubble",
-                    description: Text("在下方输入第一条消息。")
+                    description: Text(
+                        model.isNewSessionDraftActive
+                            ? "输入并发送第一条消息后，才会创建 Pi 会话。"
+                            : "在下方输入第一条消息。"
+                    )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

@@ -2,7 +2,7 @@
 
 状态：Reference Index（参考索引）
 
-最后对齐：2026-08-13
+最后对齐：2026-08-15
 
 ## 权威边界
 
@@ -28,6 +28,7 @@
 | REF-009 | Todos | Agent Team Workspace（智能体团队工作空间） | [todos.dev](https://todos.dev/) | Work Map、Run 历史与人工门禁参考 |
 | REF-010 | pi-dteam | Pi Extension（Pi 扩展） | [ssdiwu/pi-dteam](https://github.com/ssdiwu/pi-dteam) | D Team 执行层机制参考 |
 | REF-011 | Codex Taskboard | Local-first Taskboard（本地优先任务看板） | [chuspeeism/dashi-taskboard@9b2aeb53](https://github.com/chuspeeism/dashi-taskboard/tree/9b2aeb53bfe8d40eb5d65feecdfc2cc235928066) | 外部状态流转与会话关联参考，未进入版本路线 |
+| REF-012 | Otty | Native Terminal Workspace（原生终端工作台） | 本机 `1.3.1@c0620a3c`、[官方文档](https://docs.otty.sh/)与 507 提供的实机截图 | 左侧活动扫描与右侧详情分层参考 |
 
 ## REF-001 OpenAI Codex 桌面端
 
@@ -132,6 +133,18 @@
 **D Code 参考点**：保留 Work Item 与 Session / Run 分层、执行状态与人工验收分离、原会话不因组织操作被复制或迁移等调查结论。
 
 **明确不纳入**：会话拖入 Kanban、四列看板、自动移列和 Taskboard 运行时均未进入 D Code 当前版本路线。对应的离线原型只用于保存已完成的研究；未来若重新立项，必须另行进入版本 PRD，不从参考文件自动升级为产品需求。
+
+## REF-012 Otty
+
+**已核实证据**：本机 `/Applications/Otty.app` 为 `1.3.1`，应用内版本哈希为 `c0620a3c`。507 提供并在实机中核对了左侧 Tab 分组 / 排序菜单，以及右侧 Info / Outline / Git / Files 详情页签；Otty 官方文档同时说明了[左侧 Tab 的 Group / Order / Divider 与运行徽标](https://docs.otty.sh/user-interface/window-tab-split)和[跟随当前 Pane 的右侧 Details Panel](https://docs.otty.sh/user-interface/details-panel)。这些证据只说明参考对象在该版本的行为，不表示 D Code 已经实现对应能力。
+
+**D Code 借鉴**：
+
+- 左侧列表把“耐久导航”和“当前活动扫描”分开理解；Otty 的运行、等待、完成、失败徽标证明紧凑状态可帮助用户跨会话发现需要关注的工作，但 D Code 用 `0.0.6` Activity View（活动视图）承载这一结果，而不是给默认 Project / Recent 导航增加任意排序器；
+- 右侧详情按对象职责拆分：当前目录与会话事实进入 Information Inspector（信息检查器），只读 Files 已由 `0.0.4` 建立，可信 Project 快捷动作进入 `0.0.7`，Exact Git Diff（精确 Git 差异）进入 `0.0.8`，Markdown / HTML 缓冲区与预览分别进入 `0.0.15–0.0.16`；
+- Outline 的“快速理解当前内容结构”思想由 D Code 已有 Session Path、Plan、对话导航尺和后续结构化产物导航吸收，不复制终端命令时间线；Process / Ports 只有在连续 dogfood 形成真实闭环缺口后才进入 `0.0.18+`。
+
+**明确不借鉴**：不把 Otty 的 Tab 等同于 Pi Session，不加入 No Grouping / By Project / By Date、Created / Updated / Manual 等通用配置矩阵，不加入手工 Divider（分隔线），也不把终端进程、端口、Shell Outline 或任意 Pane / Split Runtime 搬进 D Code。`0.0.6` 首版使用产品语义固定的“等待处理 → 正在运行 → 新完成 → 其余按可证明活动时间”顺序；默认导航仍由置顶、Recent 与 Project 组织。
 
 ## 技术上游，不属于竞品参考
 

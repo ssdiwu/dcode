@@ -109,7 +109,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.4");
+    assert.equal(hello.hostVersion, "0.0.5");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -123,6 +123,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal((hello.capabilities as Record<string, boolean>).sessionTrash, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionChangeLedger, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRename, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionRunCorrelation, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };

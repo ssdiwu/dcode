@@ -37,18 +37,26 @@ struct PendingPromptDraft: Equatable {
     let promptID: String
     let draft: String
     let draftTarget: SessionDraftTarget?
+    let followUpQueueID: String?
+    let followUpItemID: String?
 
     init(
         sessionID: String,
         promptID: String,
         draft: String,
-        draftTarget: SessionDraftTarget? = nil
+        draftTarget: SessionDraftTarget? = nil,
+        followUpQueueID: String? = nil,
+        followUpItemID: String? = nil
     ) {
         self.sessionID = sessionID
         self.promptID = promptID
         self.draft = draft
         self.draftTarget = draftTarget
+        self.followUpQueueID = followUpQueueID
+        self.followUpItemID = followUpItemID
     }
+
+    var isFollowUpDispatch: Bool { followUpQueueID != nil && followUpItemID != nil }
 }
 
 @MainActor
@@ -76,6 +84,8 @@ final class AppModel {
     var hostState: HostState?
     var activePlan: ActivePlanPresentation?
     var composerText = ""
+    private(set) var newSessionDraft: NewSessionDraft?
+    private(set) var isNewSessionDraftActive = false
     var optimisticUserMessage: String?
     var streamingText = ""
     var streamingThinking = ""
@@ -117,6 +127,10 @@ final class AppModel {
     var isMutatingPins = false
     var pendingArchiveRetry: ArchivedSessionRecord?
     var draftStoreIssue: String?
+    var followUpQueues: [FollowUpQueueRecord] = []
+    var followUpQueueIssue: String?
+    var isMutatingFollowUpQueue = false
+    private var isSettlingFollowUpRun = false
     var pathSheetPresented = false
     var copySheetMode: SessionCopyMode?
     var pendingTrashSession: SessionSummary?
@@ -137,18 +151,26 @@ final class AppModel {
     @ObservationIgnored private let sessionArchiveStore: SessionArchiveStore
     @ObservationIgnored private let sessionPinStore: SessionPinStore
     @ObservationIgnored private let sessionChangeStore: SessionChangeStore
+    @ObservationIgnored private let followUpQueueStore: FollowUpQueueStore
     @ObservationIgnored private let hostConfiguration: HostLaunchConfiguration?
     @ObservationIgnored private var projectStoreWritable = false
     @ObservationIgnored private var sessionDraftStoreWritable = false
     @ObservationIgnored private var sessionArchiveStoreWritable = false
     @ObservationIgnored private var sessionPinStoreWritable = false
     @ObservationIgnored private var sessionChangeStoreWritable = false
+    @ObservationIgnored private var followUpQueueStoreWritable = false
     @ObservationIgnored private var draftDocument = SessionDraftDocument()
     @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
     @ObservationIgnored private var draftRevision = 0
     @ObservationIgnored private var sessionChangeDocument = SessionChangeDocument()
     @ObservationIgnored private var sessionChangeSaveTask: Task<Void, Never>?
     @ObservationIgnored private var sessionChangeRevision = 0
+    @ObservationIgnored private var followUpQueueRevision = 0
+    @ObservationIgnored private var currentSessionRunID: String?
+    @ObservationIgnored private var settledRunOutcomes: [String: FollowUpRunOutcome] = [:]
+    @ObservationIgnored private var followUpSettlementTask: Task<Void, Never>?
+    @ObservationIgnored private var followUpSettlementGeneration = UUID()
+    @ObservationIgnored private var isShuttingDown = false
     @ObservationIgnored private var deferredComposerText: String?
     @ObservationIgnored private var visibilityGeneration = UUID()
     @ObservationIgnored private var recentWindow = SessionListWindow()
@@ -166,6 +188,7 @@ final class AppModel {
         sessionArchiveStore: SessionArchiveStore = SessionArchiveStore(),
         sessionPinStore: SessionPinStore = SessionPinStore(),
         sessionChangeStore: SessionChangeStore = SessionChangeStore(),
+        followUpQueueStore: FollowUpQueueStore = FollowUpQueueStore(),
         hostConfiguration: HostLaunchConfiguration? = nil
     ) {
         self.projectStore = projectStore
@@ -173,6 +196,7 @@ final class AppModel {
         self.sessionArchiveStore = sessionArchiveStore
         self.sessionPinStore = sessionPinStore
         self.sessionChangeStore = sessionChangeStore
+        self.followUpQueueStore = followUpQueueStore
         self.hostConfiguration = hostConfiguration
     }
 
@@ -196,9 +220,81 @@ final class AppModel {
 
     var pinnedSessionIDs: [String] { pinnedSessions.map(\.sessionID).sorted() }
 
-    var isPromptTransactionActive: Bool { isSendingRequest || pendingPrompt != nil || isMutatingArchive }
+    var isPromptTransactionActive: Bool {
+        isCreatingSession
+            || isSendingRequest
+            || pendingPrompt != nil
+            || isMutatingArchive
+            || isSettlingFollowUpRun
+    }
 
     var canPersistSessionDrafts: Bool { sessionDraftStoreWritable && draftStoreIssue == nil }
+
+    var currentFollowUpQueue: FollowUpQueueRecord? {
+        guard let sessionID = selectedSessionID else { return nil }
+        let document = FollowUpQueueDocument(queues: followUpQueues)
+        guard let index = document.matchingQueueIndex(
+            sessionID: sessionID,
+            currentPathID: currentPathIdentity,
+            orderedPathEntryIDs: currentPathEntryIDs
+        ) else { return nil }
+        return followUpQueues[index]
+    }
+
+    var currentPathEntryIDs: [String] {
+        var entryIDs = inspection?.entries.compactMap { $0["id"]?.stringValue } ?? []
+        if let targetEntryID = currentDraftTarget?.pathID.flatMap(Self.entryID(fromPathID:)),
+           !entryIDs.contains(targetEntryID) {
+            entryIDs.append(targetEntryID)
+        } else if let leafID = inspection?.leafId, !entryIDs.contains(leafID) {
+            entryIDs.append(leafID)
+        }
+        return entryIDs
+    }
+
+    var currentLineageEntryID: String? {
+        if let targetEntryID = currentDraftTarget?.pathID.flatMap(Self.entryID(fromPathID:)) {
+            return targetEntryID
+        }
+        if let leafID = inspection?.leafId { return leafID }
+        if let selectedEntryID = Self.entryID(fromPathID: inspection?.selectedPathId) {
+            return selectedEntryID
+        }
+        return currentPathEntryIDs.last
+    }
+
+    var currentPathIdentity: String? {
+        inspection?.selectedPathId ?? currentDraftTarget?.pathID
+    }
+
+    private static func entryID(fromPathID pathID: String?) -> String? {
+        guard let pathID, pathID.hasPrefix("leaf:"), pathID.count > 5 else { return nil }
+        return String(pathID.dropFirst(5))
+    }
+
+    var shouldQueueComposerText: Bool {
+        isStreaming || currentFollowUpQueue != nil
+    }
+
+    var canSubmitComposerText: Bool {
+        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              readyClient != nil,
+              !isCreatingSession,
+              !isSendingRequest,
+              pendingPrompt == nil,
+              !isMutatingFollowUpQueue else { return false }
+        if isNewSessionDraftActive { return !isStreaming }
+        guard selectedSessionID != nil else { return false }
+        if shouldQueueComposerText {
+            return followUpQueueStoreWritable
+                && followUpQueueIssue == nil
+                && pendingPathDraft == nil
+                && !text.hasPrefix("/")
+                && currentLineageEntryID != nil
+        }
+        return !isStreaming
+    }
 
     var selectedPath: SessionPathSummary? {
         guard let inspection else { return nil }
@@ -215,6 +311,7 @@ final class AppModel {
             )
             && !archivedSessions.contains(where: { $0.sessionID == session.id })
             && !(selectedSessionID == session.id && hostState?.writable == true)
+            && !followUpQueues.contains(where: { $0.sessionID == session.id && !$0.items.isEmpty })
     }
 
     func isSessionPinned(_ sessionID: String) -> Bool {
@@ -275,6 +372,10 @@ final class AppModel {
 
     var canUseHostSessions: Bool {
         connectionState == .ready && hostHello != nil && client != nil
+    }
+
+    var newSessionDraftDirectoryPath: String? {
+        isNewSessionDraftActive ? newSessionDraft?.directoryPath : nil
     }
 
     @ObservationIgnored private var readyClient: PiHostClient? {
@@ -515,6 +616,7 @@ final class AppModel {
     }
 
     func selectProject(_ projectID: UUID) async {
+        parkNewSessionDraft()
         workbenchDestination = .workspace
         selectedProjectID = projectID
         inspectorScope = .project(projectID)
@@ -523,6 +625,7 @@ final class AppModel {
 
     func presentArchivedSessions() {
         dismissSearch()
+        parkNewSessionDraft()
         workbenchDestination = .settings(.archivedSessions)
     }
 
@@ -532,6 +635,7 @@ final class AppModel {
 
     func presentSettings(_ page: SettingsPage = .appearance) {
         dismissSearch()
+        parkNewSessionDraft()
         workbenchDestination = .settings(page)
     }
 
@@ -954,6 +1058,14 @@ final class AppModel {
 
     func updateComposerText(_ text: String) {
         composerText = text
+        if isNewSessionDraftActive {
+            newSessionDraft?.text = text
+            draftDocument.newSessionDraft = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : newSessionDraft
+            scheduleDraftSave()
+            return
+        }
         guard let target = currentDraftTarget else { return }
         setDraftText(text, for: target)
         scheduleDraftSave()
@@ -1162,49 +1274,72 @@ final class AppModel {
             return
         }
         guard !isStreaming, !isOpeningSession, !isPromptTransactionActive else { return }
+        parkNewSessionDraft()
         await flushCurrentDraft()
         await openSession(sessionID, writable: false)
     }
 
     func createSession(at directory: URL) async {
-        guard let client = readyClient,
+        guard readyClient != nil,
               !isStreaming,
               !isCreatingSession,
               !isOpeningSession,
               !isPromptTransactionActive else { return }
-        isCreatingSession = true
-        defer { isCreatingSession = false }
-        await flushCurrentDraft()
+
+        let canonicalDirectoryPath: String
         do {
-            let result: SessionCreateResult = try await client.request(
-                "session.create",
-                params: ["cwd": .string(directory.path)]
-            )
-            // The create response is the visibility commit point. Invalidate
-            // any list request that started before it so a late stale response
-            // cannot temporarily hide the newly durable Session.
-            visibilityGeneration = UUID()
-            upsertCreatedSession(result.session)
-            // Publish the durable Session before waiting for the previous runtime
-            // to shut down. Yield once so SwiftUI can render the new Recent row.
-            await Task.yield()
-            let opened = await openSession(
-                result.session.id,
-                writable: false,
-                presentFailure: false,
-                useOpenedPathDraftTarget: true
-            )
-            Task { [weak self] in await self?.reloadAllSessionLists() }
-            if !opened {
-                searchOpenError = nil
-                issue = AppIssue(
-                    title: "会话已创建，但暂时无法打开",
-                    message: "它已经立即保存在最近会话中。旧运行时尚未安全结束或新会话暂时无法观察，请稍后从会话栏重新打开。"
-                )
-            }
+            canonicalDirectoryPath = try ProjectStore.canonicalDirectoryPath(directory)
         } catch {
-            present(error, title: "无法创建会话")
+            present(error, title: "新会话工作目录不可用")
+            return
         }
+
+        await flushCurrentDraft()
+
+        if isNewSessionDraftActive {
+            newSessionDraft?.text = composerText
+        }
+        let existingDraft = newSessionDraft.flatMap { draft in
+            draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draft
+        }
+        if let existingDraft, existingDraft.directoryPath != canonicalDirectoryPath {
+            showNotice("已恢复之前未发送的新会话草稿；发送或取消后，才能在其他目录开始新会话。", level: "info")
+        }
+        let draft = existingDraft ?? NewSessionDraft(directoryPath: canonicalDirectoryPath, text: "")
+
+        clearActiveSessionPresentation()
+        workbenchDestination = .workspace
+        workspaceTabSelection = .conversation
+        inspectorScope = nil
+        newSessionDraft = draft
+        isNewSessionDraftActive = true
+        composerText = draft.text
+        draftDocument.newSessionDraft = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : draft
+    }
+
+    func discardNewSessionDraft() {
+        guard newSessionDraft != nil else { return }
+        newSessionDraft = nil
+        draftDocument.newSessionDraft = nil
+        scheduleDraftSave()
+        isNewSessionDraftActive = false
+        clearActiveSessionPresentation()
+        workbenchDestination = .workspace
+        workspaceTabSelection = .conversation
+    }
+
+    private func parkNewSessionDraft() {
+        guard isNewSessionDraftActive else { return }
+        newSessionDraft?.text = composerText
+        if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            newSessionDraft = nil
+        }
+        draftDocument.newSessionDraft = newSessionDraft
+        scheduleDraftSave()
+        isNewSessionDraftActive = false
+        composerText = ""
     }
 
     func requestTrashSession(_ session: SessionSummary) {
@@ -1604,7 +1739,356 @@ final class AppModel {
         Task { [weak self] in await self?.reloadAllSessionLists() }
     }
 
+    func enqueueFollowUpFromComposer() async {
+        guard followUpQueueStoreWritable,
+              followUpQueueIssue == nil,
+              !isMutatingFollowUpQueue,
+              pendingPrompt == nil,
+              let sessionID = selectedSessionID,
+              let pathID = currentPathIdentity,
+              let lineageEntryID = currentLineageEntryID,
+              pendingPathDraft == nil else { return }
+        let originalDraft = composerText
+        let trimmed = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else { return }
+
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        let now = Date().ISO8601Format()
+        var next = followUpQueues
+        let document = FollowUpQueueDocument(queues: next)
+        if let queueIndex = document.matchingQueueIndex(
+            sessionID: sessionID,
+            currentPathID: pathID,
+            orderedPathEntryIDs: currentPathEntryIDs
+        ) {
+            next[queueIndex].items.append(FollowUpQueueItem(text: originalDraft))
+            if isStreaming,
+               next[queueIndex].activeRunID == nil,
+               let currentSessionRunID {
+                next[queueIndex].activeRunID = currentSessionRunID
+                next[queueIndex].activeRunEntryID = lineageEntryID
+            }
+            next[queueIndex].updatedAt = now
+        } else {
+            next.append(FollowUpQueueRecord(
+                sessionID: sessionID,
+                pathID: pathID,
+                lineageEntryID: lineageEntryID,
+                items: [FollowUpQueueItem(text: originalDraft)],
+                activeRunID: isStreaming ? currentSessionRunID : nil,
+                activeRunEntryID: isStreaming && currentSessionRunID != nil ? lineageEntryID : nil
+            ))
+        }
+        guard await persistFollowUpQueues(next) else { return }
+
+        if composerText == originalDraft {
+            composerText = ""
+            if let target = currentDraftTarget {
+                setDraftText("", for: target)
+                _ = await flushCurrentDraft()
+            }
+        }
+        showNotice("已加入后续消息队列；当前运行不会被打断。", level: "info")
+    }
+
+    func editFollowUpItem(queueID: String, itemID: String, text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isMutatingFollowUpQueue else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: { $0.id == itemID }),
+              next[queueIndex].items[itemIndex].state == .pending else { return }
+        let now = Date().ISO8601Format()
+        next[queueIndex].items[itemIndex].text = text
+        next[queueIndex].items[itemIndex].updatedAt = now
+        next[queueIndex].updatedAt = now
+        _ = await persistFollowUpQueues(next)
+    }
+
+    func moveFollowUpItem(queueID: String, itemID: String, offset: Int) async {
+        guard offset == -1 || offset == 1, !isMutatingFollowUpQueue else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: { $0.id == itemID }),
+              next[queueIndex].items[itemIndex].state == .pending else { return }
+        let destination = itemIndex + offset
+        guard next[queueIndex].items.indices.contains(destination),
+              next[queueIndex].items[destination].state == .pending else { return }
+        let item = next[queueIndex].items.remove(at: itemIndex)
+        next[queueIndex].items.insert(item, at: destination)
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        _ = await persistFollowUpQueues(next)
+    }
+
+    func removeFollowUpItem(queueID: String, itemID: String) async {
+        guard !isMutatingFollowUpQueue else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: { $0.id == itemID }),
+              next[queueIndex].items[itemIndex].state == .pending else { return }
+        next[queueIndex].items.remove(at: itemIndex)
+        if next[queueIndex].items.isEmpty, next[queueIndex].activeRunID == nil {
+            next.remove(at: queueIndex)
+        } else {
+            next[queueIndex].updatedAt = Date().ISO8601Format()
+        }
+        _ = await persistFollowUpQueues(next)
+    }
+
+    func resumeFollowUpQueue(_ queueID: String) async {
+        guard !isStreaming,
+              extensionDialogs.isEmpty,
+              !isMutatingFollowUpQueue,
+              let queue = currentFollowUpQueue,
+              queue.id == queueID,
+              queue.pauseReason != nil,
+              queue.pauseReason?.requiresResultResolution != true,
+              queue.pathID == currentPathIdentity,
+              currentPathEntryIDs.contains(queue.lineageEntryID),
+              let lineageEntryID = currentLineageEntryID else { return }
+        isMutatingFollowUpQueue = true
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }) else {
+            isMutatingFollowUpQueue = false
+            return
+        }
+        next[queueIndex].lineageEntryID = lineageEntryID
+        next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+        next[queueIndex].activeRunID = nil
+        next[queueIndex].activeRunEntryID = nil
+        next[queueIndex].pauseReason = nil
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        let saved = await persistFollowUpQueues(next)
+        isMutatingFollowUpQueue = false
+        if saved { await dispatchNextFollowUp(queueID: queueID) }
+    }
+
+    func resolveUnknownDispatch(_ queueID: String, wasPersisted: Bool) async {
+        guard !isMutatingFollowUpQueue,
+              let queue = currentFollowUpQueue,
+              queue.id == queueID,
+              queue.pauseReason == .dispatchUnknown,
+              queue.items.first?.state == .unknown,
+              currentPathEntryIDs.contains(queue.lineageEntryID),
+              let lineageEntryID = currentLineageEntryID else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }) else { return }
+        if wasPersisted {
+            next[queueIndex].items.removeFirst()
+            next[queueIndex].lineageEntryID = lineageEntryID
+            next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+        } else {
+            next[queueIndex].items[0].state = .pending
+            next[queueIndex].items[0].promptID = nil
+            next[queueIndex].items[0].updatedAt = Date().ISO8601Format()
+        }
+        next[queueIndex].activeRunID = nil
+        next[queueIndex].activeRunEntryID = nil
+        next[queueIndex].pauseReason = .manualResume
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        if next[queueIndex].items.isEmpty {
+            next.remove(at: queueIndex)
+        }
+        _ = await persistFollowUpQueues(next)
+    }
+
+    func resolveUnknownRun(_ queueID: String) async {
+        guard !isMutatingFollowUpQueue,
+              let queue = currentFollowUpQueue,
+              queue.id == queueID,
+              queue.pauseReason == .runOutcomeUnknown,
+              currentPathEntryIDs.contains(queue.lineageEntryID),
+              let lineageEntryID = currentLineageEntryID else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }) else { return }
+        next[queueIndex].lineageEntryID = lineageEntryID
+        next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+        next[queueIndex].activeRunID = nil
+        next[queueIndex].activeRunEntryID = nil
+        next[queueIndex].pauseReason = .manualResume
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        if next[queueIndex].items.isEmpty {
+            next.remove(at: queueIndex)
+        }
+        _ = await persistFollowUpQueues(next)
+    }
+
+    @discardableResult
+    private func persistFollowUpQueues(_ next: [FollowUpQueueRecord]) async -> Bool {
+        guard followUpQueueStoreWritable else { return false }
+        followUpQueueRevision += 1
+        do {
+            try await followUpQueueStore.save(
+                FollowUpQueueDocument(queues: next),
+                revision: followUpQueueRevision
+            )
+            followUpQueues = next
+            return true
+        } catch let queueError as FollowUpQueueStoreError {
+            switch queueError {
+            case .unavailableAfterLoadFailure:
+                followUpQueueStoreWritable = false
+                followUpQueueIssue = "后续消息队列保存已锁止；原文件保留在：\(followUpQueueStore.fileURL.path)"
+            default:
+                showNotice(queueError.localizedDescription, level: "warning")
+                return false
+            }
+        } catch {
+            followUpQueueStoreWritable = false
+            followUpQueueIssue = "后续消息队列保存失败；原文件已保留，本次停止继续写入：\(followUpQueueStore.fileURL.path)"
+        }
+        showNotice(followUpQueueIssue ?? "后续消息队列保存失败。", level: "warning")
+        return false
+    }
+
+    @discardableResult
+    func reloadFollowUpQueues(announceSuccess: Bool = true) async -> Bool {
+        guard !isMutatingFollowUpQueue,
+              pendingPrompt?.isFollowUpDispatch != true else { return false }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        do {
+            var document = try await followUpQueueStore.load()
+            var normalizedInterruptedState = false
+            let now = Date().ISO8601Format()
+            for queueIndex in document.queues.indices {
+                if let itemIndex = document.queues[queueIndex].items.firstIndex(where: { $0.state == .dispatching }) {
+                    document.queues[queueIndex].items[itemIndex].state = .unknown
+                    document.queues[queueIndex].pauseReason = .dispatchUnknown
+                    document.queues[queueIndex].updatedAt = now
+                    normalizedInterruptedState = true
+                } else if document.queues[queueIndex].activeRunID != nil {
+                    document.queues[queueIndex].pauseReason = .runOutcomeUnknown
+                    document.queues[queueIndex].updatedAt = now
+                    normalizedInterruptedState = true
+                } else if !document.queues[queueIndex].items.isEmpty,
+                          document.queues[queueIndex].pauseReason == nil {
+                    // The App may have stopped after durably marking the queue ready
+                    // but before the next Host request began. Make that crash window
+                    // explicit and user-resumable instead of leaving a silent queue.
+                    document.queues[queueIndex].pauseReason = .manualResume
+                    document.queues[queueIndex].updatedAt = now
+                    normalizedInterruptedState = true
+                }
+            }
+            if normalizedInterruptedState {
+                followUpQueueRevision += 1
+                try await followUpQueueStore.save(document, revision: followUpQueueRevision)
+            }
+            followUpQueues = document.queues
+            followUpQueueStoreWritable = true
+            followUpQueueIssue = nil
+            if announceSuccess {
+                showNotice("后续消息队列已重新载入。", level: "info")
+            }
+            return true
+        } catch {
+            followUpQueueStoreWritable = false
+            followUpQueueIssue = "后续消息队列未能安全载入；原文件已保留，本次不会覆盖：\(followUpQueueStore.fileURL.path)"
+            showNotice(followUpQueueIssue ?? "后续消息队列未能载入。", level: "warning")
+            return false
+        }
+    }
+
     func sendPrompt() async {
+        if isNewSessionDraftActive {
+            await createSessionFromDraftAndSend()
+            return
+        }
+        if shouldQueueComposerText {
+            await enqueueFollowUpFromComposer()
+            return
+        }
+        await sendPromptToSelectedSession()
+    }
+
+    private func createSessionFromDraftAndSend() async {
+        guard let client = readyClient,
+              let draft = newSessionDraft,
+              isNewSessionDraftActive,
+              !isCreatingSession,
+              !isOpeningSession,
+              !isStreaming,
+              !isMutatingArchive,
+              !isSendingRequest,
+              pendingPrompt == nil else { return }
+        let message = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+
+        isCreatingSession = true
+        defer { isCreatingSession = false }
+        do {
+            let result: SessionCreateResult = try await client.request(
+                "session.create",
+                params: ["cwd": .string(draft.directoryPath)]
+            )
+            // The first submit action is the visibility commit point. A blank
+            // local draft never reaches Pi or the Recent list.
+            visibilityGeneration = UUID()
+            upsertCreatedSession(result.session)
+
+            let initialTarget = SessionDraftTarget.path(
+                sessionID: result.session.id,
+                pathID: "root"
+            )
+            draftDocument.activeTargets[result.session.id] = initialTarget
+            setDraftText(draft.text, for: initialTarget)
+            newSessionDraft = nil
+            draftDocument.newSessionDraft = nil
+            isNewSessionDraftActive = false
+            guard await flushCurrentDraft() else {
+                issue = AppIssue(
+                    title: "会话已创建，但首次消息尚未发送",
+                    message: "输入仍保留在当前内存中，但草稿资料未能完成到真实会话的安全转移；本次不会继续打开或发送。请先修复草稿资料，再从最近会话重试。"
+                )
+                return
+            }
+
+            // Make the newly durable row observable before the previous runtime
+            // finishes yielding its write lease.
+            await Task.yield()
+            let openedWritable = await openSession(
+                result.session.id,
+                writable: true,
+                draftTargetAfterOpen: initialTarget
+            )
+            Task { [weak self] in await self?.reloadAllSessionLists() }
+
+            guard selectedSessionID == result.session.id else {
+                issue = AppIssue(
+                    title: "会话已创建，但首次消息尚未发送",
+                    message: "输入内容已作为该会话的草稿保留。请稍后从最近会话重新打开并发送。"
+                )
+                return
+            }
+            if composerText != draft.text {
+                updateComposerText(draft.text)
+            }
+            guard openedWritable else {
+                issue = AppIssue(
+                    title: "会话已创建，但首次消息尚未发送",
+                    message: "输入内容已保留在该会话草稿中；当前只读或旧运行时尚未安全结束，请稍后重试。"
+                )
+                return
+            }
+            await sendPromptToSelectedSession(failureTitle: "会话已创建，但首次消息尚未发送")
+        } catch {
+            present(error, title: "无法创建会话")
+        }
+    }
+
+    private func sendPromptToSelectedSession(failureTitle: String = "发送失败") async {
         guard readyClient != nil,
               let sourceSessionID = selectedSessionID,
               !isMutatingArchive,
@@ -1654,7 +2138,402 @@ final class AppModel {
             let _: Acknowledgement = try await client.request("session.prompt", params: params)
         } catch {
             restorePendingPrompt(for: sessionID)
-            present(error, title: "发送失败")
+            present(error, title: failureTitle)
+        }
+    }
+
+    private func dispatchNextFollowUp(queueID: String) async {
+        guard !isShuttingDown,
+              !isMutatingFollowUpQueue,
+              !isStreaming,
+              extensionDialogs.isEmpty,
+              pendingPrompt == nil,
+              let selectedSessionID,
+              currentFollowUpQueue?.id == queueID else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+
+        guard await ensureWritable(),
+              let client = readyClient,
+              self.selectedSessionID == selectedSessionID else {
+            await pauseFollowUpQueueInline(queueID: queueID, reason: .hostInterrupted)
+            return
+        }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              next[queueIndex].sessionID == selectedSessionID,
+              next[queueIndex].pauseReason == nil,
+              next[queueIndex].activeRunID == nil,
+              let item = next[queueIndex].items.first,
+              item.state == .pending,
+              currentPathEntryIDs.contains(next[queueIndex].lineageEntryID) else {
+            return
+        }
+
+        let promptID = UUID().uuidString
+        let now = Date().ISO8601Format()
+        next[queueIndex].items[0].state = .dispatching
+        next[queueIndex].items[0].promptID = promptID
+        next[queueIndex].items[0].updatedAt = now
+        next[queueIndex].updatedAt = now
+        guard await persistFollowUpQueues(next) else { return }
+
+        pendingPrompt = PendingPromptDraft(
+            sessionID: selectedSessionID,
+            promptID: promptID,
+            draft: item.text,
+            followUpQueueID: queueID,
+            followUpItemID: item.id
+        )
+        isSendingRequest = true
+        defer { isSendingRequest = false }
+        do {
+            let _: Acknowledgement = try await client.request("session.prompt", params: [
+                "message": .string(item.text),
+                "promptId": .string(promptID),
+            ])
+        } catch {
+            await markFollowUpDispatchUnknown(
+                queueID: queueID,
+                itemID: item.id,
+                promptID: promptID
+            )
+            if pendingPrompt?.promptID == promptID { pendingPrompt = nil }
+            present(error, title: "后续消息派发结果未知")
+        }
+    }
+
+    private func confirmFollowUpPromptPersisted(
+        sessionID: String,
+        promptID: String,
+        entryID: String
+    ) async {
+        await waitForFollowUpMutation()
+        guard let pending = pendingPrompt,
+              pending.sessionID == sessionID,
+              pending.promptID == promptID,
+              let queueID = pending.followUpQueueID,
+              let itemID = pending.followUpItemID else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: {
+                  $0.id == itemID && $0.promptID == promptID && $0.state == .dispatching
+              }) else {
+            await markFollowUpDispatchUnknown(
+                queueID: queueID,
+                itemID: itemID,
+                promptID: promptID
+            )
+            pendingPrompt = nil
+            return
+        }
+        next[queueIndex].items.remove(at: itemIndex)
+        next[queueIndex].lineageEntryID = entryID
+        next[queueIndex].pathID = "leaf:\(entryID)"
+        next[queueIndex].activeRunID = promptID
+        next[queueIndex].activeRunEntryID = entryID
+        next[queueIndex].pauseReason = nil
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        let saved = await persistFollowUpQueues(next)
+        if !saved {
+            markFollowUpDispatchUnknownInMemory(
+                queueID: queueID,
+                itemID: itemID,
+                promptID: promptID
+            )
+        }
+        currentSessionRunID = promptID
+        _ = completePersistedPrompt(sessionID: sessionID, promptID: promptID, entryID: entryID)
+    }
+
+    private func failFollowUpPrompt(
+        sessionID: String,
+        promptID: String,
+        persistedEntryID: String?,
+        message: String
+    ) async {
+        await waitForFollowUpMutation()
+        guard let pending = pendingPrompt,
+              pending.sessionID == sessionID,
+              pending.promptID == promptID,
+              let queueID = pending.followUpQueueID,
+              let itemID = pending.followUpItemID else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: {
+                  $0.id == itemID && $0.promptID == promptID
+              }) else {
+            pendingPrompt = nil
+            return
+        }
+        let now = Date().ISO8601Format()
+        if let persistedEntryID {
+            next[queueIndex].items.remove(at: itemIndex)
+            next[queueIndex].lineageEntryID = persistedEntryID
+            next[queueIndex].pathID = "leaf:\(persistedEntryID)"
+        } else {
+            next[queueIndex].items[itemIndex].state = .pending
+            next[queueIndex].items[itemIndex].promptID = nil
+            next[queueIndex].items[itemIndex].updatedAt = now
+        }
+        next[queueIndex].activeRunID = nil
+        next[queueIndex].activeRunEntryID = nil
+        next[queueIndex].pauseReason = .runFailed
+        next[queueIndex].updatedAt = now
+        if next[queueIndex].items.isEmpty {
+            next.remove(at: queueIndex)
+        }
+        _ = await persistFollowUpQueues(next)
+        if let persistedEntryID {
+            _ = completePersistedPrompt(
+                sessionID: sessionID,
+                promptID: promptID,
+                entryID: persistedEntryID
+            )
+        } else {
+            pendingPrompt = nil
+        }
+        showNotice(message, level: "error")
+    }
+
+    private func failActiveFollowUpRun(
+        sessionID: String,
+        promptID: String,
+        persistedEntryID: String?,
+        message: String
+    ) async {
+        await waitForFollowUpMutation()
+        guard !isMutatingFollowUpQueue else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: {
+            $0.sessionID == sessionID && $0.activeRunID == promptID
+        }) else { return }
+        if let persistedEntryID {
+            next[queueIndex].lineageEntryID = persistedEntryID
+            next[queueIndex].pathID = "leaf:\(persistedEntryID)"
+        }
+        next[queueIndex].activeRunID = nil
+        next[queueIndex].activeRunEntryID = nil
+        next[queueIndex].pauseReason = .runFailed
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        if next[queueIndex].items.isEmpty {
+            next.remove(at: queueIndex)
+        }
+        _ = await persistFollowUpQueues(next)
+        showNotice(message, level: "error")
+    }
+
+    private func settleFollowUpRun(runID: String?, outcome: FollowUpRunOutcome) async {
+        guard !isShuttingDown else { return }
+        await waitForFollowUpMutation()
+        if readyClient != nil, selectedSessionID != nil {
+            await refreshSnapshot()
+        }
+        await waitForFollowUpMutation()
+        guard !isMutatingFollowUpQueue,
+              let sessionID = selectedSessionID else { return }
+        let document = FollowUpQueueDocument(queues: followUpQueues)
+        let queueIndex = runID.flatMap { candidate in
+            followUpQueues.firstIndex(where: {
+                $0.sessionID == sessionID && $0.activeRunID == candidate
+            })
+        } ?? document.matchingQueueIndex(
+            sessionID: sessionID,
+            currentPathID: currentPathIdentity,
+            orderedPathEntryIDs: currentPathEntryIDs
+        )
+        guard let queueIndex,
+              followUpQueues[queueIndex].pauseReason == nil,
+              followUpQueues[queueIndex].activeRunID == nil
+                || runID == followUpQueues[queueIndex].activeRunID else { return }
+
+        isMutatingFollowUpQueue = true
+        var next = followUpQueues
+        let queueID = next[queueIndex].id
+        let now = Date().ISO8601Format()
+        let pathStillMatches = currentPathEntryIDs.contains(next[queueIndex].lineageEntryID)
+        let nextLineageEntryID = currentLineageEntryID
+        var shouldDispatch = false
+
+        if !pathStillMatches || nextLineageEntryID == nil {
+            next[queueIndex].activeRunID = nil
+            next[queueIndex].activeRunEntryID = nil
+            next[queueIndex].pauseReason = .pathChanged
+        } else if !extensionDialogs.isEmpty {
+            next[queueIndex].lineageEntryID = nextLineageEntryID ?? next[queueIndex].lineageEntryID
+            next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+            next[queueIndex].activeRunID = nil
+            next[queueIndex].activeRunEntryID = nil
+            next[queueIndex].pauseReason = .waitingForUser
+        } else {
+            switch outcome {
+            case .normal:
+                next[queueIndex].lineageEntryID = nextLineageEntryID ?? next[queueIndex].lineageEntryID
+                next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+                next[queueIndex].activeRunID = nil
+                next[queueIndex].activeRunEntryID = nil
+                next[queueIndex].pauseReason = nil
+                shouldDispatch = !next[queueIndex].items.isEmpty
+            case .failed:
+                next[queueIndex].lineageEntryID = nextLineageEntryID ?? next[queueIndex].lineageEntryID
+                next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+                next[queueIndex].activeRunID = nil
+                next[queueIndex].activeRunEntryID = nil
+                next[queueIndex].pauseReason = .runFailed
+            case .aborted:
+                next[queueIndex].lineageEntryID = nextLineageEntryID ?? next[queueIndex].lineageEntryID
+                next[queueIndex].pathID = currentPathIdentity ?? next[queueIndex].pathID
+                next[queueIndex].activeRunID = nil
+                next[queueIndex].activeRunEntryID = nil
+                next[queueIndex].pauseReason = .runAborted
+            case .unknown:
+                if next[queueIndex].activeRunID == nil, let runID {
+                    next[queueIndex].activeRunID = runID
+                    next[queueIndex].activeRunEntryID = nextLineageEntryID
+                }
+                next[queueIndex].pauseReason = .runOutcomeUnknown
+            }
+        }
+        next[queueIndex].updatedAt = now
+        if next[queueIndex].items.isEmpty,
+           next[queueIndex].activeRunID == nil,
+           next[queueIndex].pauseReason == nil {
+            next.remove(at: queueIndex)
+            shouldDispatch = false
+        }
+        let saved = await persistFollowUpQueues(next)
+        isMutatingFollowUpQueue = false
+        if saved, shouldDispatch {
+            await dispatchNextFollowUp(queueID: queueID)
+        }
+    }
+
+    private func markFollowUpDispatchUnknown(
+        queueID: String,
+        itemID: String,
+        promptID: String
+    ) async {
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = next[queueIndex].items.firstIndex(where: {
+                  $0.id == itemID && $0.promptID == promptID
+              }) else { return }
+        next[queueIndex].items[itemIndex].state = .unknown
+        next[queueIndex].items[itemIndex].updatedAt = Date().ISO8601Format()
+        next[queueIndex].pauseReason = .dispatchUnknown
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        if !(await persistFollowUpQueues(next)) {
+            followUpQueues = next
+        }
+    }
+
+    private func markFollowUpDispatchUnknownInMemory(
+        queueID: String,
+        itemID: String,
+        promptID: String
+    ) {
+        guard let queueIndex = followUpQueues.firstIndex(where: { $0.id == queueID }),
+              let itemIndex = followUpQueues[queueIndex].items.firstIndex(where: {
+                  $0.id == itemID && $0.promptID == promptID
+              }) else { return }
+        followUpQueues[queueIndex].items[itemIndex].state = .unknown
+        followUpQueues[queueIndex].pauseReason = .dispatchUnknown
+        followUpQueues[queueIndex].updatedAt = Date().ISO8601Format()
+    }
+
+    private func pauseFollowUpQueueInline(
+        queueID: String,
+        reason: FollowUpQueuePauseReason
+    ) async {
+        var next = followUpQueues
+        guard let queueIndex = next.firstIndex(where: { $0.id == queueID }) else { return }
+        if let itemIndex = next[queueIndex].items.firstIndex(where: { $0.state == .dispatching }) {
+            next[queueIndex].items[itemIndex].state = .unknown
+            next[queueIndex].pauseReason = .dispatchUnknown
+        } else {
+            next[queueIndex].pauseReason = reason
+        }
+        next[queueIndex].updatedAt = Date().ISO8601Format()
+        _ = await persistFollowUpQueues(next)
+    }
+
+    private func pauseFollowUpQueues(
+        sessionID: String?,
+        reason: FollowUpQueuePauseReason
+    ) async {
+        await waitForFollowUpMutation()
+        guard !isMutatingFollowUpQueue else { return }
+        isMutatingFollowUpQueue = true
+        defer { isMutatingFollowUpQueue = false }
+        var next = followUpQueues
+        var changed = false
+        let now = Date().ISO8601Format()
+        for queueIndex in next.indices where sessionID == nil || next[queueIndex].sessionID == sessionID {
+            var queueChanged = false
+            if let itemIndex = next[queueIndex].items.firstIndex(where: { $0.state == .dispatching }) {
+                next[queueIndex].items[itemIndex].state = .unknown
+                next[queueIndex].pauseReason = .dispatchUnknown
+                queueChanged = true
+            } else if next[queueIndex].activeRunID != nil {
+                next[queueIndex].pauseReason = reason
+                queueChanged = true
+            }
+            if queueChanged {
+                next[queueIndex].updatedAt = now
+                changed = true
+            }
+        }
+        if changed { _ = await persistFollowUpQueues(next) }
+    }
+
+    private func pauseFollowUpQueuesForShutdown() async {
+        await pauseFollowUpQueues(sessionID: nil, reason: .hostInterrupted)
+    }
+
+    private func waitForFollowUpMutation() async {
+        while isMutatingFollowUpQueue, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func isTrackedFollowUpRun(sessionID: String?, runID: String?) -> Bool {
+        guard let sessionID else { return false }
+        if let runID,
+           followUpQueues.contains(where: {
+               $0.sessionID == sessionID && $0.activeRunID == runID
+           }) {
+            return true
+        }
+        return selectedSessionID == sessionID
+            && currentFollowUpQueue?.pauseReason == nil
+            && currentFollowUpQueue?.items.isEmpty == false
+    }
+
+    private func cancelFollowUpSettlementGate() {
+        followUpSettlementGeneration = UUID()
+        followUpSettlementTask?.cancel()
+        followUpSettlementTask = nil
+        isSettlingFollowUpRun = false
+    }
+
+    private static func followUpOutcome(from data: JSONValue?) -> FollowUpRunOutcome {
+        guard let messages = data?["messages"]?.arrayValue,
+              let assistant = messages.reversed().first(where: {
+                  $0["role"]?.stringValue == "assistant"
+              }),
+              let stopReason = assistant["stopReason"]?.stringValue?.lowercased() else {
+            return .unknown
+        }
+        switch stopReason {
+        case "aborted", "abort", "cancelled", "canceled": return .aborted
+        case "error", "failed", "failure": return .failed
+        default: return .normal
         }
     }
 
@@ -1880,6 +2759,8 @@ final class AppModel {
         }
         do {
             draftDocument = try await sessionDraftStore.load()
+            newSessionDraft = draftDocument.newSessionDraft
+            isNewSessionDraftActive = false
             sessionDraftStoreWritable = true
             draftStoreIssue = nil
         } catch {
@@ -1899,6 +2780,7 @@ final class AppModel {
                 level: "warning"
             )
         }
+        _ = await reloadFollowUpQueues(announceSuccess: false)
         return true
     }
 
@@ -1917,6 +2799,9 @@ final class AppModel {
     }
 
     private func performShutdown() async {
+        isShuttingDown = true
+        await followUpSettlementTask?.value
+        await pauseFollowUpQueuesForShutdown()
         await flushCurrentDraft()
         refreshTask?.cancel()
         searchTask?.cancel()
@@ -2042,6 +2927,7 @@ final class AppModel {
         hostState = result.state
         activePlan = ActivePlanParser.parse(result.state?.activePlan ?? result.snapshot.activePlan)
         isStreaming = result.state?.isStreaming ?? false
+        currentSessionRunID = nil
         clearStreamingPresentation()
         optimisticUserMessage = nil
         availableModels = []
@@ -2124,6 +3010,7 @@ final class AppModel {
         activePlan = nil
         optimisticUserMessage = nil
         isStreaming = false
+        currentSessionRunID = nil
         clearStreamingPresentation()
         availableModels = []
         availableThinkingLevels = []
@@ -2194,7 +3081,31 @@ final class AppModel {
                pendingPrompt?.promptID == promptID {
                 let outcome = event.data?["outcome"]?.stringValue
                 if outcome == "persisted", let entryID = event.data?["entryId"]?.stringValue {
-                    _ = completePersistedPrompt(sessionID: sessionID, promptID: promptID, entryID: entryID)
+                    if pendingPrompt?.isFollowUpDispatch == true {
+                        Task { [weak self] in
+                            await self?.confirmFollowUpPromptPersisted(
+                                sessionID: sessionID,
+                                promptID: promptID,
+                                entryID: entryID
+                            )
+                        }
+                    } else {
+                        currentSessionRunID = promptID
+                        _ = completePersistedPrompt(sessionID: sessionID, promptID: promptID, entryID: entryID)
+                    }
+                } else if pendingPrompt?.isFollowUpDispatch == true {
+                    let queueID = pendingPrompt?.followUpQueueID
+                    let itemID = pendingPrompt?.followUpItemID
+                    Task { [weak self] in
+                        guard let self, let queueID, let itemID else { return }
+                        await self.markFollowUpDispatchUnknown(
+                            queueID: queueID,
+                            itemID: itemID,
+                            promptID: promptID
+                        )
+                        if self.pendingPrompt?.promptID == promptID { self.pendingPrompt = nil }
+                        self.showNotice("Host 未返回后续消息的持久化条目；队列已暂停等待核对。", level: "warning")
+                    }
                 } else if pendingPrompt?.draftTarget?.pathAction != nil {
                     restorePendingPrompt(for: sessionID)
                 } else {
@@ -2203,9 +3114,37 @@ final class AppModel {
             }
         case "session.promptFailed":
             guard let sessionID = event.data?["sessionId"]?.stringValue,
-                  let promptID = event.data?["promptId"]?.stringValue,
-                  pendingPrompt?.sessionID == sessionID,
-                  pendingPrompt?.promptID == promptID else { return }
+                  let promptID = event.data?["promptId"]?.stringValue else { return }
+            let persistedEntryID = event.data?["persistedEntryId"]?.stringValue
+            let message = event.data?["message"]?.stringValue
+                ?? (persistedEntryID == nil
+                    ? "本次输入未能完成。"
+                    : "输入已经进入会话，但对应 Agent 运行失败。")
+            if pendingPrompt?.sessionID != sessionID || pendingPrompt?.promptID != promptID {
+                guard followUpQueues.contains(where: {
+                    $0.sessionID == sessionID && $0.activeRunID == promptID
+                }) else { return }
+                Task { [weak self] in
+                    await self?.failActiveFollowUpRun(
+                        sessionID: sessionID,
+                        promptID: promptID,
+                        persistedEntryID: persistedEntryID,
+                        message: message
+                    )
+                }
+                return
+            }
+            if pendingPrompt?.isFollowUpDispatch == true {
+                Task { [weak self] in
+                    await self?.failFollowUpPrompt(
+                        sessionID: sessionID,
+                        promptID: promptID,
+                        persistedEntryID: persistedEntryID,
+                        message: message
+                    )
+                }
+                return
+            }
             if let entryID = event.data?["persistedEntryId"]?.stringValue,
                completePersistedPrompt(sessionID: sessionID, promptID: promptID, entryID: entryID) {
                 showNotice("输入已经保存到新路径，但后续 Agent 运行失败。", level: "error")
@@ -2217,11 +3156,22 @@ final class AppModel {
             recordSessionChange(event.data)
         case "session.conflict":
             guard let sessionID = event.data?["sessionId"]?.stringValue else { return }
-            if pendingPrompt?.sessionID == sessionID { restorePendingPrompt(for: sessionID) }
+            cancelFollowUpSettlementGate()
+            if pendingPrompt?.sessionID == sessionID, pendingPrompt?.isFollowUpDispatch != true {
+                restorePendingPrompt(for: sessionID)
+            }
             guard sessionID == selectedSessionID else { return }
             isStreaming = false
             showNotice("检测到 Pi 的新写入，D Code 已停止本次写入并切回持续同步；草稿已保留。", level: "warning")
-            Task { [weak self] in await self?.resumeObservationAfterConflict(sessionID) }
+            Task { [weak self] in
+                guard let self else { return }
+                await self.pauseFollowUpQueues(sessionID: sessionID, reason: .conflict)
+                if self.pendingPrompt?.sessionID == sessionID,
+                   self.pendingPrompt?.isFollowUpDispatch == true {
+                    self.pendingPrompt = nil
+                }
+                await self.resumeObservationAfterConflict(sessionID)
+            }
         case "session.changed":
             guard event.data?["sessionId"]?.stringValue == selectedSessionID else { return }
             scheduleRefresh()
@@ -2263,15 +3213,33 @@ final class AppModel {
             showNotice(event.data?["message"]?.stringValue ?? "Host 诊断事件", level: "error")
         case "host.processEnded":
             resetExtensionUIState()
+            cancelFollowUpSettlementGate()
             searchProbeTask?.cancel()
             searchProbeTask = nil
+            let interruptedSessionID = selectedSessionID
+            Task { [weak self] in
+                await self?.pauseFollowUpQueues(
+                    sessionID: interruptedSessionID,
+                    reason: .hostInterrupted
+                )
+                if self?.pendingPrompt?.isFollowUpDispatch == true {
+                    self?.pendingPrompt = nil
+                }
+            }
             let expected = event.data?["expected"]?.boolValue ?? false
             connectionState = expected ? .idle : .failed
             if !expected {
                 issue = AppIssue(title: "Pi Host 已停止", message: "会话连接已中断。重新打开应用即可尝试恢复。")
             }
         case "host.restartRequired":
+            cancelFollowUpSettlementGate()
             showNotice("会话运行时未能安全停止。D Code 已保留观察能力，但再次发送前需要重新打开应用。", level: "error")
+            Task { [weak self] in
+                await self?.pauseFollowUpQueues(
+                    sessionID: self?.selectedSessionID,
+                    reason: .hostInterrupted
+                )
+            }
         default:
             break
         }
@@ -2281,6 +3249,7 @@ final class AppModel {
         guard let type = data?["type"]?.stringValue else { return }
         switch type {
         case "agent_start":
+            if let runID = data?["runId"]?.stringValue { currentSessionRunID = runID }
             isStreaming = true
             clearStreamingPresentation()
         case "message_start":
@@ -2319,13 +3288,49 @@ final class AppModel {
         case "tool_execution_end":
             updateStreamingTool(data, finished: true)
         case "agent_end":
+            let runID = data?["runId"]?.stringValue ?? currentSessionRunID
+            let sessionID = data?["sessionId"]?.stringValue ?? selectedSessionID
+            if let runID, data?["willRetry"]?.boolValue != true {
+                settledRunOutcomes[runID] = Self.followUpOutcome(from: data)
+            }
+            if data?["willRetry"]?.boolValue != true,
+               isTrackedFollowUpRun(sessionID: sessionID, runID: runID) {
+                isSettlingFollowUpRun = true
+            }
             if data?["willRetry"]?.boolValue != true {
                 isStreaming = false
             }
             scheduleRefresh()
         case "agent_settled":
+            let runID = data?["runId"]?.stringValue ?? currentSessionRunID
+            let sessionID = data?["sessionId"]?.stringValue ?? selectedSessionID
+            let outcome = runID.flatMap { settledRunOutcomes.removeValue(forKey: $0) } ?? .unknown
+            if currentSessionRunID == runID { currentSessionRunID = nil }
             isStreaming = false
             scheduleRefresh()
+            followUpSettlementTask?.cancel()
+            let tracked = isTrackedFollowUpRun(sessionID: sessionID, runID: runID)
+            guard tracked else {
+                isSettlingFollowUpRun = false
+                return
+            }
+            isSettlingFollowUpRun = true
+            let generation = UUID()
+            followUpSettlementGeneration = generation
+            followUpSettlementTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(180)) }
+                catch {
+                    guard let self,
+                          self.followUpSettlementGeneration == generation else { return }
+                    self.isSettlingFollowUpRun = false
+                    return
+                }
+                await self?.settleFollowUpRun(runID: runID, outcome: outcome)
+                guard let self,
+                      self.followUpSettlementGeneration == generation else { return }
+                self.isSettlingFollowUpRun = false
+                self.followUpSettlementTask = nil
+            }
         case "message_end":
             if data?["message"]?["role"]?.stringValue == "assistant" {
                 markStreamingAssistantMessageEnded()

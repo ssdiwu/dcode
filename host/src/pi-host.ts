@@ -45,7 +45,7 @@ import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.4";
+const HOST_VERSION = "0.0.5";
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -331,6 +331,7 @@ export class PiHost {
             sessionVisibilityExclusions: true,
             sessionChangeLedger: true,
             sessionRename: true,
+            sessionRunCorrelation: true,
           },
         };
       case "session.list":

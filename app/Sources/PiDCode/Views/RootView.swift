@@ -280,7 +280,7 @@ struct RootView: View {
                 SettingsView(page: page, navigationWidth: navigationWidth)
             } else {
                 WorkspaceContentView {
-                    if model.inspection != nil {
+                    if model.inspection != nil || model.isNewSessionDraftActive {
                         SessionDetailView()
                     } else {
                         UserHomeView(
@@ -423,6 +423,10 @@ struct RootView: View {
     private var topBarIdentity: some View {
         if case .settings = model.workbenchDestination {
             Label("设置", systemImage: "gearshape")
+                .font(.headline)
+                .lineLimit(1)
+        } else if model.workbenchDestination == .workspace, model.isNewSessionDraftActive {
+            Label("新会话", systemImage: "plus.bubble")
                 .font(.headline)
                 .lineLimit(1)
         } else if model.workbenchDestination == .workspace, let inspection = model.inspection {

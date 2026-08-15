@@ -88,17 +88,28 @@ struct SessionDraftRecord: Codable, Hashable, Sendable {
     var updatedAt: String
 }
 
+struct NewSessionDraft: Codable, Hashable, Sendable {
+    let directoryPath: String
+    var text: String
+}
+
 struct SessionDraftDocument: Codable, Equatable, Sendable {
     static let currentVersion = 1
 
     let version: Int
     var records: [SessionDraftRecord]
     var activeTargets: [String: SessionDraftTarget]
+    var newSessionDraft: NewSessionDraft?
 
-    init(records: [SessionDraftRecord] = [], activeTargets: [String: SessionDraftTarget] = [:]) {
+    init(
+        records: [SessionDraftRecord] = [],
+        activeTargets: [String: SessionDraftTarget] = [:],
+        newSessionDraft: NewSessionDraft? = nil
+    ) {
         version = Self.currentVersion
         self.records = records
         self.activeTargets = activeTargets
+        self.newSessionDraft = newSessionDraft
     }
 }
 

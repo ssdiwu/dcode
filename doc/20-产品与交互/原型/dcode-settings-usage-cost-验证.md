@@ -32,7 +32,7 @@
 
 - `supported（支持）`。
 - 产品入口固定为“设置 → 数据 → 用量与费用”。
-- 当前不绑定具体版本；`0.0.9` 已改为 Structured Verification Evidence（结构化验证证据），当前 `0.0.4` 不吸收该实现范围。
+- 当前不绑定具体版本；`0.0.9` 已改为 Structured Verification Evidence（结构化验证证据），当前 `0.0.5` Follow-up Queue 也不吸收该实现范围。
 - 进入正式 PRD 前，需要用 ADR（决策档案）固定 Pi JSONL 权威、记录值 / 估算值 / 不可用的费用语义、价格版本、时区、去重、增量刷新和可重建派生索引边界。
 
 ## 清理状态

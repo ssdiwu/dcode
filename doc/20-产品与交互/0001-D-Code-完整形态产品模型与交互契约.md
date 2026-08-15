@@ -45,7 +45,7 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - Pi Session 的稳定 ID、消息、模型上下文和 Pi 已持久化的运行条目继续以 `~/.pi/agent` 为唯一权威。
 - 添加 Source Folder 后，D Code 读取并展示已有 `cwd` 与该文件夹对应的 Pi Session；不需要导入、复制或重写 JSONL。
 - 未关联的旧 Pi Session 不出现在 Recent 或任何 Project；打开、续写或观察旧会话不会把它转换为 D Code Recent Session。
-- 在 Project 内新建会话时，没有 Source Folder 则禁用并引导添加；恰好一个时直接以该目录为新 Pi Session 的 `cwd` 创建；两个及以上时才让用户选择目标 Source Folder。
+- 在 Project 内新建会话时，没有 Source Folder 则禁用并引导添加；恰好一个时直接以该目录开始会话前草稿；两个及以上时才让用户选择目标 Source Folder。首次发送后创建的 Pi Session 使用所选目录作为 `cwd`。
 - Recent Sessions、Project 列表与 Search Results 都只是同一 Pi Session 权威上的不同可见性投影；三者在排序、分页和结果截断前统一排除 D Code 已归档的 Session ID，不改变会话身份或写入所有权。恢复归档只撤销该排除，不会为旧 Pi Session 补写 D Code 来源或 Project 关联。置顶只参与 Recent / Project 已成立候选集合的分页前排序，不能扩大可见范围或覆盖归档排除。
 
 ### Session Path（会话路径）与独立会话
@@ -86,15 +86,19 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - 主工作区是窗口中央唯一的内容页面容器。Workspace（工作台）、Settings（设置）与 Archived Sessions（已归档会话）都是其中可切换的 Workbench Page（工作台页面），不会打开第二个 App 窗口或叠加 Sheet。
 - 齿轮与 `Command-,` 都在当前窗口进入 Settings 工具页面；该页面临时使用完整工作台画布，以页内设置导航组织外观、工作台、已归档会话与“关于 D Code”，以受限宽度分组内容承载具体选项。“已归档会话”沿用同一设置外壳，不打开 Sheet 或第二窗口；“关于 D Code”显示应用图标、版本 / 构建号、作者 GitHub 和项目 GitHub。页内设置导航在语义上不是会话栏，但继承会话栏当前实际宽度；在 Settings 或 Workspace 调整后，另一页面立即同步。进入期间日常会话栏与信息检查器让出空间，但其显示偏好保持不变，返回 Workspace 后恢复。
 - Conversation 是 Workspace 中唯一的会话主页面，不建立或显示名为“对话”的标签。只有真实打开文件、Artifact、Preview 或 Editor 后才出现 Workspace Tab 标签栏，标签栏不预放空标签，也不拥有独立于主画布的整条背景。
+- 点击全局或 Project 内“新建会话”只进入没有 Session ID 的本地会话前草稿，并继续复用唯一 Conversation 主页面；顶部显示“新会话”，不出现信息检查器或冗余标签。空白草稿离开即消失，非空正文可由本机草稿资料恢复；首次提交非空正文时才创建真实 Pi Session。创建已提交但打开或发送失败时保留真实 Session 与逐字草稿，不自动删除。
 - 打开内容标签时，当前会话的原生消息流、Active Plan 与 Composer 可以隐藏，但其 Session、Session Path、滚动位置、输入草稿和恢复状态不得被重建或清除；关闭最后一个内容标签或从会话栏重新进入 Session 后，主页面原位恢复。
 - 从项目文件树再次打开同一文件时聚焦已有标签，不创建重复标签；同名文件用 Source Folder 或完整路径区分。关闭当前内容标签后切到相邻已打开标签，没有相邻内容时直接回到会话主页面。
 - Project 文件树和助手正文中的文件、目录与代码行引用使用同一打开合同：在 D Code 的 Workspace Tab 中打开并定位对应本机内容；目标不存在、超出已授权范围或行号失效时显示真实状态，不静默转交外部 IDE。
 - Active Plan 以紧凑状态带出现在消息流与 Composer 之间，完成后让出空间。
 - Composer 底部集中显示本次发送使用的模型与思考强度、极速开关和当前上下文占用；这些控制与占用状态不在顶部状态条或信息检查器重复呈现。上下文占用可展开查看已用量与总容量，但已加载来源仍由 Session 的 Context 面板负责。
+- 当前 Session Run 正在执行且没有等待用户输入或权限决定时，Composer 仍接受普通文本作为绑定当前 Session / Path 的 Queue Item。队列以 Composer 附近的最小表面显示顺序与待派发事实；派发前可查看、编辑、调整顺序或撤回，且不会进入 transcript、Pi Session 或模型上下文。
+- Follow-up Queue 不打断或 steer 当前 Run。只有前一 Run 取得正常收口证据、绑定的 Session / Path 未漂移且普通写入门禁成立时，D Code 才逐条交给 Host 派发；失败、中止、等待用户输入、等待权限、Host 中断或派发结果未知都会保留剩余队列并停止自动派发。完整 Run State、停止、重试与等待输入控制面从 `0.0.6` Interaction Dock 开始实现。
+- 从 `0.0.6` 起，会话栏铃铛在默认 Project / 置顶导航与 Activity View 间切换；活动投影优先显示可靠的等待、当前运行与带蓝点的新完成结果，其余可见 Session 按最后可证明活动时间排列。切换不替换 Conversation，也不创建页面、标签、Session 或后台运行。蓝点只表示最新完成结果尚未在 Conversation 成功呈现，打开活动列表本身不清除。
 - Composer 的 `+` 只承载“发送前加入本次请求”的可复用资源，首批为 Skills 与 Prompt Templates；`/` 面板承载一次性 Session / Extension commands；Settings 承载跨请求持久配置、安全与资源生命周期。
 - Settings 的模型页面复用 Pi 当前 Model Catalog（模型目录），按供应商展示模型、在线刷新 / 本机缓存状态、Pi 认证状态、默认模型以及“在 D Code 中启用”状态。Pi 原生 `enabledModels` 只定义模型循环规则；D Code 明确复用同一组规则约束 Composer 模型选择器与快捷切换，不把它外推成供应商或模型可用性。启停不会强制改写当前 Session 或历史消息记录的实际模型。
 - 自定义模型供应商通过 Pi `models.json` 的真实合同管理，并只支持当前 Pi 能解释的供应商、API（应用程序接口）与模型字段；认证继续交给 Pi 登录、认证文件或环境变量合同。D Code 不复制、展示或保存 API key（API 密钥）、OAuth token（OAuth 令牌）等凭据正文，配置校验失败时不得覆盖上一份可用定义。
-- 重命名、复制、归档、路径与谱系等 Session 动作继续使用原生会话菜单；不能因为 Pi TUI 存在某个内建斜杠命令就直接暴露，只有形成 D Code 原生合同后才进入 UI。该分层从 `0.0.5` 开始实现，不扩张 `0.0.4`。
+- 重命名、复制、归档、路径与谱系等 Session 动作继续使用原生会话菜单；不能因为 Pi TUI 存在某个内建斜杠命令就直接暴露，只有形成 D Code 原生合同后才进入 UI。该分层已由 `0.0.3` 建立并作为后续版本回归基线；`0.0.5` 不借消息队列扩张命令入口。
 - 消息下方就近提供复制文本、编辑并重走及从这里继续等动作；完整会话复制与归档放在 Session 操作中，避免把完整 Fork 误解为从单条消息截取历史。
 - 助手正文必须保留原始 Markdown 的段落、空行与列表换行；呈现样式不能改变复制得到的原始文本。
 - Pi 结构化 `image` 内容块以紧凑方形缩略图进入消息流，点击后在原生查看器中显示并缩放原图；原始图片仍只保存在 Pi Session JSONL，D Code 只做有界内存解码，不生成缓存或附件副本。任意远程 Markdown 图片不会自动加载，Composer 图片发送另行排期。
@@ -144,14 +148,18 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 ## Agent Team（智能体团队）
 
 - Agent Profile 是具有稳定身份和版本的可复用本机定义，包含名称、职责说明、可选默认工作范围与模型路由；完整目标态还可引用版本化 Skill 与 Permission Policy。创建、编辑或选择档案不会启动 Worker，也不会创建 Pi Session；编辑只影响未来运行。
-- Agent Team 属于当前 Session 的一次 Team Run，而不是独立 Task 导航层；活动团队保留派发时的 Session Path 来源，切换会话路径不伪装把运行中 Worker 热迁移到新上下文。
+- Agent Team 属于当前 Main Agent Session（主智能体会话）的一次 Team Run，而不是独立 Task 导航层；主 Pi Session 是团队协作根，每轮执行保留稳定主会话 ID 与派发时的 Session Path 来源，切换会话路径不伪装把运行中 Worker 热迁移到新上下文。同一主会话可以先后拥有多轮 Team Run。
 - Team Run 必须由用户或主智能体在明确边界下显式启动；短任务默认继续由单 Agent 完成。协调、执行与验证是当次任务职责，不是强制的固定档案类型；一个 Agent Profile 可在不同 Team Run 中承担不同职责。
+- 每个实际执行 Agent 工作的 Team Member Run 创建具有新稳定 ID 的 Child Agent Session（子智能体会话）；它不是主会话的新 Session Path，也不复用主会话 ID。D Code 持久记录主会话、Team Run、成员运行、子 Pi Session 与执行目录之间的关系，但主、子会话的消息和模型上下文仍分别由 Pi 权威保存。
+- 子会话默认从所属 Team Run 进入，不作为普通会话重复平铺到顶层 Recent 或 Project 会话列表；用户仍可显式进入并核对子会话历史。成员结束、Team Run 关闭或工作空间清理不会自动删除子 Pi Session。需要成为可恢复会话产物的结构化 Report 或证据必须经 Host 回到相应 Pi Session，或由该会话稳定引用，D Code 本机记录不得成为唯一副本。
 - 主智能体负责理解、派发、判断、中转和最终综合；成员负责有界工作项或证据问题。Finding、Request、指令与交接均由主智能体有界中转，首版不声称 Worker P2P、自组织依赖调度或自动合并。
-- 每个 Team Member Run 保存所用 Profile 版本、当次任务、实际模型、Effective Grant、声明写入范围、来源上下文、queued / running / waiting / completed / failed 状态、可见事件与结构化 Report；背后的 Worker Runtime 只属于 Host 运行期。
+- 每个 Team Member Run 保存所用 Profile 版本、当次任务、实际模型、Effective Grant、声明写入范围、来源上下文、子会话与执行目录引用、queued / running / waiting / completed / failed 状态、可见事件与结构化 Report；对应子 Pi Session 可以独立持久化，背后的模型生成、工具调用与 Worker Runtime 只属于 Host 运行期。
+- D Code 可以按主 Pi Session ID 建立受管执行命名空间，并在其下区分 Team Run 与子会话；目录只是执行映射，不是产品身份。具有写入能力的成员必须使用彼此隔离、且不与主会话共享的可写执行目录；Git 项目优先验证独立 worktree，Session Path 仍不绑定 Git 分支、快照或工作树。
+- 子会话只接收显式、有界的 Context Package，包括任务、必要来源、允许范围、基线、完成信号与回报格式；主会话完整历史不会因为父子关系被自动复制。D Code Harness 负责产品编排，不建立独立于各 Pi Session Agent Loop 的第二模型或工具循环。
 - 信息检查器负责团队概览、成员选择、当次职责、实际模型与工具授予、运行状态、当前活动、耗时 / 用量、卡住与重试；主工作区负责所选成员的 Finding、Request、控制记录、Verifier 退回原因与结构化 Report。
 - 主对话在运行中只突出当前活动和需要用户处理的 Request；成员已经结束的过程折叠进 Team Run，最终综合与结构化 Report 保持可见，不把成员日志重新铺满主对话。
 - Worker completed 只表示已收到合法结构化报告；Team Run closed 表示主智能体已综合并关闭本轮；Work Item done 仍需要验收条件或用户确认成立。三者不得自动逐级推导。
-- 对外呈现使用“工作轨迹”“发现”“请求”“控制”和“结论”；不展示隐藏的原始推理过程、完整 Worker Transcript 或凭据。运行时可以留在 Host 内存中，需要跨重启恢复的只是脱敏的可见事件、团队摘要与结构化报告。
+- 对外呈现使用“工作轨迹”“发现”“请求”“控制”和“结论”；不展示隐藏的原始推理过程、完整 Worker Transcript 或凭据。跨重启可以恢复主、子会话引用、未处理工作空间、脱敏可见事件、团队摘要与结构化报告，但不伪装恢复已经销毁的模型生成、工具调用或 Worker Runtime。
 - `pi-dteam`、`pi-intercom` 与 `pi-messenger` 只作为机制与呈现参考；Agent Team 的产品对象、数据合同、生命周期、Host IPC 和原生呈现由 D Code 自己定义，不要求用户安装它们，也不解析它们的 TUI。
 
 ## Cross-Session Collaboration（跨会话协作）
@@ -233,6 +241,7 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - [ ] 所有路径与复制操作都明确提示项目文件保持当前状态，不创建、切换或还原 Git 分支。
 - [ ] 普通复制后源 Session 继续可见；复制并归档只有在目标验证成功后隐藏源 Session，且归档源可恢复、Pi JSONL 不被删除或改写。
 - [ ] 置顶会话只在会话栏最上方的全局独立区域出现，并从 Recent / Project 普通列表去重；置顶不扩大可见集合且在分页前生效。普通会话行只常驻单行标题，悬停或键盘聚焦时显示完整标题、更新时间、Project、Source Folder、完整 `cwd` 与当前 Git 分支；同一路径可置顶或直接归档，右键菜单和 Session 菜单提供等价入口。直接归档不伪造复制目标，恢复后保留草稿和置顶状态。
+- [ ] 会话栏铃铛只在默认导航与同一可见 Session 集合的 Activity View 间切换；当前运行、等待处理、新完成蓝点和时间排序来自可靠状态。仅打开活动列表不清除蓝点，最新完成结果在 Conversation 成功呈现后才标记已查看；单活动 Session 架构不被伪装成后台多会话运行。
 - [ ] 助手 Markdown 中的标题、段落、空行、粗体、列表、引用、分隔线与表格按原结构显示；粗体结尾紧接中文时不暴露 `**` 标记，复制仍返回原始正文。
 - [ ] 已完成工作轮默认不常驻显示日期和耗时；整条最终回复悬停或键盘聚焦时，正文外显示“耗时 + 完成日期时间”，移出后隐藏且不引发布局跳动，VoiceOver 仍可读取。
 
@@ -243,6 +252,8 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - [ ] 执行状态和用户关注态同时可见且不互相覆盖；确认计划、回答问题和验收结果均有明确操作，不以失败或无限加载伪装。
 - [ ] Agent Profile 可独立创建和编辑稳定身份、名称、职责、可选默认工作范围与模型路由，且不会因保存档案而启动 Worker；同一档案可在不同 Team Run 中承担不同职责，修改也不会热更新在途成员。
 - [ ] D Team 只能显式启动，短任务仍可保持单 Agent；团队概览能显示成员职责与权限、排队 / 运行 / 等待 / 已报告 / 失败、当前活动、耗时 / 用量、卡住 / 重试、经主智能体中转的发现 / 请求 / 指令、Verifier 退回原因与结构化报告，同时不暴露隐藏推理、完整 Worker Transcript 或凭据。
+- [ ] 当前主 Pi Session 启动 Team Run 后，每个实际执行成员拥有新的子 Pi Session ID；D Code 能从主会话进入对应成员记录与子会话，并能证明主会话、来源路径、Team Run、Team Member Run、子会话和执行目录的关系，而不复制会话历史或把子会话重复平铺到顶层导航。
+- [ ] 具有写入能力的成员使用独立可写执行目录；重启后未处理工作空间与父子引用仍可恢复，运行中断不会被伪装为 Worker Runtime 已恢复，也不会自动重跑、合并或删除成果。
 - [ ] Worker 报告、Team Run 关闭与 Work Item 验收三种完成语义可独立判定，任一前置状态都不会自动推导后续完成。
 - [ ] 跨会话消息保留稳定身份、来源、目标、引用、送达、已读与失败状态；重试幂等，重启后可恢复，且不会被呈现为普通用户消息。
 
@@ -262,6 +273,7 @@ D Code 必须在不建立第二套会话权威的前提下，提供由用户掌�
 - 在本文中规定具体存储格式、索引引擎、IPC 字段、分页游标或 Swift 类型。
 - 让一个 Source Folder 同时属于多个 Project。
 - 把 Session Path 与 Git 分支、文件快照或工作树绑定。
+- 让主会话与多个子会话同时写入同一个执行目录，或把系统 `/tmp` 作为未处理成果的耐久存储。
 - 搜索隐藏 thinking、原始工具日志或凭据正文。
 - 以 HTML 原型代替原生 App 的实现、自动测试或人工验收。
 

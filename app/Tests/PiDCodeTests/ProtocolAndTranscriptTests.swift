@@ -277,10 +277,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testAboutMetadataUsesBundleVersionAndCanonicalGitHubLinks() {
         XCTAssertEqual(
             AboutAppMetadata.versionText(infoDictionary: [
-                "CFBundleShortVersionString": "0.0.4",
-                "CFBundleVersion": "4",
+                "CFBundleShortVersionString": "0.0.5",
+                "CFBundleVersion": "5",
             ]),
-            "版本 0.0.4（4）"
+            "版本 0.0.5（5）"
         )
         XCTAssertEqual(AboutAppMetadata.versionText(infoDictionary: [:]), "版本未知")
         XCTAssertEqual(AboutAppMetadata.authorURL.absoluteString, "https://github.com/ssdiwu")
@@ -1210,12 +1210,13 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionTrash"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionVisibilityExclusions"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRename"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRunCorrelation"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.4",
+            hostVersion: "0.0.5",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1236,7 +1237,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.4",
+            hostVersion: "0.0.5",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1451,6 +1452,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True,
             "sessionRename": True,
+            "sessionRunCorrelation": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -1461,7 +1463,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.4",
+                    "hostVersion": "0.0.5",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1532,8 +1534,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         await model.shutdown()
     }
 
-    func testCreatedSessionAppearsBeforeThePreviousRuntimeFinishesOpeningIt() async throws {
-        let root = temporaryURL("create-before-open")
+    func testNewSessionStaysLocalUntilTheFirstPromptIsSubmitted() async throws {
+        let root = temporaryURL("lazy-session-create")
         let workspace = root.appending(path: "workspace", directoryHint: .isDirectory)
         let agentDirectory = root.appending(path: "agent", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -1561,8 +1563,11 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True,
             "sessionRename": True,
+            "sessionRunCorrelation": True,
         }
         agent_dir = sys.argv[2]
+        create_marker = os.path.join(agent_dir, "create-requested")
+        prompt_marker = os.path.join(agent_dir, "prompt-requested")
         open_marker = os.path.join(agent_dir, "open-started")
         open_gate = os.path.join(agent_dir, "allow-open")
         stale_list_marker = os.path.join(agent_dir, "stale-list-started")
@@ -1580,6 +1585,15 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                     "method": request["method"],
                     "ok": True,
                     "result": result,
+                }), flush=True)
+
+        def emit_event(event, data):
+            with output_lock:
+                print(json.dumps({
+                    "version": 1,
+                    "type": "event",
+                    "event": event,
+                    "data": data,
                 }), flush=True)
 
         def emit_stale_list(request):
@@ -1606,7 +1620,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.4",
+                    "hostVersion": "0.0.5",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1619,6 +1633,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                     continue
                 result = {"sessions": [] if created is None else [created]}
             elif method == "session.create":
+                open(create_marker, "w").close()
                 created = summary(params["cwd"])
                 result = {"created": True, "session": created, "activation": {"status": "created"}}
             elif method == "session.open":
@@ -1626,22 +1641,23 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                 deadline = time.time() + 2.0
                 while not os.path.exists(open_gate) and time.time() < deadline:
                     time.sleep(0.01)
+                writable = params.get("mode") == "writable"
                 result = {
-                    "mode": "readOnly",
+                    "mode": "writable" if writable else "readOnly",
                     "snapshot": {
                         "summary": created,
                         "header": {"type": "session", "version": 3, "id": created["id"], "cwd": created["cwd"]},
                         "parentSessionId": None,
                         "leafId": None,
-                        "currentPathId": created["id"],
-                        "selectedPathId": created["id"],
+                        "currentPathId": "root",
+                        "selectedPathId": "root",
                         "paths": [],
                         "entries": [],
                         "context": {"messageCount": 0, "model": None, "thinkingLevel": "off"},
                         "activePlan": None,
                     },
                     "state": {
-                        "mode": "readOnly",
+                        "mode": "writable" if writable else "readOnly",
                         "sessionId": created["id"],
                         "sessionFile": created["path"],
                         "sessionName": None,
@@ -1653,7 +1669,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                         "pendingMessageCount": 0,
                         "contextUsage": None,
                         "fastMode": None,
-                        "writable": False,
+                        "writable": writable,
                         "conflict": None,
                     },
                     "extensions": None,
@@ -1671,6 +1687,18 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                 result = {"models": []}
             elif method == "session.getThinkingLevels":
                 result = {"levels": ["off"]}
+            elif method == "session.getCommands":
+                result = {"commands": []}
+            elif method == "session.prompt":
+                open(prompt_marker, "w").close()
+                prompt_id = params["promptId"]
+                emit_event("session.promptCompleted", {
+                    "sessionId": created["id"],
+                    "promptId": prompt_id,
+                    "outcome": "persisted",
+                    "entryId": "user-first",
+                })
+                result = {"accepted": True, "completed": False}
             else:
                 result = {"shuttingDown": True}
             emit(request, result)
@@ -1695,6 +1723,45 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         await model.start()
         XCTAssertEqual(model.connectionState, .ready)
 
+        await model.createSession(at: workspace)
+        XCTAssertTrue(model.isNewSessionDraftActive)
+        XCTAssertNil(model.selectedSessionID)
+        XCTAssertTrue(model.recentSessions.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
+
+        await model.selectProject(UUID())
+        XCTAssertFalse(model.isNewSessionDraftActive)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
+
+        await model.createSession(at: workspace)
+        model.updateComposerText("第一条真实消息")
+        await model.selectProject(UUID())
+        try await Task.sleep(for: .milliseconds(250))
+        let parkedDrafts = try await draftStore.load()
+        XCTAssertEqual(
+            parkedDrafts.newSessionDraft,
+            NewSessionDraft(directoryPath: workspace.path, text: "第一条真实消息")
+        )
+        let restoredModel = AppModel(
+            projectStore: ProjectStore(fileURL: root.appending(path: "restored-projects.json")),
+            sessionDraftStore: draftStore,
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "restored-archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "restored-pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "restored-changes.json")),
+            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "restored-queues.json"))
+        )
+        let restoredMetadataLoaded = await restoredModel.loadSessionMetadata()
+        XCTAssertTrue(restoredMetadataLoaded)
+        XCTAssertEqual(
+            restoredModel.newSessionDraft,
+            NewSessionDraft(directoryPath: workspace.path, text: "第一条真实消息")
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
+
+        await model.createSession(at: workspace)
+        XCTAssertTrue(model.isNewSessionDraftActive)
+        XCTAssertEqual(model.composerText, "第一条真实消息")
+
         let staleReloadTask = Task { await model.reloadRecentSessions() }
         let staleListMarker = agentDirectory.appending(path: "stale-list-started")
         for _ in 0..<100 where !FileManager.default.fileExists(atPath: staleListMarker.path) {
@@ -1702,12 +1769,13 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: staleListMarker.path))
 
-        let createTask = Task { await model.createSession(at: workspace) }
+        let sendTask = Task { await model.sendPrompt() }
         let marker = agentDirectory.appending(path: "open-started")
         for _ in 0..<100 where !FileManager.default.fileExists(atPath: marker.path) {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
         XCTAssertTrue(model.recentSessions.contains(where: { $0.id == "created-session" }))
         XCTAssertTrue(model.isCreatingSession)
         XCTAssertTrue(model.isOpeningSession)
@@ -1717,23 +1785,119 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(model.recentSessions.contains(where: { $0.id == "created-session" }))
 
         try Data().write(to: agentDirectory.appending(path: "allow-open"))
-        await createTask.value
+        await sendTask.value
         XCTAssertEqual(model.selectedSessionID, "created-session")
+        XCTAssertFalse(model.isNewSessionDraftActive)
         XCTAssertFalse(model.isCreatingSession)
-
-        let createdSummary = try XCTUnwrap(model.recentSessions.first(where: { $0.id == "created-session" }))
-        model.updateComposerText("尚未发送的草稿")
-        model.requestTrashSession(createdSummary)
-        XCTAssertEqual(model.pendingTrashSession?.id, createdSummary.id)
-        model.pendingTrashSession = nil
-        await model.trashSession(createdSummary)
-        XCTAssertFalse(model.recentSessions.contains(where: { $0.id == createdSummary.id }))
-        XCTAssertNil(model.selectedSessionID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "prompt-requested").path))
         XCTAssertNil(model.issue)
 
         await model.shutdown()
         let savedDrafts = try await draftStore.load()
-        XCTAssertFalse(savedDrafts.records.contains(where: { $0.target.sessionID == createdSummary.id }))
+        XCTAssertNil(savedDrafts.newSessionDraft)
+        XCTAssertFalse(savedDrafts.records.contains(where: { $0.target.sessionID == "created-session" }))
+    }
+
+    func testNewSessionDoesNotOpenWhenDraftOwnershipTransferCannotPersist() async throws {
+        let root = temporaryURL("lazy-session-transfer-failure")
+        let workspace = root.appending(path: "workspace", directoryHint: .isDirectory)
+        let agentDirectory = root.appending(path: "agent", directoryHint: .isDirectory)
+        let draftDirectory = root.appending(path: "draft-store", directoryHint: .isDirectory)
+        let draftFile = draftDirectory.appending(path: "drafts.json")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let script = root.appending(path: "transfer-failure-host.py")
+        let source = #"""
+        import json, os, sys
+
+        capabilities = {
+            "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
+            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True,
+            "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
+            "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
+            "sessionTrash": True, "sessionVisibilityExclusions": True,
+            "sessionChangeLedger": True, "sessionRename": True,
+            "sessionRunCorrelation": True,
+        }
+        agent_dir = sys.argv[2]
+        created = None
+
+        def respond(request, result=None, error=None):
+            envelope = {
+                "version": 1, "type": "response", "id": request["id"],
+                "method": request["method"], "ok": error is None,
+            }
+            if error is None:
+                envelope["result"] = result
+            else:
+                envelope["error"] = {"code": "TEST_OPENED", "message": error}
+            print(json.dumps(envelope), flush=True)
+
+        for line in sys.stdin:
+            request = json.loads(line)
+            method = request["method"]
+            params = request.get("params", {})
+            if method == "host.hello":
+                respond(request, {
+                    "protocolVersion": 1, "hostVersion": "0.0.5", "piVersion": "0.84.1",
+                    "nodeVersion": "test", "capabilities": capabilities,
+                })
+            elif method == "session.list":
+                respond(request, {"sessions": [] if created is None else [created]})
+            elif method == "session.create":
+                created = {
+                    "path": os.path.join(params["cwd"], "created-session.jsonl"),
+                    "id": "created-session", "cwd": params["cwd"],
+                    "created": "2026-08-15T09:00:00Z", "modified": "2026-08-15T09:00:00Z",
+                    "messageCount": 0, "firstMessage": "",
+                }
+                open(os.path.join(agent_dir, "create-requested"), "w").close()
+                respond(request, {"created": True, "session": created, "activation": {"status": "created"}})
+            elif method == "session.open":
+                open(os.path.join(agent_dir, "open-requested"), "w").close()
+                respond(request, error="Draft transfer should have stopped before session.open")
+            else:
+                respond(request, {"shuttingDown": True})
+            if method == "host.shutdown":
+                break
+        """#
+        try source.write(to: script, atomically: true, encoding: .utf8)
+
+        let draftStore = SessionDraftStore(fileURL: draftFile)
+        let model = AppModel(
+            projectStore: ProjectStore(fileURL: root.appending(path: "projects.json")),
+            sessionDraftStore: draftStore,
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "queues.json")),
+            hostConfiguration: HostLaunchConfiguration(
+                nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
+                hostEntryURL: script,
+                agentDirectoryURL: agentDirectory
+            )
+        )
+        await model.start()
+        XCTAssertEqual(model.connectionState, .ready)
+        await model.createSession(at: workspace)
+        model.updateComposerText("必须保留的第一条消息")
+        try await Task.sleep(for: .milliseconds(250))
+        let storedBeforeFailure = try await draftStore.load()
+        XCTAssertEqual(storedBeforeFailure.newSessionDraft?.text, "必须保留的第一条消息")
+
+        try FileManager.default.removeItem(at: draftDirectory)
+        XCTAssertTrue(FileManager.default.createFile(atPath: draftDirectory.path, contents: Data()))
+
+        await model.sendPrompt()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "open-requested").path))
+        XCTAssertTrue(model.recentSessions.contains(where: { $0.id == "created-session" }))
+        XCTAssertEqual(model.issue?.title, "会话已创建，但首次消息尚未发送")
+        XCTAssertEqual(model.composerText, "必须保留的第一条消息")
+        await model.shutdown()
     }
 
     func testDiagnosticSanitizerRedactsCommonCredentialShapes() {

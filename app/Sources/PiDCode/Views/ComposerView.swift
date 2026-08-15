@@ -4,6 +4,7 @@ struct ComposerView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
     @State private var showingContext = false
+    @State private var showingFollowUpQueue = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +22,22 @@ struct ComposerView: View {
     private func composer(text: Binding<String>) -> some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
+                if let followUpQueueIssue = model.followUpQueueIssue {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Label(followUpQueueIssue, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("后续消息队列不可写：\(followUpQueueIssue)")
+                        Button("重新载入") {
+                            Task { await model.reloadFollowUpQueues() }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(model.isMutatingFollowUpQueue)
+                        .help("修复或恢复原文件后重新载入后续消息队列")
+                        .accessibilityLabel("重新载入后续消息队列")
+                    }
+                }
                 if let draftStoreIssue = model.draftStoreIssue {
                     Label(draftStoreIssue, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -46,8 +63,11 @@ struct ComposerView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
+                if let queue = model.currentFollowUpQueue {
+                    followUpQueue(queue)
+                }
                 TextField(
-                    "交给 D Code 一项工作，或输入 / 使用命令",
+                    composerPlaceholder,
                     text: text,
                     axis: .vertical
                 )
@@ -56,14 +76,19 @@ struct ComposerView: View {
                 .lineLimit(3...7)
                 .frame(minHeight: 66, maxHeight: 126, alignment: .topLeading)
                 .focused($focused)
-                .disabled(model.isSendingRequest || model.pendingPrompt != nil)
+                .disabled(
+                    model.isCreatingSession
+                        || model.isSendingRequest
+                        || model.pendingPrompt != nil
+                        || model.isMutatingFollowUpQueue
+                )
                 .accessibilityLabel("消息输入")
 
                 runtimeControls
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .dCodeFloatingSurface(cornerRadius: 16, accented: focused)
+            .dCodeFloatingSurface(cornerRadius: 16)
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
@@ -84,6 +109,7 @@ struct ComposerView: View {
             }
             .help("查看上下文占用")
             .accessibilityLabel("上下文占用：\(contextAccessibilityLabel)")
+            .disabled(model.isNewSessionDraftActive)
 
             Button {
                 Task { await model.toggleFastMode() }
@@ -96,12 +122,40 @@ struct ComposerView: View {
             .buttonStyle(.borderless)
             .accessibilityLabel(fastAccessibilityLabel)
             .help(fastHelp)
-            .disabled(model.pendingPathDraft != nil || model.isPromptTransactionActive)
+            .disabled(
+                model.isNewSessionDraftActive
+                    || model.pendingPathDraft != nil
+                    || model.isPromptTransactionActive
+            )
 
             Spacer(minLength: 4)
 
             modelAndThinkingMenu
-                .disabled(model.pendingPathDraft != nil || model.isPromptTransactionActive)
+                .disabled(
+                    model.isNewSessionDraftActive
+                        || model.pendingPathDraft != nil
+                        || model.isPromptTransactionActive
+                )
+
+            if model.shouldQueueComposerText {
+                Button {
+                    Task { await model.sendPrompt() }
+                } label: {
+                    Image(systemName: "text.badge.plus")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(
+                            width: PiDCodeMetrics.prominentIconActionTarget,
+                            height: PiDCodeMetrics.prominentIconActionTarget
+                        )
+                        .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!sendEnabled)
+                .help("加入后续消息（⌘↩）")
+                .accessibilityLabel("加入后续消息队列")
+            }
 
             if model.isStreaming {
                 Button {
@@ -118,7 +172,7 @@ struct ComposerView: View {
                 .buttonStyle(.plain)
                 .help("停止当前运行")
                 .accessibilityLabel("停止当前运行")
-            } else {
+            } else if !model.shouldQueueComposerText {
                 Button {
                     Task { await model.sendPrompt() }
                 } label: {
@@ -135,10 +189,100 @@ struct ComposerView: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!sendEnabled)
                 .help("发送（⌘↩）")
-                .accessibilityLabel(model.pendingPathDraft == nil ? "发送消息" : "发送并创建新路径")
+                .accessibilityLabel(
+                    model.isNewSessionDraftActive
+                        ? "发送并创建会话"
+                        : (model.pendingPathDraft == nil ? "发送消息" : "发送并创建新路径")
+                )
             }
         }
         .font(.caption)
+    }
+
+    private func followUpQueue(_ queue: FollowUpQueueRecord) -> some View {
+        DisclosureGroup(isExpanded: $showingFollowUpQueue) {
+            VStack(alignment: .leading, spacing: 8) {
+                if queue.items.isEmpty, queue.activeRunID != nil {
+                    Label("当前后续消息已进入会话，正在等待本轮正常收口。", systemImage: "hourglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(Array(queue.items.enumerated()), id: \.element.id) { index, item in
+                    FollowUpQueueItemRow(
+                        queueID: queue.id,
+                        item: item,
+                        position: index + 1,
+                        canMoveUp: index > 0 && queue.items[index - 1].state == .pending,
+                        canMoveDown: index + 1 < queue.items.count
+                            && queue.items[index + 1].state == .pending
+                    )
+                }
+                if let pauseReason = queue.pauseReason {
+                    followUpPauseControls(queue: queue, reason: pauseReason)
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: queue.pauseReason == nil ? "text.line.first.and.arrowtriangle.forward" : "pause.circle")
+                Text(followUpQueueLabel(queue))
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 8)
+                if let pauseReason = queue.pauseReason {
+                    Text(pauseReason.label)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        }
+        .accessibilityLabel("后续消息队列，共 \(queue.items.count) 项")
+    }
+
+    @ViewBuilder
+    private func followUpPauseControls(
+        queue: FollowUpQueueRecord,
+        reason: FollowUpQueuePauseReason
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(reason.label, systemImage: "exclamationmark.circle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            switch reason {
+            case .dispatchUnknown:
+                Text("先在会话历史中核对队首正文是否已经出现，再选择结果。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("未进入会话") {
+                        Task { await model.resolveUnknownDispatch(queue.id, wasPersisted: false) }
+                    }
+                    Button("已进入会话") {
+                        Task { await model.resolveUnknownDispatch(queue.id, wasPersisted: true) }
+                    }
+                }
+            case .runOutcomeUnknown:
+                Text("确认上一轮已经停止，且当前路径内容完整后，再解除等待。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("已核对上一轮") {
+                    Task { await model.resolveUnknownRun(queue.id) }
+                }
+            default:
+                Button("继续派发") {
+                    Task { await model.resumeFollowUpQueue(queue.id) }
+                }
+                .disabled(model.isStreaming || model.isMutatingFollowUpQueue)
+            }
+        }
+        .buttonStyle(.borderless)
     }
 
     private var modelAndThinkingMenu: some View {
@@ -256,14 +400,13 @@ struct ComposerView: View {
     }
 
     private var sendEnabled: Bool {
-        !model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.isSendingRequest
-            && model.pendingPrompt == nil
-            && !model.isStreaming
+        model.canSubmitComposerText
     }
 
     private var commandSuggestions: [CommandDescriptor] {
-        guard model.canWrite, model.composerText.hasPrefix("/") else { return [] }
+        guard !model.shouldQueueComposerText,
+              model.canWrite,
+              model.composerText.hasPrefix("/") else { return [] }
         let fragment = model.composerText.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
         guard !model.composerText.contains(" ") else { return [] }
         return model.availableCommands.filter { fragment.isEmpty || $0.name.localizedCaseInsensitiveContains(fragment) }
@@ -305,6 +448,20 @@ struct ComposerView: View {
         return fast.enabled ? .accentColor : .secondary
     }
 
+    private var composerPlaceholder: String {
+        if model.isNewSessionDraftActive {
+            return "输入第一条消息；发送后才会创建 Pi 会话"
+        }
+        return model.shouldQueueComposerText
+            ? "写下下一步，加入后续消息队列"
+            : "交给 D Code 一项工作，或输入 / 使用命令"
+    }
+
+    private func followUpQueueLabel(_ queue: FollowUpQueueRecord) -> String {
+        if queue.items.isEmpty, queue.activeRunID != nil { return "后续消息运行中" }
+        return "后续消息 \(queue.items.count)"
+    }
+
     private func thinkingLabel(_ value: String?) -> String {
         switch value {
         case "off": "关闭"
@@ -317,5 +474,121 @@ struct ComposerView: View {
         case let value?: value
         case nil: "思考"
         }
+    }
+}
+
+private struct FollowUpQueueItemRow: View {
+    @Environment(AppModel.self) private var model
+    let queueID: String
+    let item: FollowUpQueueItem
+    let position: Int
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+
+    @State private var editing = false
+    @State private var editedText: String
+
+    init(
+        queueID: String,
+        item: FollowUpQueueItem,
+        position: Int,
+        canMoveUp: Bool,
+        canMoveDown: Bool
+    ) {
+        self.queueID = queueID
+        self.item = item
+        self.position = position
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
+        _editedText = State(initialValue: item.text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(position)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, alignment: .trailing)
+                Text(item.state.label)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(item.state == .unknown ? .orange : .secondary)
+                Spacer()
+                if item.state == .pending, !editing {
+                    Button {
+                        editedText = item.text
+                        editing = true
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .help("编辑第 \(position) 条后续消息")
+                    .accessibilityLabel("编辑第 \(position) 条后续消息")
+                    Button {
+                        Task { await model.moveFollowUpItem(queueID: queueID, itemID: item.id, offset: -1) }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .disabled(!canMoveUp || model.isMutatingFollowUpQueue)
+                    .help("上移第 \(position) 条后续消息")
+                    .accessibilityLabel("上移第 \(position) 条后续消息")
+                    Button {
+                        Task { await model.moveFollowUpItem(queueID: queueID, itemID: item.id, offset: 1) }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .disabled(!canMoveDown || model.isMutatingFollowUpQueue)
+                    .help("下移第 \(position) 条后续消息")
+                    .accessibilityLabel("下移第 \(position) 条后续消息")
+                    Button(role: .destructive) {
+                        Task { await model.removeFollowUpItem(queueID: queueID, itemID: item.id) }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(model.isMutatingFollowUpQueue)
+                    .help("撤回第 \(position) 条后续消息")
+                    .accessibilityLabel("撤回第 \(position) 条后续消息")
+                }
+            }
+            if editing {
+                TextField("后续消息正文", text: $editedText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...8)
+                HStack {
+                    Spacer()
+                    Button("取消") {
+                        editedText = item.text
+                        editing = false
+                    }
+                    Button("保存") {
+                        let text = editedText
+                        Task {
+                            await model.editFollowUpItem(queueID: queueID, itemID: item.id, text: text)
+                            if model.followUpQueues
+                                .flatMap(\.items)
+                                .first(where: { $0.id == item.id })?.text == text {
+                                editing = false
+                            }
+                        }
+                    }
+                    .disabled(
+                        editedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || editedText == item.text
+                            || model.isMutatingFollowUpQueue
+                    )
+                }
+            } else {
+                Text(item.text)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        .buttonStyle(.borderless)
+        .onChange(of: item.text) { _, newValue in
+            if !editing { editedText = newValue }
+        }
+        .accessibilityElement(children: .contain)
     }
 }

@@ -235,6 +235,20 @@ final class SessionPathAndArchiveTests: XCTestCase {
         }
     }
 
+    func testDraftStoreLoadsVersionOneDocumentsWrittenBeforeNewSessionDrafts() async throws {
+        let root = temporaryDirectory("legacy-draft-document")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileURL = root.appending(path: "drafts.json")
+        try Data(#"{"activeTargets":{},"records":[],"version":1}"#.utf8).write(to: fileURL)
+
+        let document = try await SessionDraftStore(fileURL: fileURL).load()
+
+        XCTAssertTrue(document.records.isEmpty)
+        XCTAssertTrue(document.activeTargets.isEmpty)
+        XCTAssertNil(document.newSessionDraft)
+    }
+
     func testArchiveStoreRoundTripsAndFailsClosedWithoutOverwritingUnknownData() async throws {
         let root = temporaryDirectory("archive-store")
         defer { try? FileManager.default.removeItem(at: root) }

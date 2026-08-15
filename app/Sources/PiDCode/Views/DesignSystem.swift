@@ -53,7 +53,6 @@ private struct DCodeFloatingSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     let cornerRadius: CGFloat
-    let accented: Bool
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -62,10 +61,8 @@ private struct DCodeFloatingSurfaceModifier: ViewModifier {
             .clipShape(shape)
             .overlay {
                 shape.strokeBorder(
-                    accented
-                        ? Color.accentColor.opacity(0.58)
-                        : Color.primary.opacity(0.11),
-                    lineWidth: accented ? 1.5 : 1
+                    Color.primary.opacity(0.11),
+                    lineWidth: 1
                 )
             }
             .shadow(
@@ -191,10 +188,9 @@ extension View {
     }
 
     func dCodeFloatingSurface(
-        cornerRadius: CGFloat = PiDCodeMetrics.floatingSurfaceRadius,
-        accented: Bool = false
+        cornerRadius: CGFloat = PiDCodeMetrics.floatingSurfaceRadius
     ) -> some View {
-        modifier(DCodeFloatingSurfaceModifier(cornerRadius: cornerRadius, accented: accented))
+        modifier(DCodeFloatingSurfaceModifier(cornerRadius: cornerRadius))
     }
 
     func dCodeSidebarSurface() -> some View {

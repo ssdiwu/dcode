@@ -1169,6 +1169,11 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;/div&gt;
 
         &lt;div class=&quot;de-composer&quot; id=&quot;de-composer&quot;&gt;
+          &lt;div class=&quot;de-queue-summary&quot; id=&quot;de-queue-summary&quot; hidden&gt;
+            &lt;i data-lucide=&quot;list-plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+            &lt;span&gt;&lt;strong&gt;后续队列 · 2 条待派发&lt;/strong&gt;&lt;small&gt;绑定当前路径 · 可编辑、调整顺序或撤回&lt;/small&gt;&lt;/span&gt;
+            &lt;button type=&quot;button&quot;&gt;查看&lt;/button&gt;
+          &lt;/div&gt;
           &lt;div class=&quot;de-path-draft&quot; id=&quot;de-path-draft&quot; hidden&gt;
             &lt;i data-lucide=&quot;route&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
             &lt;span&gt;&lt;strong&gt;新会话路径草稿&lt;/strong&gt;&lt;small id=&quot;de-path-draft-origin&quot;&gt;从 11:21 的回复继续 · 尚未创建 · 原路径保留&lt;/small&gt;&lt;/span&gt;
@@ -1709,6 +1714,11 @@ html&gt;body{padding:0}&lt;/style&gt;
     #dcode-version-evolution .de-composer textarea { min-height: 42px; padding: 0; color: var(--de-text); font: inherit; resize: none; background: transparent; border: 0; }
     #dcode-version-evolution .de-composer textarea::placeholder { color: var(--de-secondary); }
     #dcode-version-evolution .de-composer textarea[aria-invalid=&quot;true&quot;] { box-shadow: inset 0 -1px 0 var(--de-accent); }
+    #dcode-version-evolution .de-queue-summary { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; color: var(--de-text); background: var(--de-toolbar); border: 1px solid var(--de-border); border-radius: 8px; }
+    #dcode-version-evolution .de-queue-summary &gt; span { display: grid; min-width: 0; gap: 2px; }
+    #dcode-version-evolution .de-queue-summary small { overflow: hidden; color: var(--de-secondary); text-overflow: ellipsis; white-space: nowrap; }
+    #dcode-version-evolution .de-queue-summary button { padding: 4px 7px; color: var(--de-secondary); background: transparent; border-radius: 6px; }
+    #dcode-version-evolution .de-queue-summary button:hover { color: var(--de-text); background: var(--de-hover); }
     #dcode-version-evolution .de-path-draft { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; color: var(--de-accent); background: var(--de-accent-soft); border: 1px solid var(--de-border); border-radius: 8px; }
     #dcode-version-evolution .de-path-draft &gt; span { display: grid; min-width: 0; gap: 2px; }
     #dcode-version-evolution .de-path-draft small { overflow: hidden; color: var(--de-secondary); text-overflow: ellipsis; white-space: nowrap; }
@@ -2014,22 +2024,20 @@ html&gt;body{padding:0}&lt;/style&gt;
         },
         &#x27;0.0.5&#x27;: {
           title: &#x27;后续消息队列&#x27;,
-          summary: &#x27;当前 Agent 运行时继续接收意图；尚未派发的消息有明确顺序且可调整或撤回。&#x27;,
+          summary: &#x27;当前 Agent 运行时继续接收意图；尚未派发的普通文本在 Composer 附近可见、可管理。&#x27;,
           mode: &#x27;conversation&#x27;,
-          right: &#x27;milestone&#x27;,
+          right: &#x27;files&#x27;,
           projectFiles: true,
           projectInspector: true,
-          sessionRight: &#x27;milestone&#x27;,
+          sessionRight: &#x27;overview&#x27;,
           paths: true,
-          milestoneTitle: &#x27;Follow-up Queue · 2 条待派发&#x27;,
-          milestoneBody: &#x27;当前回合继续运行；后续消息只排队，不伪装成已执行。&#x27;,
-          milestoneBoundary: &#x27;不引入多 Agent 或长期工作项。&#x27;,
+          queue: true,
           messageHeading: &#x27;运行中也能继续表达下一步&#x27;,
-          messageBody: &#x27;后续消息进入可见队列；当前回合安全结束后才按顺序继续，不用打断正在完成的工作。&#x27;
+          messageBody: &#x27;后续消息只在本机待派发；当前回合正常收口后才按顺序继续，失败、等待或身份变化都会停住。&#x27;
         },
         &#x27;0.0.6&#x27;: {
-          title: &#x27;运行状态与交互坞&#x27;,
-          summary: &#x27;当前活动、后续队列、等待输入、停止与重试集中到 Composer 附近的连续控制面。&#x27;,
+          title: &#x27;活动视图与运行状态&#x27;,
+          summary: &#x27;铃铛切换到活动视图：真实运行与等待优先，新完成结果显示蓝点，其余会话按活动时间排列；当前控制收敛到 Composer 附近。&#x27;,
           mode: &#x27;conversation&#x27;,
           right: &#x27;milestone&#x27;,
           projectFiles: true,
@@ -2037,11 +2045,11 @@ html&gt;body{padding:0}&lt;/style&gt;
           sessionRight: &#x27;milestone&#x27;,
           paths: true,
           runtime: true,
-          milestoneTitle: &#x27;Interaction Dock · 正在验证&#x27;,
-          milestoneBody: &#x27;当前活动、队列和等待用户输入使用不同状态，不再分散到多个临时提示。&#x27;,
-          milestoneBoundary: &#x27;仍是当前 Session 的运行控制，不是 Goal 调度器。&#x27;,
-          messageHeading: &#x27;始终看得懂现在发生了什么&#x27;,
-          messageBody: &#x27;当前动作、下一条消息、停止原因和可执行控制形成一条连续状态，而不是只剩“正在运行”。&#x27;
+          milestoneTitle: &#x27;Activity View + Interaction Dock&#x27;,
+          milestoneBody: &#x27;左侧发现当前运行、等待与尚未查看的新完成结果；Composer 附近统一当前活动、队列和用户控制。&#x27;,
+          milestoneBoundary: &#x27;仍只有一个本实例拥有的活动 Session，不是后台多会话或 Goal 调度器。&#x27;,
+          messageHeading: &#x27;知道哪个 Agent 正在做什么&#x27;,
+          messageBody: &#x27;默认导航继续按 Project 组织；活动视图按可靠状态和时间组织，蓝点只在最新完成结果真正呈现后消除。&#x27;
         },
         &#x27;0.0.7&#x27;: {
           title: &#x27;项目信任与动作权限&#x27;,
@@ -2342,6 +2350,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       var conversation = root.querySelector(&#x27;#de-conversation&#x27;);
       var planStrip = root.querySelector(&#x27;#de-plan-strip&#x27;);
       var composer = root.querySelector(&#x27;#de-composer&#x27;);
+      var queueSummary = root.querySelector(&#x27;#de-queue-summary&#x27;);
       var filePreview = root.querySelector(&#x27;#de-file-preview&#x27;);
       var filePreviewSource = root.querySelector(&#x27;#de-file-preview-source&#x27;);
       var filePreviewPath = root.querySelector(&#x27;#de-file-preview-path&#x27;);
@@ -3244,6 +3253,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         root.querySelector(&#x27;#de-plan-strip&#x27;).hidden = false;
         root.querySelector(&#x27;#de-communication&#x27;).hidden = !state.communication;
         root.querySelector(&#x27;#de-runtime-strip&#x27;).hidden = !state.runtime;
+        queueSummary.hidden = !state.queue;
         root.querySelector(&#x27;#de-inspector-button&#x27;).hidden = !state.right;
 
         if (state.messageHeading) {

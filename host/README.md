@@ -20,6 +20,7 @@
 - 通过 Pi SDK 持久修改当前 Session Name，同一名称供 Pi、D Code 左栏、搜索与窗口顶部使用；空名称恢复 Pi 的自动标题；
 - 既有会话先以共享观察态打开：Host 只轮询当前文件身份，变化时通知 App 从已知路径刷新；发送或修改运行设置时再以写入意图取得 Session Lease，并持续检测外部写入；
 - 使用固定 Pi SDK 加载现有 settings、模型、会话、流式事件及可兼容的结构化扩展能力；
+- 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，Host 不另建产品队列；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；

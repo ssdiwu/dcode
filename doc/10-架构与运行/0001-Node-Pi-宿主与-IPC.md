@@ -89,7 +89,7 @@ open "dist/D Code.app"
 | `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照和路径摘要；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配 Source Folder，`excludedSessionIds` 在分页前排除归档对象；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
 | `session.search` | 在独立 Worker 中查询可见会话本机索引；请求携带完整 Project Source Folder 范围、归档排除 ID 与可选筛选范围，Host 在排序、分组和 `limit` 前再次强制可见性；搜索本身不打开会话、不创建租约 |
 | `session.refresh` | 从当前活动会话的已知规范路径读取最新快照，不重新扫描全部 Session 目录；用于外部 Pi 条目落盘后的合并刷新 |
-| `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建并立即返回，不扫描全库、不创建 Lease、不加载扩展，也不关闭当前 Runtime；App 随后用独立 `session.open` 安全切换 |
+| `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建并立即返回，不扫描全库、不创建 Lease、不加载扩展，也不关闭当前 Runtime；从 `0.0.5` 起 App 只在本地会话前草稿首次提交非空正文时调用，随后用独立 writable `session.open` 与 `session.prompt` 发送 |
 | `session.open`、`session.close` | 打开内部观察态或可写会话并管理生命周期；可选 `pathId` 让历史路径观察与可写 runtime 使用同一叶节点；既有会话的 writable 请求必须携带本次 Write Intent |
 | `session.setName` | 在当前会话空闲、Lease 稳定时调用 Pi SDK 写入 Session Name；空字符串恢复自动名称，单行名称最多 200 个 UTF-16 code unit |
 | `session.trash` | 只将唯一、空的 D Code 创建 Session 移入当前 macOS 用户废纸篓；取得临时 Lease 后再次校验身份、来源、消息数和子会话关系，失败不执行永久删除 |
@@ -130,7 +130,7 @@ open "dist/D Code.app"
 ## 会话路径、草稿与复制归档
 
 - Host 从同一 JSONL 的终端叶节点投影 Session Path；只读查看路径不会改变 Pi runtime。真正发送路径草稿前，Host 通过 Pi 的 tree lifecycle 切换到指定节点，并在租约前后复核源文件；路径 user record 尚未持久化时失败会回滚原叶节点，持久化后则保留新路径。
-- Swift 以 Session ID 与 Path target 为键，把未发送草稿原子保存到 `~/Library/Application Support/D Code/session-drafts-v1.json`。草稿不写 Pi JSONL、不进入模型上下文或搜索索引；文件无法安全载入时停止覆盖原文件。
+- Swift 把未发送草稿原子保存到 `~/Library/Application Support/D Code/session-drafts-v1.json`。普通草稿以 Session ID 与 Path target 为键；尚无 Pi 身份的会话前草稿只保存一个规范 `cwd` 与非空正文，空白内容不写入资料。两者都不写 Pi JSONL、不进入模型上下文或搜索索引；会话前草稿首次提交后才调用 `session.create`，并把正文转移到新 Session 的 root Path 草稿。文件无法安全载入时停止覆盖原文件。
 - `session.copy` 不调用 Pi 0.84.1 会全量对象化历史的 `SessionManager.forkFrom`。Host 在 `<agent-dir>/.dcode-session-copy-staging/operation-*` 中逐行读取并写入 Pi v3 兼容文档：新 Header 使用新 ID、目标规范 `cwd` 与源路径 `parentSession`，第二条写入与新 ID 匹配的 D Code 来源，随后原样保留源的全部非 Header 记录。单条记录上限 16 MiB、记录总数上限 100,000；验证 UTF-8、JSON、父子关系、重复 ID、尾换行、历史摘要与源稳定性后，才以 hard link（硬链接）一次发布到正常会话目录。源 JSONL 全程不改，发布前失败只清理隐藏暂存。
 - 归档不是 Pi Session mutation（变更）。Swift 将直接归档记录或源与复制目标关系原子保存到 `~/Library/Application Support/D Code/session-archives-v1.json`；普通列表与搜索把归档源 ID 作为 `excludedSessionIds` 交给 Host。恢复显示只删除本机归档记录，再按真实 D Code 来源与 Project `cwd` 重新投影，不改源 JSONL。
 - 置顶同样不进入 Pi Session。Swift 以稳定 Session ID 原子保存到 `session-pins-v1.json`，再用 `session.list(sessionIds:)` 有界补取已掉出普通页的置顶候选；只有通过当前 Recent 来源或 Project exact `cwd` 过滤的结果才会进入全局置顶投影。已置顶 ID 从 Recent / Project 普通请求中排除，因此同一会话只在顶部独立区域出现；Archive 排除始终先于 Pin 投影。
@@ -138,6 +138,8 @@ open "dist/D Code.app"
 ## 会话级变更账本
 
 `host.hello.capabilities.sessionChangeLedger=true` 表示 Host 能把本次 D Code Run 内成功、结构化的文件工具结果投影为 `session.changeRecorded`。首版 adapter 只接受 DHashline-compatible `edit` 的 unified patch 元数据与 create-only `write` details；失败结果、未知工具、缺失结构、Bash 与外部写入全部不猜测。
+
+`host.hello.capabilities.sessionRunCorrelation=true` 表示 Host 会把 D Code 传入的稳定 Prompt ID 作为当前 Run ID，在 `session.event` 中回传 `runId`，并在用户条目通过 Lease 核验后以 `session.promptCompleted` 返回匹配的 Session ID、Prompt ID 与 Entry ID。这是 `0.0.5` Follow-up Queue 的所有权转移证据；Host 仍不保存、编辑或重排 D Code 的待派发队列。
 
 Swift 以稳定 Session ID 为第一身份，将收到的记录原子保存到 `~/Library/Application Support/D Code/session-changes-v1.json`。记录总量上限 50,000，标识、路径、行数、时间和来源均在进入内存及写盘前校验；损坏或未知版本保留原字节、停止继续写账本，但不阻断普通 Session 导航。摘要按 Session ID 去重文件并累计已观察的增删活动；Active Plan 仍按当前 Session Path 投影。复制得到的新 Session ID 不读取源 ID 的账本，Archive 也不删除原 ID 记录。
 
@@ -184,7 +186,7 @@ Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：�
 npm test
 ```
 
-当前 Host 自动测试共 121 项，除完整保留 `0.0.2` 搜索与 `0.0.1` 会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议和进程生命周期回归外，还覆盖快速创建、空会话废纸篓、路径选择、tree lifecycle、未持久化回滚、完整有界复制、record 语义损坏拒绝、隐藏暂存清理、临时租约释放、发布前 Busy 复核、fresh origin、归档排除、无模型旧会话观察、会话持久重命名，以及 DHashline-compatible edit / write 变更投影、失败与未知结构拒绝、事件作用域和正文不出 wire。Swift 包共 93 项测试，除既有 Project、文件树、Git、Recent、搜索、外观、会话和 Composer 回归外，还覆盖 Project 加载取消、路径目标 rebase、逐路径草稿、Prompt transaction（输入事务）跨会话隔离、逆序 Prompt/快照结算、退出保存、直接归档与置顶资料、分页前排序、Markdown 块级呈现与保真降级、工作轮投影与导航、历史时间格式、DHashline 安全工具 presenter、无模型观察解码、可调左右栏与非模态 Work Inspector 宽度策略，以及会话变更聚合、复制身份隔离、账本 fail-safe 持久化与 Host 事件去重。
+当前 Host 自动测试共 121 项，除完整保留 `0.0.2` 搜索与 `0.0.1` 会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议和进程生命周期回归外，还覆盖快速创建、空会话废纸篓、路径选择、tree lifecycle、未持久化回滚、完整有界复制、record 语义损坏拒绝、隐藏暂存清理、临时租约释放、发布前 Busy 复核、fresh origin、归档排除、无模型旧会话观察、会话持久重命名，以及 DHashline-compatible edit / write 变更投影、失败与未知结构拒绝、事件作用域和正文不出 wire。Swift 包共 127 项测试，除既有 Project、文件树、Git、Recent、搜索、外观、会话和 Composer 回归外，还覆盖 Project 加载取消、路径目标 rebase、会话前 / 逐路径草稿、首次发送延迟创建及所有权转移失败门禁、Prompt transaction（输入事务）跨会话隔离、逆序 Prompt/快照结算、退出保存、后续消息队列所有权 / 恢复 / 顺序派发、直接归档与置顶资料、分页前排序、Markdown 块级呈现与保真降级、工作轮投影与导航、历史时间格式、DHashline 安全工具 presenter、无模型观察解码、可调左右栏与非模态 Work Inspector 宽度策略，以及会话变更聚合、复制身份隔离、账本 fail-safe 持久化与 Host 事件去重。
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 
