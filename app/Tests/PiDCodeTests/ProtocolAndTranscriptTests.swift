@@ -925,12 +925,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         XCTAssertTrue(policy(1_280).inlineSidebar)
         XCTAssertTrue(policy(1_280).inlineInspector)
-        XCTAssertTrue(policy(1_166).inlineSidebar)
-        XCTAssertTrue(policy(1_166).inlineInspector)
-        XCTAssertEqual(policy(1_166).conversationWidth, 480)
-        XCTAssertFalse(policy(1_165).inlineSidebar)
-        XCTAssertTrue(policy(1_165).inlineInspector)
-        XCTAssertEqual(policy(1_165).conversationWidth, 765)
+        XCTAssertEqual(policy(1_280).conversationWidth, 480)
+        XCTAssertFalse(policy(1_279).inlineSidebar)
+        XCTAssertTrue(policy(1_279).inlineInspector)
+        XCTAssertEqual(policy(1_279).conversationWidth, 879)
         XCTAssertFalse(policy(880).inlineSidebar)
         XCTAssertTrue(policy(880).inlineInspector)
         XCTAssertEqual(policy(880).conversationWidth, 480)
@@ -939,8 +937,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     }
 
     func testWorkbenchLayoutClampsAndUsesPersistedPanelWidths() {
-        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(120), 240)
-        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(900), 420)
+        XCTAssertEqual(WorkbenchLayoutPolicy.defaultSidebarWidth, 400)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(120), 400)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(900), 520)
         XCTAssertEqual(WorkbenchLayoutPolicy.defaultInspectorWidth, 400)
         XCTAssertEqual(WorkbenchLayoutPolicy.clampInspectorWidth(120), 400)
         XCTAssertEqual(WorkbenchLayoutPolicy.clampInspectorWidth(900), 520)
@@ -1052,7 +1051,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testTopLevelPagesInheritOnePersistedNavigationWidth() {
         let layout = WorkbenchLayoutPolicy(
             width: 1_400,
-            preferredSidebarWidth: 376,
+            preferredSidebarWidth: 436,
             preferredInspectorWidth: 468,
             sidebarUserHidden: false,
             inspectorUserHidden: false,
@@ -1063,9 +1062,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let workspace = WorkbenchSurfaceLayout(destination: .workspace, layout: layout)
         let settings = WorkbenchSurfaceLayout(destination: .settings(.workbench), layout: layout)
 
-        XCTAssertEqual(workspace.navigationWidth, 376)
-        XCTAssertEqual(settings.navigationWidth, 376)
-        XCTAssertEqual(workspace.contentLeadingInset, 376)
+        XCTAssertEqual(workspace.navigationWidth, 436)
+        XCTAssertEqual(settings.navigationWidth, 436)
+        XCTAssertEqual(workspace.contentLeadingInset, 436)
         XCTAssertEqual(settings.contentLeadingInset, 0)
         XCTAssertTrue(workspace.canResizeNavigation)
         XCTAssertTrue(settings.canResizeNavigation)
@@ -1075,7 +1074,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testHiddenWorkspaceStillHandsItsPersistedWidthToSettingsNavigation() {
         let layout = WorkbenchLayoutPolicy(
             width: 1_200,
-            preferredSidebarWidth: 352,
+            preferredSidebarWidth: 432,
             sidebarUserHidden: true,
             inspectorUserHidden: true,
             hasInspectorScope: false,
@@ -1087,7 +1086,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         XCTAssertEqual(workspace.navigationWidth, 0)
         XCTAssertFalse(workspace.mainWorkspaceIsWrappedByNavigation)
-        XCTAssertEqual(settings.navigationWidth, 352)
+        XCTAssertEqual(settings.navigationWidth, 432)
         XCTAssertTrue(settings.mainWorkspaceIsWrappedByNavigation)
         XCTAssertTrue(settings.canResizeNavigation)
     }
