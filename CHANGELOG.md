@@ -4,16 +4,18 @@
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-08-16
+
 ### Added
 
 - 冻结 `0.0.5` Follow-up Queue（后续消息队列）的产品范围与所有权决策：尚未派发的 Queue Item 由 D Code 以本机耐久状态管理，绑定当前 Session / Path；只有经 Host 交给 Pi 并取得匹配的持久化证据后才成为会话消息。
 - 实现 Composer 附近的原生 Follow-up Queue：运行中可继续输入普通文本，待派发项可查看、编辑、上下移动与撤回；队列以本机原子 Store 跨重启保留，派发与 Run 结果不明时停住并要求核对。
-- Host 公开 `sessionRunCorrelation` 能力门禁，App 只在能将 `session.event.runId` 与 Prompt 稳定关联的 `0.0.5` Host 上启用当前候选。
+- Host 公开 `sessionRunCorrelation` 能力门禁，App 只在能将 `session.event.runId` 与 Prompt 稳定关联的 `0.0.5` Host 上启用后续消息队列。
 - 确认 `0.0.6` Activity View（活动视图）与 Run State（运行状态）的下一版范围：会话栏铃铛切换活动投影，可靠运行与等待优先，新完成结果以可恢复蓝点提示，其余会话按活动时间排序；本版仍不声称后台多会话执行。
 
 ### Changed
 
-- 将 `0.0.5` 从 Active Implementation 推进为 Local Implementation Candidate，App / Host 版本升为 `0.0.5`；Conversation 继续是无冗余标签的唯一会话主页面，本版只增加 Composer 附近的最小队列表面，完整 Run State / Interaction Dock 留到 `0.0.6`。
+- 将 App / Host 版本定版为 `0.0.5`；Conversation 继续是无冗余标签的唯一会话主页面，本版只增加 Composer 附近的最小队列表面，完整 Run State / Interaction Dock 留到 `0.0.6`。
 - “新建会话”改为先进入本地会话前草稿：空白草稿离开即消失，不再创建或遗留 Pi 空会话；非空正文由原子草稿资料恢复，只有首次发送时才调用 `session.create`，创建后打开或发送失败则把正文保留到该真实 Session 草稿中并明确提示。
 
 ### Fixed
