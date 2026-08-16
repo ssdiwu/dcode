@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-08-16
+
 ### Added
 
 - 实现 Session Sidebar（会话栏）的 Activity View（活动视图）：搜索旁铃铛只切换左侧投影，默认置顶 / Recent / Project 导航与唯一 Conversation 主页面保持不变；活动列表固定优先显示等待处理、当前真实运行和新完成结果，其余可见 Session 按可靠活动时间分组排序。
