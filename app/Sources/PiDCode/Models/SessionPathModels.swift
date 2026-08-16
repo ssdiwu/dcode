@@ -88,9 +88,61 @@ struct SessionDraftRecord: Codable, Hashable, Sendable {
     var updatedAt: String
 }
 
+struct NewSessionModelSelection: Codable, Hashable, Sendable {
+    let provider: String
+    let modelID: String
+
+    init(provider: String, modelID: String) {
+        self.provider = provider
+        self.modelID = modelID
+    }
+
+    init(_ model: HostModel) {
+        self.init(provider: model.provider, modelID: model.id)
+    }
+
+    func matches(_ model: HostModel) -> Bool {
+        provider == model.provider && modelID == model.id
+    }
+}
+
 struct NewSessionDraft: Codable, Hashable, Sendable {
     let directoryPath: String
     var text: String
+    var selectedModel: NewSessionModelSelection? = nil
+    var selectedThinkingLevel: String? = nil
+    var fastModeEnabled = false
+
+    init(
+        directoryPath: String,
+        text: String,
+        selectedModel: NewSessionModelSelection? = nil,
+        selectedThinkingLevel: String? = nil,
+        fastModeEnabled: Bool = false
+    ) {
+        self.directoryPath = directoryPath
+        self.text = text
+        self.selectedModel = selectedModel
+        self.selectedThinkingLevel = selectedThinkingLevel
+        self.fastModeEnabled = fastModeEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case directoryPath
+        case text
+        case selectedModel
+        case selectedThinkingLevel
+        case fastModeEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        directoryPath = try container.decode(String.self, forKey: .directoryPath)
+        text = try container.decode(String.self, forKey: .text)
+        selectedModel = try container.decodeIfPresent(NewSessionModelSelection.self, forKey: .selectedModel)
+        selectedThinkingLevel = try container.decodeIfPresent(String.self, forKey: .selectedThinkingLevel)
+        fastModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .fastModeEnabled) ?? false
+    }
 }
 
 struct SessionDraftDocument: Codable, Equatable, Sendable {

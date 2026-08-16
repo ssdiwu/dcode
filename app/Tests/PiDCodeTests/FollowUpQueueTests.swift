@@ -321,6 +321,9 @@ final class FollowUpQueueTests: XCTestCase {
                 "stopReason": .string("stop"),
             ])]),
         ])))
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertTrue(model.hasActiveRun)
+        XCTAssertTrue(model.shouldQueueComposerText)
         XCTAssertTrue(model.isPromptTransactionActive)
         try await Task.sleep(for: .milliseconds(260))
         XCTAssertEqual(model.currentFollowUpQueue?.activeRunID, "run-gate")
@@ -331,9 +334,48 @@ final class FollowUpQueueTests: XCTestCase {
             "runId": .string("run-gate"),
         ])))
         try await Task.sleep(for: .milliseconds(420))
-        XCTAssertNil(model.currentFollowUpQueue?.activeRunID)
-        XCTAssertEqual(model.currentFollowUpQueue?.pauseReason, .hostInterrupted)
+        XCTAssertEqual(model.currentFollowUpQueue?.activeRunID, "run-gate")
+        XCTAssertNil(model.currentFollowUpQueue?.pauseReason)
+
+        model.handle(HostEvent(name: "session.runStateChanged", data: .object([
+            "sessionId": .string("session-a"),
+            "runId": .string("run-gate"),
+            "phase": .string("unknown"),
+            "startedAt": .string(timestamp),
+            "updatedAt": .string(timestamp),
+            "completedAt": .string(timestamp),
+            "inputPersisted": .bool(true),
+            "retryable": .bool(false),
+        ])))
+        let paused = await waitUntil {
+            model.currentFollowUpQueue?.pauseReason == .runOutcomeUnknown
+        }
+        XCTAssertTrue(paused)
+        XCTAssertEqual(model.currentFollowUpQueue?.activeRunID, "run-gate")
         XCTAssertEqual(model.currentFollowUpQueue?.items.first?.state, .pending)
+    }
+
+    @MainActor
+    func testQueueCreatedAfterAgentEndStillBindsToTheActiveHostRun() async throws {
+        let root = temporaryDirectory("agent-end-bind")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, queueURL: root.appending(path: "queues.json"))
+        let metadataLoaded = await model.loadSessionMetadata()
+        XCTAssertTrue(metadataLoaded)
+        prepareRunningSession(model, runID: "run-bind")
+
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("agent_end"),
+            "sessionId": .string("session-a"),
+            "runId": .string("run-bind"),
+            "willRetry": .bool(false),
+        ])))
+        model.updateComposerText("仍属于这一轮之后")
+        await model.enqueueFollowUpFromComposer()
+
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertEqual(model.currentFollowUpQueue?.activeRunID, "run-bind")
+        XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["仍属于这一轮之后"])
     }
 
     @MainActor
@@ -397,6 +439,7 @@ final class FollowUpQueueTests: XCTestCase {
         ]
         prompts = []
         streaming = False
+        run_state = None
 
         capabilities = {
             "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
@@ -406,6 +449,8 @@ final class FollowUpQueueTests: XCTestCase {
             "sessionTrash": True, "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True, "sessionRename": True,
             "sessionRunCorrelation": True,
+            "sessionRunState": True,
+            "preSessionModelSelection": True,
         }
 
         def emit_event(name, data=None):
@@ -448,7 +493,7 @@ final class FollowUpQueueTests: XCTestCase {
                 "model": None, "thinkingLevel": "off", "activePlan": None,
                 "isStreaming": streaming, "pendingMessageCount": 0,
                 "contextUsage": None, "fastMode": None, "writable": writable,
-                "conflict": None,
+                "conflict": None, "runState": run_state,
             }
 
         def persist_prompts():
@@ -458,7 +503,7 @@ final class FollowUpQueueTests: XCTestCase {
             os.replace(temporary, prompts_file)
 
         def finish_run(ordinal, prompt_id, user_id):
-            global streaming
+            global streaming, run_state
             if ordinal == 1:
                 deadline = time.time() + 5
                 while not os.path.exists(gate) and time.time() < deadline:
@@ -477,13 +522,20 @@ final class FollowUpQueueTests: XCTestCase {
             wire_message = assistant["message"]
             emit_event("session.event", {"type": "agent_end", "sessionId": session_id, "runId": prompt_id, "willRetry": False, "messages": [wire_message]})
             emit_event("session.event", {"type": "agent_settled", "sessionId": session_id, "runId": prompt_id})
+            run_state = {
+                "sessionId": session_id, "runId": prompt_id, "phase": "completed",
+                "startedAt": "2026-08-15T09:00:01Z", "updatedAt": "2026-08-15T09:00:02Z",
+                "completionId": prompt_id + ":" + assistant_id, "completionEntryId": assistant_id,
+                "completedAt": "2026-08-15T09:00:02Z", "inputPersisted": True, "retryable": False,
+            }
+            emit_event("session.runStateChanged", run_state)
 
         for line in sys.stdin:
             request = json.loads(line)
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.5", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.6", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":
@@ -514,6 +566,12 @@ final class FollowUpQueueTests: XCTestCase {
                         "message": {"role": "user", "content": message, "timestamp": ordinal},
                     })
                     streaming = True
+                    run_state = {
+                        "sessionId": session_id, "runId": prompt_id, "phase": "running",
+                        "startedAt": "2026-08-15T09:00:01Z", "updatedAt": "2026-08-15T09:00:01Z",
+                        "inputPersisted": True, "retryable": False,
+                    }
+                emit_event("session.runStateChanged", run_state)
                 emit_event("session.event", {"type": "agent_start", "sessionId": session_id, "runId": prompt_id})
                 emit_event("session.promptCompleted", {"sessionId": session_id, "promptId": prompt_id, "outcome": "persisted", "entryId": user_id})
                 result = {"accepted": True, "completed": False}
@@ -533,6 +591,7 @@ final class FollowUpQueueTests: XCTestCase {
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
             followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "queues.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -595,7 +654,8 @@ final class FollowUpQueueTests: XCTestCase {
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
-            followUpQueueStore: FollowUpQueueStore(fileURL: queueURL)
+            followUpQueueStore: FollowUpQueueStore(fileURL: queueURL),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
     }
 
@@ -611,6 +671,15 @@ final class FollowUpQueueTests: XCTestCase {
         model.handle(HostEvent(name: "session.event", data: .object([
             "type": .string("agent_start"),
             "runId": .string(runID),
+        ])))
+        model.handle(HostEvent(name: "session.runStateChanged", data: .object([
+            "sessionId": .string("session-a"),
+            "runId": .string(runID),
+            "phase": .string("running"),
+            "startedAt": .string(timestamp),
+            "updatedAt": .string(timestamp),
+            "inputPersisted": .bool(true),
+            "retryable": .bool(false),
         ])))
     }
 

@@ -1,6 +1,6 @@
 # Node/Pi 宿主与 IPC
 
-状态：Implemented 0.0.3（`v0.0.2` 与 `v0.0.3` 已固定为本地回归基线，等待 507 联合人工验收）
+状态：Active Implementation 0.0.6（自动测试与本机 App bundle 构建已通过；真实 Run 与完整人工验收尚未完成）
 
 ## 职责
 
@@ -16,6 +16,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 - 在列表分页与搜索排序、截断之前排除由 Swift 本机归档资料指定的 Session ID；
 - 执行共享会话观察、按需 Session Lease 与冲突检测；
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
+- 公开当前 D Code-owned Run 的稳定 Session / Run 身份、结构化等待、停止请求、完成、失败、中止与未知状态，并只在最终助手 Entry 经 Lease 同步后确认完成；
 - 返回 Pi SDK 的 Context Usage，并维护 D Code 自有、会话级持久化的极速状态；
 - 转发 Pi 流式事件和结构化 Active Plan；
 - 以原生 Unicode 结构渲染受支持的 Mermaid 图表，并为不支持类型返回显式失败；
@@ -42,13 +43,13 @@ open "dist/D Code.app"
 
 `build.sh` 将 release Swift executable、arm64 Node `22.22.3`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
 
-- Host 开发运行要求 Node `>=22.19.0`；`0.0.3` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
+- Host 开发运行要求 Node `>=22.19.0`；`0.0.6` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
 - `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
 - `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
 - App 退出应发送 `host.shutdown`；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
-- App 在执行任何会话查询前要求 `hostVersion=0.0.3`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage、Fast Mode、`sessionSearch`、`sessionPaths`、`sessionCopy`、`sessionTrash` 与 `sessionVisibilityExclusions` 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航分类、搜索范围、复制语义或写入路径。
+- App 在执行任何会话查询前要求 `hostVersion=0.0.6`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage、Fast Mode、`sessionSearch`、`sessionPaths`、`sessionCopy`、`sessionTrash`、`sessionVisibilityExclusions`、`sessionChangeLedger`、`sessionRename`、`sessionRunCorrelation`、`sessionRunState` 与 `preSessionModelSelection` 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航、运行状态、模型选择、队列所有权或写入路径。
 - Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
 
 ## Protocol v1
@@ -95,8 +96,8 @@ open "dist/D Code.app"
 | `session.trash` | 只将唯一、空的 D Code 创建 Session 移入当前 macOS 用户废纸篓；取得临时 Lease 后再次校验身份、来源、消息数和子会话关系，失败不执行永久删除 |
 | `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径 |
 | `session.copy` | 在源稳定且空闲时把完整已持久化历史复制成新 Session ID 与目标 `cwd`；源文件不改，失败目标不进入正常会话目录 |
-| `session.getState`、`session.getCommands` | 获取当前权威状态、命令、模板与 skills |
-| `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels |
+| `session.getState`、`session.getCommands` | 获取当前权威状态、当前 D Code-owned Run State、命令、模板与 skills |
+| `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前会话设置 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
 | `extension.respond` | 完成标准 select/confirm/input/editor 扩展请求 |
@@ -109,7 +110,7 @@ open "dist/D Code.app"
 
 ### 事件组
 
-- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`、`session.searchIndexChanged`；搜索索引事件只报告 idle/building/updating/rebuilding/ready/failed、完成度与可选错误，不携带正文；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
+- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`、`session.searchIndexChanged`、`session.runStateChanged`；搜索索引事件只报告 idle/building/updating/rebuilding/ready/failed、完成度与可选错误，不携带正文；Run State 事件只携带稳定身份、阶段、时间、等待原因、输入持久化与安全重试门禁，不携带会话正文；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
 - Pi 运行：`session.event`，其中载荷来自 `AgentSessionEvent`，`message_update.partial` 不转发累积快照；Host 为 D Code 发起的 Run 补充稳定 Session ID、Prompt / Run ID 与已持久化 Path user entry ID，但不把这些字段写入 Pi JSONL；
 - 会话变更：`session.changeRecorded` 只在当前 D Code Run 中的成功 `edit` / `write` 结果满足已知结构化合同时发出；只携带 Session / Run / Path / tool-call 标识、规范路径、动作、首行、增删行和时间，不携带工具参数正文、源码或完整 patch；
 - 计划：`plan.changed`，只识别 `dgoal-work-v1` 与 `dgoal-plan-v2`；
@@ -130,7 +131,7 @@ open "dist/D Code.app"
 ## 会话路径、草稿与复制归档
 
 - Host 从同一 JSONL 的终端叶节点投影 Session Path；只读查看路径不会改变 Pi runtime。真正发送路径草稿前，Host 通过 Pi 的 tree lifecycle 切换到指定节点，并在租约前后复核源文件；路径 user record 尚未持久化时失败会回滚原叶节点，持久化后则保留新路径。
-- Swift 把未发送草稿原子保存到 `~/Library/Application Support/D Code/session-drafts-v1.json`。普通草稿以 Session ID 与 Path target 为键；尚无 Pi 身份的会话前草稿只保存一个规范 `cwd` 与非空正文，空白内容不写入资料。两者都不写 Pi JSONL、不进入模型上下文或搜索索引；会话前草稿首次提交后才调用 `session.create`，并把正文转移到新 Session 的 root Path 草稿。文件无法安全载入时停止覆盖原文件。
+- Swift 把未发送草稿原子保存到 `~/Library/Application Support/D Code/session-drafts-v1.json`。普通草稿以 Session ID 与 Path target 为键；尚无 Pi 身份的会话前草稿只保存一个规范 `cwd`、非空正文、可选 Provider / Model 标识、可选 thinking level 与 Fast Mode 布尔值，空白内容不写入资料，凭据和模型配置正文不进入该文件。两者都不写 Pi JSONL、不进入模型上下文或搜索索引；会话前草稿首次提交后才调用 `session.create`，取得写权并依次确认模型、显式 thinking level 与 Fast Mode 后才发送第一条 Prompt，并把正文转移到新 Session 的 root Path 草稿。文件无法安全载入时停止覆盖原文件。
 - `session.copy` 不调用 Pi 0.84.1 会全量对象化历史的 `SessionManager.forkFrom`。Host 在 `<agent-dir>/.dcode-session-copy-staging/operation-*` 中逐行读取并写入 Pi v3 兼容文档：新 Header 使用新 ID、目标规范 `cwd` 与源路径 `parentSession`，第二条写入与新 ID 匹配的 D Code 来源，随后原样保留源的全部非 Header 记录。单条记录上限 16 MiB、记录总数上限 100,000；验证 UTF-8、JSON、父子关系、重复 ID、尾换行、历史摘要与源稳定性后，才以 hard link（硬链接）一次发布到正常会话目录。源 JSONL 全程不改，发布前失败只清理隐藏暂存。
 - 归档不是 Pi Session mutation（变更）。Swift 将直接归档记录或源与复制目标关系原子保存到 `~/Library/Application Support/D Code/session-archives-v1.json`；普通列表与搜索把归档源 ID 作为 `excludedSessionIds` 交给 Host。恢复显示只删除本机归档记录，再按真实 D Code 来源与 Project `cwd` 重新投影，不改源 JSONL。
 - 置顶同样不进入 Pi Session。Swift 以稳定 Session ID 原子保存到 `session-pins-v1.json`，再用 `session.list(sessionIds:)` 有界补取已掉出普通页的置顶候选；只有通过当前 Recent 来源或 Project exact `cwd` 过滤的结果才会进入全局置顶投影。已置顶 ID 从 Recent / Project 普通请求中排除，因此同一会话只在顶部独立区域出现；Archive 排除始终先于 Pin 投影。
@@ -140,6 +141,12 @@ open "dist/D Code.app"
 `host.hello.capabilities.sessionChangeLedger=true` 表示 Host 能把本次 D Code Run 内成功、结构化的文件工具结果投影为 `session.changeRecorded`。首版 adapter 只接受 DHashline-compatible `edit` 的 unified patch 元数据与 create-only `write` details；失败结果、未知工具、缺失结构、Bash 与外部写入全部不猜测。
 
 `host.hello.capabilities.sessionRunCorrelation=true` 表示 Host 会把 D Code 传入的稳定 Prompt ID 作为当前 Run ID，在 `session.event` 中回传 `runId`，并在用户条目通过 Lease 核验后以 `session.promptCompleted` 返回匹配的 Session ID、Prompt ID 与 Entry ID。这是 `0.0.5` Follow-up Queue 的所有权转移证据；Host 仍不保存、编辑或重排 D Code 的待派发队列。
+
+`host.hello.capabilities.sessionRunState=true` 表示 Host 会为当前唯一 D Code-owned Run 公开 `running`、`waitingForUser`、`stopRequested`、`completed`、`failed`、`aborted` 或 `unknown`。`waitingForUser` 另以 `waitingFor=select|confirm|input|editor` 区分非颜色等待语义；多个结构化请求必须全部关闭后才恢复 `running`。点击停止只先进入 `stopRequested`，直到 Agent 真正收敛才成为 `aborted`；正常完成还必须在本轮输入之后取得最终 assistant Entry 的稳定 ID，即使其后追加了安全元数据条目，仍以 `runId:entryId` 形成 completion identity。冲突、进程结束或无法证明终态时进入 `unknown`，App 必须阻止自动派发、重复发送与不安全重试。`agent_end` 只结束流式展示，不是终态证据；Follow-up Queue 只按匹配 Session / Run 的终态 Run State 结算。
+
+`host.hello.capabilities.preSessionModelSelection=true` 表示 `session.getModels` 可以在没有活动 Pi Session 时接受一个规范工作目录，使用 Pi 的 `auth.json`、`models.json` 与该目录生效的 `settings.json` 组合本机可用模型快照，再按 `enabledModels` 的精确 / 通配规则解析 Composer 选择范围；仅登记、已认证但未启用的模型不会进入结果，并仅在精确默认 Provider / Model 同时位于该范围时返回 `defaultModel`。同一过滤合同也用于已有 Session 的模型选择菜单，但不会改写该 Session 当前或历史模型事实。结果还公开 Pi 的可选默认 thinking level，以及从真实模型元数据和 D Code Fast Mode 合同推导的 thinking levels / `fastModeSupported`；它们不构成第二份模型配置。该查询不进行网络目录刷新，不返回或复制凭据，也不修改 Pi 设置；App 没有范围内精确默认项时必须让用户显式选择，并在第一条 Prompt 前按需通过已有 `session.setModel`、`session.setThinking` 与 `session.setFastMode` 写入新 Session。完整模型设置已前移到 `0.0.7`，Provider 管理仍不属于该能力。
+
+Swift 将尚未呈现的最新稳定完成身份原子保存到 `~/Library/Application Support/D Code/activity-attention-v1.json`；资料版本化、有界且只含 Session / Run / Completion / Entry 身份、完成时间与可选查看时间，不保存正文、Thinking、工具结果或凭据。Activity View 仍从可见 Pi Session 与 Host Run State 重建；关注资料不是第二套会话数据库，旧结果也不能清除同一 Session 的更新完成身份。
 
 Swift 以稳定 Session ID 为第一身份，将收到的记录原子保存到 `~/Library/Application Support/D Code/session-changes-v1.json`。记录总量上限 50,000，标识、路径、行数、时间和来源均在进入内存及写盘前校验；损坏或未知版本保留原字节、停止继续写账本，但不阻断普通 Session 导航。摘要按 Session ID 去重文件并累计已观察的增删活动；Active Plan 仍按当前 Session Path 投影。复制得到的新 Session ID 不读取源 ID 的账本，Archive 也不删除原 ID 记录。
 
@@ -186,7 +193,9 @@ Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：�
 npm test
 ```
 
-当前 Host 自动测试共 121 项，除完整保留 `0.0.2` 搜索与 `0.0.1` 会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议和进程生命周期回归外，还覆盖快速创建、空会话废纸篓、路径选择、tree lifecycle、未持久化回滚、完整有界复制、record 语义损坏拒绝、隐藏暂存清理、临时租约释放、发布前 Busy 复核、fresh origin、归档排除、无模型旧会话观察、会话持久重命名，以及 DHashline-compatible edit / write 变更投影、失败与未知结构拒绝、事件作用域和正文不出 wire。Swift 包共 127 项测试，除既有 Project、文件树、Git、Recent、搜索、外观、会话和 Composer 回归外，还覆盖 Project 加载取消、路径目标 rebase、会话前 / 逐路径草稿、首次发送延迟创建及所有权转移失败门禁、Prompt transaction（输入事务）跨会话隔离、逆序 Prompt/快照结算、退出保存、后续消息队列所有权 / 恢复 / 顺序派发、直接归档与置顶资料、分页前排序、Markdown 块级呈现与保真降级、工作轮投影与导航、历史时间格式、DHashline 安全工具 presenter、无模型观察解码、可调左右栏与非模态 Work Inspector 宽度策略，以及会话变更聚合、复制身份隔离、账本 fail-safe 持久化与 Host 事件去重。
+当前 Host 自动测试共 124 项，除完整保留搜索、会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议、队列关联和进程生命周期回归外，还覆盖等待类型、多个结构化请求的完整关闭门禁、停止请求与最终中止分离，以及最终助手 Entry 后带安全元数据时仍经同步形成稳定完成身份；若本轮已持久化输入的 Entry 边界不再可见，则保守收口为 unknown，不会将历史助手消息误认为本轮完成。Swift 包共 135 项通过；除既有 Project、文件树、Git、Recent、搜索、外观、会话、路径草稿、延迟创建、Prompt transaction、Follow-up Queue、归档置顶、Markdown、工作轮、工具 presenter、可调栏位和变更账本回归外，还覆盖 Activity Attention Store 的原子恢复与损坏保留、固定优先级与确定排序、最新完成身份实际可见后才清除、重启可见性恢复、`agent_end` 与 Host 终态之间的运行门禁、该窗口中新建队列的 Run 归属、stopRequested 与 confirmed abort 的状态边界，以及铃铛当前投影 / 关注态的可访问语义；所有会载入元数据的测试均使用隔离关注存储。
+
+`./app/build.sh` 已在最终工作树本机装配 432 MiB 的 `dist/D Code.app`，Host 版本与 bundle metadata 均为 `0.0.6`，包内 arm64 Node 为 `22.22.3`，ad-hoc 深层签名验证通过；当前内嵌 Host 已包含 `preSessionModelSelection`。较早的同版本实现候选曾只读打开真实可见会话、不发送 Prompt，确认默认 Navigation、Activity 固定时间分组、400pt 会话栏、当前标题 / Path / Conversation / Composer / Inspector 保持与切回；铃铛 Accessibility Tree 同时暴露当前投影、关注状态和活动 selected trait。较早的最终重建候选以完全隔离的 D Code / Pi 目录启动后，Window Server 确认存在 `1362 × 795` 可见窗口，但 Orca 在系统权限显示 granted 时仍无法取得该新进程的 AX window，截图接口也失败；本次模型修复后的 bundle 只完成构建、内嵌能力与签名校验，尚未把模型菜单点击或首条真实 Prompt 记为人工验收。该 smoke 不覆盖真实 Run、完成关注恢复、停止 / 重试时序或完整 VoiceOver 操作。
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 

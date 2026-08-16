@@ -60,7 +60,7 @@
 - 对话仍是任务主空间，本机文件、变更与运行信息作为可并行操作的上下文，不用模态蒙版切断左栏和中央对话；
 - Project 文件树和助手正文中的文件、目录、代码行引用可在 D Code 自有 Workspace Tab 中打开并定位；
 - Goal 在输入区附近持续显示阶段、耗时、证据、阻塞与人工控制，但不取代 D Code 的耐久 Work Map；
-- Agent Profile 与 Team Member Run 继续分离，但 Profile / D Team 已移至 `0.3.x` 候选方向；`0.1.0` 前只在 `0.0.7` 建立独立于 Skill 的动作权限，在 `0.0.11–0.0.12` 建立一次性资源调用与本机 Skill / Prompt / Command / Extension 管理，在 `0.0.13–0.0.14` 建立 Pi 模型目录、启用范围与自定义供应商管理；
+- Agent Profile 与 Team Member Run 继续分离，但 Profile / D Team 已移至 `0.3.x` 候选方向；`0.1.0` 前先在 `0.0.7` 建立 Pi 模型目录、启用范围与默认模型设置，在 `0.0.8` 建立独立于 Skill 的动作权限，在 `0.0.12–0.0.13` 建立一次性资源调用与本机 Skill / Prompt / Command / Extension 管理，在 `0.0.14` 建立自定义供应商管理；
 - 权限请求显示动作、目标、风险理由与作用范围；上下文和用量只呈现 Pi 能提供的真实本地数据。
 
 **明确不借鉴**：不复制 Electron 架构或视觉皮肤，不照搬固定 Coder / Verifier / General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。Remote Control、IM、云端 / 定时任务、账号积分与签到、在线部署、Chrome Cookie 导入、BYOK、Skill 市场和增长反馈入口均不进入 D Code 本机版本路线。
@@ -141,7 +141,7 @@
 **D Code 借鉴**：
 
 - 左侧列表把“耐久导航”和“当前活动扫描”分开理解；Otty 的运行、等待、完成、失败徽标证明紧凑状态可帮助用户跨会话发现需要关注的工作，但 D Code 用 `0.0.6` Activity View（活动视图）承载这一结果，而不是给默认 Project / Recent 导航增加任意排序器；
-- 右侧详情按对象职责拆分：当前目录与会话事实进入 Information Inspector（信息检查器），只读 Files 已由 `0.0.4` 建立，可信 Project 快捷动作进入 `0.0.7`，Exact Git Diff（精确 Git 差异）进入 `0.0.8`，Markdown / HTML 缓冲区与预览分别进入 `0.0.15–0.0.16`；
+- 右侧详情按对象职责拆分：当前目录与会话事实进入 Information Inspector（信息检查器），只读 Files 已由 `0.0.4` 建立，可信 Project 快捷动作进入 `0.0.8`，Exact Git Diff（精确 Git 差异）进入 `0.0.9`，Markdown / HTML 缓冲区与预览分别进入 `0.0.15–0.0.16`；
 - Outline 的“快速理解当前内容结构”思想由 D Code 已有 Session Path、Plan、对话导航尺和后续结构化产物导航吸收，不复制终端命令时间线；Process / Ports 只有在连续 dogfood 形成真实闭环缺口后才进入 `0.0.18+`。
 
 **明确不借鉴**：不把 Otty 的 Tab 等同于 Pi Session，不加入 No Grouping / By Project / By Date、Created / Updated / Manual 等通用配置矩阵，不加入手工 Divider（分隔线），也不把终端进程、端口、Shell Outline 或任意 Pane / Split Runtime 搬进 D Code。`0.0.6` 首版使用产品语义固定的“等待处理 → 正在运行 → 新完成 → 其余按可证明活动时间”顺序；默认导航仍由置顶、Recent 与 Project 组织。

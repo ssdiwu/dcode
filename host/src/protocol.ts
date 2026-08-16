@@ -229,11 +229,20 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.abort":
     case "session.getState":
     case "session.getCommands":
-    case "session.getModels":
     case "session.getThinkingLevels":
     case "session.refresh":
     case "host.shutdown":
       return;
+    case "session.getModels": {
+      const cwd = optionalString(params, "cwd");
+      if (cwd !== undefined && (cwd.length === 0 || cwd.length > 4_096)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.cwd to be a non-empty string up to 4096 characters",
+        );
+      }
+      return;
+    }
     case "session.close": {
       const expectedSessionId = optionalString(params, "expectedSessionId");
       if (expectedSessionId !== undefined && (expectedSessionId.length === 0 || expectedSessionId.length > 4_096)) {

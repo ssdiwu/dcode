@@ -175,7 +175,12 @@ struct RootView: View {
 
             if surface.canResizeNavigation {
                 HStack(spacing: 0) {
-                    Color.clear.frame(width: max(0, surface.navigationWidth - 5))
+                    Color.clear.frame(
+                        width: max(
+                            0,
+                            surface.navigationWidth - WorkbenchResizeHandle.pointerHitTargetWidth / 2
+                        )
+                    )
                     WorkbenchResizeHandle(
                         side: .sidebar,
                         width: $preferredSidebarWidth,
@@ -203,7 +208,12 @@ struct RootView: View {
                             - WorkbenchLayoutPolicy.minimumConversationWidth
                             - (layout.inlineSidebar ? layout.sidebarWidth : 0)
                     )
-                    Color.clear.frame(width: max(0, layout.inspectorWidth - 5))
+                    Color.clear.frame(
+                        width: max(
+                            0,
+                            layout.inspectorWidth - WorkbenchResizeHandle.pointerHitTargetWidth / 2
+                        )
+                    )
                 }
                 .zIndex(1)
                 .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
@@ -680,6 +690,8 @@ private struct WindowDragRegion: NSViewRepresentable {
 }
 
 private struct WorkbenchResizeHandle: View {
+    static let pointerHitTargetWidth: CGFloat = 20
+
     enum Side {
         case sidebar
         case inspector
@@ -704,53 +716,19 @@ private struct WorkbenchResizeHandle: View {
     let currentWidth: CGFloat
     let maximumAvailableWidth: CGFloat
 
-    @State private var dragStartWidth: CGFloat?
-    @State private var hovered = false
-
     var body: some View {
-        Rectangle()
-            .fill(.clear)
-            .frame(width: 10)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let start = dragStartWidth ?? currentWidth
-                        dragStartWidth = start
-                        let proposed: CGFloat
-                        switch side {
-                        case .sidebar: proposed = start + value.translation.width
-                        case .inspector: proposed = start - value.translation.width
-                        }
-                        width = Double(clamped(proposed))
-                    }
-                    .onEnded { _ in
-                        dragStartWidth = nil
-                    }
-            )
-            .onTapGesture(count: 2) {
+        WorkbenchPointerResizeSurface(
+            side: side,
+            currentWidth: currentWidth,
+            widthChanged: { proposed in
+                width = Double(clamped(proposed))
+            },
+            reset: {
                 width = Double(clamped(side.defaultWidth))
             }
-            .onHover { next in
-                hovered = next
-                (next ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
-            }
-            .onDisappear {
-                if hovered {
-                    NSCursor.arrow.set()
-                }
-            }
-            .focusable()
-            .focusEffectDisabled()
-            .accessibilityLabel(side.label)
-            .accessibilityValue("\(Int(currentWidth.rounded())) 点")
-            .accessibilityAdjustableAction { direction in
-                switch direction {
-                case .increment: width = Double(clamped(currentWidth + 16))
-                case .decrement: width = Double(clamped(currentWidth - 16))
-                @unknown default: break
-                }
-            }
+        )
+            .frame(width: Self.pointerHitTargetWidth)
+            .frame(maxHeight: .infinity)
             .help("拖动调整宽度；双击恢复默认")
     }
 
@@ -762,6 +740,110 @@ private struct WorkbenchResizeHandle: View {
         case .inspector:
             return min(WorkbenchLayoutPolicy.clampInspectorWidth(proposed), available)
         }
+    }
+}
+
+private final class WorkbenchPointerResizeNSView: NSView {
+    var direction: CGFloat = 1
+    var currentWidth: CGFloat = 0
+    var widthChanged: ((CGFloat) -> Void)?
+    var reset: (() -> Void)?
+    var increment: (() -> Void)?
+    var decrement: (() -> Void)?
+
+    private var dragOriginX: CGFloat?
+    private var dragOriginWidth: CGFloat?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            reset?()
+            clearDrag()
+            return
+        }
+        dragOriginX = event.locationInWindow.x
+        dragOriginWidth = currentWidth
+        window?.makeFirstResponder(self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let dragOriginX, let dragOriginWidth else { return }
+        let translation = event.locationInWindow.x - dragOriginX
+        widthChanged?(dragOriginWidth + direction * translation)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        clearDrag()
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        guard let increment else { return false }
+        increment()
+        NSAccessibility.post(element: self, notification: .valueChanged)
+        return true
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        guard let decrement else { return false }
+        decrement()
+        NSAccessibility.post(element: self, notification: .valueChanged)
+        return true
+    }
+
+    private func clearDrag() {
+        dragOriginX = nil
+        dragOriginWidth = nil
+    }
+}
+
+private struct WorkbenchPointerResizeSurface: NSViewRepresentable {
+    let side: WorkbenchResizeHandle.Side
+    let currentWidth: CGFloat
+    let widthChanged: (CGFloat) -> Void
+    let reset: () -> Void
+
+    func makeNSView(context: Context) -> WorkbenchPointerResizeNSView {
+        WorkbenchPointerResizeNSView()
+    }
+
+    func updateNSView(_ nsView: WorkbenchPointerResizeNSView, context: Context) {
+        nsView.direction = side == .sidebar ? 1 : -1
+        nsView.currentWidth = currentWidth
+        nsView.widthChanged = widthChanged
+        nsView.reset = reset
+        nsView.increment = { widthChanged(currentWidth + 16) }
+        nsView.decrement = { widthChanged(currentWidth - 16) }
+        nsView.setAccessibilityElement(true)
+        nsView.setAccessibilityRole(.splitter)
+        nsView.setAccessibilityLabel(side.label)
+        nsView.setAccessibilityValue(Int(currentWidth.rounded()))
+        nsView.toolTip = "拖动调整宽度；双击恢复默认"
+    }
+
+    static func dismantleNSView(_ nsView: WorkbenchPointerResizeNSView, coordinator: ()) {
+        nsView.widthChanged = nil
+        nsView.reset = nil
+        nsView.increment = nil
+        nsView.decrement = nil
     }
 }
 

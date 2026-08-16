@@ -1,12 +1,5 @@
 import Foundation
 
-enum FollowUpRunOutcome: String, Equatable, Sendable {
-    case normal
-    case failed
-    case aborted
-    case unknown
-}
-
 enum FollowUpQueueItemState: String, Codable, Hashable, Sendable {
     case pending
     case dispatching

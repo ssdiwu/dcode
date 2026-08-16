@@ -71,7 +71,7 @@ enum WorkbenchWidthClass: Equatable, Sendable {
 
 struct WorkbenchLayoutPolicy: Equatable, Sendable {
     static let defaultSidebarWidth: CGFloat = 400
-    static let minimumSidebarWidth: CGFloat = 400
+    static let minimumSidebarWidth: CGFloat = 280
     static let maximumSidebarWidth: CGFloat = 520
     static let defaultInspectorWidth: CGFloat = 400
     static let minimumInspectorWidth: CGFloat = 400

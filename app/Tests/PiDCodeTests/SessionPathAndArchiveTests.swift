@@ -64,7 +64,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
             sessionDraftStore: store,
             sessionArchiveStore: archiveStore,
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
-            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -95,7 +96,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
             sessionDraftStore: store,
             sessionArchiveStore: archiveStore,
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
-            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -249,6 +251,23 @@ final class SessionPathAndArchiveTests: XCTestCase {
         XCTAssertNil(document.newSessionDraft)
     }
 
+    func testDraftStoreLoadsNewSessionDraftWrittenBeforeModelSelectionWasAdded() async throws {
+        let root = temporaryDirectory("legacy-new-session-model")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileURL = root.appending(path: "drafts.json")
+        try Data(
+            #"{"activeTargets":{},"records":[],"newSessionDraft":{"directoryPath":"/work","text":"继续"},"version":1}"#.utf8
+        ).write(to: fileURL)
+
+        let document = try await SessionDraftStore(fileURL: fileURL).load()
+
+        XCTAssertEqual(
+            document.newSessionDraft,
+            NewSessionDraft(directoryPath: "/work", text: "继续", selectedModel: nil, fastModeEnabled: false)
+        )
+    }
+
     func testArchiveStoreRoundTripsAndFailsClosedWithoutOverwritingUnknownData() async throws {
         let root = temporaryDirectory("archive-store")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -368,7 +387,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
             sessionDraftStore: SessionDraftStore(fileURL: draftURL),
             sessionArchiveStore: archiveStore,
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
-            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
@@ -413,7 +433,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
             sessionDraftStore: draftStore,
             sessionArchiveStore: archiveStore,
             sessionPinStore: pinStore,
-            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json"))
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)

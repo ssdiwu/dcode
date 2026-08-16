@@ -65,6 +65,16 @@ test("method parameter validation rejects invalid values", () => {
     () => validateMethodParams("session.create", { cwd: "" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("session.getModels", {}));
+  assert.doesNotThrow(() => validateMethodParams("session.getModels", { cwd: "/work" }));
+  assert.throws(
+    () => validateMethodParams("session.getModels", { cwd: "" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.getModels", { cwd: 42 }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("content.renderMermaid", { source: "x".repeat(100_001) }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",

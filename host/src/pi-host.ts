@@ -14,6 +14,7 @@ import {
   collectEntriesForBranchSummary,
   createAgentSession,
   getAgentDir,
+  resolveModelScopeWithDiagnostics,
   type AgentSession,
   type AgentSessionEvent,
   type SessionEntry,
@@ -44,8 +45,45 @@ import { SessionCopier } from "./session-copy.js";
 import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
 
+// Pi 0.84.1 uses medium when settings.json does not override the default.
+// Keep this pinned-version fallback next to the Host compatibility boundary.
+const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.5";
+const HOST_VERSION = "0.0.6";
+
+type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
+type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
+type RunWaitKind = "select" | "confirm" | "input" | "editor";
+
+interface RunState {
+  sessionId: string;
+  runId: string;
+  phase: RunPhase;
+  waitingFor?: RunWaitKind;
+  startedAt: string;
+  updatedAt: string;
+  completionId?: string;
+  completionEntryId?: string;
+  completedAt?: string;
+  inputPersisted: boolean;
+  retryable: boolean;
+}
+
+interface ActiveRun {
+  id: string;
+  pathEntryId?: string;
+  toolCalls: Map<string, { toolName: string; args: unknown }>;
+  state: RunState;
+  outcome?: RunOutcome;
+  finalization?: Promise<void>;
+}
+
+function runWaitKind(value: unknown): RunWaitKind | undefined {
+  return value === "select" || value === "confirm" || value === "input" || value === "editor"
+    ? value
+    : undefined;
+}
 
 export interface PiHostOptions {
   agentDir?: string;
@@ -92,11 +130,8 @@ interface WritableSession {
   activePlan: unknown;
   fastMode: DCodeFastController;
   closing: boolean;
-  currentRun?: {
-    id: string;
-    pathEntryId?: string;
-    toolCalls: Map<string, { toolName: string; args: unknown }>;
-  };
+  currentRun?: ActiveRun;
+  lastRunState?: RunState;
 }
 
 type ActiveSession = ReadOnlySession | WritableSession;
@@ -175,13 +210,30 @@ function toWireEvent(active: WritableSession, event: AgentSessionEvent): unknown
   };
 }
 
+function outcomeFromAgentEnd(event: AgentSessionEvent): RunOutcome {
+  if (event.type !== "agent_end") return "unknown";
+  const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
+  if (!assistant || !("stopReason" in assistant)) return "unknown";
+  switch (assistant.stopReason) {
+    case "aborted": return "aborted";
+    case "error": return "failed";
+    case "pending":
+    case "deferred": return "unknown";
+    default: return "completed";
+  }
+}
+
 function safeModel(model: unknown): unknown {
   if (typeof model !== "object" || model === null) return null;
   const source = model as Record<string, unknown>;
   if (typeof source.provider !== "string" || source.provider.trim() === "") return null;
   if (typeof source.id !== "string" || source.id.trim() === "") return null;
   const keys = ["provider", "id", "name", "api", "reasoning", "input", "contextWindow", "maxTokens", "cost"];
-  return Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
+  return {
+    ...Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]])),
+    thinkingLevels: getSupportedThinkingLevels(model as Parameters<typeof getSupportedThinkingLevels>[0]),
+    fastModeSupported: createFastSnapshot(true, { provider: source.provider, id: source.id }).active,
+  };
 }
 
 function planFromEntry(entry: SessionEntry): { matched: boolean; plan: unknown } {
@@ -332,6 +384,8 @@ export class PiHost {
             sessionChangeLedger: true,
             sessionRename: true,
             sessionRunCorrelation: true,
+            sessionRunState: true,
+            preSessionModelSelection: true,
           },
         };
       case "session.list":
@@ -398,15 +452,25 @@ export class PiHost {
         );
       case "session.abort": {
         const active = this.requireWritable();
-        await active.session.abort();
-        return { aborted: true };
+        if (active.currentRun) this.updateRunState(active, active.currentRun, "stopRequested");
+        try {
+          await active.session.abort();
+          return { aborted: true };
+        } catch (error) {
+          if (active.currentRun) {
+            this.updateRunState(active, active.currentRun, "unknown", {
+              retryable: false,
+            });
+          }
+          throw error;
+        }
       }
       case "session.getState":
         return this.getState();
       case "session.getCommands":
         return this.getCommands();
       case "session.getModels":
-        return this.getModels();
+        return await this.getModels(typeof params.cwd === "string" ? params.cwd : undefined);
       case "session.getThinkingLevels":
         return this.getThinkingLevels();
       case "session.setModel":
@@ -1055,8 +1119,30 @@ export class PiHost {
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
       });
       session = created.session;
-      ui = new ExtensionUIBridge((event, data) => this.options.emit(event, data));
-      const active: WritableSession = {
+      let active: WritableSession;
+      ui = new ExtensionUIBridge((event, data) => {
+        const run = active.currentRun;
+        const details = typeof data === "object" && data !== null && !Array.isArray(data)
+          ? data as Record<string, unknown>
+          : {};
+        if (run && event === "extension.request") {
+          this.updateRunState(active, run, "waitingForUser", { waitingFor: runWaitKind(details.method) });
+        } else if (run && event === "extension.closed" && run.state.phase === "waitingForUser") {
+          if (active.ui.hasPendingDialogs) {
+            this.updateRunState(active, run, "waitingForUser", {
+              waitingFor: runWaitKind(active.ui.pendingDialogMethod),
+            });
+          } else {
+            this.updateRunState(active, run, "running");
+          }
+        }
+        this.options.emit(event, {
+          ...details,
+          sessionId: active.session.sessionId,
+          ...(run ? { runId: run.id } : {}),
+        });
+      });
+      active = {
         mode,
         inspection,
         session,
@@ -1378,10 +1464,22 @@ export class PiHost {
         throw error;
       }
     }
-    active.currentRun = {
+    const startedAt = new Date().toISOString();
+    const run: ActiveRun = {
       id: promptId,
       toolCalls: new Map(),
+      state: {
+        sessionId: active.session.sessionId,
+        runId: promptId,
+        phase: "running",
+        startedAt,
+        updatedAt: startedAt,
+        inputPersisted: false,
+        retryable: false,
+      },
     };
+    active.currentRun = run;
+    this.options.emit("session.runStateChanged", run.state);
     return await new Promise((resolve, reject) => {
       let responded = false;
       const accept = (completed = false) => {
@@ -1408,12 +1506,12 @@ export class PiHost {
             outcome: "handled",
           });
         }
-        if (active.currentRun?.id === promptId) active.currentRun = undefined;
+        await this.finalizeRun(active, run);
         accept(true);
       }).catch(async (error) => {
         if (call.confirmation) await call.confirmation;
         await this.rollbackPromptPath(call);
-        if (active.currentRun?.id === promptId) active.currentRun = undefined;
+        await this.finalizeRun(active, run, run.outcome ?? "failed");
         if (!responded) reject(error);
         else this.options.emit("session.promptFailed", {
           sessionId: active.session.sessionId,
@@ -1423,6 +1521,76 @@ export class PiHost {
         });
       });
     });
+  }
+
+  private updateRunState(
+    active: WritableSession,
+    run: ActiveRun,
+    phase: RunPhase,
+    changes: Partial<Pick<RunState, "waitingFor" | "completionId" | "completionEntryId" | "completedAt" | "inputPersisted" | "retryable">> = {},
+  ): void {
+    run.state = {
+      ...run.state,
+      ...changes,
+      phase,
+      waitingFor: phase === "waitingForUser" ? changes.waitingFor : undefined,
+      updatedAt: changes.completedAt ?? new Date().toISOString(),
+    };
+    if (!run.state.phase || run.state.sessionId !== active.session.sessionId) return;
+    if (["completed", "failed", "aborted", "unknown"].includes(phase)) {
+      active.lastRunState = run.state;
+    }
+    this.options.emit("session.runStateChanged", run.state);
+  }
+
+  private async finalizeRun(
+    active: WritableSession,
+    run: ActiveRun,
+    forcedOutcome?: RunOutcome,
+  ): Promise<void> {
+    if (run.finalization) return await run.finalization;
+    run.finalization = (async () => {
+      await this.synchronizeOwnedSnapshot(active);
+      await active.leaseSync;
+      let outcome = forcedOutcome ?? run.outcome ?? "unknown";
+      if (active.conflict) outcome = "unknown";
+      const completedAt = new Date().toISOString();
+      if (outcome === "completed") {
+        const manager = active.session.sessionManager;
+        const leaf = manager.getLeafEntry();
+        const branch = manager.getBranch();
+        const boundary = run.pathEntryId
+          ? branch.findIndex((entry) => entry.id === run.pathEntryId)
+          : -1;
+        const completionEntry = run.pathEntryId
+          ? boundary >= 0
+            ? branch.slice(boundary + 1).reverse().find((entry) => (
+                entry.type === "message" && entry.message.role === "assistant"
+              ))
+            : undefined
+          : leaf?.type === "message" && leaf.message.role === "assistant" ? leaf : undefined;
+        if (completionEntry?.type === "message" && completionEntry.message.role === "assistant") {
+          this.updateRunState(active, run, "completed", {
+            completionId: `${run.id}:${completionEntry.id}`,
+            completionEntryId: completionEntry.id,
+            completedAt,
+            inputPersisted: run.pathEntryId !== undefined,
+            retryable: false,
+          });
+        } else {
+          outcome = "unknown";
+        }
+      }
+      if (outcome !== "completed") {
+        this.updateRunState(active, run, outcome, {
+          completedAt,
+          inputPersisted: run.pathEntryId !== undefined,
+          retryable: outcome === "failed" && run.pathEntryId === undefined,
+        });
+      }
+      if (active.currentRun === run) active.currentRun = undefined;
+    })();
+    await run.finalization;
   }
 
   private installPromptSourceBoundary(active: WritableSession): void {
@@ -1468,6 +1636,7 @@ export class PiHost {
         thinkingLevel: active.inspection.context.thinkingLevel,
         activePlan: active.inspection.activePlan,
         isStreaming: false,
+        runState: null,
         writable: false,
         contextUsage: model && model.contextWindow > 0
           ? { tokens: null, contextWindow: model.contextWindow, percent: null }
@@ -1485,6 +1654,7 @@ export class PiHost {
       thinkingLevel: active.session.thinkingLevel,
       activePlan: active.activePlan,
       isStreaming: active.session.isStreaming,
+      runState: active.currentRun?.state ?? active.lastRunState ?? null,
       isCompacting: active.session.isCompacting,
       pendingMessageCount: active.session.pendingMessageCount,
       contextUsage: active.session.getContextUsage() ?? null,
@@ -1514,12 +1684,48 @@ export class PiHost {
     return { commands };
   }
 
-  private getModels(): unknown {
-    const active = this.requireActive();
-    const models = active.mode === "writable"
-      ? active.session.modelRuntime.getAvailableSnapshot()
-      : active.modelRuntime.getAvailableSnapshot();
-    return { models: models.map((model) => safeModel(model)) };
+  private async getModels(cwd?: string): Promise<unknown> {
+    let canonicalCwd: string;
+    let runtime: ModelRuntime;
+    if (cwd === undefined) {
+      const active = this.requireActive();
+      canonicalCwd = active.inspection.summary.cwd;
+      runtime = active.mode === "writable"
+        ? active.session.modelRuntime
+        : active.modelRuntime;
+    } else {
+      try {
+        canonicalCwd = await realpath(cwd);
+        if (!(await stat(canonicalCwd)).isDirectory()) throw new Error("not a directory");
+      } catch (error) {
+        throw new PiHostError("CWD_NOT_ACCESSIBLE", `Working directory is not accessible: ${cwd}`, {
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      runtime = await ModelRuntime.create({
+        authPath: join(this.agentDir, "auth.json"),
+        modelsPath: join(this.agentDir, "models.json"),
+        allowModelNetwork: false,
+      });
+    }
+
+    const settings = SettingsManager.create(canonicalCwd, this.agentDir);
+    const enabledPatterns = settings.getEnabledModels();
+    const models = enabledPatterns && enabledPatterns.length > 0
+      ? (await resolveModelScopeWithDiagnostics(enabledPatterns, runtime)).scopedModels.map(({ model }) => model)
+      : [...runtime.getAvailableSnapshot()];
+    const defaultProvider = settings.getDefaultProvider();
+    const defaultModelId = settings.getDefaultModel();
+    const defaultThinkingLevel = settings.getDefaultThinkingLevel() ?? PI_DEFAULT_THINKING_LEVEL;
+    const defaultModel = defaultProvider && defaultModelId
+      ? models.find((model) => model.provider === defaultProvider && model.id === defaultModelId)
+      : undefined;
+    return {
+      models: models.map((model) => safeModel(model)),
+      defaultModel: defaultModel ? safeModel(defaultModel) : null,
+      defaultThinkingLevel,
+    };
   }
 
   private getThinkingLevels(): unknown {
@@ -1563,6 +1769,12 @@ export class PiHost {
 
   private onSessionEvent(active: WritableSession, event: AgentSessionEvent): void {
     if (this.active !== active || active.closing) return;
+    if (event.type === "agent_start" && active.currentRun && active.currentRun.state.phase !== "stopRequested") {
+      this.updateRunState(active, active.currentRun, "running");
+    }
+    if (event.type === "agent_end" && active.currentRun && !event.willRetry) {
+      active.currentRun.outcome = outcomeFromAgentEnd(event);
+    }
     if (event.type === "tool_execution_start" && active.currentRun) {
       active.currentRun.toolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
     }
@@ -1601,6 +1813,9 @@ export class PiHost {
     if (!shouldSynchronize) return;
     this.searchIndex.invalidate();
     this.synchronizeOwnedSnapshot(active);
+    if (event.type === "agent_settled" && active.currentRun) {
+      void this.finalizeRun(active, active.currentRun);
+    }
   }
 
   private onPersistedAgentEvent(active: WritableSession, event: AgentEvent): void {
@@ -1616,7 +1831,13 @@ export class PiHost {
       const leaf = active.session.sessionManager.getLeafEntry();
       if (leaf?.type !== "message" || leaf.message !== event.message) return;
       call.persistedEntryId = leaf.id;
-      if (active.currentRun?.id === call.promptId) active.currentRun.pathEntryId = leaf.id;
+      if (active.currentRun?.id === call.promptId) {
+        active.currentRun.pathEntryId = leaf.id;
+        this.updateRunState(active, active.currentRun, active.currentRun.state.phase, {
+          inputPersisted: true,
+          retryable: false,
+        });
+      }
       call.confirmation = this.synchronizeOwnedSnapshot(active).then(() => {
         if (active.conflict || call.confirmed) return;
         call.confirmed = true;

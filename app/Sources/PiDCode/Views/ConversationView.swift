@@ -10,6 +10,7 @@ struct ConversationView: View {
     @State private var expandedRoundIDs: Set<String> = []
     @State private var selectedNavigationRoundID: String?
     @State private var followsLatest = true
+    @State private var visibleEntryIDs: Set<String> = []
     @State private var navigationHighlightToken = UUID()
     private let bottomID = "conversation-bottom"
 
@@ -58,7 +59,15 @@ struct ConversationView: View {
                                     highlightedEntryID: highlightedEntryID,
                                     highlighted: highlightedRoundID == round.id,
                                     pathActionDisabled: pathActionDisabled,
-                                    pathAction: model.beginPathDraft
+                                    pathAction: model.beginPathDraft,
+                                    entryVisibilityChanged: { entryID, isVisible in
+                                        if isVisible {
+                                            visibleEntryIDs.insert(entryID)
+                                            model.markCompletionPresented(entryID: entryID)
+                                        } else {
+                                            visibleEntryIDs.remove(entryID)
+                                        }
+                                    }
                                 )
                                 .padding(.vertical, 9)
                                 .conversationListRow(showsPersistentRail: showsPersistentRail)
@@ -140,6 +149,7 @@ struct ConversationView: View {
                         highlightedRoundID = nil
                         highlightedEntryID = nil
                         expandedRoundIDs.removeAll()
+                        visibleEntryIDs.removeAll()
                         navigationHighlightToken = UUID()
                         Task { @MainActor in
                             await Task.yield()
@@ -152,6 +162,14 @@ struct ConversationView: View {
                             self.selectedNavigationRoundID = nil
                             followsLatest = true
                         }
+                    }
+                    .onChange(of: model.activityAttentionRecords) { _, records in
+                        guard let sessionID = model.selectedSessionID,
+                              let record = records.first(where: {
+                                  $0.sessionID == sessionID && $0.isUnseen
+                              }),
+                              visibleEntryIDs.contains(record.entryID) else { return }
+                        model.markCompletionPresented(entryID: record.entryID)
                     }
                     .onChange(of: model.transcript.count) { _, count in
                         if count > 6 { scrollToBottomAfterLayout(proxy) }
@@ -325,6 +343,7 @@ private struct ConversationRoundView: View {
     let highlighted: Bool
     let pathActionDisabled: Bool
     let pathAction: (TranscriptItem) -> Void
+    let entryVisibilityChanged: (String, Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -420,6 +439,8 @@ private struct ConversationRoundView: View {
                 : nil
         )
         .id(item.id)
+        .onAppear { entryVisibilityChanged(item.id, true) }
+        .onDisappear { entryVisibilityChanged(item.id, false) }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(

@@ -14,9 +14,13 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             sidebarHeader
             List {
-                pinnedSection
-                recentSection
-                projectsSection
+                if model.sidebarProjection == .activity {
+                    activityList
+                } else {
+                    pinnedSection
+                    recentSection
+                    projectsSection
+                }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -72,6 +76,38 @@ struct SidebarView: View {
                         || model.isOpeningSession
                         || model.isPromptTransactionActive
                 )
+                Button {
+                    Task { await model.toggleSidebarProjection() }
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        IconActionGlyph(
+                            systemName: model.sidebarProjection == .activity ? "bell.fill" : "bell"
+                        )
+                            .foregroundStyle(
+                                model.sidebarProjection == .activity ? Color.accentColor : Color.primary
+                            )
+                        if model.hasUnseenActivity && model.sidebarProjection != .activity {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -2, y: 2)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+                .buttonStyle(IconActionStyle())
+                .dCodeAccessibleButton(
+                    model.sidebarProjection == .activity ? "返回会话导航" : "查看活动"
+                )
+                .accessibilityValue(
+                    model.sidebarProjection.bellAccessibilityValue(
+                        hasUnseenActivity: model.hasUnseenActivity
+                    )
+                )
+                .accessibilityAddTraits(model.sidebarProjection == .activity ? .isSelected : [])
+                .accessibilityIdentifier("sidebar.activity-toggle")
+                .help(model.sidebarProjection == .activity ? "返回默认会话导航" : "查看正在运行和最近完成")
+                .disabled(model.connectionState != .ready || model.isOpeningSession)
                 Button(action: newGlobalSession) {
                     IconActionGlyph(systemName: "plus.bubble")
                 }
@@ -102,6 +138,59 @@ struct SidebarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, PiDCodeMetrics.spacingStandard)
+    }
+
+    @ViewBuilder
+    private var activityList: some View {
+        if let activityAttentionIssue = model.activityAttentionIssue {
+            Section {
+                Label(activityAttentionIssue, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        if let activitySessionError = model.activitySessionError {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("活动列表未完整载入", systemImage: "exclamationmark.triangle")
+                        .font(.caption.weight(.semibold))
+                    Text(activitySessionError)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                    Button("重试") {
+                        Task { await model.reloadActivitySessions() }
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
+        ForEach(model.activitySections) { section in
+            Section(section.title) {
+                ForEach(section.sessions) { presentation in
+                    ActivitySessionNavigationItem(
+                        presentation: presentation,
+                        selectionDisabled: model.connectionState != .ready || model.isOpeningSession,
+                        select: { selectSession(presentation.id) }
+                    )
+                }
+            }
+        }
+        if model.activitySections.isEmpty && !model.isLoadingActivitySessions {
+            Section("活动") {
+                Text("还没有可显示的会话活动")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        if model.isLoadingActivitySessions {
+            Section {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在载入活动…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -376,6 +465,95 @@ private struct ProjectNavigationView: View {
             .frame(width: PiDCodeMetrics.iconActionTarget, height: PiDCodeMetrics.iconActionTarget)
             .accessibilityLabel("在 \(project.name) 新建会话")
             .disabled(sessionCreationDisabled)
+        }
+    }
+}
+
+private struct ActivitySessionNavigationItem: View {
+    @Environment(AppModel.self) private var model
+    let presentation: ActivitySessionPresentation
+    let selectionDisabled: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: 9) {
+                Image(systemName: iconName)
+                    .foregroundStyle(statusColor)
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(presentation.summary.displayTitle)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(statusLabel)
+                            .foregroundStyle(statusColor)
+                        Text(presentation.activityDate.piDCodeRelativeLabel)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                if presentation.hasUnseenCompletion {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("有新完成结果")
+                }
+            }
+            .padding(.horizontal, PiDCodeMetrics.spacingStandard)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: PiDCodeMetrics.minimumTarget, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius))
+            .background(
+                model.selectedSessionID == presentation.id ? Color.primary.opacity(0.10) : Color.clear,
+                in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(selectionDisabled)
+        .help("\(presentation.summary.displayTitle)\n\(statusLabel)\n\(presentation.summary.cwd)")
+        .accessibilityLabel("打开会话 \(presentation.summary.displayTitle)，\(statusLabel)，\(presentation.hasUnseenCompletion ? "有新完成结果" : "没有新完成结果")")
+        .accessibilityAddTraits(model.selectedSessionID == presentation.id ? .isSelected : [])
+    }
+
+    private var iconName: String {
+        switch presentation.status {
+        case .waitingForUser: "person.crop.circle.badge.exclamationmark"
+        case .running: "waveform"
+        case .stopRequested: "stop.circle"
+        case .newCompletion, .completed: "checkmark.circle"
+        case .failed: "exclamationmark.triangle"
+        case .aborted: "xmark.circle"
+        case .unknown: "questionmark.circle"
+        case .history: "clock"
+        }
+    }
+
+    private var statusLabel: String {
+        switch presentation.status {
+        case .waitingForUser: presentation.waitingFor?.label ?? "等待你处理"
+        case .running: "正在运行"
+        case .stopRequested: "正在停止"
+        case .newCompletion: "新完成"
+        case .completed: "已完成"
+        case .failed: "运行失败"
+        case .aborted: "已中止"
+        case .unknown: "结果未知"
+        case .history: "最近活动"
+        }
+    }
+
+    private var statusColor: Color {
+        switch presentation.status {
+        case .waitingForUser, .stopRequested, .unknown: .orange
+        case .running: .accentColor
+        case .newCompletion: .accentColor
+        case .failed: .red
+        case .completed, .aborted, .history: .secondary
         }
     }
 }

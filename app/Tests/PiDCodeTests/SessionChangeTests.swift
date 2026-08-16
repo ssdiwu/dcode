@@ -100,7 +100,8 @@ final class SessionChangeTests: XCTestCase {
             sessionDraftStore: SessionDraftStore(fileURL: root.appending(path: "drafts.json")),
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
-            sessionChangeStore: changeStore
+            sessionChangeStore: changeStore,
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
         )
         let loaded = await model.loadSessionMetadata()
         XCTAssertTrue(loaded)

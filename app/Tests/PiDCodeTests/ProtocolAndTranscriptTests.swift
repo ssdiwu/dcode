@@ -277,10 +277,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testAboutMetadataUsesBundleVersionAndCanonicalGitHubLinks() {
         XCTAssertEqual(
             AboutAppMetadata.versionText(infoDictionary: [
-                "CFBundleShortVersionString": "0.0.5",
-                "CFBundleVersion": "5",
+                "CFBundleShortVersionString": "0.0.6",
+                "CFBundleVersion": "6",
             ]),
-            "版本 0.0.5（5）"
+            "版本 0.0.6（6）"
         )
         XCTAssertEqual(AboutAppMetadata.versionText(infoDictionary: [:]), "版本未知")
         XCTAssertEqual(AboutAppMetadata.authorURL.absoluteString, "https://github.com/ssdiwu")
@@ -938,7 +938,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
     func testWorkbenchLayoutClampsAndUsesPersistedPanelWidths() {
         XCTAssertEqual(WorkbenchLayoutPolicy.defaultSidebarWidth, 400)
-        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(120), 400)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(120), 280)
+        XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(320), 320)
         XCTAssertEqual(WorkbenchLayoutPolicy.clampSidebarWidth(900), 520)
         XCTAssertEqual(WorkbenchLayoutPolicy.defaultInspectorWidth, 400)
         XCTAssertEqual(WorkbenchLayoutPolicy.clampInspectorWidth(120), 400)
@@ -1187,6 +1188,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let state = try JSONDecoder().decode(HostState.self, from: Data(source.utf8))
 
         XCTAssertEqual(state.contextUsage, ContextUsage(tokens: 128_000, contextWindow: 256_000, percent: 50))
+        XCTAssertEqual(state.contextUsage?.remainingPercent, 50)
+        XCTAssertEqual(ContextUsage(tokens: 300, contextWindow: 256, percent: 117).remainingPercent, 0)
+        XCTAssertEqual(ContextUsage(tokens: nil, contextWindow: 256, percent: nil).remainingPercent, nil)
         XCTAssertEqual(
             state.fastMode,
             FastModeState(
@@ -1210,12 +1214,14 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionVisibilityExclusions"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRename"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRunCorrelation"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRunState"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("preSessionModelSelection"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.5",
+            hostVersion: "0.0.6",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1236,7 +1242,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.5",
+            hostVersion: "0.0.6",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1452,6 +1458,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionChangeLedger": True,
             "sessionRename": True,
             "sessionRunCorrelation": True,
+            "sessionRunState": True,
+            "preSessionModelSelection": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -1462,7 +1470,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.5",
+                    "hostVersion": "0.0.6",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1493,6 +1501,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -1563,15 +1572,24 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionChangeLedger": True,
             "sessionRename": True,
             "sessionRunCorrelation": True,
+            "sessionRunState": True,
+            "preSessionModelSelection": True,
         }
         agent_dir = sys.argv[2]
         create_marker = os.path.join(agent_dir, "create-requested")
+        models_marker = os.path.join(agent_dir, "draft-models-requested")
+        set_model_marker = os.path.join(agent_dir, "initial-model-set")
+        set_thinking_marker = os.path.join(agent_dir, "initial-thinking-set")
+        set_fast_marker = os.path.join(agent_dir, "initial-fast-set")
+        runtime_order = os.path.join(agent_dir, "initial-runtime-order")
         prompt_marker = os.path.join(agent_dir, "prompt-requested")
         open_marker = os.path.join(agent_dir, "open-started")
         open_gate = os.path.join(agent_dir, "allow-open")
         stale_list_marker = os.path.join(agent_dir, "stale-list-started")
         stale_list_gate = os.path.join(agent_dir, "allow-stale-list")
         created = None
+        selected_model = None
+        thinking_level = "off"
         dcode_list_count = 0
         output_lock = threading.Lock()
 
@@ -1619,7 +1637,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.5",
+                    "hostVersion": "0.0.6",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1683,13 +1701,77 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                     "trashPath": os.path.join(agent_dir, "Trash", "created-session.jsonl"),
                 }
             elif method == "session.getModels":
-                result = {"models": []}
+                model = {
+                    "provider": "openai",
+                    "id": "gpt-4o-mini",
+                    "name": "GPT-4o mini",
+                    "reasoning": True,
+                    "contextWindow": 128000,
+                    "maxTokens": 16384,
+                    "thinkingLevels": ["off", "high"],
+                    "fastModeSupported": True,
+                }
+                if "cwd" in params:
+                    open(models_marker, "w").close()
+                result = {"models": [model], "defaultModel": None, "defaultThinkingLevel": "high"}
             elif method == "session.getThinkingLevels":
                 result = {"levels": ["off"]}
             elif method == "session.getCommands":
                 result = {"commands": []}
+            elif method == "session.setModel":
+                selected_model = {
+                    "provider": params["provider"],
+                    "id": params["modelId"],
+                    "name": "GPT-4o mini",
+                    "reasoning": True,
+                    "contextWindow": 128000,
+                    "maxTokens": 16384,
+                    "thinkingLevels": ["off", "high"],
+                    "fastModeSupported": True,
+                }
+                open(set_model_marker, "w").close()
+                with open(runtime_order, "a") as output:
+                    output.write("model\n")
+                result = {"model": selected_model}
+            elif method == "session.setThinking":
+                thinking_level = params["level"]
+                open(set_thinking_marker, "w").close()
+                with open(runtime_order, "a") as output:
+                    output.write("thinking\n")
+                result = {"level": thinking_level}
+            elif method == "session.setFastMode":
+                open(set_fast_marker, "w").close()
+                with open(runtime_order, "a") as output:
+                    output.write("fast\n")
+                result = {
+                    "enabled": params["enabled"],
+                    "active": params["enabled"],
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "requestedServiceTier": "priority",
+                    "reason": "supported" if params["enabled"] else "disabled",
+                }
+            elif method == "session.getState":
+                result = {
+                    "mode": "writable",
+                    "sessionId": created["id"],
+                    "sessionFile": created["path"],
+                    "sessionName": None,
+                    "cwd": created["cwd"],
+                    "model": selected_model,
+                    "thinkingLevel": thinking_level,
+                    "activePlan": None,
+                    "isStreaming": False,
+                    "pendingMessageCount": 0,
+                    "contextUsage": None,
+                    "fastMode": None,
+                    "writable": True,
+                    "conflict": None,
+                }
             elif method == "session.prompt":
                 open(prompt_marker, "w").close()
+                with open(runtime_order, "a") as output:
+                    output.write("prompt\n")
                 prompt_id = params["promptId"]
                 emit_event("session.promptCompleted", {
                     "sessionId": created["id"],
@@ -1713,6 +1795,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -1724,6 +1807,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         await model.createSession(at: workspace)
         XCTAssertTrue(model.isNewSessionDraftActive)
+        XCTAssertEqual(model.availableModels.map(\.qualifiedName), ["openai/gpt-4o-mini"])
+        XCTAssertNil(model.selectedNewSessionModel)
+        XCTAssertNil(model.composerThinkingLevel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "draft-models-requested").path))
         XCTAssertNil(model.selectedSessionID)
         XCTAssertTrue(model.recentSessions.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
@@ -1734,12 +1821,27 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         await model.createSession(at: workspace)
         model.updateComposerText("第一条真实消息")
+        XCTAssertFalse(model.canSubmitComposerText)
+        model.selectNewSessionModel(try XCTUnwrap(model.availableModels.first))
+        XCTAssertEqual(model.selectedNewSessionModel?.qualifiedName, "openai/gpt-4o-mini")
+        XCTAssertEqual(model.composerThinkingLevel, "high")
+        await model.setComposerThinkingLevel("high")
+        XCTAssertFalse(model.composerFastModeEnabled)
+        await model.setComposerFastModeEnabled(true)
+        XCTAssertTrue(model.composerFastModeEnabled)
+        XCTAssertTrue(model.canSubmitComposerText)
         await model.selectProject(UUID())
         try await Task.sleep(for: .milliseconds(250))
         let parkedDrafts = try await draftStore.load()
         XCTAssertEqual(
             parkedDrafts.newSessionDraft,
-            NewSessionDraft(directoryPath: workspace.path, text: "第一条真实消息")
+            NewSessionDraft(
+                directoryPath: workspace.path,
+                text: "第一条真实消息",
+                selectedModel: NewSessionModelSelection(provider: "openai", modelID: "gpt-4o-mini"),
+                selectedThinkingLevel: "high",
+                fastModeEnabled: true
+            )
         )
         let restoredModel = AppModel(
             projectStore: ProjectStore(fileURL: root.appending(path: "restored-projects.json")),
@@ -1747,13 +1849,14 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "restored-archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "restored-pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "restored-changes.json")),
-            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "restored-queues.json"))
+            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "restored-queues.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "restored-activity.json"))
         )
         let restoredMetadataLoaded = await restoredModel.loadSessionMetadata()
         XCTAssertTrue(restoredMetadataLoaded)
         XCTAssertEqual(
             restoredModel.newSessionDraft,
-            NewSessionDraft(directoryPath: workspace.path, text: "第一条真实消息")
+            parkedDrafts.newSessionDraft
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
 
@@ -1788,7 +1891,16 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(model.selectedSessionID, "created-session")
         XCTAssertFalse(model.isNewSessionDraftActive)
         XCTAssertFalse(model.isCreatingSession)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "initial-model-set").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "initial-thinking-set").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "initial-fast-set").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "prompt-requested").path))
+        XCTAssertEqual(
+            try String(contentsOf: agentDirectory.appending(path: "initial-runtime-order"), encoding: .utf8),
+            "model\nthinking\nfast\nprompt\n"
+        )
+        XCTAssertEqual(model.hostState?.model?.qualifiedName, "openai/gpt-4o-mini")
+        XCTAssertEqual(model.hostState?.thinkingLevel, "high")
         XCTAssertNil(model.issue)
 
         await model.shutdown()
@@ -1819,6 +1931,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionTrash": True, "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True, "sessionRename": True,
             "sessionRunCorrelation": True,
+            "sessionRunState": True,
+            "preSessionModelSelection": True,
         }
         agent_dir = sys.argv[2]
         created = None
@@ -1840,7 +1954,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.5", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.6", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":
@@ -1854,6 +1968,12 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                 }
                 open(os.path.join(agent_dir, "create-requested"), "w").close()
                 respond(request, {"created": True, "session": created, "activation": {"status": "created"}})
+            elif method == "session.getModels":
+                model = {
+                    "provider": "openai", "id": "gpt-4o-mini", "name": "GPT-4o mini",
+                    "reasoning": False, "contextWindow": 128000, "maxTokens": 16384,
+                }
+                respond(request, {"models": [model], "defaultModel": model})
             elif method == "session.open":
                 open(os.path.join(agent_dir, "open-requested"), "w").close()
                 respond(request, error="Draft transfer should have stopped before session.open")
@@ -1872,6 +1992,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
             followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "queues.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
             hostConfiguration: HostLaunchConfiguration(
                 nodeURL: URL(fileURLWithPath: "/usr/bin/python3"),
                 hostEntryURL: script,
@@ -1881,6 +2002,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         await model.start()
         XCTAssertEqual(model.connectionState, .ready)
         await model.createSession(at: workspace)
+        XCTAssertEqual(model.selectedNewSessionModel?.qualifiedName, "openai/gpt-4o-mini")
+        XCTAssertTrue(model.isPiDefaultNewSessionModel(try XCTUnwrap(model.selectedNewSessionModel)))
+        XCTAssertFalse(model.composerFastModeEnabled)
         model.updateComposerText("必须保留的第一条消息")
         try await Task.sleep(for: .milliseconds(250))
         let storedBeforeFailure = try await draftStore.load()

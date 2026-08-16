@@ -76,12 +76,43 @@ struct SessionDetailView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if model.isStreaming {
+            if let runState = model.currentRunState,
+               runState.phase.isActive || runState.phase == .unknown {
+                StatusPill(
+                    label: headerStatusLabel(runState),
+                    systemImage: headerStatusIcon(runState.phase),
+                    color: runState.phase == .unknown ? .orange : .accentColor
+                )
+            } else if model.isStreaming {
                 StatusPill(label: "运行中", systemImage: "waveform", color: .orange)
             }
         }
         .padding(.horizontal, 18)
         .frame(minHeight: PiDCodeMetrics.minimumTarget)
+    }
+
+    private func headerStatusLabel(_ state: SessionRunState) -> String {
+        switch state.phase {
+        case .running: "运行中"
+        case .waitingForUser: state.waitingFor?.label ?? "等待处理"
+        case .stopRequested: "正在停止"
+        case .unknown: "结果未知"
+        case .completed: "已完成"
+        case .failed: "失败"
+        case .aborted: "已中止"
+        }
+    }
+
+    private func headerStatusIcon(_ phase: SessionRunPhase) -> String {
+        switch phase {
+        case .running: "waveform"
+        case .waitingForUser: "person.crop.circle.badge.exclamationmark"
+        case .stopRequested: "stop.circle"
+        case .unknown: "questionmark.circle"
+        case .completed: "checkmark.circle"
+        case .failed: "exclamationmark.triangle"
+        case .aborted: "xmark.circle"
+        }
     }
 
     private var emptyDetail: some View {

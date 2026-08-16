@@ -7,6 +7,7 @@ import type {
 type Emit = (event: string, data?: unknown) => void;
 
 interface PendingDialog {
+  method: string;
   finish: (response: unknown) => void;
   cancel: () => void;
 }
@@ -28,6 +29,10 @@ export class ExtensionUIBridge {
   }
 
   get hasPendingDialogs(): boolean { return this.pendingDialogs.size > 0; }
+
+  get pendingDialogMethod(): string | undefined {
+    return [...this.pendingDialogs.values()].at(-1)?.method;
+  }
 
   respond(requestId: string, response: unknown): boolean {
     const dialog = this.pendingDialogs.get(requestId);
@@ -67,6 +72,7 @@ export class ExtensionUIBridge {
       };
       const cancel = () => settle(fallback);
       this.pendingDialogs.set(requestId, {
+        method,
         finish: (response) => {
           const record = responseRecord(response);
           settle(record.cancelled === true ? fallback : parse(record));

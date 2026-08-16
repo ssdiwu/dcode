@@ -109,7 +109,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.5");
+    assert.equal(hello.hostVersion, "0.0.6");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -124,6 +124,8 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal((hello.capabilities as Record<string, boolean>).sessionChangeLedger, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRename, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRunCorrelation, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionRunState, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).preSessionModelSelection, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
@@ -150,6 +152,54 @@ test("host lists, inspects, and opens a read-only session", async () => {
     await assert.rejects(
       host.handle("session.prompt", { message: "no", promptId: "read-only-prompt" }),
       (error: unknown) => error instanceof PiHostError && error.code === "SESSION_READ_ONLY",
+    );
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("model catalog is available before a Pi session exists and exposes the configured default", async () => {
+  const f = await fixture();
+  await writeFile(join(f.agentDir, "settings.json"), `${JSON.stringify({
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    defaultThinkingLevel: "high",
+    enabledModels: ["openai/gpt-4o-mini", "openai/gpt-5.6-*"],
+  })}\n`);
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  try {
+    const result = await host.handle("session.getModels", { cwd: f.root }) as {
+      models: Array<{ provider: string; id: string; fastModeSupported: boolean }>;
+      defaultModel: { provider: string; id: string; fastModeSupported: boolean } | null;
+      defaultThinkingLevel: string;
+    };
+    assert.deepEqual(
+      result.models.map((model) => `${model.provider}/${model.id}`).sort(),
+      [
+        "openai/gpt-4o-mini",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-terra",
+      ],
+    );
+    assert.equal(result.defaultModel?.provider, "openai");
+    assert.equal(result.defaultModel?.id, "gpt-4o-mini");
+    assert.equal(result.defaultModel?.fastModeSupported, false);
+    assert.equal(result.defaultThinkingLevel, "high");
+
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
+    const activeResult = await host.handle("session.getModels", {}) as {
+      models: Array<{ provider: string; id: string }>;
+    };
+    assert.deepEqual(
+      activeResult.models.map((model) => `${model.provider}/${model.id}`).sort(),
+      [
+        "openai/gpt-4o-mini",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-terra",
+      ],
     );
   } finally {
     await host.close();
@@ -417,6 +467,257 @@ test("structured tool completion emits a scoped metadata-only session change", a
     const wire = JSON.stringify(change.data);
     assert.equal(wire.includes("private-token"), false);
     assert.equal(wire.includes("@@ -3,1"), false);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("run state distinguishes user wait, stop request, and confirmed abort", async () => {
+  const f = await fixture();
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  type RunState = {
+    sessionId: string;
+    runId: string;
+    phase: string;
+    waitingFor?: string;
+    startedAt: string;
+    updatedAt: string;
+    inputPersisted: boolean;
+    retryable: boolean;
+  };
+  type WritableInternals = {
+    session: { sessionId: string; abort: () => Promise<void> };
+    ui: {
+      context: {
+        confirm: (title: string, message: string) => Promise<boolean>;
+        input: (title: string, placeholder: string) => Promise<string | undefined>;
+      };
+      respond: (requestId: string, response: unknown) => boolean;
+    };
+    currentRun?: {
+      id: string;
+      toolCalls: Map<string, { toolName: string; args: unknown }>;
+      state: RunState;
+      outcome?: "completed" | "failed" | "aborted" | "unknown";
+    };
+  };
+  const internals = host as unknown as {
+    active?: WritableInternals;
+    onSessionEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const startedAt = new Date().toISOString();
+    active.currentRun = {
+      id: "run-state",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-state",
+        phase: "running",
+        startedAt,
+        updatedAt: startedAt,
+        inputPersisted: true,
+        retryable: false,
+      },
+    };
+
+    const decision = active.ui.context.confirm("Permission", "Continue?");
+    const input = active.ui.context.input("Value", "Type here");
+    const requests = emitted.filter(({ event }) => event === "extension.request");
+    const confirmId = (requests.find(({ data }) => (data as { method?: string }).method === "confirm")?.data as { requestId?: string }).requestId;
+    const inputId = (requests.find(({ data }) => (data as { method?: string }).method === "input")?.data as { requestId?: string }).requestId;
+    assert.equal(typeof confirmId, "string");
+    assert.equal(typeof inputId, "string");
+    assert.equal(active.currentRun.state.phase, "waitingForUser");
+    assert.equal(active.currentRun.state.waitingFor, "input");
+    assert.equal(active.ui.respond(confirmId!, { confirmed: true }), true);
+    assert.equal(await decision, true);
+    assert.equal(active.currentRun.state.phase, "waitingForUser");
+    assert.equal(active.ui.respond(inputId!, { value: "done" }), true);
+    assert.equal(await input, "done");
+    assert.equal(active.currentRun.state.phase, "running");
+
+    active.session.abort = async () => undefined;
+    await host.handle("session.abort", {});
+    assert.equal(active.currentRun.state.phase, "stopRequested");
+    assert.equal(
+      (await host.handle("session.getState", {}) as { runState: RunState }).runState.phase,
+      "stopRequested",
+    );
+
+    internals.onSessionEvent(active, {
+      type: "agent_end",
+      willRetry: false,
+      messages: [{ role: "assistant", stopReason: "aborted" }],
+    } as AgentSessionEvent);
+    internals.onSessionEvent(active, { type: "agent_settled" } as AgentSessionEvent);
+    await waitUntil(
+      () => emitted.some(({ event, data }) => event === "session.runStateChanged"
+        && (data as { phase?: string } | undefined)?.phase === "aborted"),
+      "confirmed aborted run state",
+    );
+    const terminal = await host.handle("session.getState", {}) as { runState: RunState };
+    assert.equal(terminal.runState.phase, "aborted");
+    assert.equal(terminal.runState.retryable, false);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("settled run state publishes a stable completion identity", async () => {
+  const f = await fixture();
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  type WritableInternals = {
+    session: { sessionId: string; sessionManager: SessionManager };
+    currentRun?: {
+      id: string;
+      pathEntryId?: string;
+      toolCalls: Map<string, { toolName: string; args: unknown }>;
+      state: {
+        sessionId: string;
+        runId: string;
+        phase: string;
+        startedAt: string;
+        updatedAt: string;
+        inputPersisted: boolean;
+        retryable: boolean;
+      };
+    };
+  };
+  const internals = host as unknown as {
+    active?: WritableInternals;
+    onSessionEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const startedAt = new Date().toISOString();
+    active.currentRun = {
+      id: "run-completed",
+      pathEntryId: "user",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-completed",
+        phase: "running",
+        startedAt,
+        updatedAt: startedAt,
+        inputPersisted: true,
+        retryable: false,
+      },
+    };
+    internals.onSessionEvent(active, {
+      type: "agent_end",
+      willRetry: false,
+      messages: [{ role: "assistant", stopReason: "stop" }],
+    } as AgentSessionEvent);
+    active.session.sessionManager.appendCustomEntry("after-assistant", { stable: true });
+    internals.onSessionEvent(active, { type: "agent_settled" } as AgentSessionEvent);
+    await waitUntil(
+      () => emitted.some(({ event, data }) => event === "session.runStateChanged"
+        && (data as { phase?: string } | undefined)?.phase === "completed"),
+      "completed run state",
+    );
+    const completion = emitted.find(({ event, data }) => event === "session.runStateChanged"
+      && (data as { phase?: string } | undefined)?.phase === "completed")?.data as {
+        completionId: string;
+        completionEntryId: string;
+        inputPersisted: boolean;
+      };
+    assert.equal(completion.completionId, "run-completed:assistant");
+    assert.equal(completion.completionEntryId, "assistant");
+    assert.equal(completion.inputPersisted, true);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("settled run state stays unknown when its persisted input boundary is missing", async () => {
+  const f = await fixture();
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  type WritableInternals = {
+    session: { sessionId: string };
+    currentRun?: {
+      id: string;
+      pathEntryId?: string;
+      toolCalls: Map<string, { toolName: string; args: unknown }>;
+      state: {
+        sessionId: string;
+        runId: string;
+        phase: string;
+        startedAt: string;
+        updatedAt: string;
+        inputPersisted: boolean;
+        retryable: boolean;
+      };
+    };
+  };
+  const internals = host as unknown as {
+    active?: WritableInternals;
+    onSessionEvent: (active: WritableInternals, event: AgentSessionEvent) => void;
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const startedAt = new Date().toISOString();
+    active.currentRun = {
+      id: "run-missing-boundary",
+      pathEntryId: "missing-user-entry",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-missing-boundary",
+        phase: "running",
+        startedAt,
+        updatedAt: startedAt,
+        inputPersisted: true,
+        retryable: false,
+      },
+    };
+    internals.onSessionEvent(active, {
+      type: "agent_end",
+      willRetry: false,
+      messages: [{ role: "assistant", stopReason: "stop" }],
+    } as AgentSessionEvent);
+    internals.onSessionEvent(active, { type: "agent_settled" } as AgentSessionEvent);
+    await waitUntil(
+      () => emitted.some(({ event, data }) => event === "session.runStateChanged"
+        && (data as { phase?: string } | undefined)?.phase === "unknown"),
+      "unknown run state",
+    );
+    assert.equal(emitted.some(({ event, data }) => event === "session.runStateChanged"
+      && (data as { phase?: string } | undefined)?.phase === "completed"), false);
+    const terminal = await host.handle("session.getState", {}) as {
+      runState: { phase: string; inputPersisted: boolean };
+    };
+    assert.equal(terminal.runState.phase, "unknown");
+    assert.equal(terminal.runState.inputPersisted, true);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });

@@ -2052,6 +2052,22 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageBody: &#x27;默认导航继续按 Project 组织；活动视图按可靠状态和时间组织，蓝点只在最新完成结果真正呈现后消除。&#x27;
         },
         &#x27;0.0.7&#x27;: {
+          title: &#x27;Pi 模型目录与启用范围&#x27;,
+          summary: &#x27;按供应商展示 Pi 最新目录与缓存状态，用 enabledModels 管理 D Code 模型选择范围。&#x27;,
+          mode: &#x27;conversation&#x27;,
+          right: &#x27;milestone&#x27;,
+          projectFiles: true,
+          projectInspector: true,
+          sessionRight: &#x27;milestone&#x27;,
+          paths: true,
+          runtime: true,
+          milestoneTitle: &#x27;Models · 5 个供应商&#x27;,
+          milestoneBody: &#x27;在线刷新、最后可用缓存、默认模型与“在 D Code 中启用”状态分开呈现。&#x27;,
+          milestoneBoundary: &#x27;关闭只影响选择与快捷切换，不撤销认证或改写当前会话历史。&#x27;,
+          messageHeading: &#x27;模型选择复用 Pi 的真实目录&#x27;,
+          messageBody: &#x27;D Code 不维护静态模型白名单；启用规则保留 Pi 通配语义，刷新失败时也不会把空结果说成没有模型。&#x27;
+        },
+        &#x27;0.0.8&#x27;: {
           title: &#x27;项目信任与动作权限&#x27;,
           summary: &#x27;写入、命令和外部副作用按项目、目标、风险与有效范围请求真实授权。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2067,7 +2083,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageHeading: &#x27;权限与动作绑定，而不是与 Agent 名称绑定&#x27;,
           messageBody: &#x27;D Code 在执行前说明动作、目标与风险，并区分本次允许、当前范围允许和拒绝。&#x27;
         },
-        &#x27;0.0.8&#x27;: {
+        &#x27;0.0.9&#x27;: {
           title: &#x27;精确 Git 差异&#x27;,
           summary: &#x27;从 Changes 数量进入逐文件、逐变更块和行级净差异核对，保持暂存语义真实。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2083,7 +2099,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageHeading: &#x27;会话活动与 Git 净差异各自诚实&#x27;,
           messageBody: &#x27;会话账本回答本会话观察到什么；Exact Diff 回答工作树现在真正差了什么，两者不混算。&#x27;
         },
-        &#x27;0.0.9&#x27;: {
+        &#x27;0.0.10&#x27;: {
           title: &#x27;结构化验证证据&#x27;,
           summary: &#x27;命令、退出状态、时间、revision、环境与覆盖范围成为可回到真实运行的验证记录。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2099,7 +2115,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageHeading: &#x27;“通过”必须能回到证据&#x27;,
           messageBody: &#x27;Agent 的总结不是验证本身；D Code 把真实运行结果组织成可复核、不过度外推的记录。&#x27;
         },
-        &#x27;0.0.10&#x27;: {
+        &#x27;0.0.11&#x27;: {
           title: &#x27;首次自构建闭环&#x27;,
           summary: &#x27;在 D Code 会话内完成自身改动、验证、候选构建、受控重启并回到原任务。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2115,7 +2131,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageHeading: &#x27;D Code 第一次用自己构建自己&#x27;,
           messageBody: &#x27;主开发闭环留在当前工作台；底层仍调用真实 Git、Swift 工具链和 Pi，不复制第二套事实。&#x27;
         },
-        &#x27;0.0.11&#x27;: {
+        &#x27;0.0.12&#x27;: {
           title: &#x27;Composer 一次性资源调用&#x27;,
           summary: &#x27;通过 + 与 / 为当次消息选择本机 Skill、Prompt 或 Command，并显示实际采用来源。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2131,7 +2147,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           messageHeading: &#x27;资源先服务一次明确意图&#x27;,
           messageBody: &#x27;Composer 可以为当前消息装配能力，但不会因此悄悄改写永久配置或扩大权限。&#x27;
         },
-        &#x27;0.0.12&#x27;: {
+        &#x27;0.0.13&#x27;: {
           title: &#x27;本机资源设置&#x27;,
           summary: &#x27;在 Settings 中管理本机 Skill、Prompt、Command 与 Extension 的来源、兼容性、启停和持久配置。&#x27;,
           mode: &#x27;conversation&#x27;,
@@ -2146,22 +2162,6 @@ html&gt;body{padding:0}&lt;/style&gt;
           milestoneBoundary: &#x27;~/.pi/agent 仍是唯一权威；Prompt 描述不能冒充可调用工具。&#x27;,
           messageHeading: &#x27;一次调用之后，才进入长期资源管理&#x27;,
           messageBody: &#x27;设置负责持久状态；Composer 负责当次选择，两条路径使用同一真实配置合同。&#x27;
-        },
-        &#x27;0.0.13&#x27;: {
-          title: &#x27;Pi 模型目录与启用范围&#x27;,
-          summary: &#x27;按供应商展示 Pi 最新目录与缓存状态，用 enabledModels 管理 D Code 模型选择范围。&#x27;,
-          mode: &#x27;conversation&#x27;,
-          right: &#x27;milestone&#x27;,
-          projectFiles: true,
-          projectInspector: true,
-          sessionRight: &#x27;milestone&#x27;,
-          paths: true,
-          runtime: true,
-          milestoneTitle: &#x27;Models · 5 个供应商&#x27;,
-          milestoneBody: &#x27;在线刷新、最后可用缓存、默认模型与“在 D Code 中启用”状态分开呈现。&#x27;,
-          milestoneBoundary: &#x27;关闭只影响选择与快捷切换，不撤销认证或改写当前会话历史。&#x27;,
-          messageHeading: &#x27;模型选择复用 Pi 的真实目录&#x27;,
-          messageBody: &#x27;D Code 不维护静态模型白名单；启用规则保留 Pi 通配语义，刷新失败时也不会把空结果说成没有模型。&#x27;
         },
         &#x27;0.0.14&#x27;: {
           title: &#x27;自定义模型供应商&#x27;,

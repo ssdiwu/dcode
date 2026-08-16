@@ -63,8 +63,8 @@ struct ComposerView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                if let queue = model.currentFollowUpQueue {
-                    followUpQueue(queue)
+                if model.currentRunState != nil || model.currentFollowUpQueue != nil {
+                    interactionDock(queue: model.currentFollowUpQueue)
                 }
                 TextField(
                     composerPlaceholder,
@@ -96,44 +96,30 @@ struct ComposerView: View {
 
     private var runtimeControls: some View {
         HStack(spacing: 4) {
+            Spacer(minLength: 4)
+
             Button {
                 showingContext.toggle()
             } label: {
-                Label(contextCompactLabel, systemImage: "chart.pie")
-                    .lineLimit(1)
-                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+                contextRemainingRing
+                    .frame(width: 18, height: 18)
+                    .frame(
+                        width: PiDCodeMetrics.compactControlHeight,
+                        height: PiDCodeMetrics.compactControlHeight
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .popover(isPresented: $showingContext, arrowEdge: .bottom) {
                 contextPopover
             }
-            .help("查看上下文占用")
-            .accessibilityLabel("上下文占用：\(contextAccessibilityLabel)")
+            .help(contextHelpLabel)
+            .accessibilityLabel("上下文：\(contextAccessibilityLabel)")
             .disabled(model.isNewSessionDraftActive)
-
-            Button {
-                Task { await model.toggleFastMode() }
-            } label: {
-                Label(fastLabel, systemImage: "bolt.fill")
-                    .foregroundStyle(fastColor)
-                    .lineLimit(1)
-                    .frame(minHeight: PiDCodeMetrics.compactControlHeight)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(fastAccessibilityLabel)
-            .help(fastHelp)
-            .disabled(
-                model.isNewSessionDraftActive
-                    || model.pendingPathDraft != nil
-                    || model.isPromptTransactionActive
-            )
-
-            Spacer(minLength: 4)
 
             modelAndThinkingMenu
                 .disabled(
-                    model.isNewSessionDraftActive
-                        || model.pendingPathDraft != nil
+                    model.pendingPathDraft != nil
                         || model.isPromptTransactionActive
                 )
 
@@ -157,22 +143,7 @@ struct ComposerView: View {
                 .accessibilityLabel("加入后续消息队列")
             }
 
-            if model.isStreaming {
-                Button {
-                    Task { await model.abort() }
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .foregroundStyle(.white)
-                        .frame(
-                            width: PiDCodeMetrics.prominentIconActionTarget,
-                            height: PiDCodeMetrics.prominentIconActionTarget
-                        )
-                        .background(Color.red, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("停止当前运行")
-                .accessibilityLabel("停止当前运行")
-            } else if !model.shouldQueueComposerText {
+            if !model.isStreaming && !model.shouldQueueComposerText {
                 Button {
                     Task { await model.sendPrompt() }
                 } label: {
@@ -197,6 +168,63 @@ struct ComposerView: View {
             }
         }
         .font(.caption)
+    }
+
+    private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let runState = model.currentRunState {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: runStatusIcon(runState.phase))
+                        .foregroundStyle(runStatusColor(runState.phase))
+                        .frame(width: 18)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(runStatusLabel(runState))
+                            .font(.caption.weight(.semibold))
+                        Text(runStatusDetail(runState))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(runStatusLabel(runState))。\(runStatusDetail(runState))")
+                    Spacer(minLength: 8)
+                    if runState.phase == .running || runState.phase == .waitingForUser {
+                        Button(role: .destructive) {
+                            Task { await model.abort() }
+                        } label: {
+                            Label("停止", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!model.canWrite)
+                        .help("请求停止当前 D Code 拥有的运行")
+                        .accessibilityLabel("停止当前运行")
+                    } else if model.canSafelyRetryCurrentRun {
+                        Button {
+                            Task { await model.retryCurrentRunSafely() }
+                        } label: {
+                            Label("安全重试", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Host 已确认输入未持久化，使用已恢复草稿重试")
+                        .accessibilityLabel("安全重试当前运行")
+                    }
+                }
+            }
+
+            if let queue {
+                if model.currentRunState != nil { Divider() }
+                followUpQueue(queue)
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("交互坞")
     }
 
     private func followUpQueue(_ queue: FollowUpQueueRecord) -> some View {
@@ -237,13 +265,63 @@ struct ComposerView: View {
             }
             .contentShape(Rectangle())
         }
-        .padding(10)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
-        }
         .accessibilityLabel("后续消息队列，共 \(queue.items.count) 项")
+    }
+
+    private func runStatusLabel(_ state: SessionRunState) -> String {
+        switch state.phase {
+        case .running: "正在运行"
+        case .waitingForUser: state.waitingFor?.label ?? "等待你处理"
+        case .stopRequested: "正在停止"
+        case .completed: "本轮已完成"
+        case .failed: "本轮失败"
+        case .aborted: "本轮已中止"
+        case .unknown: "运行结果未知"
+        }
+    }
+
+    private func runStatusDetail(_ state: SessionRunState) -> String {
+        switch state.phase {
+        case .running:
+            "当前 Agent 正在处理；后续消息只进入 D Code 队列。"
+        case .waitingForUser:
+            state.waitingFor?.instruction ?? "请在结构化请求中完成处理；普通队列不会截获答案。"
+        case .stopRequested:
+            "停止请求已经发出，Host 尚未确认运行真正结束。"
+        case .completed:
+            "Host 已确认正常收口并形成稳定完成结果。"
+        case .failed where state.inputPersisted:
+            "输入已经进入 Pi 会话；D Code 不会自动重复发送，请从现有历史继续。"
+        case .failed where state.retryable:
+            "Host 已确认输入未进入 Pi 会话；草稿恢复后可以安全重试。"
+        case .failed:
+            "运行失败，但当前证据不足以自动重试。"
+        case .aborted:
+            "Host 已确认运行中止；尚未派发的后续消息仍被保留。"
+        case .unknown:
+            "D Code 无法证明最终结果；已阻止自动继续与重复发送。"
+        }
+    }
+
+    private func runStatusIcon(_ phase: SessionRunPhase) -> String {
+        switch phase {
+        case .running: "waveform"
+        case .waitingForUser: "person.crop.circle.badge.exclamationmark"
+        case .stopRequested: "stop.circle"
+        case .completed: "checkmark.circle"
+        case .failed: "exclamationmark.triangle"
+        case .aborted: "xmark.circle"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    private func runStatusColor(_ phase: SessionRunPhase) -> Color {
+        switch phase {
+        case .running, .completed: .accentColor
+        case .waitingForUser, .stopRequested, .unknown: .orange
+        case .failed: .red
+        case .aborted: .secondary
+        }
     }
 
     @ViewBuilder
@@ -287,64 +365,140 @@ struct ComposerView: View {
 
     private var modelAndThinkingMenu: some View {
         Menu {
-            if model.availableModels.isEmpty {
+            modelPickerMenu
+            Divider()
+            thinkingPickerMenu
+            speedPickerMenu
+            if model.isNewSessionDraftActive {
+                Divider()
+                Button {
+                    model.resetNewSessionRuntimeToPiDefaults()
+                } label: {
+                    Label("重置为 Pi 默认设置", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(model.newSessionDefaultModel == nil)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "cpu")
+                Text(model.isLoadingNewSessionModels ? "载入模型…" : (model.composerModel?.displayName ?? "选择模型"))
+                    .lineLimit(1)
+                if let thinkingLevel = model.composerThinkingLevel {
+                    Text(thinkingLabel(thinkingLevel))
+                        .foregroundStyle(.purple)
+                }
+            }
+            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("配置模型、思考强度与速度")
+        .accessibilityLabel(
+            "模型 \(model.composerModel?.displayName ?? "未选择")，思考强度 \(thinkingLabel(model.composerThinkingLevel))，速度 \(speedLabel)"
+        )
+    }
+
+    private var modelPickerMenu: some View {
+        Menu {
+            if model.isLoadingNewSessionModels {
+                Text("正在读取 Pi 模型…")
+            } else if let issue = model.newSessionModelIssue {
+                Text(issue)
+                Button("重新载入模型") {
+                    Task { await model.reloadNewSessionModels() }
+                }
+            } else if model.availableModels.isEmpty {
                 Text("没有可用模型")
             } else {
                 ForEach(Array(Dictionary(grouping: model.availableModels, by: \.provider).keys.sorted()), id: \.self) { provider in
                     Menu(provider) {
                         ForEach(model.availableModels.filter { $0.provider == provider }) { candidate in
                             Button {
-                                Task { await model.setModel(candidate) }
-                            } label: {
-                                if candidate.id == model.hostState?.model?.id,
-                                   candidate.provider == model.hostState?.model?.provider {
-                                    Label(candidate.displayName, systemImage: "checkmark")
+                                if model.isNewSessionDraftActive {
+                                    model.selectNewSessionModel(candidate)
                                 } else {
-                                    Text(candidate.displayName)
+                                    Task { await model.setModel(candidate) }
+                                }
+                            } label: {
+                                let title = model.isNewSessionDraftActive && model.isPiDefaultNewSessionModel(candidate)
+                                    ? "\(candidate.displayName) · Pi 默认"
+                                    : candidate.displayName
+                                if candidate.id == model.composerModel?.id,
+                                   candidate.provider == model.composerModel?.provider {
+                                    Label(title, systemImage: "checkmark")
+                                } else {
+                                    Text(title)
                                 }
                             }
                         }
                     }
                 }
             }
-            Divider()
-            Menu("思考强度") {
-                ForEach(model.availableThinkingLevels, id: \.self) { level in
-                    Button {
-                        Task { await model.setThinkingLevel(level) }
-                    } label: {
-                        if level == model.hostState?.thinkingLevel {
-                            Label(thinkingLabel(level), systemImage: "checkmark")
-                        } else {
-                            Text(thinkingLabel(level))
-                        }
+        } label: {
+            Label(
+                "模型 · \(model.isLoadingNewSessionModels ? "载入中" : (model.composerModel?.displayName ?? "未选择"))",
+                systemImage: "cpu"
+            )
+        }
+    }
+
+    private var thinkingPickerMenu: some View {
+        Menu {
+            ForEach(model.composerThinkingLevels, id: \.self) { level in
+                Button {
+                    Task { await model.setComposerThinkingLevel(level) }
+                } label: {
+                    if level == model.composerThinkingLevel {
+                        Label(thinkingLabel(level), systemImage: "checkmark")
+                    } else {
+                        Text(thinkingLabel(level))
                     }
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "cpu")
-                Text(model.hostState?.model?.displayName ?? "模型")
-                    .lineLimit(1)
-                Text(thinkingLabel(model.hostState?.thinkingLevel))
-                    .foregroundStyle(.purple)
-            }
-            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+            Label("推理强度 · \(thinkingLabel(model.composerThinkingLevel))", systemImage: "brain")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("切换模型与思考强度")
-        .accessibilityLabel("模型 \(model.hostState?.model?.displayName ?? "未知")，思考强度 \(thinkingLabel(model.hostState?.thinkingLevel))")
+        .disabled(model.composerModel == nil || model.composerThinkingLevels.isEmpty)
+    }
+
+    private var speedPickerMenu: some View {
+        Menu {
+            Button {
+                Task { await model.setComposerFastModeEnabled(false) }
+            } label: {
+                if !model.composerFastModeEnabled {
+                    Label("标准", systemImage: "checkmark")
+                } else {
+                    Text("标准")
+                }
+            }
+            Button {
+                Task { await model.setComposerFastModeEnabled(true) }
+            } label: {
+                if model.composerFastModeEnabled {
+                    Label("极速", systemImage: "checkmark")
+                } else {
+                    Text("极速")
+                }
+            }
+            .disabled(!model.composerFastModeSupported)
+            if !model.composerFastModeSupported {
+                Divider()
+                Text("当前模型不支持极速")
+            }
+        } label: {
+            Label("速度 · \(speedLabel)", systemImage: "gauge.with.dots.needle.50percent")
+        }
     }
 
     private var contextPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("上下文占用")
+            Text("上下文")
                 .font(.headline)
             if let usage = model.hostState?.contextUsage {
-                if let percent = usage.percent {
-                    ProgressView(value: percent, total: 100)
-                    Text("\(percent.formatted(.number.precision(.fractionLength(0))))%")
+                if let remainingPercent = usage.remainingPercent {
+                    ProgressView(value: remainingPercent, total: 100)
+                    Text("\(remainingPercent.formatted(.number.precision(.fractionLength(0))))% 剩余")
                         .font(.title3.monospacedDigit().weight(.semibold))
                 } else {
                     Text("暂不可用")
@@ -366,6 +520,23 @@ struct ComposerView: View {
         }
         .padding(16)
         .frame(width: 230)
+    }
+
+    private var contextRemainingRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 3)
+            if let remainingPercent = model.hostState?.contextUsage?.remainingPercent {
+                Circle()
+                    .trim(from: 0, to: remainingPercent / 100)
+                    .stroke(
+                        Color.secondary,
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
+        }
+        .accessibilityHidden(true)
     }
 
     private var commandPalette: some View {
@@ -412,40 +583,26 @@ struct ComposerView: View {
         return model.availableCommands.filter { fragment.isEmpty || $0.name.localizedCaseInsensitiveContains(fragment) }
     }
 
-    private var contextCompactLabel: String {
-        guard let percent = model.hostState?.contextUsage?.percent else { return "上下文" }
-        return "\(percent.formatted(.number.precision(.fractionLength(0))))%"
+    private var contextHelpLabel: String {
+        guard let usage = model.hostState?.contextUsage,
+              let remainingPercent = usage.remainingPercent else { return "上下文剩余量暂不可用" }
+        let remaining = remainingPercent.formatted(.number.precision(.fractionLength(0)))
+        guard let tokens = usage.tokens else { return "上下文剩余 \(remaining)%" }
+        return "上下文剩余 \(remaining)% · 已用 \(tokens.formatted()) / \(usage.contextWindow.formatted()) token"
     }
 
     private var contextAccessibilityLabel: String {
         guard let usage = model.hostState?.contextUsage else { return "暂不可用" }
-        let percent = usage.percent.map { "\($0.formatted(.number.precision(.fractionLength(0))))%" } ?? "待估算"
+        let remaining = usage.remainingPercent.map {
+            "\($0.formatted(.number.precision(.fractionLength(0))))% 剩余"
+        } ?? "剩余量待估算"
         let tokens = usage.tokens?.formatted() ?? "待估算"
-        return "\(percent)，\(tokens) / \(usage.contextWindow.formatted()) token"
+        return "\(remaining)，已用 \(tokens) / \(usage.contextWindow.formatted()) token"
     }
 
-    private var fastLabel: String {
-        guard let fast = model.hostState?.fastMode else { return "极速" }
-        if fast.enabled, !fast.active { return "极速：开 · 不支持" }
-        return fast.enabled ? "极速：开" : "极速：关"
-    }
-
-    private var fastAccessibilityLabel: String {
-        guard let fast = model.hostState?.fastMode else { return "极速模式：状态读取中" }
-        if fast.enabled, !fast.active { return "极速模式：已开启，但当前模型不支持" }
-        return fast.enabled ? "极速模式：开启" : "极速模式：关闭"
-    }
-
-    private var fastHelp: String {
-        guard let fast = model.hostState?.fastMode else { return "正在读取当前会话的极速状态" }
-        if fast.enabled, !fast.active { return "已开启，但当前 Provider 或模型不支持，请求不会改变" }
-        return fast.enabled ? "当前请求会申请 priority 服务等级" : "使用默认服务等级"
-    }
-
-    private var fastColor: Color {
-        guard let fast = model.hostState?.fastMode else { return .secondary }
-        if fast.enabled, !fast.active { return .orange }
-        return fast.enabled ? .accentColor : .secondary
+    private var speedLabel: String {
+        if model.composerFastModeEnabled, !model.composerFastModeSupported { return "极速（不支持）" }
+        return model.composerFastModeEnabled ? "极速" : "标准"
     }
 
     private var composerPlaceholder: String {
