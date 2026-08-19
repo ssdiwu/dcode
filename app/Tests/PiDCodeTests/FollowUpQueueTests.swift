@@ -54,7 +54,7 @@ final class FollowUpQueueTests: XCTestCase {
 
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
-        XCTAssertNotNil(model.followUpQueueIssue)
+        XCTAssertNotNil(model.followUp.queueIssue)
 
         let repaired = FollowUpQueueDocument(queues: [
             FollowUpQueueRecord(
@@ -72,9 +72,9 @@ final class FollowUpQueueTests: XCTestCase {
 
         let reloaded = await model.reloadFollowUpQueues()
         XCTAssertTrue(reloaded)
-        XCTAssertNil(model.followUpQueueIssue)
-        XCTAssertEqual(model.followUpQueues.single?.items.single?.text, "恢复后的正文")
-        XCTAssertEqual(model.followUpQueues.single?.pauseReason, .manualResume)
+        XCTAssertNil(model.followUp.queueIssue)
+        XCTAssertEqual(model.followUp.queues.single?.items.single?.text, "恢复后的正文")
+        XCTAssertEqual(model.followUp.queues.single?.pauseReason, .manualResume)
     }
 
     func testValidationRejectsOversizedTextAndMoreThanOneInFlightItem() throws {
@@ -212,8 +212,8 @@ final class FollowUpQueueTests: XCTestCase {
         model.updateComposerText(oversized)
         await model.enqueueFollowUpFromComposer()
         XCTAssertEqual(model.composerText, oversized)
-        XCTAssertTrue(model.followUpQueues.isEmpty)
-        XCTAssertNil(model.followUpQueueIssue)
+        XCTAssertTrue(model.followUp.queues.isEmpty)
+        XCTAssertNil(model.followUp.queueIssue)
 
         model.updateComposerText("仍然可以保存")
         await model.enqueueFollowUpFromComposer()
@@ -231,7 +231,7 @@ final class FollowUpQueueTests: XCTestCase {
         XCTAssertTrue(metadataLoaded)
         prepareRunningSession(model, runID: "run-steer")
         let target = try XCTUnwrap(model.currentDraftTarget)
-        model.pendingSteer = PendingSteerDraft(
+        model.followUp.pendingSteer = PendingSteerDraft(
             sessionID: "session-a",
             runID: "run-steer",
             steerID: "steer-a",
@@ -252,7 +252,7 @@ final class FollowUpQueueTests: XCTestCase {
             "retryable": .bool(false),
         ])))
 
-        XCTAssertNil(model.pendingSteer)
+        XCTAssertNil(model.followUp.pendingSteer)
         XCTAssertEqual(model.composerText, "必须恢复的介入正文")
     }
 
@@ -275,7 +275,7 @@ final class FollowUpQueueTests: XCTestCase {
         prepareRunningSession(model, runID: "run-steer-shutdown")
         let target = try XCTUnwrap(model.currentDraftTarget)
         model.updateComposerText("关闭前必须保留")
-        model.pendingSteer = PendingSteerDraft(
+        model.followUp.pendingSteer = PendingSteerDraft(
             sessionID: "session-a",
             runID: "run-steer-shutdown",
             steerID: "steer-shutdown",
@@ -327,15 +327,15 @@ final class FollowUpQueueTests: XCTestCase {
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
         XCTAssertEqual(
-            model.followUpQueues.first(where: { $0.id == "queue-dispatching" })?.items.first?.state,
+            model.followUp.queues.first(where: { $0.id == "queue-dispatching" })?.items.first?.state,
             .unknown
         )
         XCTAssertEqual(
-            model.followUpQueues.first(where: { $0.id == "queue-dispatching" })?.pauseReason,
+            model.followUp.queues.first(where: { $0.id == "queue-dispatching" })?.pauseReason,
             .dispatchUnknown
         )
         XCTAssertEqual(
-            model.followUpQueues.first(where: { $0.id == "queue-running" })?.pauseReason,
+            model.followUp.queues.first(where: { $0.id == "queue-running" })?.pauseReason,
             .runOutcomeUnknown
         )
 
@@ -364,7 +364,7 @@ final class FollowUpQueueTests: XCTestCase {
         let model = makeModel(root: root, queueURL: queueURL)
         let metadataLoaded = await model.loadSessionMetadata()
         XCTAssertTrue(metadataLoaded)
-        XCTAssertEqual(model.followUpQueues.single?.pauseReason, .manualResume)
+        XCTAssertEqual(model.followUp.queues.single?.pauseReason, .manualResume)
 
         let reloaded = try await FollowUpQueueStore(fileURL: queueURL).load()
         XCTAssertEqual(reloaded.queues.single?.pauseReason, .manualResume)
@@ -467,10 +467,10 @@ final class FollowUpQueueTests: XCTestCase {
         ])))
 
         let paused = await waitUntil {
-            model.followUpQueues.single?.pauseReason == .runFailed
+            model.followUp.queues.single?.pauseReason == .runFailed
         }
         XCTAssertTrue(paused)
-        let queue = try XCTUnwrap(model.followUpQueues.single)
+        let queue = try XCTUnwrap(model.followUp.queues.single)
         XCTAssertNil(queue.activeRunID)
         XCTAssertNil(queue.activeRunEntryID)
         XCTAssertEqual(queue.lineageEntryID, "user-failed")
@@ -701,15 +701,15 @@ final class FollowUpQueueTests: XCTestCase {
 
         model.updateComposerText("change direction now")
         await model.sendPrompt(deliveryMode: .steer)
-        XCTAssertTrue(model.pendingSteer?.accepted == true)
+        XCTAssertTrue(model.followUp.pendingSteer?.accepted == true)
         XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["  second  ", "third"])
 
         FileManager.default.createFile(atPath: agentDirectory.appending(path: "finish-first").path, contents: Data())
         let queueDrained = await waitUntil(timeout: .seconds(5)) {
-            model.followUpQueues.isEmpty
+            model.followUp.queues.isEmpty
                 && !model.isStreaming
                 && model.pendingPrompt == nil
-                && model.pendingSteer == nil
+                && model.followUp.pendingSteer == nil
         }
         XCTAssertTrue(queueDrained)
         XCTAssertEqual(model.composerText, "")

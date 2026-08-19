@@ -24,18 +24,18 @@ struct ComposerView: View {
     private func composer(text: Binding<String>) -> some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
-                if let followUpQueueIssue = model.followUpQueueIssue {
+                if let queueIssue = model.followUp.queueIssue {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Label(followUpQueueIssue, systemImage: "exclamationmark.triangle.fill")
+                        Label(queueIssue, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("后续消息队列不可写：\(followUpQueueIssue)")
+                            .accessibilityLabel("后续消息队列不可写：\(queueIssue)")
                         Button("重新载入") {
                             Task { await model.reloadFollowUpQueues() }
                         }
                         .buttonStyle(.borderless)
-                        .disabled(model.isMutatingFollowUpQueue)
+                        .disabled(model.followUp.isMutatingQueue)
                         .help("修复或恢复原文件后重新载入后续消息队列")
                         .accessibilityLabel("重新载入后续消息队列")
                     }
@@ -65,9 +65,9 @@ struct ComposerView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                if model.currentRunState?.phase.requiresInteractionDock == true
+                if model.activity.currentRunState?.phase.requiresInteractionDock == true
                     || model.currentFollowUpQueue != nil
-                    || model.pendingSteer != nil {
+                    || model.followUp.pendingSteer != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
                 ZStack(alignment: .topLeading) {
@@ -202,7 +202,7 @@ struct ComposerView: View {
 
     private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            if let runState = model.currentRunState, runState.phase.requiresInteractionDock {
+            if let runState = model.activity.currentRunState, runState.phase.requiresInteractionDock {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: runStatusIcon(runState.phase))
                         .foregroundStyle(runStatusColor(runState.phase))
@@ -242,8 +242,8 @@ struct ComposerView: View {
                 }
             }
 
-            if let pendingSteer = model.pendingSteer {
-                if model.currentRunState?.phase.requiresInteractionDock == true { Divider() }
+            if let pendingSteer = model.followUp.pendingSteer {
+                if model.activity.currentRunState?.phase.requiresInteractionDock == true { Divider() }
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(pendingSteer.accepted ? "介入信息已交给 Pi" : "正在提交介入信息")
@@ -259,7 +259,7 @@ struct ComposerView: View {
             }
 
             if let queue {
-                if model.currentRunState?.phase.requiresInteractionDock == true || model.pendingSteer != nil {
+                if model.activity.currentRunState?.phase.requiresInteractionDock == true || model.followUp.pendingSteer != nil {
                     Divider()
                 }
                 followUpQueue(queue)
@@ -405,7 +405,7 @@ struct ComposerView: View {
                 Button("继续派发") {
                     Task { await model.resumeFollowUpQueue(queue.id) }
                 }
-                .disabled(model.isStreaming || model.isMutatingFollowUpQueue)
+                .disabled(model.isStreaming || model.followUp.isMutatingQueue)
             }
         }
         .buttonStyle(.borderless)
@@ -424,12 +424,12 @@ struct ComposerView: View {
                 } label: {
                     Label("重置为 Pi 默认设置", systemImage: "arrow.counterclockwise")
                 }
-                .disabled(model.newSessionDefaultModel == nil)
+                .disabled(model.modelSettings.defaultModel == nil)
             }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "cpu")
-                Text(model.isLoadingNewSessionModels ? "载入模型…" : (model.composerModel?.displayName ?? "选择模型"))
+                Text(model.modelSettings.isLoadingModels ? "载入模型…" : (model.composerModel?.displayName ?? "选择模型"))
                     .lineLimit(1)
                 if let thinkingLevel = model.composerThinkingLevel {
                     Text(thinkingLabel(thinkingLevel))
@@ -448,19 +448,19 @@ struct ComposerView: View {
 
     private var modelPickerMenu: some View {
         Menu {
-            if model.isLoadingNewSessionModels {
+            if model.modelSettings.isLoadingModels {
                 Text("正在读取 Pi 模型…")
-            } else if let issue = model.newSessionModelIssue {
+            } else if let issue = model.modelSettings.modelIssue {
                 Text(issue)
                 Button("重新载入模型") {
                     Task { await model.reloadNewSessionModels() }
                 }
-            } else if model.availableModels.isEmpty {
+            } else if model.modelSettings.models.isEmpty {
                 Text("没有可用模型")
             } else {
-                ForEach(Array(Dictionary(grouping: model.availableModels, by: \.provider).keys.sorted()), id: \.self) { provider in
+                ForEach(Array(Dictionary(grouping: model.modelSettings.models, by: \.provider).keys.sorted()), id: \.self) { provider in
                     Menu(provider) {
-                        ForEach(model.availableModels.filter { $0.provider == provider }) { candidate in
+                        ForEach(model.modelSettings.models.filter { $0.provider == provider }) { candidate in
                             Button {
                                 if model.isNewSessionDraftActive {
                                     model.selectNewSessionModel(candidate)
@@ -484,7 +484,7 @@ struct ComposerView: View {
             }
         } label: {
             Label(
-                "模型 · \(model.isLoadingNewSessionModels ? "载入中" : (model.composerModel?.displayName ?? "未选择"))",
+                "模型 · \(model.modelSettings.isLoadingModels ? "载入中" : (model.composerModel?.displayName ?? "未选择"))",
                 systemImage: "cpu"
             )
         }
@@ -627,8 +627,8 @@ struct ComposerView: View {
         !model.isCreatingSession
             && !model.isSendingRequest
             && model.pendingPrompt == nil
-            && model.pendingSteer == nil
-            && !model.isMutatingFollowUpQueue
+            && model.followUp.pendingSteer == nil
+            && !model.followUp.isMutatingQueue
     }
 
     private var commandSuggestions: [CommandDescriptor] {
@@ -852,7 +852,7 @@ private struct FollowUpQueueItemRow: View {
                     } label: {
                         Image(systemName: "arrow.up")
                     }
-                    .disabled(!canMoveUp || model.isMutatingFollowUpQueue)
+                    .disabled(!canMoveUp || model.followUp.isMutatingQueue)
                     .help("上移第 \(position) 条后续消息")
                     .accessibilityLabel("上移第 \(position) 条后续消息")
                     Button {
@@ -860,7 +860,7 @@ private struct FollowUpQueueItemRow: View {
                     } label: {
                         Image(systemName: "arrow.down")
                     }
-                    .disabled(!canMoveDown || model.isMutatingFollowUpQueue)
+                    .disabled(!canMoveDown || model.followUp.isMutatingQueue)
                     .help("下移第 \(position) 条后续消息")
                     .accessibilityLabel("下移第 \(position) 条后续消息")
                     Button(role: .destructive) {
@@ -868,7 +868,7 @@ private struct FollowUpQueueItemRow: View {
                     } label: {
                         Image(systemName: "trash")
                     }
-                    .disabled(model.isMutatingFollowUpQueue)
+                    .disabled(model.followUp.isMutatingQueue)
                     .help("撤回第 \(position) 条后续消息")
                     .accessibilityLabel("撤回第 \(position) 条后续消息")
                 }
@@ -887,7 +887,7 @@ private struct FollowUpQueueItemRow: View {
                         let text = editedText
                         Task {
                             await model.editFollowUpItem(queueID: queueID, itemID: item.id, text: text)
-                            if model.followUpQueues
+                            if model.followUp.queues
                                 .flatMap(\.items)
                                 .first(where: { $0.id == item.id })?.text == text {
                                 editing = false
@@ -897,7 +897,7 @@ private struct FollowUpQueueItemRow: View {
                     .disabled(
                         editedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || editedText == item.text
-                            || model.isMutatingFollowUpQueue
+                            || model.followUp.isMutatingQueue
                     )
                 }
             } else {

@@ -158,7 +158,7 @@ struct ConversationView: View {
                             followsLatest = true
                         }
                     }
-                    .onChange(of: model.activityAttentionRecords) { _, records in
+                    .onChange(of: model.activity.attentionRecords) { _, records in
                         guard let sessionID = model.selectedSessionID,
                               let record = records.first(where: {
                                   $0.sessionID == sessionID && $0.isUnseen

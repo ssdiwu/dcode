@@ -10,11 +10,11 @@ struct ModelSettingsView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 header
 
-                if let error = model.modelSettingsError {
+                if let error = model.modelSettings.snapshotError {
                     issueBanner(error)
                 }
 
-                if let snapshot = model.modelSettings {
+                if let snapshot = model.modelSettings.snapshot {
                     if snapshot.projectOverrides.isActive {
                         projectOverrideBanner(snapshot)
                     }
@@ -27,7 +27,7 @@ struct ModelSettingsView: View {
                     enabledRulesGroup(snapshot)
                     providerCatalog(snapshot)
                     authenticationEntry(snapshot)
-                } else if model.isLoadingModelSettings {
+                } else if model.modelSettings.isLoadingSnapshot {
                     HStack(spacing: 10) {
                         ProgressView()
                             .controlSize(.small)
@@ -54,7 +54,7 @@ struct ModelSettingsView: View {
         }
         .sheet(isPresented: $showingAuthentication) {
             ProviderAuthenticationView()
-                .interactiveDismissDisabled(model.modelAuthFlow != nil)
+                .interactiveDismissDisabled(model.modelSettings.authFlow != nil)
         }
     }
 
@@ -74,7 +74,7 @@ struct ModelSettingsView: View {
                 } label: {
                     Label("刷新目录", systemImage: "arrow.clockwise")
                 }
-                .disabled(model.isLoadingModelSettings || model.isMutatingModelSettings)
+                .disabled(model.modelSettings.isLoadingSnapshot || model.modelSettings.isMutatingSnapshot)
                 .accessibilityHint("向支持动态目录的 Provider 请求一次更新")
             }
             Text(model.modelSettingsCwd)
@@ -207,7 +207,7 @@ struct ModelSettingsView: View {
                 Text("Provider 与模型目录")
                     .font(.title3.weight(.semibold))
                 Spacer()
-                if model.isLoadingModelSettings || model.isMutatingModelSettings {
+                if model.modelSettings.isLoadingSnapshot || model.modelSettings.isMutatingSnapshot {
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -383,7 +383,7 @@ struct ModelSettingsView: View {
     }
 
     private var settingsAreBusy: Bool {
-        model.isLoadingModelSettings || model.isMutatingModelSettings
+        model.modelSettings.isLoadingSnapshot || model.modelSettings.isMutatingSnapshot
     }
 
 
@@ -464,18 +464,18 @@ private struct ProviderAuthenticationView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.modelAuthFlow?.providerName ?? "关联 Provider")
+                    Text(model.modelSettings.authFlow?.providerName ?? "关联 Provider")
                         .font(.title2.weight(.semibold))
-                    Text(model.modelAuthFlow == nil
+                    Text(model.modelSettings.authFlow == nil
                         ? "认证由 Pi 管理；成功后模型会自动进入 D Code 目录。"
                         : "D Code 只传递本次认证交互，不保存或回显凭据。")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if model.modelAuthFlow != nil { ProgressView().controlSize(.small) }
+                if model.modelSettings.authFlow != nil { ProgressView().controlSize(.small) }
             }
 
-            if let flow = model.modelAuthFlow {
+            if let flow = model.modelSettings.authFlow {
                 authFlow(flow)
             } else {
                 providerList
@@ -484,7 +484,7 @@ private struct ProviderAuthenticationView: View {
             HStack {
                 Button("关闭", role: .cancel) {
                     Task {
-                        if model.modelAuthFlow != nil,
+                        if model.modelSettings.authFlow != nil,
                            !(await model.cancelModelAuthentication()) { return }
                         dismiss()
                     }
@@ -494,14 +494,14 @@ private struct ProviderAuthenticationView: View {
         }
         .padding(24)
         .frame(width: 620, height: 520)
-        .onChange(of: model.modelAuthFlow?.prompt?.id) { _, _ in value = "" }
+        .onChange(of: model.modelSettings.authFlow?.prompt?.id) { _, _ in value = "" }
         .onDisappear {
             value = ""
         }
     }
 
     private var providerList: some View {
-        let providers = model.modelSettings?.providers.filter { !$0.auth.configured } ?? []
+        let providers = model.modelSettings.snapshot?.providers.filter { !$0.auth.configured } ?? []
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 if providers.isEmpty {

@@ -76,7 +76,7 @@ struct SessionDetailView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let runState = model.currentRunState,
+            if let runState = model.activity.currentRunState,
                runState.phase.isActive || runState.phase == .unknown {
                 StatusPill(
                     label: headerStatusLabel(runState),

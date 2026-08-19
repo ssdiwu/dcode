@@ -9,6 +9,9 @@ let package = Package(
     products: [
         .executable(name: "PiDCode", targets: ["PiDCode"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/nalexn/ViewInspector", exact: "0.10.3"),
+    ],
     targets: [
         .executableTarget(
             name: "PiDCode",
@@ -17,7 +20,10 @@ let package = Package(
         ),
         .testTarget(
             name: "PiDCodeTests",
-            dependencies: ["PiDCode"],
+            dependencies: [
+                "PiDCode",
+                .product(name: "ViewInspector", package: "ViewInspector"),
+            ],
             path: "app/Tests/PiDCodeTests"
         ),
     ]

@@ -142,19 +142,19 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var activityList: some View {
-        if let activityAttentionIssue = model.activityAttentionIssue {
+        if let attentionIssue = model.activity.attentionIssue {
             Section {
-                Label(activityAttentionIssue, systemImage: "exclamationmark.triangle.fill")
+                Label(attentionIssue, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
         }
-        if let activitySessionError = model.activitySessionError {
+        if let sessionError = model.activity.sessionError {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("活动列表未完整载入", systemImage: "exclamationmark.triangle")
                         .font(.caption.weight(.semibold))
-                    Text(activitySessionError)
+                    Text(sessionError)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
@@ -176,13 +176,13 @@ struct SidebarView: View {
                 }
             }
         }
-        if model.activitySections.isEmpty && !model.isLoadingActivitySessions {
+        if model.activitySections.isEmpty && !model.activity.isLoadingSessions {
             Section("活动") {
                 Text("还没有可显示的会话活动")
                     .foregroundStyle(.secondary)
             }
         }
-        if model.isLoadingActivitySessions {
+        if model.activity.isLoadingSessions {
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

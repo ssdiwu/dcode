@@ -51,7 +51,7 @@ struct RootView: View {
                         closeOverlays()
                     }
                 }
-                .onChange(of: model.searchPresented) { _, presented in
+                .onChange(of: model.search.presented) { _, presented in
                     if presented {
                         searchPreviousResponder = NSApp.keyWindow?.firstResponder
                     } else if let responder = searchPreviousResponder {
@@ -140,9 +140,9 @@ struct RootView: View {
                 .padding(.leading, surface.contentLeadingInset)
                 .padding(.trailing, layout.inlineInspector ? layout.inspectorWidth : 0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
-                .accessibilityHidden(layout.dimsBackground || model.searchPresented)
-                .disabled(model.searchPresented)
+                .allowsHitTesting(!layout.dimsBackground && !model.search.presented)
+                .accessibilityHidden(layout.dimsBackground || model.search.presented)
+                .disabled(model.search.presented)
 
             if layout.inlineSidebar {
                 HStack(spacing: 0) {
@@ -152,9 +152,9 @@ struct RootView: View {
                     Spacer(minLength: 0)
                 }
                 .transition(.move(edge: .leading))
-                .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
-                .accessibilityHidden(layout.dimsBackground || model.searchPresented)
-                .disabled(model.searchPresented)
+                .allowsHitTesting(!layout.dimsBackground && !model.search.presented)
+                .accessibilityHidden(layout.dimsBackground || model.search.presented)
+                .disabled(model.search.presented)
             }
 
             if layout.inlineInspector {
@@ -168,9 +168,9 @@ struct RootView: View {
                         .frame(width: layout.inspectorWidth)
                 }
                 .transition(.move(edge: .trailing))
-                .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
-                .accessibilityHidden(layout.dimsBackground || model.searchPresented)
-                .disabled(model.searchPresented)
+                .allowsHitTesting(!layout.dimsBackground && !model.search.presented)
+                .accessibilityHidden(layout.dimsBackground || model.search.presented)
+                .disabled(model.search.presented)
             }
 
             if surface.canResizeNavigation {
@@ -193,8 +193,8 @@ struct RootView: View {
                 }
                 .padding(.top, PiDCodeMetrics.windowTopBarHeight)
                 .zIndex(1)
-                .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
-                .accessibilityHidden(layout.dimsBackground || model.searchPresented)
+                .allowsHitTesting(!layout.dimsBackground && !model.search.presented)
+                .accessibilityHidden(layout.dimsBackground || model.search.presented)
             }
 
             if layout.inlineInspector {
@@ -216,8 +216,8 @@ struct RootView: View {
                     )
                 }
                 .zIndex(1)
-                .allowsHitTesting(!layout.dimsBackground && !model.searchPresented)
-                .accessibilityHidden(layout.dimsBackground || model.searchPresented)
+                .allowsHitTesting(!layout.dimsBackground && !model.search.presented)
+                .accessibilityHidden(layout.dimsBackground || model.search.presented)
             }
 
             if layout.dimsBackground {
@@ -240,8 +240,8 @@ struct RootView: View {
                 }
                 .transition(.move(edge: .leading))
                 .zIndex(3)
-                .disabled(model.searchPresented)
-                .accessibilityHidden(model.searchPresented)
+                .disabled(model.search.presented)
+                .accessibilityHidden(model.search.presented)
             }
 
             if layout.inspectorOverlay {
@@ -256,11 +256,11 @@ struct RootView: View {
                 }
                 .transition(.move(edge: .trailing))
                 .zIndex(3)
-                .disabled(model.searchPresented)
-                .accessibilityHidden(model.searchPresented)
+                .disabled(model.search.presented)
+                .accessibilityHidden(model.search.presented)
             }
 
-            if model.searchPresented {
+            if model.search.presented {
                 Color.black.opacity(0.24)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
@@ -281,7 +281,7 @@ struct RootView: View {
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorUserHidden)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: sidebarOverlayPresented)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: inspectorOverlayPresented)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: model.searchPresented)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: model.search.presented)
     }
 
     private func centralContent(navigationWidth: CGFloat) -> some View {
@@ -376,11 +376,11 @@ struct RootView: View {
                         TopBarActionButton(
                             systemName: "sidebar.left",
                             label: layout.sidebarIsVisible ? "隐藏会话栏" : "显示会话栏",
-                            disabled: model.searchPresented
+                            disabled: model.search.presented
                         ) {
                             toggleSidebar(layout: layout)
                         }
-                        .accessibilityHidden(model.searchPresented)
+                        .accessibilityHidden(model.search.presented)
                         if layout.showsTopBarNewSession {
                             TopBarActionButton(
                                 systemName: "plus.bubble",
@@ -390,11 +390,11 @@ struct RootView: View {
                                     || model.isOpeningSession
                                     || model.isStreaming
                                     || model.isPromptTransactionActive
-                                    || model.searchPresented
+                                    || model.search.presented
                             ) {
                                 createGlobalSession()
                             }
-                            .accessibilityHidden(model.searchPresented)
+                            .accessibilityHidden(model.search.presented)
                         }
                     }
                     Spacer(minLength: 0)
@@ -403,8 +403,8 @@ struct RootView: View {
 
                 HStack(spacing: 0) {
                     topBarIdentity
-                        .allowsHitTesting(!model.searchPresented)
-                        .accessibilityHidden(model.searchPresented)
+                        .allowsHitTesting(!model.search.presented)
+                        .accessibilityHidden(model.search.presented)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, PiDCodeMetrics.spacingSection)
@@ -416,11 +416,11 @@ struct RootView: View {
                         TopBarActionButton(
                             systemName: "sidebar.right",
                             label: inspectorIsVisible(layout: layout) ? "隐藏信息检查器" : "显示信息检查器",
-                            disabled: model.searchPresented
+                            disabled: model.search.presented
                         ) {
                             toggleInspector(layout: layout)
                         }
-                        .accessibilityHidden(model.searchPresented)
+                        .accessibilityHidden(model.search.presented)
                     }
                 }
                 .padding(.trailing, PiDCodeMetrics.spacingGroup)

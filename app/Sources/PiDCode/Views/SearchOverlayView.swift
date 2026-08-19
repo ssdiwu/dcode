@@ -50,7 +50,7 @@ struct SearchOverlayView: View {
             TextField(
                 "搜索标题、用户消息与助手回复",
                 text: Binding(
-                    get: { model.searchQuery },
+                    get: { model.search.query },
                     set: { model.updateSearchQuery($0) }
                 )
             )
@@ -91,7 +91,7 @@ struct SearchOverlayView: View {
             Picker(
                 "项目",
                 selection: Binding(
-                    get: { model.searchProjectID },
+                    get: { model.search.projectID },
                     set: { model.selectSearchProject($0) }
                 )
             ) {
@@ -110,7 +110,7 @@ struct SearchOverlayView: View {
             Picker(
                 "源文件夹",
                 selection: Binding(
-                    get: { model.searchSourceFolderPath },
+                    get: { model.search.sourceFolderPath },
                     set: { model.selectSearchSourceFolder($0) }
                 )
             ) {
@@ -135,7 +135,7 @@ struct SearchOverlayView: View {
 
     @ViewBuilder
     private var resultContent: some View {
-        if let error = model.searchError {
+        if let error = model.search.error {
             ContentUnavailableView(
                 "搜索暂不可用",
                 systemImage: "exclamationmark.magnifyingglass",
@@ -147,27 +147,27 @@ struct SearchOverlayView: View {
                     .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                     .padding(.bottom, 18)
             }
-        } else if model.isSearchQuerying {
+        } else if model.search.isQuerying {
             ContentUnavailableView(
                 "正在搜索",
                 systemImage: "magnifyingglass",
                 description: Text("正在查询当前可见会话。")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if model.searchResults.isEmpty,
-                  model.searchIndexStatus.state != .ready {
+        } else if model.search.results.isEmpty,
+                  model.search.indexStatus.state != .ready {
             ContentUnavailableView(
-                model.searchIndexStatus.state == .rebuilding ? "正在重建搜索索引" : "正在建立搜索索引",
+                model.search.indexStatus.state == .rebuilding ? "正在重建搜索索引" : "正在建立搜索索引",
                 systemImage: "text.magnifyingglass",
                 description: Text("只读取 D Code 最近会话与已关联项目的当前会话路径。")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if model.searchResults.isEmpty {
-            ContentUnavailableView.search(text: model.searchQuery)
+        } else if model.search.results.isEmpty {
+            ContentUnavailableView.search(text: model.search.query)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
-                if let error = model.searchOpenError {
+                if let error = model.search.openError {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: "exclamationmark.circle")
                             .foregroundStyle(.orange)
@@ -198,14 +198,14 @@ struct SearchOverlayView: View {
         ScrollViewReader { proxy in
             ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(Array(model.searchResults.enumerated()), id: \.element.id) { index, result in
+                        ForEach(Array(model.search.results.enumerated()), id: \.element.id) { index, result in
                             Button {
                                 Task { await model.openSearchResult(result) }
                             } label: {
                                 SearchResultRow(
                                     result: result,
                                     ownership: model.ownership(for: result),
-                                    selected: index == model.searchSelection
+                                    selected: index == model.search.selection
                                 )
                             }
                             .buttonStyle(.plain)
@@ -219,7 +219,7 @@ struct SearchOverlayView: View {
                     }
                     .padding(8)
             }
-            .onChange(of: model.searchSelection) { _, index in
+            .onChange(of: model.search.selection) { _, index in
                 if reduceMotion { proxy.scrollTo(index) }
                 else { withAnimation(.smooth(duration: 0.14)) { proxy.scrollTo(index) } }
             }
@@ -248,17 +248,17 @@ struct SearchOverlayView: View {
     }
 
     private var selectedProject: DCodeProject? {
-        guard let id = model.searchProjectID else { return nil }
+        guard let id = model.search.projectID else { return nil }
         return model.projects.first(where: { $0.id == id })
     }
 
     @ViewBuilder
     private var indexStatus: some View {
-        switch model.searchIndexStatus.state {
+        switch model.search.indexStatus.state {
         case .building, .updating, .rebuilding:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.small)
-                if let progress = model.searchIndexStatus.progress, progress.total > 0 {
+                if let progress = model.search.indexStatus.progress, progress.total > 0 {
                     Text("\(progress.completed)/\(progress.total)")
                         .monospacedDigit()
                 } else {
@@ -272,7 +272,7 @@ struct SearchOverlayView: View {
                 .font(.caption)
                 .foregroundStyle(.red)
         case .ready:
-            Text("\(model.searchResults.count) 个会话")
+            Text("\(model.search.results.count) 个会话")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .idle:

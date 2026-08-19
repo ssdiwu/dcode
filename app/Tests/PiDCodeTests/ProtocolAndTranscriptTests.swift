@@ -2097,7 +2097,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         await model.createSession(at: workspace)
         XCTAssertTrue(model.isNewSessionDraftActive)
-        XCTAssertEqual(model.availableModels.map(\.qualifiedName), ["openai/gpt-4o-mini"])
+        XCTAssertEqual(model.modelSettings.models.map(\.qualifiedName), ["openai/gpt-4o-mini"])
         XCTAssertNil(model.selectedNewSessionModel)
         XCTAssertNil(model.composerThinkingLevel)
         XCTAssertTrue(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "draft-models-requested").path))
@@ -2112,7 +2112,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         await model.createSession(at: workspace)
         model.updateComposerText("第一条真实消息")
         XCTAssertFalse(model.canSubmitComposerText)
-        model.selectNewSessionModel(try XCTUnwrap(model.availableModels.first))
+        model.selectNewSessionModel(try XCTUnwrap(model.modelSettings.models.first))
         XCTAssertEqual(model.selectedNewSessionModel?.qualifiedName, "openai/gpt-4o-mini")
         XCTAssertEqual(model.composerThinkingLevel, "high")
         await model.setComposerThinkingLevel("high")

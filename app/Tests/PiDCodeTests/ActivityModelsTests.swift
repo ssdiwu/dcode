@@ -105,14 +105,14 @@ final class ActivityModelsTests: XCTestCase {
                 entryID: "assistant-new"
             )
         ))
-        XCTAssertEqual(model.activityAttentionRecords.first?.isUnseen, true)
+        XCTAssertEqual(model.activity.attentionRecords.first?.isUnseen, true)
 
         model.markCompletionPresented(entryID: "assistant-old")
-        XCTAssertEqual(model.activityAttentionRecords.first?.isUnseen, true)
+        XCTAssertEqual(model.activity.attentionRecords.first?.isUnseen, true)
 
         model.transcript.append(transcriptItem(id: "assistant-new"))
         model.markCompletionPresented(entryID: "assistant-new")
-        XCTAssertEqual(model.activityAttentionRecords.first?.isUnseen, false)
+        XCTAssertEqual(model.activity.attentionRecords.first?.isUnseen, false)
 
         model.handle(HostEvent(
             name: "session.runStateChanged",
@@ -122,10 +122,10 @@ final class ActivityModelsTests: XCTestCase {
                 entryID: "assistant-latest"
             )
         ))
-        XCTAssertEqual(model.activityAttentionRecords.first?.entryID, "assistant-latest")
-        XCTAssertEqual(model.activityAttentionRecords.first?.isUnseen, true)
+        XCTAssertEqual(model.activity.attentionRecords.first?.entryID, "assistant-latest")
+        XCTAssertEqual(model.activity.attentionRecords.first?.isUnseen, true)
         model.markCompletionPresented(entryID: "assistant-new")
-        XCTAssertEqual(model.activityAttentionRecords.first?.isUnseen, true)
+        XCTAssertEqual(model.activity.attentionRecords.first?.isUnseen, true)
     }
 
     func testRunStateDistinguishesStopRequestFromConfirmedAbort() {
@@ -135,16 +135,16 @@ final class ActivityModelsTests: XCTestCase {
             name: "session.runStateChanged",
             data: runStateData(runID: "run-1", phase: "stopRequested")
         ))
-        XCTAssertEqual(model.currentRunState?.phase, .stopRequested)
+        XCTAssertEqual(model.activity.currentRunState?.phase, .stopRequested)
         XCTAssertTrue(model.isStreaming)
 
         model.handle(HostEvent(
             name: "session.runStateChanged",
             data: runStateData(runID: "run-1", phase: "aborted", completedAt: "2026-08-16T01:00:03Z")
         ))
-        XCTAssertEqual(model.currentRunState?.phase, .aborted)
+        XCTAssertEqual(model.activity.currentRunState?.phase, .aborted)
         XCTAssertFalse(model.isStreaming)
-        XCTAssertTrue(model.activityAttentionRecords.isEmpty)
+        XCTAssertTrue(model.activity.attentionRecords.isEmpty)
     }
 
     func testHostRunStateStillGatesActionsAfterAgentEndStopsStreamingPresentation() {
@@ -177,7 +177,7 @@ final class ActivityModelsTests: XCTestCase {
         XCTAssertEqual(waiting.waitingFor, .editor)
 
         let model = AppModel()
-        model.activityAttentionRecords = [ActivityAttentionRecord(
+        model.activity.attentionRecords = [ActivityAttentionRecord(
             sessionID: "session-a",
             runID: "run-completed",
             completionID: "run-completed:assistant",
@@ -186,7 +186,7 @@ final class ActivityModelsTests: XCTestCase {
             presentedAt: nil
         )]
         XCTAssertFalse(model.hasUnseenActivity)
-        model.activitySessions = [summary(id: "session-a", modified: "2026-08-16T09:10:00Z")]
+        model.activity.sessions = [summary(id: "session-a", modified: "2026-08-16T09:10:00Z")]
         XCTAssertTrue(model.hasUnseenActivity)
     }
 

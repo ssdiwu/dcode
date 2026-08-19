@@ -61,7 +61,7 @@ final class SearchModelsTests: XCTestCase {
 
     func testSearchSelectionNeverLeavesTheAvailableResultRange() {
         let model = AppModel()
-        model.searchResults = (0..<2).map { index in
+        model.search.results = (0..<2).map { index in
             SessionSearchResult(
                 sessionId: "session-\(index)",
                 entryId: nil,
@@ -75,9 +75,9 @@ final class SearchModelsTests: XCTestCase {
             )
         }
         model.moveSearchSelection(by: 4)
-        XCTAssertEqual(model.searchSelection, 1)
+        XCTAssertEqual(model.search.selection, 1)
         model.moveSearchSelection(by: -4)
-        XCTAssertEqual(model.searchSelection, 0)
+        XCTAssertEqual(model.search.selection, 0)
     }
 
     func testSearchResultAccessibilityDescriptionUsesVisibleValues() {
@@ -133,18 +133,18 @@ final class SearchModelsTests: XCTestCase {
             snippet: "旧结果",
             matchCount: 1
         )
-        model.searchPresented = true
-        model.searchResults = [result]
+        model.search.presented = true
+        model.search.results = [result]
         model.updateSearchQuery("新查询")
-        XCTAssertTrue(model.searchResults.isEmpty)
+        XCTAssertTrue(model.search.results.isEmpty)
 
-        model.searchResults = [result]
+        model.search.results = [result]
         model.selectSearchProject(UUID())
-        XCTAssertTrue(model.searchResults.isEmpty)
+        XCTAssertTrue(model.search.results.isEmpty)
 
-        model.searchResults = [result]
+        model.search.results = [result]
         model.selectSearchSourceFolder("/work/new")
-        XCTAssertTrue(model.searchResults.isEmpty)
+        XCTAssertTrue(model.search.results.isEmpty)
     }
 
     func testProjectChangesReconcilePersistedSearchScope() {
@@ -155,8 +155,8 @@ final class SearchModelsTests: XCTestCase {
         let projectB = DCodeProject(name: "B", sourceFolders: [])
         let model = AppModel()
         model.projects = [projectA, projectB]
-        model.searchProjectID = projectA.id
-        model.searchSourceFolderPath = "/work/shared"
+        model.search.projectID = projectA.id
+        model.search.sourceFolderPath = "/work/shared"
 
         model.projects = [
             DCodeProject(id: projectA.id, name: "A", sourceFolders: []),
@@ -167,22 +167,22 @@ final class SearchModelsTests: XCTestCase {
             ),
         ]
         model.reconcileSearchScope()
-        XCTAssertEqual(model.searchProjectID, projectA.id)
-        XCTAssertNil(model.searchSourceFolderPath)
+        XCTAssertEqual(model.search.projectID, projectA.id)
+        XCTAssertNil(model.search.sourceFolderPath)
 
         model.projects.removeAll(where: { $0.id == projectA.id })
         model.reconcileSearchScope()
-        XCTAssertNil(model.searchProjectID)
-        XCTAssertNil(model.searchSourceFolderPath)
+        XCTAssertNil(model.search.projectID)
+        XCTAssertNil(model.search.sourceFolderPath)
     }
 
     func testOpeningSearchResultFreezesSearchIntentUntilTheTransactionSettles() {
         let projectID = UUID()
         let model = AppModel()
-        model.searchPresented = true
-        model.searchQuery = "当前查询"
-        model.searchProjectID = projectID
-        model.searchSourceFolderPath = "/work/current"
+        model.search.presented = true
+        model.search.query = "当前查询"
+        model.search.projectID = projectID
+        model.search.sourceFolderPath = "/work/current"
         model.isOpeningSession = true
 
         model.updateSearchQuery("新查询")
@@ -190,10 +190,10 @@ final class SearchModelsTests: XCTestCase {
         model.selectSearchSourceFolder(nil)
         model.dismissSearch()
 
-        XCTAssertEqual(model.searchQuery, "当前查询")
-        XCTAssertEqual(model.searchProjectID, projectID)
-        XCTAssertEqual(model.searchSourceFolderPath, "/work/current")
-        XCTAssertTrue(model.searchPresented)
+        XCTAssertEqual(model.search.query, "当前查询")
+        XCTAssertEqual(model.search.projectID, projectID)
+        XCTAssertEqual(model.search.sourceFolderPath, "/work/current")
+        XCTAssertTrue(model.search.presented)
     }
 
     func testSearchRequestPlanIncludesVisibleUnionAndCombinedScopeBeforeLimit() {
@@ -317,10 +317,10 @@ final class SearchModelsTests: XCTestCase {
             matchCount: 1
         )
         let targetToken = UUID()
-        model.searchPresented = true
-        model.searchQuery = "项目搜索"
-        model.searchResults = [result]
-        model.searchSelection = 0
+        model.search.presented = true
+        model.search.query = "项目搜索"
+        model.search.results = [result]
+        model.search.selection = 0
         model.conversationTarget = ConversationTarget(
             sessionID: "session-1",
             entryID: "message-7",
@@ -330,11 +330,11 @@ final class SearchModelsTests: XCTestCase {
         model.recordSearchOpenFailure("SEARCH_TARGET_STALE")
         model.clearConversationTarget(UUID())
 
-        XCTAssertTrue(model.searchPresented)
-        XCTAssertEqual(model.searchQuery, "项目搜索")
-        XCTAssertEqual(model.searchResults, [result])
-        XCTAssertEqual(model.searchSelection, 0)
-        XCTAssertEqual(model.searchOpenError, "SEARCH_TARGET_STALE")
+        XCTAssertTrue(model.search.presented)
+        XCTAssertEqual(model.search.query, "项目搜索")
+        XCTAssertEqual(model.search.results, [result])
+        XCTAssertEqual(model.search.selection, 0)
+        XCTAssertEqual(model.search.openError, "SEARCH_TARGET_STALE")
         XCTAssertEqual(model.conversationTarget?.token, targetToken)
 
         model.clearConversationTarget(targetToken)
@@ -343,8 +343,8 @@ final class SearchModelsTests: XCTestCase {
 
     func testFailedIndexStatusStopsQueryingAndCannotTriggerAutomaticResultFetch() {
         let model = AppModel()
-        model.searchPresented = true
-        model.isSearchQuerying = true
+        model.search.presented = true
+        model.search.isQuerying = true
         let failed = SessionSearchIndexStatus(
             state: .failed,
             complete: false,
@@ -364,15 +364,15 @@ final class SearchModelsTests: XCTestCase {
             ])
         ))
 
-        XCTAssertEqual(model.searchIndexStatus, failed)
-        XCTAssertFalse(model.isSearchQuerying)
-        XCTAssertEqual(model.searchError, "缓存无法读取")
+        XCTAssertEqual(model.search.indexStatus, failed)
+        XCTAssertFalse(model.search.isQuerying)
+        XCTAssertEqual(model.search.error, "缓存无法读取")
     }
 
     func testIncompleteIndexEventImmediatelyRemovesPreviouslyReadyResults() {
         let model = AppModel()
-        model.searchPresented = true
-        model.searchResults = [SessionSearchResult(
+        model.search.presented = true
+        model.search.results = [SessionSearchResult(
             sessionId: "stale-session",
             entryId: nil,
             matchKind: "title",
@@ -393,8 +393,8 @@ final class SearchModelsTests: XCTestCase {
             ])
         ))
 
-        XCTAssertTrue(model.searchResults.isEmpty)
-        XCTAssertTrue(model.isSearchQuerying)
-        XCTAssertEqual(model.searchIndexStatus.state, .updating)
+        XCTAssertTrue(model.search.results.isEmpty)
+        XCTAssertTrue(model.search.isQuerying)
+        XCTAssertEqual(model.search.indexStatus.state, .updating)
     }
 }

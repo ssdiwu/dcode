@@ -36,8 +36,8 @@ final class HostProcessLifecycle: @unchecked Sendable {
     }
 }
 
-actor PiHostClient {
-    typealias EventSink = @MainActor @Sendable (HostEvent) -> Void
+actor PiHostClient: HostProviding {
+    typealias EventSink = HostEventSink
 
     nonisolated let lifecycle = HostProcessLifecycle()
 
