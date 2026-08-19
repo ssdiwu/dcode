@@ -44,6 +44,8 @@ export interface SessionInspection {
     thinkingLevel: string;
   };
   activePlan: unknown;
+  /** dgoal-work-v1 最新条目携带的待批计划提案；无提案时为 null。 */
+  activeProposal: unknown;
 }
 
 export interface SessionPathSummary {
@@ -485,21 +487,27 @@ function sessionPaths(
 }
 
 function findActivePlan(entries: SessionEntry[]): unknown {
+  return findDgoalWorkState(entries).plan;
+}
+
+/** 最新 dgoal-work-v1 条目的 {plan, proposal}：plan 保留 active/paused goal，proposal 为待批提案。 */
+function findDgoalWorkState(entries: SessionEntry[]): { plan: unknown; proposal: unknown } {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (!entry || entry.type !== "custom") continue;
     if (entry.customType === "dgoal-work-v1") {
-      const goal = (entry.data as { goal?: unknown } | undefined)?.goal;
-      if (typeof goal === "object" && goal !== null && (goal as { status?: unknown }).status === "active") return goal;
-      return null;
+      const data = entry.data as { goal?: unknown; pendingProposal?: unknown } | undefined;
+      const goal = data?.goal;
+      const status = typeof goal === "object" && goal !== null ? (goal as { status?: unknown }).status : undefined;
+      const plan = typeof goal === "object" && goal !== null && (status === "active" || status === "paused") ? goal : null;
+      return { plan, proposal: plan ? data?.pendingProposal ?? null : null };
     }
     if (entry.customType === "dgoal-plan-v2") {
       const goal = (entry.data as { goal?: unknown } | undefined)?.goal;
-      if (typeof goal === "object" && goal !== null) return goal;
-      return null;
+      return { plan: typeof goal === "object" && goal !== null ? goal : null, proposal: null };
     }
   }
-  return null;
+  return { plan: null, proposal: null };
 }
 
 export class SessionReader {
@@ -663,6 +671,7 @@ export class SessionReader {
         thinkingLevel: context.thinkingLevel,
       },
       activePlan: findActivePlan(branch),
+      activeProposal: findDgoalWorkState(branch).proposal,
     };
   }
 }

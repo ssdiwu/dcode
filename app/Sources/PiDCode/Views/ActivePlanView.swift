@@ -70,18 +70,28 @@ struct ActivePlanView: View {
                             .font(.headline)
                         Text(plan.objective)
                             .font(.callout.weight(.semibold))
+                        assuranceHeader(plan)
                         Text("第 \(currentStepNumber(plan))/\(max(plan.totalCount, 1)) 步 · \(plan.currentLabel)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if !plan.rootItems.isEmpty {
-                            PlanItemGroup(title: nil, status: nil, items: plan.rootItems, currentItemID: plan.currentItem?.id)
+                            PlanItemGroup(
+                                title: nil,
+                                status: nil,
+                                items: plan.rootItems,
+                                currentItemID: plan.currentItem?.id,
+                                acceptanceCriteria: [],
+                                check: nil
+                            )
                         }
                         ForEach(plan.phases) { phase in
                             PlanItemGroup(
                                 title: phase.subject,
                                 status: phase.status,
                                 items: phase.items,
-                                currentItemID: plan.currentItem?.id
+                                currentItemID: plan.currentItem?.id,
+                                acceptanceCriteria: phase.acceptanceCriteria,
+                                check: phase.check
                             )
                         }
                     }
@@ -110,6 +120,63 @@ struct ActivePlanView: View {
         }
         .frame(width: 430)
         .frame(maxHeight: 430)
+    }
+
+    /// 保障档位、暂停原因、耗时与升级历史；soft 清单如实标注无执行保障。
+    private func assuranceHeader(_ plan: ActivePlanPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(plan.assuranceLabel)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        plan.isSoftList ? Color.secondary.opacity(0.15) : Color.accentColor.opacity(0.15),
+                        in: Capsule()
+                    )
+                if let contract = plan.contract, contract.transitions > 0 {
+                    Text("已升级 \(contract.transitions) 次")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let elapsed = plan.startedAt.map({ Date().timeIntervalSince($0) }),
+                   let text = ConversationTimingFormatter.durationText(elapsed) {
+                    Text("已进行 \(text)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let pause = plan.pauseReasonLabel {
+                Label(pause + (plan.pauseDetail.map { " · \($0)" } ?? ""), systemImage: "pause.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let contract = plan.contract {
+                ForEach(Array(contract.acceptanceCriteria.enumerated()), id: \.offset) { index, criterion in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("验收 \(index + 1)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(criterion.criterion)
+                            .font(.caption)
+                        if let evidence = criterion.evidence, !evidence.isEmpty {
+                            Text("证据：\(evidence)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                if let goalCheck = contract.goalCheck {
+                    Label(
+                        "\(goalCheck.label)\(goalCheck.modelID.map { " · \($0)" } ?? "")",
+                        systemImage: goalCheck.isApproved ? "checkmark.seal.fill" : "xmark.seal"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(goalCheck.isApproved ? .green : (goalCheck.isError ? .orange : .red))
+                }
+            }
+        }
     }
 
     private var accessibilityLabel: String {
@@ -182,6 +249,8 @@ private struct PlanItemGroup: View {
     let status: PlanItemStatus?
     let items: [PlanItemPresentation]
     let currentItemID: String?
+    let acceptanceCriteria: [PlanCriterionPresentation]
+    let check: PlanCheckPresentation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -195,7 +264,20 @@ private struct PlanItemGroup: View {
                             .font(.caption2)
                             .foregroundStyle(statusColor(status))
                     }
+                    if let check {
+                        Label(
+                            check.label + (check.modelID.map { " · \($0)" } ?? ""),
+                            systemImage: check.isApproved ? "checkmark.seal.fill" : "xmark.seal"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(check.isApproved ? .green : (check.isError ? .orange : .red))
+                    }
                 }
+            }
+            ForEach(Array(acceptanceCriteria.enumerated()), id: \.offset) { index, criterion in
+                Text("验收：\(criterion.criterion)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             if items.isEmpty {
                 Text("此阶段没有工作项")
@@ -219,11 +301,19 @@ private struct PlanItemRow: View {
             Image(systemName: statusIcon)
                 .foregroundStyle(statusColor(item.status))
                 .frame(width: 16)
-            Text(item.subject)
-                .font(.callout.weight(isCurrent ? .semibold : .regular))
-                .foregroundStyle(item.status.isTerminal ? .secondary : .primary)
-                .strikethrough(item.status == .abandoned, color: .secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.subject)
+                    .font(.callout.weight(isCurrent ? .semibold : .regular))
+                    .foregroundStyle(item.status.isTerminal ? .secondary : .primary)
+                    .strikethrough(item.status == .abandoned, color: .secondary)
+                if let evidence = item.evidence, !evidence.isEmpty, item.status.isTerminal {
+                    Text("证据：\(evidence)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if isCurrent {
                 Text("当前")
                     .font(.caption2.weight(.semibold))

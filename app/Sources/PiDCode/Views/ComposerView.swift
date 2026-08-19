@@ -67,7 +67,8 @@ struct ComposerView: View {
                 }
                 if model.activity.currentRunState?.phase.requiresInteractionDock == true
                     || model.currentFollowUpQueue != nil
-                    || model.followUp.pendingSteer != nil {
+                    || model.followUp.pendingSteer != nil
+                    || model.pendingPlanProposal != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
                 ZStack(alignment: .topLeading) {
@@ -133,13 +134,21 @@ struct ComposerView: View {
             Button {
                 showingContext.toggle()
             } label: {
-                contextRemainingRing
-                    .frame(width: 18, height: 18)
-                    .frame(
-                        width: PiDCodeMetrics.compactControlHeight,
-                        height: PiDCodeMetrics.compactControlHeight
-                    )
-                    .contentShape(Rectangle())
+                HStack(spacing: 4) {
+                    contextRemainingRing
+                        .frame(width: 18, height: 18)
+                    if let delta = contextDeltaCaption {
+                        Text(delta)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .help("本轮运行累计的上下文 token 增减：+ 为新增，− 为压缩或修剪释放")
+                    }
+                }
+                .frame(
+                    width: PiDCodeMetrics.compactControlHeight,
+                    height: PiDCodeMetrics.compactControlHeight
+                )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .popover(isPresented: $showingContext, arrowEdge: .bottom) {
@@ -256,6 +265,11 @@ struct ComposerView: View {
                     Image(systemName: "arrow.turn.up.right")
                         .foregroundStyle(Color.accentColor)
                 }
+            }
+
+            if let proposal = model.pendingPlanProposal {
+                Divider()
+                planProposalCard(proposal)
             }
 
             if let queue {
@@ -565,15 +579,150 @@ struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            contextCompositionSection
         }
         .padding(16)
-        .frame(width: 230)
+        .frame(width: 268)
+        .task {
+            await model.loadContextBreakdown()
+        }
+    }
+
+    /// 构成占比：分项 token 为估算口径（与 Pi 压缩判断一致），
+    /// “系统与工具”由真实总量反推；无锚定时只显示消息分项。
+    private var contextCompositionSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            HStack {
+                Text("构成")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(model.isLoadingContextBreakdown ? "载入中…" : "估算")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let breakdown = model.contextBreakdown {
+                if breakdown.available {
+                    ForEach(breakdown.compositionRows) { row in
+                        contextCompositionRow(row)
+                    }
+                    if let free = breakdown.freeTokens {
+                        contextCompositionRow(
+                            ContextCompositionRow(kind: .systemTools, tokens: nil, fraction: nil),
+                            freeLabel: "剩余可用 \(free.formatted())"
+                        )
+                    }
+                    if breakdown.estimated == true {
+                        Text("尚未取得真实用量锚定；系统与工具部分暂不可推算。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("当前为只读观察，构成占比需要打开为可写会话。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if !model.isLoadingContextBreakdown {
+                Text("构成占比暂不可用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func contextCompositionRow(_ row: ContextCompositionRow, freeLabel: String? = nil) -> some View {
+        HStack(spacing: 8) {
+            Text(row.kind.label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    if let fraction = row.fraction {
+                        Capsule()
+                            .fill(contextPartColor(row.kind))
+                            .frame(width: proxy.size.width * fraction)
+                    }
+                }
+            }
+            .frame(height: 6)
+            Text(freeLabel ?? row.tokens.map { $0.formatted() } ?? "推算中")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            freeLabel ?? "\(row.kind.label) \(row.tokens.map { $0.formatted() } ?? "推算中") token"
+        )
+    }
+
+    private func contextPartColor(_ kind: ContextPartKind) -> Color {
+        switch kind {
+        case .systemTools: .gray
+        case .user: .accentColor
+        case .assistant: .blue
+        case .thinking: .purple
+        case .toolResult: .green
+        }
+    }
+
+    /// dgoal 待批计划提案卡：呈现提案并一键发起 `/dgoal review`，
+    /// 由 dgoal 的原生启动门禁对话框完成实际批准 / 拒绝 / 反馈。
+    private func planProposalCard(_ proposal: PlanProposalPresentation) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "doc.badge.gearshape")
+                .foregroundStyle(Color.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("待批准计划提案")
+                        .font(.caption.weight(.semibold))
+                    Text(proposal.profile.label)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.purple.opacity(0.12), in: Capsule())
+                }
+                Text(proposal.objective)
+                    .font(.caption)
+                    .lineLimit(2)
+                Text(proposalDetail(proposal))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await model.requestPlanReview() }
+            } label: {
+                Text(model.hasActiveRun ? "运行结束可审阅" : "审阅提案")
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(model.hasActiveRun || model.isSendingRequest)
+            .help("发送 /dgoal review，由 dgoal 弹出原生审阅对话框")
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func proposalDetail(_ proposal: PlanProposalPresentation) -> String {
+        var parts: [String] = []
+        if !proposal.phaseSubjects.isEmpty {
+            parts.append("\(proposal.phaseSubjects.count) 个阶段")
+        }
+        if !proposal.acceptanceCriteria.isEmpty {
+            parts.append("\(proposal.acceptanceCriteria.count) 条验收")
+        }
+        if !proposal.nonGoals.isEmpty {
+            parts.append("排除 \(proposal.nonGoals.count) 项")
+        }
+        return parts.isEmpty ? "等待用户批准后才进入执行" : parts.joined(separator: " · ") + " · 等待批准"
     }
 
     private var contextRemainingRing: some View {
         ZStack {
             Circle()
-                .stroke(Color.accentColor, lineWidth: 3)
+                .stroke(contextRemainingColor, lineWidth: 3)
             if let usedFraction = model.hostState?.contextUsage?.usedFraction {
                 Circle()
                     .trim(from: 0, to: usedFraction)
@@ -586,6 +735,23 @@ struct ComposerView: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// 余量环保持“蓝为剩余、白为已用”；跌破阈值后底环转橙 / 红，提示即将耗尽。
+    private var contextRemainingColor: Color {
+        guard let remaining = model.hostState?.contextUsage?.remainingPercent else { return .accentColor }
+        if remaining < 8 { return .red }
+        if remaining < 20 { return .orange }
+        return .accentColor
+    }
+
+    private var contextDeltaCaption: String? {
+        let delta = model.contextDelta
+        guard !delta.isEmpty else { return nil }
+        var parts: [String] = []
+        if delta.added > 0 { parts.append("+\(delta.added.formatted())") }
+        if delta.released > 0 { parts.append("−\(delta.released.formatted())") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private var commandPalette: some View {

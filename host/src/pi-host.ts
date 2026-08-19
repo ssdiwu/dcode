@@ -14,6 +14,7 @@ import {
   VERSION as PI_VERSION,
   collectEntriesForBranchSummary,
   createAgentSession,
+  estimateTokens,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
   type AgentSession,
@@ -130,6 +131,8 @@ interface WritableSession {
   leaseSync: Promise<void>;
   ownedMutationDepth: number;
   activePlan: unknown;
+  /** dgoal-work-v1 最新条目的待批计划提案；无提案或无活动 goal 时为 null。 */
+  activeProposal: unknown;
   fastMode: DCodeFastController;
   closing: boolean;
   currentRun?: ActiveRun;
@@ -270,19 +273,19 @@ function safeModel(model: unknown): SafeModelSnapshot | null {
   };
 }
 
-function planFromEntry(entry: SessionEntry): { matched: boolean; plan: unknown } {
-  if (entry.type !== "custom") return { matched: false, plan: null };
+function planFromEntry(entry: SessionEntry): { matched: boolean; plan: unknown; proposal: unknown } {
+  if (entry.type !== "custom") return { matched: false, plan: null, proposal: null };
   if (entry.customType === "dgoal-work-v1") {
-    const goal = (entry.data as { goal?: unknown } | undefined)?.goal;
-    return {
-      matched: true,
-      plan: typeof goal === "object" && goal !== null && (goal as { status?: unknown }).status === "active" ? goal : null,
-    };
+    const data = entry.data as { goal?: unknown; pendingProposal?: unknown } | undefined;
+    const goal = data?.goal;
+    const status = typeof goal === "object" && goal !== null ? (goal as { status?: unknown }).status : undefined;
+    const plan = typeof goal === "object" && goal !== null && (status === "active" || status === "paused") ? goal : null;
+    return { matched: true, plan, proposal: plan ? data?.pendingProposal ?? null : null };
   }
   if (entry.customType === "dgoal-plan-v2") {
-    return { matched: true, plan: (entry.data as { goal?: unknown } | undefined)?.goal ?? null };
+    return { matched: true, plan: (entry.data as { goal?: unknown } | undefined)?.goal ?? null, proposal: null };
   }
-  return { matched: false, plan: null };
+  return { matched: false, plan: null, proposal: null };
 }
 
 function agentSessionSnapshotDigest(session: AgentSession): string {
@@ -416,6 +419,7 @@ export class PiHost {
             mermaidUnicode: true,
             projectCwdScope: true,
             contextUsage: true,
+            contextBreakdown: true,
             fastMode: true,
             sessionExternalSync: true,
             dcodeSessionOrigin: true,
@@ -519,6 +523,8 @@ export class PiHost {
       }
       case "session.getState":
         return this.getState();
+      case "session.contextBreakdown":
+        return this.getContextBreakdown();
       case "session.getCommands":
         return this.getCommands();
       case "session.getModels":
@@ -1024,6 +1030,7 @@ export class PiHost {
       active.session.agent.state.messages = active.session.sessionManager.buildSessionContext().messages;
       active.inspection = refreshed.inspection;
       active.activePlan = refreshed.inspection.activePlan;
+      active.activeProposal = refreshed.inspection.activeProposal;
     } else {
       active.inspection = refreshed.inspection;
       active.pinnedLeafId = undefined;
@@ -1229,6 +1236,7 @@ export class PiHost {
         leaseSync: Promise.resolve(),
         ownedMutationDepth: 0,
         activePlan: inspection.activePlan,
+        activeProposal: inspection.activeProposal,
         fastMode,
         closing: false,
       };
@@ -1278,6 +1286,7 @@ export class PiHost {
       await this.assertLeaseStable(active);
       active.inspection = synchronizedInspection;
       active.activePlan = synchronizedInspection.activePlan;
+      active.activeProposal = synchronizedInspection.activeProposal;
       active.conflictTimer = setInterval(() => { void this.checkConflict(active); }, this.conflictPollMs);
       active.conflictTimer.unref?.();
       this.options.emit("session.opened", { mode, sessionId, path: synchronizedInspection.summary.path });
@@ -1398,6 +1407,7 @@ export class PiHost {
     await this.assertLeaseStable(active);
     active.inspection = inspection;
     active.activePlan = inspection.activePlan;
+    active.activeProposal = inspection.activeProposal;
   }
 
   private async navigateToExactLeaf(active: WritableSession, targetId: string): Promise<void> {
@@ -1708,6 +1718,68 @@ export class PiHost {
         ? currentCall
         : undefined;
       return this.promptCall.run(correlatedCall, () => prompt(text, options));
+    };
+  }
+
+  /**
+   * 上下文构成占比：按消息种类估算分项 token，用最近一次真实 usage 总量锚定，
+   * 差值反推“系统与工具”。全部为估算口径（chars/4，与 Pi 压缩判断一致），如实标注。
+   */
+  private getContextBreakdown(): unknown {
+    const active = this.requireActive();
+    if (active.mode !== "writable") {
+      return { available: false, reason: "readOnly" };
+    }
+    const messages = active.session.sessionManager.buildSessionContext().messages;
+    const parts = {
+      user: 0,
+      assistant: 0,
+      thinking: 0,
+      toolCall: 0,
+      toolResult: 0,
+    };
+    for (const message of messages) {
+      if (message.role === "user") {
+        parts.user += estimateTokens(message);
+      } else if (message.role === "toolResult") {
+        parts.toolResult += estimateTokens(message);
+      } else if (message.role === "assistant") {
+        const whole = estimateTokens(message);
+        let thinkingChars = 0;
+        const blocks = Array.isArray((message as { content?: unknown[] }).content)
+          ? ((message as { content: unknown[] }).content)
+          : [];
+        for (const block of blocks) {
+          if (
+            typeof block === "object" && block !== null
+            && (block as { type?: unknown }).type === "thinking"
+          ) {
+            const text = (block as { text?: unknown }).text;
+            if (typeof text === "string") thinkingChars += text.length;
+          }
+        }
+        const thinking = Math.ceil(thinkingChars / 4);
+        parts.thinking += thinking;
+        parts.assistant += Math.max(0, whole - thinking);
+      }
+    }
+    const usage = active.session.getContextUsage() ?? { tokens: null, contextWindow: 0, percent: null };
+    const estimatedTotal = parts.user + parts.assistant + parts.thinking + parts.toolCall + parts.toolResult;
+    const anchored = typeof usage.tokens === "number" && usage.tokens > 0 ? usage.tokens : null;
+    const systemAndTools = anchored !== null ? Math.max(0, anchored - estimatedTotal) : null;
+    return {
+      available: true,
+      estimated: anchored === null,
+      totalTokens: anchored,
+      estimatedMessageTokens: estimatedTotal,
+      contextWindow: usage.contextWindow,
+      parts: [
+        { kind: "systemTools", tokens: systemAndTools },
+        { kind: "user", tokens: parts.user },
+        { kind: "assistant", tokens: parts.assistant },
+        { kind: "thinking", tokens: parts.thinking },
+        { kind: "toolResult", tokens: parts.toolResult },
+      ],
     };
   }
 
@@ -2270,7 +2342,8 @@ export class PiHost {
       const plan = planFromEntry(event.entry);
       if (plan.matched) {
         active.activePlan = plan.plan;
-        this.options.emit("plan.changed", { entryId: event.entry.id, plan: plan.plan });
+        active.activeProposal = plan.proposal;
+        this.options.emit("plan.changed", { entryId: event.entry.id, plan: plan.plan, proposal: plan.proposal });
       }
     }
     const shouldSynchronize = (

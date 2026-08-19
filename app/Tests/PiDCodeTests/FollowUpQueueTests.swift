@@ -514,7 +514,7 @@ final class FollowUpQueueTests: XCTestCase {
 
         capabilities = {
             "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
-            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True,
+            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True, "contextBreakdown": True,
             "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
             "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
             "sessionTrash": True, "sessionVisibilityExclusions": True,
@@ -795,7 +795,8 @@ final class FollowUpQueueTests: XCTestCase {
             paths: [],
             entries: entryIDs.map { .object(["id": .string($0)]) },
             context: SessionContextSnapshot(messageCount: entryIDs.count, model: nil, thinkingLevel: "off"),
-            activePlan: nil
+            activePlan: nil,
+            activeProposal: nil
         )
     }
 

@@ -127,6 +127,7 @@ extension AppModel {
             showNotice(event.data?["message"]?.stringValue ?? "扩展或会话操作失败。", level: "error")
         case "plan.changed":
             activePlan = ActivePlanParser.parse(event.data?["plan"])
+            pendingPlanProposal = ActivePlanParser.parseProposal(event.data?["proposal"])
             scheduleRefresh()
         default:
             break

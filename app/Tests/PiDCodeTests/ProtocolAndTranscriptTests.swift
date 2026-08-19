@@ -1730,7 +1730,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "structuredPlan": True,
             "mermaidUnicode": True,
             "projectCwdScope": True,
-            "contextUsage": True,
+            "contextUsage": True, "contextBreakdown": True,
             "fastMode": True,
             "sessionExternalSync": True,
             "dcodeSessionOrigin": True,
@@ -1847,7 +1847,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "structuredPlan": True,
             "mermaidUnicode": True,
             "projectCwdScope": True,
-            "contextUsage": True,
+            "contextUsage": True, "contextBreakdown": True,
             "fastMode": True,
             "sessionExternalSync": True,
             "dcodeSessionOrigin": True,
@@ -2215,7 +2215,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         capabilities = {
             "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
-            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True,
+            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True, "contextBreakdown": True,
             "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
             "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
             "sessionTrash": True, "sessionVisibilityExclusions": True,

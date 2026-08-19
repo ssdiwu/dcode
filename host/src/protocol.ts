@@ -15,6 +15,7 @@ export const HOST_METHODS = [
   "session.steer",
   "session.abort",
   "session.getState",
+  "session.contextBreakdown",
   "session.getCommands",
   "session.getModels",
   "modelSettings.get",
@@ -277,6 +278,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "host.hello":
     case "session.abort":
     case "session.getState":
+    case "session.contextBreakdown":
     case "session.getCommands":
     case "session.getThinkingLevels":
     case "session.refresh":

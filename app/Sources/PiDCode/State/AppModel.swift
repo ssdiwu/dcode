@@ -68,6 +68,14 @@ struct PendingSteerDraft: Equatable {
     var accepted: Bool
 }
 
+/// 本轮运行以来上下文 token 的累计增减：added 为新增，released 为压缩或修剪释放。
+struct ContextDeltaPresentation: Equatable {
+    let added: Int
+    let released: Int
+
+    var isEmpty: Bool { added == 0 && released == 0 }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -95,6 +103,10 @@ final class AppModel {
     var conversationNavigationItems: [ConversationNavigationItem] = []
     var hostState: HostState?
     var activePlan: ActivePlanPresentation?
+    var pendingPlanProposal: PlanProposalPresentation?
+    private(set) var contextDelta = ContextDeltaPresentation(added: 0, released: 0)
+    private(set) var contextBreakdown: ContextBreakdownResult?
+    private(set) var isLoadingContextBreakdown = false
     var composerText = ""
     private(set) var newSessionDraft: NewSessionDraft?
     private(set) var isNewSessionDraftActive = false
@@ -184,6 +196,8 @@ final class AppModel {
     @ObservationIgnored private var projectWindows: [UUID: SessionListWindow] = [:]
     @ObservationIgnored private var projectLoadGenerations: [UUID: UUID] = [:]
     @ObservationIgnored private var shutdownTask: Task<Void, Never>?
+    @ObservationIgnored private var lastContextTokens: Int?
+    @ObservationIgnored private var contextDeltaRunID: String?
 
     init(
         projectStore: ProjectStore = ProjectStore(),
@@ -2833,7 +2847,10 @@ final class AppModel {
         }
     }
 
-    private func sendPromptToSelectedSession(failureTitle: String = "发送失败") async {
+    private func sendPromptToSelectedSession(
+        failureTitle: String = "发送失败",
+        fixedMessage: String? = nil
+    ) async {
         guard readyClient != nil,
               let sourceSessionID = selectedSessionID,
               !isMutatingArchive,
@@ -2843,7 +2860,7 @@ final class AppModel {
         let draftTarget = currentDraftTarget
         guard draftTarget == nil || draftTarget?.sessionID == sourceSessionID else { return }
         let pathAction = draftTarget?.actionForSending(currentPathID: inspection?.currentPathId)
-        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = (fixedMessage ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         deferredComposerText = nil
         isSendingRequest = true
@@ -2864,10 +2881,10 @@ final class AppModel {
         pendingPrompt = PendingPromptDraft(
             sessionID: sessionID,
             promptID: promptID,
-            draft: draft,
+            draft: fixedMessage ?? draft,
             draftTarget: draftTarget
         )
-        composerText = ""
+        if fixedMessage == nil { composerText = "" }
         optimisticUserMessage = message
         do {
             var params: [String: JSONValue] = [
@@ -3725,7 +3742,9 @@ final class AppModel {
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
         hostState = result.state
+        beginContextDeltaSession()
         activePlan = ActivePlanParser.parse(result.state?.activePlan ?? result.snapshot.activePlan)
+        pendingPlanProposal = ActivePlanParser.parseProposal(result.snapshot.activeProposal)
         isStreaming = result.state?.isStreaming ?? false
         activity.currentRunState = result.state?.runState
         currentSessionRunID = result.state?.runState?.phase.isActive == true
@@ -3815,7 +3834,10 @@ final class AppModel {
         inspection = nil
         setTranscript([])
         hostState = nil
+        beginContextDeltaSession()
+        contextBreakdown = nil
         activePlan = nil
+        pendingPlanProposal = nil
         optimisticUserMessage = nil
         isStreaming = false
         currentSessionRunID = nil
@@ -3863,6 +3885,7 @@ final class AppModel {
                   selectedSessionID == sessionID else { return }
             rebaseActiveDraftIfPathAdvanced(to: snapshot)
             inspection = snapshot
+            pendingPlanProposal = ActivePlanParser.parseProposal(snapshot.activeProposal)
             applyRefreshedTranscript(parsed)
             replaceVisibleSummary(snapshot.summary)
             await refreshState()
@@ -3879,6 +3902,7 @@ final class AppModel {
             let state: HostState = try await client.request("session.getState")
             guard selectedSessionID == sessionID, state.sessionId == sessionID else { return }
             hostState = state
+            recordContextUsage(state.contextUsage)
             activePlan = ActivePlanParser.parse(state.activePlan)
             if let runState = state.runState {
                 applyRunState(runState)
@@ -3892,8 +3916,52 @@ final class AppModel {
         }
     }
 
+    /// 批准卡入口：向当前会话发送 `/dgoal review`，由 dgoal 弹出原生启动门禁对话框。
+    /// 运行中禁用——审阅门禁需要空闲会话。
+    func requestPlanReview() async {
+        guard !hasActiveRun, !isSendingRequest, pendingPrompt == nil else { return }
+        await sendPromptToSelectedSession(failureTitle: "无法发起计划审阅", fixedMessage: "/dgoal review")
+    }
+
+    /// 会话切换或清空时重置本轮上下文增减；首个快照只建立基线，不计入增减。
+    func beginContextDeltaSession() {
+        lastContextTokens = hostState?.contextUsage?.tokens
+        contextDeltaRunID = nil
+        contextDelta = ContextDeltaPresentation(added: 0, released: 0)
+    }
+
+    /// 累计两次观测之间的上下文 token 增减；释放（压缩 / 修剪）单列为 released。
+    func recordContextUsage(_ usage: ContextUsage?) {
+        guard let tokens = usage?.tokens else { return }
+        defer { lastContextTokens = tokens }
+        guard let previous = lastContextTokens, tokens != previous else { return }
+        let delta = tokens - previous
+        if delta > 0 {
+            contextDelta = ContextDeltaPresentation(added: contextDelta.added + delta, released: contextDelta.released)
+        } else {
+            contextDelta = ContextDeltaPresentation(added: contextDelta.added, released: contextDelta.released - delta)
+        }
+    }
+
+    /// 圆环弹层打开时按需拉取构成占比；只读会话返回不可用原因。
+    func loadContextBreakdown() async {
+        guard readyClient != nil, selectedSessionID != nil, !isLoadingContextBreakdown else { return }
+        isLoadingContextBreakdown = true
+        defer { isLoadingContextBreakdown = false }
+        guard let client = readyClient else { return }
+        do {
+            contextBreakdown = try await client.request("session.contextBreakdown")
+        } catch {
+            contextBreakdown = nil
+        }
+    }
+
     func applyRunState(_ state: SessionRunState) {
         guard state.sessionID == selectedSessionID || state.sessionID == hostState?.sessionId else { return }
+        if state.runID != contextDeltaRunID {
+            contextDeltaRunID = state.runID
+            contextDelta = ContextDeltaPresentation(added: 0, released: 0)
+        }
         activity.currentRunState = state
         currentSessionRunID = state.phase.isActive ? state.runID : nil
         isStreaming = state.phase.isActive

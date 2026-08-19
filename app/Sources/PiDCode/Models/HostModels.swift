@@ -34,6 +34,7 @@ enum HostCompatibility {
         "mermaidUnicode",
         "projectCwdScope",
         "contextUsage",
+        "contextBreakdown",
         "fastMode",
         "sessionExternalSync",
         "dcodeSessionOrigin",
@@ -104,7 +105,8 @@ struct SessionInspection: Codable, Sendable {
     let entries: [JSONValue]
     let context: SessionContextSnapshot
     let activePlan: JSONValue?
-
+    /// dgoal-work-v1 最新条目携带的待批计划提案；旧 Host 无此字段时为 nil。
+    let activeProposal: JSONValue?
 }
 
 struct SessionCopySource: Codable, Sendable {
@@ -176,6 +178,73 @@ struct ContextUsage: Codable, Equatable, Sendable {
     var usedFraction: Double? {
         guard let percent else { return nil }
         return min(max(percent / 100, 0), 1)
+    }
+}
+
+struct ContextBreakdownPart: Codable, Equatable, Sendable {
+    let kind: String
+    let tokens: Int?
+}
+
+/// `session.contextBreakdown` 的结果：按消息种类估算的上下文构成，
+/// totalTokens 为最近一次真实 usage 锚定值；estimated 为 true 时无锚定。
+struct ContextBreakdownResult: Codable, Equatable, Sendable {
+    let available: Bool
+    let reason: String?
+    let estimated: Bool?
+    let totalTokens: Int?
+    let estimatedMessageTokens: Int?
+    let contextWindow: Int?
+    let parts: [ContextBreakdownPart]?
+}
+
+enum ContextPartKind: String, CaseIterable, Sendable {
+    case systemTools
+    case user
+    case assistant
+    case thinking
+    case toolResult
+
+    var label: String {
+        switch self {
+        case .systemTools: "系统与工具"
+        case .user: "用户消息"
+        case .assistant: "助手回复"
+        case .thinking: "思考"
+        case .toolResult: "工具结果"
+        }
+    }
+}
+
+struct ContextCompositionRow: Identifiable, Equatable, Sendable {
+    let kind: ContextPartKind
+    let tokens: Int?
+    let fraction: Double?
+
+    var id: String { kind.rawValue }
+}
+
+extension ContextBreakdownResult {
+    /// 供圆环弹层使用的构成行；锚定总量时含“系统与工具（推算）”与剩余空闲。
+    var compositionRows: [ContextCompositionRow] {
+        guard available else { return [] }
+        let anchored = estimated == false ? totalTokens : nil
+        let basis = anchored ?? estimatedMessageTokens
+        return (parts ?? []).compactMap { part in
+            guard let kind = ContextPartKind(rawValue: part.kind) else { return nil }
+            let fraction: Double?
+            if let tokens = part.tokens, let basis, basis > 0 {
+                fraction = min(Double(tokens) / Double(basis), 1)
+            } else {
+                fraction = nil
+            }
+            return ContextCompositionRow(kind: kind, tokens: part.tokens, fraction: fraction)
+        }
+    }
+
+    var freeTokens: Int? {
+        guard available, let total = totalTokens, let window = contextWindow, window > 0 else { return nil }
+        return max(window - total, 0)
     }
 }
 

@@ -618,7 +618,8 @@ final class SessionPathAndArchiveTests: XCTestCase {
             paths: [],
             entries: entryIDs.map { .object(["id": .string($0)]) },
             context: SessionContextSnapshot(messageCount: entryIDs.count, model: nil, thinkingLevel: "off"),
-            activePlan: nil
+            activePlan: nil,
+            activeProposal: nil
         )
     }
 

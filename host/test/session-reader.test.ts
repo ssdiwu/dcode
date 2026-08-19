@@ -296,3 +296,38 @@ test("inspect rejects a missing session", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("dgoal work state keeps paused goals and pending proposals for native review", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-reader-test-"));
+  try {
+    const timestamp = new Date().toISOString();
+    const proposal = {
+      goalId: "goal-two",
+      proposal: { objective: "发布 0.0.8", assuranceProfile: "goal_check", acceptanceCriteria: [], phases: [] },
+    };
+    const head = { type: "session", id: "session-paused", timestamp, cwd: "/tmp/paused" };
+    const entries = [
+      head,
+      { type: "custom", id: "plan-done", parentId: null, timestamp, customType: "dgoal-work-v1", data: { goal: { id: "goal-one", status: "done", workList: { phases: [] } } } },
+      { type: "custom", id: "plan-paused", parentId: "plan-done", timestamp, customType: "dgoal-work-v1", data: { goal: { id: "goal-two", status: "paused", pauseReason: "等待用户输入", workList: { phases: [] } }, pendingProposal: proposal } },
+    ];
+    const path = join(root, "session-paused.jsonl");
+    await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const reader = new SessionReader(root);
+    const inspection = await reader.inspect("session-paused");
+    assert.equal((inspection.activePlan as { id?: string } | null)?.id, "goal-two");
+    assert.deepEqual(inspection.activeProposal, proposal);
+
+    const cleared = [
+      head,
+      { type: "custom", id: "plan-done", parentId: null, timestamp, customType: "dgoal-work-v1", data: { goal: { id: "goal-one", status: "done", workList: { phases: [] } } } },
+      { type: "custom", id: "plan-review-done", parentId: "plan-done", timestamp, customType: "dgoal-work-v1", data: { goal: { id: "goal-two", status: "active", workList: { phases: [] } } } },
+    ];
+    await writeFile(path, `${cleared.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const reloaded = await reader.inspect("session-paused");
+    assert.equal((reloaded.activePlan as { status?: string } | null)?.status, "active");
+    assert.equal(reloaded.activeProposal, null, "提案被审阅后必须随最新条目清除");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
