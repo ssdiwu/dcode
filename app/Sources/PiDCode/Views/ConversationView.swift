@@ -6,12 +6,10 @@ struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var highlightedEntryID: String?
-    @State private var highlightedRoundID: String?
     @State private var expandedRoundIDs: Set<String> = []
     @State private var selectedNavigationRoundID: String?
     @State private var followsLatest = true
     @State private var visibleEntryIDs: Set<String> = []
-    @State private var navigationHighlightToken = UUID()
     private let bottomID = "conversation-bottom"
 
     var body: some View {
@@ -57,7 +55,6 @@ struct ConversationView: View {
                                     ),
                                     expanded: expansionBinding(for: round.id),
                                     highlightedEntryID: highlightedEntryID,
-                                    highlighted: highlightedRoundID == round.id,
                                     pathActionDisabled: pathActionDisabled,
                                     pathAction: model.beginPathDraft,
                                     entryVisibilityChanged: { entryID, isVisible in
@@ -146,11 +143,9 @@ struct ConversationView: View {
                     .onChange(of: presentationIdentity) { _, _ in
                         followsLatest = true
                         selectedNavigationRoundID = nil
-                        highlightedRoundID = nil
                         highlightedEntryID = nil
                         expandedRoundIDs.removeAll()
                         visibleEntryIDs.removeAll()
-                        navigationHighlightToken = UUID()
                         Task { @MainActor in
                             await Task.yield()
                             await Task.yield()
@@ -274,9 +269,6 @@ struct ConversationView: View {
     private func navigate(to item: ConversationNavigationItem, using proxy: ScrollViewProxy) {
         followsLatest = false
         selectedNavigationRoundID = item.id
-        highlightedRoundID = item.id
-        let token = UUID()
-        navigationHighlightToken = token
         if reduceMotion {
             proxy.scrollTo(item.anchorID, anchor: .center)
         } else {
@@ -284,24 +276,11 @@ struct ConversationView: View {
                 proxy.scrollTo(item.anchorID, anchor: .center)
             }
         }
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.6))
-            guard navigationHighlightToken == token else { return }
-            if reduceMotion {
-                highlightedRoundID = nil
-            } else {
-                withAnimation(.easeOut(duration: 0.25)) {
-                    highlightedRoundID = nil
-                }
-            }
-        }
     }
 
     private func returnToLatest(using proxy: ScrollViewProxy) {
         followsLatest = true
         selectedNavigationRoundID = nil
-        highlightedRoundID = nil
-        navigationHighlightToken = UUID()
         scrollToBottom(proxy)
     }
 
@@ -340,7 +319,6 @@ private struct ConversationRoundView: View {
     let collapsesUserMessage: Bool
     @Binding var expanded: Bool
     let highlightedEntryID: String?
-    let highlighted: Bool
     let pathActionDisabled: Bool
     let pathAction: (TranscriptItem) -> Void
     let entryVisibilityChanged: (String, Bool) -> Void
@@ -359,22 +337,10 @@ private struct ConversationRoundView: View {
                     completionMetadata: ConversationTimingFormatter.completionText(
                         duration: round.duration,
                         completedAt: round.completedAt,
-                        didFail: finalAssistant.blocks.contains(where: { block in
-                            if case .error = block { return true }
-                            return false
-                        })
-                    )
+                        totalTokens: round.totalTokens
+                    ) ?? "",
+                    completionFailed: round.finalAssistantFailed
                 )
-            }
-        }
-        .background(
-            highlighted ? Color.accentColor.opacity(0.10) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
-        .overlay {
-            if highlighted {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.42), lineWidth: 1.5)
             }
         }
     }
@@ -426,12 +392,14 @@ private struct ConversationRoundView: View {
         _ item: TranscriptItem,
         allowsPathAction: Bool = true,
         collapsesCompletedUserMessage: Bool = false,
-        completionMetadata: String? = nil
+        completionMetadata: String? = nil,
+        completionFailed: Bool = false
     ) -> some View {
         MessageRow(
             item: item,
             collapsesCompletedUserMessage: collapsesCompletedUserMessage,
             completionMetadata: completionMetadata,
+            completionFailed: completionFailed,
             pathActionDisabled: pathActionDisabled,
             pathAction: allowsPathAction
                 && (item.role == .assistant || (item.role == .user && item.editableText != nil))
@@ -461,6 +429,7 @@ private struct MessageRow: View {
     let item: TranscriptItem
     var collapsesCompletedUserMessage = false
     var completionMetadata: String?
+    var completionFailed = false
     var pathActionDisabled = false
     var pathAction: (() -> Void)?
     @State private var userMessageExpanded = false
@@ -472,12 +441,14 @@ private struct MessageRow: View {
         item: TranscriptItem,
         collapsesCompletedUserMessage: Bool = false,
         completionMetadata: String? = nil,
+        completionFailed: Bool = false,
         pathActionDisabled: Bool = false,
         pathAction: (() -> Void)? = nil
     ) {
         self.item = item
         self.collapsesCompletedUserMessage = collapsesCompletedUserMessage
         self.completionMetadata = completionMetadata
+        self.completionFailed = completionFailed
         self.pathActionDisabled = pathActionDisabled
         self.pathAction = pathAction
     }
@@ -545,7 +516,11 @@ private struct MessageRow: View {
     private var footerRow: some View {
         if userMessageExpanded || pathActionAvailable || metadataText != nil {
             HStack(spacing: 10) {
-                if item.role == .user { Spacer(minLength: 8) }
+                if item.role != .user, let metadataText {
+                    metadataView(metadataText)
+                }
+
+                Spacer(minLength: 8)
 
                 if userMessageCollapsible, userMessageExpanded {
                     Button(action: toggleUserMessageExpansion) {
@@ -574,16 +549,13 @@ private struct MessageRow: View {
                         item.role == .user ? "从这条用户消息编辑并重走" : "从这条助手消息继续"
                     )
                     .disabled(pathActionDisabled)
+                    .opacity(showsMetadata ? 1 : 0)
+                    .allowsHitTesting(showsMetadata)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsMetadata)
                 }
 
-                if item.role != .user { Spacer(minLength: 8) }
-
-                if let metadataText {
-                    Text(metadataText)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(Color.secondary.opacity(showsMetadata ? 0.72 : 0))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsMetadata)
-                        .accessibilityLabel(metadataAccessibilityLabel)
+                if item.role == .user, let metadataText {
+                    metadataView(metadataText)
                 }
             }
             .frame(
@@ -608,12 +580,33 @@ private struct MessageRow: View {
 
     private var metadataAccessibilityLabel: String {
         guard let metadataText else { return "" }
-        return completionMetadata == nil
-            ? "消息发送于 \(metadataText)"
-            : "本轮\(metadataText)"
+        guard completionMetadata != nil else { return "消息发送于 \(metadataText)" }
+        let status = completionFailed ? "失败" : "已完成"
+        return metadataText.isEmpty ? "本轮\(status)" : "本轮\(status)，\(metadataText)"
     }
 
     private var showsMetadata: Bool { hovering || footerFocused || contentControlFocused }
+
+    private var metadataOpacity: Double {
+        completionMetadata == nil ? (showsMetadata ? 0.72 : 0) : 0.72
+    }
+
+    private func metadataView(_ metadataText: String) -> some View {
+        HStack(spacing: 6) {
+            if completionMetadata != nil {
+                Image(systemName: completionFailed ? "xmark" : "checkmark")
+                    .foregroundStyle(completionFailed ? Color.red : Color.green)
+                    .accessibilityHidden(true)
+            }
+            if !metadataText.isEmpty {
+                Text(metadataText)
+            }
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(Color.secondary.opacity(metadataOpacity))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsMetadata)
+        .accessibilityLabel(metadataAccessibilityLabel)
+    }
 
     private var userMessageCollapsible: Bool {
         UserMessagePresentation.shouldCollapse(
@@ -658,17 +651,15 @@ private struct MessageRow: View {
         case let .image(_, image):
             TranscriptImageView(presentation: image)
         case let .thinking(_, value):
-            DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("思考过程", systemImage: "brain")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
                 Text(value)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 5)
-            } label: {
-                Label("Thinking", systemImage: "brain")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
             }
         case let .toolCall(_, call):
             ToolCallCard(call: call)
@@ -996,6 +987,7 @@ private struct NativeDiffView: View {
 
 private struct StreamingResponseView: View {
     @Environment(AppModel.self) private var model
+    @State private var showsThinking = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1025,22 +1017,32 @@ private struct StreamingResponseView: View {
                     }
                     .padding(10)
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: PiDCodeMetrics.controlRadius))
-                } else if !model.streamingThinking.isEmpty {
-                    HStack(alignment: .top, spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Label("正在思考", systemImage: "brain")
+                }
+
+                if !model.streamingThinking.isEmpty {
+                    DisclosureGroup(isExpanded: $showsThinking) {
+                        Text(model.streamingThinking)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 5)
+                    } label: {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Label("Pi 正在思考", systemImage: "brain")
                                 .font(.callout.weight(.medium))
-                            Text(currentThinkingExcerpt)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(3)
-                                .textSelection(.enabled)
                         }
                     }
-                } else if !model.streamingText.isEmpty {
+                }
+
+                if !model.streamingText.isEmpty {
                     CopyableMarkdownText(value: model.streamingText, rendersBlocks: false)
-                } else {
+                }
+
+                if model.streamingThinking.isEmpty,
+                   model.streamingTools.last(where: \.isRunning) == nil,
+                   model.streamingText.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text(model.workingMessage ?? "Pi 正在思考…")
@@ -1051,13 +1053,5 @@ private struct StreamingResponseView: View {
             }
             Spacer(minLength: 44)
         }
-    }
-
-    private var currentThinkingExcerpt: String {
-        let paragraphs = model.streamingThinking
-            .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return paragraphs.suffix(3).joined(separator: "\n")
     }
 }

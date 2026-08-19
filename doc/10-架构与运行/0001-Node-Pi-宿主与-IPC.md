@@ -1,6 +1,6 @@
 # Node/Pi 宿主与 IPC
 
-状态：Active Implementation 0.0.6（自动测试与本机 App bundle 构建已通过；真实 Run 与完整人工验收尚未完成）
+状态：Active Implementation 0.0.7（自动测试与本机 App bundle 构建已通过；模型设置写入、回复运行信息与真实 Run 的最终人工验收尚未完成）
 
 ## 职责
 
@@ -18,6 +18,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
 - 公开当前 D Code-owned Run 的稳定 Session / Run 身份、结构化等待、停止请求、完成、失败、中止与未知状态，并只在最终助手 Entry 经 Lease 同步后确认完成；
 - 返回 Pi SDK 的 Context Usage，并维护 D Code 自有、会话级持久化的极速状态；
+- 缓存优先读取 Pi 模型目录，主目录只投影已认证 Provider，按用户显式动作刷新动态目录或通过 Pi `ModelRuntime.login` 关联 Provider，并通过 Pi SettingsManager 受控修改全局模型启用范围与默认模型；
 - 转发 Pi 流式事件和结构化 Active Plan；
 - 以原生 Unicode 结构渲染受支持的 Mermaid 图表，并为不支持类型返回显式失败；
 - 把标准扩展交互转换为协议事件，并对 custom/widget 等 TUI 能力发出明确 unsupported 事件；
@@ -43,13 +44,13 @@ open "dist/D Code.app"
 
 `build.sh` 将 release Swift executable、arm64 Node `22.22.3`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
 
-- Host 开发运行要求 Node `>=22.19.0`；`0.0.6` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
+- Host 开发运行要求 Node `>=22.19.0`；`0.0.7` App Bundle 构建精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
 - `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
 - `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
 - App 退出应发送 `host.shutdown`；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
-- App 在执行任何会话查询前要求 `hostVersion=0.0.6`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage、Fast Mode、`sessionSearch`、`sessionPaths`、`sessionCopy`、`sessionTrash`、`sessionVisibilityExclusions`、`sessionChangeLedger`、`sessionRename`、`sessionRunCorrelation`、`sessionRunState` 与 `preSessionModelSelection` 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航、运行状态、模型选择、队列所有权或写入路径。
+- App 在执行任何会话查询前要求 `hostVersion=0.0.7`，并校验 Session Lease、当前会话外部同步、结构化 Plan、Mermaid、Project cwdScope、D Code 创建来源、Context Usage、Fast Mode、`sessionSearch`、`sessionPaths`、`sessionCopy`、`sessionTrash`、`sessionVisibilityExclusions`、`sessionChangeLedger`、`sessionRename`、`sessionRunCorrelation`、`sessionRunState`、`preSessionModelSelection`、`modelSettings`、`sessionSteer` 与 `modelAuthentication` 能力；旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航、运行状态、模型选择、模型设置、认证、队列所有权或写入路径。
 - Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
 
 ## Protocol v1
@@ -80,7 +81,7 @@ open "dist/D Code.app"
 {"version":1,"type":"event","event":"session.opened","data":{}}
 ```
 
-非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。普通输入按顺序处理并设置排队背压；`extension.respond` 为解除正在等待原生对话框的 `session.prompt`，在入口与 Pi Host 两层都绕过普通请求队列。输出仍按写入顺序串行化，stdin 正常结束时会等待普通与旁路请求共同收敛。
+非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。普通输入按顺序处理并设置排队背压；`extension.respond` 以及 `modelAuth.respond / cancel` 为解除正在等待原生交互的长请求，在入口与 Pi Host 两层都绕过普通请求队列。输出仍按写入顺序串行化，stdin 正常结束时会等待普通与旁路请求共同收敛。
 
 ### 方法组
 
@@ -95,9 +96,13 @@ open "dist/D Code.app"
 | `session.setName` | 在当前会话空闲、Lease 稳定时调用 Pi SDK 写入 Session Name；空字符串恢复自动名称，单行名称最多 200 个 UTF-16 code unit |
 | `session.trash` | 只将唯一、空的 D Code 创建 Session 移入当前 macOS 用户废纸篓；取得临时 Lease 后再次校验身份、来源、消息数和子会话关系，失败不执行永久删除 |
 | `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径 |
+| `session.steer` | 携带预期 Run ID，在当前 Host Run 仍为同一 `running`、没有结构化等待时调用 Pi 专用 `AgentSession.steer()`；Run 已变化则拒绝，不经过可降级为普通 Prompt 的异步 input handler，不建立新 Run、不执行斜杠命令、不中止正在执行的工具，在下一安全模型边界应用介入信息 |
 | `session.copy` | 在源稳定且空闲时把完整已持久化历史复制成新 Session ID 与目标 `cwd`；源文件不改，失败目标不进入正常会话目录 |
 | `session.getState`、`session.getCommands` | 获取当前权威状态、当前 D Code-owned Run State、命令、模板与 skills |
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
+| `modelSettings.get`、`modelSettings.refresh` | 在没有活动 Session 时按规范 `cwd` 读取 Pi 目录、全局与当前有效选择范围、默认模型、项目覆盖和安全认证 / 缓存状态；未认证 Provider 只返回身份与认证方法，不返回内建模型；只有显式 `refresh` 才允许有界访问动态目录网络 |
+| `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel` | 通过 Pi `SettingsManager` 只修改全局 `enabledModels` 或默认 Provider / Model；写前验证设置可读、模型存在、认证与启用范围，项目级设置保持只读 |
+| `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 驱动 Pi `ModelRuntime.login` 的 API Key / OAuth 交互；prompt/event 使用独立 flow/request ID，响应和取消旁路解除等待，成功后只返回重新读取的安全模型快照 |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前会话设置 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
 | `extension.respond` | 完成标准 select/confirm/input/editor 扩展请求 |
@@ -146,6 +151,15 @@ open "dist/D Code.app"
 
 `host.hello.capabilities.preSessionModelSelection=true` 表示 `session.getModels` 可以在没有活动 Pi Session 时接受一个规范工作目录，使用 Pi 的 `auth.json`、`models.json` 与该目录生效的 `settings.json` 组合本机可用模型快照，再按 `enabledModels` 的精确 / 通配规则解析 Composer 选择范围；仅登记、已认证但未启用的模型不会进入结果，并仅在精确默认 Provider / Model 同时位于该范围时返回 `defaultModel`。同一过滤合同也用于已有 Session 的模型选择菜单，但不会改写该 Session 当前或历史模型事实。结果还公开 Pi 的可选默认 thinking level，以及从真实模型元数据和 D Code Fast Mode 合同推导的 thinking levels / `fastModeSupported`；它们不构成第二份模型配置。该查询不进行网络目录刷新，不返回或复制凭据，也不修改 Pi 设置；App 没有范围内精确默认项时必须让用户显式选择，并在第一条 Prompt 前按需通过已有 `session.setModel`、`session.setThinking` 与 `session.setFastMode` 写入新 Session。完整模型设置已前移到 `0.0.7`，Provider 管理仍不属于该能力。
 
+## Pi 模型设置边界
+
+`host.hello.capabilities.modelSettings=true` 表示 Host 提供认证后目录的安全投影与全局选择设置写入，而不是把 Pi 模型配置复制成 D Code 私有数据库；`modelAuthentication=true` 表示可以通过 Pi 原生认证合同关联 Provider。
+
+- `modelSettings.get` 创建缓存优先、`allowModelNetwork=false` 的 Pi `ModelRuntime`；首次进入设置不隐式访问网络。`modelSettings.refresh` 才以用户动作允许网络并设置 12 秒中止边界，单个 Provider 失败保留其他目录，整体失败或离线也继续返回本地可辨认快照。
+- 模型快照 Wire 只返回 Provider / Model 安全元数据、认证是否已配置及认证来源类型、缓存时间、启用规则、匹配关系与设置读取问题；未认证 Provider 的模型数组为空。认证步骤中的 API Key / Provider 配置值只短暂经过 `modelAuth.respond`，Protocol 严格限长，Host 不发事件、不回显、不写日志，错误统一脱敏；Provider 产生的 prompt / progress 文案进入界面前也会限长并再次脱敏。OAuth token 与认证文件正文始终不进入 Swift，D Code 不建立凭据资料。
+- 全局写入先由 Pi `SettingsManager` 读取并确认没有 global error，再使用其 setter 与 `flush()` 锁内合并；损坏或不可读的全局文件原字节保留。默认模型还必须真实存在、已认证且位于全局启用范围。
+- 当前 `cwd` 的 `.pi/settings.json` 只用于计算 effective scope 与解释覆盖来源；`0.0.7` 不写项目设置。更改全局值只影响后续选择和新会话，不改当前 / 历史 Session 的模型事实。
+
 Swift 将尚未呈现的最新稳定完成身份原子保存到 `~/Library/Application Support/D Code/activity-attention-v1.json`；资料版本化、有界且只含 Session / Run / Completion / Entry 身份、完成时间与可选查看时间，不保存正文、Thinking、工具结果或凭据。Activity View 仍从可见 Pi Session 与 Host Run State 重建；关注资料不是第二套会话数据库，旧结果也不能清除同一 Session 的更新完成身份。
 
 Swift 以稳定 Session ID 为第一身份，将收到的记录原子保存到 `~/Library/Application Support/D Code/session-changes-v1.json`。记录总量上限 50,000，标识、路径、行数、时间和来源均在进入内存及写盘前校验；损坏或未知版本保留原字节、停止继续写账本，但不阻断普通 Session 导航。摘要按 Session ID 去重文件并累计已观察的增删活动；Active Plan 仍按当前 Session Path 投影。复制得到的新 Session ID 不读取源 ID 的账本，Archive 也不删除原 ID 记录。
@@ -181,7 +195,7 @@ Host 不导入或调用 `pi-tui`，不执行 extension 提供的 TUI factory，�
 
 扩展的 headless 执行和用户可见呈现分属两层：Host 可以通过 Pi SDK 加载启用的普通扩展并运行其工具，Swift 不调用扩展 TUI renderer。对 read/edit/write/search 等已识别结构，App 将原始 args/content/details 安全投影为 D Code-owned presenter，隐藏 write/edit 正文并对 read 只显示边界行；未识别工具保留通用 fallback。当前本机隔离 smoke 已验证 `pi-dhashline 0.1.1` 能在固定 Pi `0.84.1` Host 中加载，writable `session.open.extensions.errors=[]` 且 `session.getCommands` 包含 `/dhashline`；该结论只覆盖加载与命令契约，不外推为所有模型文件操作均已人工验收。
 
-Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：一个产品轮以用户消息为边界，可包含多个 Pi turn。历史 `startedAt` 优先使用用户 JSONL entry 的持久化时间，`completedAt` 使用该轮最后一条已接受 entry 的持久化时间；这是可跨重启恢复的近似值，不是精确 `agent_settled` 时间。运行中只维护当前 Thinking 或正在执行的工具；`agent_end(willRetry=true)` 不结束可见活动，直到 `agent_settled`。
+Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：一个产品轮以用户消息为边界，可包含多个 Pi turn。历史 `startedAt` 优先使用用户 JSONL entry 的持久化时间，`completedAt` 使用该轮最后一条已接受 entry 的持久化时间；这是可跨重启恢复的近似值，不是精确 `agent_settled` 时间。每条稳定最终 Assistant 下方常显完成状态、完成时间与该边界计算出的耗时；本轮 token 只对所有 Assistant Message 已持久化、非负且可安全求和的 `usage.totalTokens` 合计，字段缺失、非法或溢出时省略，不以 Context Usage 或估算值替代。中间工具失败后若最终 Assistant 正常完成，状态仍以最终结果为准。运行中 Thinking 跨 Assistant / Tool 边界累积，与当前工具和流式正文同时呈现；实时 buffer 上限为 `100,000` UTF-16 code unit，超出时保留最新内容并标记较早部分已省略，完整持久化 Thinking 仍从 Pi Session 读取。`agent_end(willRetry=true)` 不结束可见活动，直到 `agent_settled`。
 
 `host.hello.capabilities` 中 `extensionDialogs=true`，`extensionCustomHeadless=false`，`extensionWidgets=false`。这表示原生结构化对话框可用，不表示提供任意 Pi 扩展界面的兼容层。
 
@@ -193,9 +207,9 @@ Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：�
 npm test
 ```
 
-当前 Host 自动测试共 124 项，除完整保留搜索、会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议、队列关联和进程生命周期回归外，还覆盖等待类型、多个结构化请求的完整关闭门禁、停止请求与最终中止分离，以及最终助手 Entry 后带安全元数据时仍经同步形成稳定完成身份；若本轮已持久化输入的 Entry 边界不再可见，则保守收口为 unknown，不会将历史助手消息误认为本轮完成。Swift 包共 135 项通过；除既有 Project、文件树、Git、Recent、搜索、外观、会话、路径草稿、延迟创建、Prompt transaction、Follow-up Queue、归档置顶、Markdown、工作轮、工具 presenter、可调栏位和变更账本回归外，还覆盖 Activity Attention Store 的原子恢复与损坏保留、固定优先级与确定排序、最新完成身份实际可见后才清除、重启可见性恢复、`agent_end` 与 Host 终态之间的运行门禁、该窗口中新建队列的 Run 归属、stopRequested 与 confirmed abort 的状态边界，以及铃铛当前投影 / 关注态的可访问语义；所有会载入元数据的测试均使用隔离关注存储。
+当前 Host 自动测试共 130 项，除完整保留搜索、会话观察、按需写入、租约、冲突恢复、资源加载、结构化 Extension UI、Mermaid、协议、队列关联和进程生命周期回归外，还覆盖模型设置、未认证目录隐藏、Pi API Key 登录且事件不泄漏 secret、steer 保持当前 Run 身份，以及 Run State 的等待、停止和稳定完成边界。Swift 包共 141 项通过；除既有 Project、文件树、Git、Recent、搜索、外观、会话、路径草稿、延迟创建、Prompt transaction、Follow-up Queue、归档置顶、Markdown、工作轮、工具 presenter、可调栏位、变更账本与 Activity 回归外，还覆盖模型 / 认证快照、Host 能力门禁、Assistant usage / token 边界、Return 键策略、Thinking 跨工具保留、steer 正常结算、异常恢复和 shutdown 草稿保留。
 
-`./app/build.sh` 已在最终工作树本机装配 432 MiB 的 `dist/D Code.app`，Host 版本与 bundle metadata 均为 `0.0.6`，包内 arm64 Node 为 `22.22.3`，ad-hoc 深层签名验证通过；当前内嵌 Host 已包含 `preSessionModelSelection`。较早的同版本实现候选曾只读打开真实可见会话、不发送 Prompt，确认默认 Navigation、Activity 固定时间分组、400pt 会话栏、当前标题 / Path / Conversation / Composer / Inspector 保持与切回；铃铛 Accessibility Tree 同时暴露当前投影、关注状态和活动 selected trait。较早的最终重建候选以完全隔离的 D Code / Pi 目录启动后，Window Server 确认存在 `1362 × 795` 可见窗口，但 Orca 在系统权限显示 granted 时仍无法取得该新进程的 AX window，截图接口也失败；本次模型修复后的 bundle 只完成构建、内嵌能力与签名校验，尚未把模型菜单点击或首条真实 Prompt 记为人工验收。该 smoke 不覆盖真实 Run、完成关注恢复、停止 / 重试时序或完整 VoiceOver 操作。
+`./app/build.sh` 已在当前工作树本机装配 433 MiB 的 `dist/D Code.app`，Host 版本与 bundle metadata 均为 `0.0.7`（build 7），包内 arm64 Node 为 `22.22.3`，ad-hoc 深层签名验证通过；当前内嵌 Host 包含 `preSessionModelSelection`、`modelSettings`、`sessionSteer` 与 `modelAuthentication`。另以独立 Bundle ID、fake Host 和隔离资料取得原生窗口 / Accessibility Tree：Return 真实写入 fake `session.prompt`，稳定完成 Dock 消失，Context 蓝 / 白环可见，模型页只展示已认证 Provider 模型、模型行全局启用与底部未认证 Provider 关联入口。真实 Pi steer / Provider 登录、浅色外观和完整 VoiceOver 仍记为待人工验收，不由自动测试或 fake Host 替代。
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 

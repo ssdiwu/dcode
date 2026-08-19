@@ -106,10 +106,13 @@ test("host lists, inspects, and opens a read-only session", async () => {
         fastMode: boolean;
         sessionExternalSync: boolean;
         dcodeSessionOrigin: boolean;
+        modelSettings: boolean;
+        sessionSteer: boolean;
+        modelAuthentication: boolean;
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.6");
+    assert.equal(hello.hostVersion, "0.0.7");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -126,6 +129,9 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRunCorrelation, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRunState, true);
     assert.equal((hello.capabilities as Record<string, boolean>).preSessionModelSelection, true);
+    assert.equal(hello.capabilities.modelSettings, true);
+    assert.equal(hello.capabilities.sessionSteer, true);
+    assert.equal(hello.capabilities.modelAuthentication, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
@@ -201,6 +207,277 @@ test("model catalog is available before a Pi session exists and exposes the conf
         "openai/gpt-5.6-terra",
       ],
     );
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("model settings expose safe Pi state and update only global model keys", async () => {
+  const f = await fixture();
+  await writeFile(join(f.agentDir, "settings.json"), `${JSON.stringify({
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    defaultThinkingLevel: "high",
+    enabledModels: ["openai/gpt-4o-mini"],
+    theme: "dark",
+  })}\n`);
+  await mkdir(join(f.root, ".pi"), { recursive: true });
+  await writeFile(join(f.root, ".pi", "settings.json"), `${JSON.stringify({
+    enabledModels: ["openai/gpt-5.6-*"],
+  })}\n`);
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  try {
+    const initial = await host.handle("modelSettings.get", { cwd: f.root }) as {
+      cwd: string;
+      providers: Array<{
+        id: string;
+        auth: { configured: boolean; source: string | null };
+        models: Array<{ model: { provider: string; id: string }; globalEnabled: boolean; enabled: boolean }>;
+      }>;
+      global: { enabledModels: string[]; unrestricted: boolean; defaultProvider: string; defaultModelId: string };
+      effective: { enabledModels: string[] };
+      projectOverrides: { enabledModels: boolean; defaultModel: boolean };
+    };
+    assert.equal(initial.cwd, await realpath(f.root));
+    assert.deepEqual(initial.global.enabledModels, ["openai/gpt-4o-mini"]);
+    assert.equal(initial.global.unrestricted, false);
+    assert.equal(initial.global.defaultProvider, "openai");
+    assert.equal(initial.global.defaultModelId, "gpt-4o-mini");
+    assert.deepEqual(initial.effective.enabledModels, ["openai/gpt-5.6-*"]);
+    assert.deepEqual(initial.projectOverrides, { enabledModels: true, defaultModel: false });
+    const openai = initial.providers.find((provider) => provider.id === "openai");
+    assert.equal(openai?.auth.configured, true);
+    assert.ok(openai?.auth.source);
+    const mini = openai?.models.find(({ model }) => model.id === "gpt-4o-mini");
+    assert.equal(mini?.globalEnabled, true);
+    assert.equal(mini?.enabled, false);
+
+    await assert.rejects(
+      host.handle("modelSettings.setDefaultModel", {
+        cwd: f.root,
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "MODEL_NOT_ENABLED",
+    );
+    const unchanged = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(unchanged.defaultProvider, "openai");
+    assert.equal(unchanged.defaultModel, "gpt-4o-mini");
+
+    const changed = await host.handle("modelSettings.setEnabledModels", {
+      cwd: f.root,
+      enabledModels: ["openai/gpt-4o-mini", "openai/gpt-5.6-*"],
+    }) as { global: { enabledModels: string[] } };
+    assert.deepEqual(changed.global.enabledModels, ["openai/gpt-4o-mini", "openai/gpt-5.6-*"]);
+    const stored = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(stored.theme, "dark");
+    assert.equal(stored.defaultThinkingLevel, "high");
+    assert.deepEqual(stored.enabledModels, ["openai/gpt-4o-mini", "openai/gpt-5.6-*"]);
+
+    await host.handle("modelSettings.setDefaultModel", {
+      cwd: f.root,
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+    });
+    const withDefault = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(withDefault.defaultProvider, "openai");
+    assert.equal(withDefault.defaultModel, "gpt-5.6-sol");
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("model settings refresh respects offline mode and retains the local catalog", async () => {
+  const f = await fixture();
+  const previousOffline = process.env.PI_OFFLINE;
+  process.env.PI_OFFLINE = "1";
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  try {
+    const result = await host.handle("modelSettings.refresh", { cwd: f.root }) as {
+      providers: Array<{ id: string; models: Array<{ model: { id: string } }> }>;
+      refresh: { attempted: boolean; aborted: boolean; failed: boolean; networkDisabled: boolean };
+    };
+    assert.deepEqual(result.refresh, {
+      attempted: true,
+      aborted: false,
+      failed: false,
+      networkDisabled: true,
+    });
+    assert.ok(result.providers.find((provider) => provider.id === "openai")?.models.length);
+  } finally {
+    if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = previousOffline;
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("model settings refuse to overwrite an unreadable Pi global settings file", async () => {
+  const f = await fixture();
+  const settingsPath = join(f.agentDir, "settings.json");
+  await writeFile(settingsPath, "{not-json\n");
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  try {
+    await assert.rejects(
+      host.handle("modelSettings.setEnabledModels", {
+        cwd: f.root,
+        enabledModels: ["openai/gpt-4o-mini"],
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "MODEL_SETTINGS_UNREADABLE",
+    );
+    assert.equal(await readFile(settingsPath, "utf8"), "{not-json\n");
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("unauthenticated providers hide their models and authenticate through Pi without emitting the secret", async () => {
+  const f = await fixture();
+  const previousOpenAIKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  await writeFile(join(f.agentDir, "auth.json"), "{}\n");
+  const emitted: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    emit: (event, data) => emitted.push({ event, data }),
+  });
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
+    const initial = await host.handle("modelSettings.get", { cwd: f.root }) as {
+      providers: Array<{
+        id: string;
+        auth: { configured: boolean; methods: Array<{ type: string; interactive: boolean }> };
+        models: unknown[];
+      }>;
+    };
+    const unauthenticated = initial.providers.find((provider) => provider.id === "openai");
+    assert.equal(unauthenticated?.auth.configured, false);
+    assert.deepEqual(unauthenticated?.models, []);
+    assert.equal(
+      unauthenticated?.auth.methods.some((method) => method.type === "api_key" && method.interactive),
+      true,
+    );
+
+    const flowId = "auth-openai";
+    const login = host.handle("modelAuth.start", {
+      cwd: f.root,
+      flowId,
+      provider: "openai",
+      authType: "api_key",
+    }) as Promise<{ providers: Array<{ id: string; auth: { configured: boolean }; models: unknown[] }> }>;
+    await waitUntil(
+      () => emitted.some(({ event }) => event === "modelAuth.request"),
+      "model authentication prompt",
+    );
+    const request = emitted.find(({ event }) => event === "modelAuth.request")?.data as {
+      requestId: string;
+      prompt: { type: string };
+    };
+    assert.equal(request.prompt.type, "secret");
+    const secret = "test-auth-secret-not-real";
+    await host.handle("modelAuth.respond", {
+      flowId,
+      requestId: request.requestId,
+      value: secret,
+    });
+    const authenticated = await login;
+    const openai = authenticated.providers.find((provider) => provider.id === "openai");
+    assert.equal(openai?.auth.configured, true);
+    assert.ok(openai?.models.length);
+    const activeModels = await host.handle("session.getModels", {}) as {
+      models: Array<{ provider: string; id: string }>;
+    };
+    assert.equal(activeModels.models.some((model) => model.provider === "openai"), true);
+    assert.equal(JSON.stringify(emitted).includes(secret), false);
+    assert.equal((JSON.parse(await readFile(join(f.agentDir, "auth.json"), "utf8")) as {
+      openai?: { key?: string };
+    }).openai?.key, secret);
+  } finally {
+    if (previousOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousOpenAIKey;
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("steering an active run uses Pi steer semantics without replacing the run identity", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => {},
+  });
+  type PromptOptions = {
+    source?: "rpc" | "extension";
+    streamingBehavior?: "steer" | "followUp";
+  };
+  type WritableInternals = {
+    session: {
+      prompt: (message: string, options?: PromptOptions) => Promise<void>;
+      steer: (message: string) => Promise<void>;
+    };
+    currentRun?: {
+      id: string;
+      toolCalls: Map<string, unknown>;
+      state: {
+        sessionId: string;
+        runId: string;
+        phase: "running";
+        startedAt: string;
+        updatedAt: string;
+        inputPersisted: boolean;
+        retryable: boolean;
+      };
+    };
+  };
+  const internals = host as unknown as { active?: WritableInternals };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const originalSteer = active.session.steer;
+    Object.defineProperty(active.session, "isStreaming", { value: true, configurable: true });
+    const now = new Date().toISOString();
+    active.currentRun = {
+      id: "run-active",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-active",
+        phase: "running",
+        startedAt: now,
+        updatedAt: now,
+        inputPersisted: true,
+        retryable: false,
+      },
+    };
+    let observed: string | undefined;
+    active.session.steer = async (message) => { observed = message; };
+
+    const result = await host.handle("session.steer", {
+      message: "change direction",
+      steerId: "steer-1",
+      expectedRunId: "run-active",
+    }) as { accepted: boolean; steerId: string; runId: string };
+
+    assert.deepEqual(result, { accepted: true, steerId: "steer-1", runId: "run-active" });
+    assert.equal(observed, "change direction");
+    assert.equal(active.currentRun?.id, "run-active");
+    await assert.rejects(
+      host.handle("session.steer", {
+        message: "must not enter another run",
+        steerId: "steer-stale",
+        expectedRunId: "run-stale",
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_RUN_CHANGED",
+    );
+    active.currentRun = undefined;
+    active.session.steer = originalSteer;
+    delete (active.session as { isStreaming?: boolean }).isStreaming;
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });

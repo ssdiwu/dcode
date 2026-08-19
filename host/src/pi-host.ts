@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AuthType } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
   CURRENT_SESSION_VERSION,
@@ -39,6 +40,7 @@ import {
   type SessionSummary,
 } from "./session-reader.js";
 import { DCodeResourceLoader } from "./resource-policy.js";
+import { ModelAuthBridge } from "./model-auth.js";
 import { publishNewFileAtomically } from "./atomic-file.js";
 import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
 import { SessionCopier } from "./session-copy.js";
@@ -50,7 +52,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.6";
+const HOST_VERSION = "0.0.7";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -145,6 +147,29 @@ interface PromptCallContext {
   rollbackLeafId?: string | null;
 }
 
+interface ModelScopeProjection {
+  unrestricted: boolean;
+  enabledKeys: Set<string>;
+  matchedPatterns: Map<string, string[]>;
+  diagnostics: Array<{ code: string; message: string; pattern: string }>;
+}
+
+interface ModelCacheMetadata {
+  checkedAt?: number;
+  lastModified?: number;
+}
+
+interface ModelRefreshAttempt {
+  attempted: boolean;
+  aborted: boolean;
+  failed: boolean;
+  providerErrors: Set<string>;
+}
+
+function modelKey(provider: string, modelId: string): string {
+  return `${provider}/${modelId}`;
+}
+
 interface SessionPathAction {
   kind: "editUser" | "continueAssistant" | "continuePath";
   entryId: string;
@@ -223,7 +248,13 @@ function outcomeFromAgentEnd(event: AgentSessionEvent): RunOutcome {
   }
 }
 
-function safeModel(model: unknown): unknown {
+type SafeModelSnapshot = Record<string, unknown> & {
+  provider: string;
+  id: string;
+  name?: string;
+};
+
+function safeModel(model: unknown): SafeModelSnapshot | null {
   if (typeof model !== "object" || model === null) return null;
   const source = model as Record<string, unknown>;
   if (typeof source.provider !== "string" || source.provider.trim() === "") return null;
@@ -231,6 +262,9 @@ function safeModel(model: unknown): unknown {
   const keys = ["provider", "id", "name", "api", "reasoning", "input", "contextWindow", "maxTokens", "cost"];
   return {
     ...Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]])),
+    provider: source.provider,
+    id: source.id,
+    ...(typeof source.name === "string" ? { name: source.name } : {}),
     thinkingLevels: getSupportedThinkingLevels(model as Parameters<typeof getSupportedThinkingLevels>[0]),
     fastModeSupported: createFastSnapshot(true, { provider: source.provider, id: source.id }).active,
   };
@@ -300,6 +334,7 @@ export class PiHost {
   private readonly leaseQuietWindowMs: number;
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
+  private readonly modelAuth: ModelAuthBridge;
 
   constructor(private readonly options: PiHostOptions) {
     this.agentDir = options.agentDir ?? getAgentDir();
@@ -315,6 +350,7 @@ export class PiHost {
       ...(options.searchCacheDirectory ? { cacheDirectory: options.searchCacheDirectory } : {}),
       emit: options.emit,
     });
+    this.modelAuth = new ModelAuthBridge(options.emit);
   }
 
   get wantsShutdown(): boolean { return this.shutdownRequested; }
@@ -322,6 +358,12 @@ export class PiHost {
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
     if (method === "extension.respond") {
       return await this.handleExtensionResponse(params);
+    }
+    if (method === "modelAuth.respond") {
+      return this.handleModelAuthResponse(params);
+    }
+    if (method === "modelAuth.cancel") {
+      return this.handleModelAuthCancel(params);
     }
     if (method === "session.search") {
       return await this.searchIndex.search({
@@ -345,6 +387,7 @@ export class PiHost {
   }
 
   async close(): Promise<void> {
+    this.modelAuth.close();
     const searchClose = this.searchShutdown ?? this.searchIndex.close();
     this.searchShutdown = searchClose;
     try {
@@ -386,6 +429,9 @@ export class PiHost {
             sessionRunCorrelation: true,
             sessionRunState: true,
             preSessionModelSelection: true,
+            modelSettings: true,
+            sessionSteer: true,
+            modelAuthentication: true,
           },
         };
       case "session.list":
@@ -450,6 +496,12 @@ export class PiHost {
             ? params.pathAction as unknown as SessionPathAction
             : undefined,
         );
+      case "session.steer":
+        return await this.steer(
+          params.message as string,
+          params.steerId as string,
+          params.expectedRunId as string,
+        );
       case "session.abort": {
         const active = this.requireWritable();
         if (active.currentRun) this.updateRunState(active, active.currentRun, "stopRequested");
@@ -471,6 +523,28 @@ export class PiHost {
         return this.getCommands();
       case "session.getModels":
         return await this.getModels(typeof params.cwd === "string" ? params.cwd : undefined);
+      case "modelSettings.get":
+        return await this.getModelSettings(params.cwd as string, false);
+      case "modelSettings.refresh":
+        return await this.getModelSettings(params.cwd as string, true);
+      case "modelSettings.setEnabledModels":
+        return await this.setGlobalEnabledModels(
+          params.cwd as string,
+          params.enabledModels as string[],
+        );
+      case "modelSettings.setDefaultModel":
+        return await this.setGlobalDefaultModel(
+          params.cwd as string,
+          params.provider as string,
+          params.modelId as string,
+        );
+      case "modelAuth.start":
+        return await this.startModelAuth(
+          params.cwd as string,
+          params.flowId as string,
+          params.provider as string,
+          params.authType as AuthType,
+        );
       case "session.getThinkingLevels":
         return this.getThinkingLevels();
       case "session.setModel":
@@ -494,6 +568,8 @@ export class PiHost {
         void this.searchShutdown.catch(() => undefined);
         return { shuttingDown: true };
       case "extension.respond":
+      case "modelAuth.respond":
+      case "modelAuth.cancel":
         throw new PiHostError("INTERNAL_ERROR", "Extension method was not routed correctly");
       case "session.search":
         throw new PiHostError("INTERNAL_ERROR", "Search method was not routed correctly");
@@ -1523,6 +1599,37 @@ export class PiHost {
     });
   }
 
+  private async steer(message: string, steerId: string, expectedRunId: string): Promise<unknown> {
+    const active = this.requireWritable();
+    await this.beforeMutation(active);
+    const run = active.currentRun;
+    if (!run || run.state.phase !== "running" || !active.session.isStreaming) {
+      throw new PiHostError(
+        "SESSION_NOT_RUNNING",
+        "A steering message requires a currently running Pi turn",
+      );
+    }
+    if (run.id !== expectedRunId) {
+      throw new PiHostError(
+        "SESSION_RUN_CHANGED",
+        "The active Pi run changed before the steering message could be delivered",
+        { expectedRunId, activeRunId: run.id },
+      );
+    }
+    if (active.ui.hasPendingDialogs) {
+      throw new PiHostError(
+        "SESSION_WAITING_FOR_USER",
+        "Answer the active structured request before steering the run",
+      );
+    }
+    try {
+      await active.session.steer(message);
+    } catch {
+      throw new PiHostError("STEER_REJECTED", "Pi did not accept the steering message");
+    }
+    return { accepted: true, steerId, runId: run.id };
+  }
+
   private updateRunState(
     active: WritableSession,
     run: ActiveRun,
@@ -1710,6 +1817,21 @@ export class PiHost {
       });
     }
 
+    if (cwd === undefined) {
+      const active = this.requireActive();
+      const canRefreshRuntime = active.mode === "readOnly"
+        || (!active.session.isStreaming
+          && !active.session.isCompacting
+          && active.session.pendingMessageCount === 0);
+      if (canRefreshRuntime) {
+        try {
+          await runtime.refresh({ allowNetwork: false });
+        } catch {
+          // Keep the last valid active snapshot; explicit model settings surfaces the read issue.
+        }
+      }
+    }
+
     const settings = SettingsManager.create(canonicalCwd, this.agentDir);
     const enabledPatterns = settings.getEnabledModels();
     const models = enabledPatterns && enabledPatterns.length > 0
@@ -1726,6 +1848,355 @@ export class PiHost {
       defaultModel: defaultModel ? safeModel(defaultModel) : null,
       defaultThinkingLevel,
     };
+  }
+
+  private async canonicalModelSettingsCwd(cwd: string): Promise<string> {
+    try {
+      const canonicalCwd = await realpath(cwd);
+      if (!(await stat(canonicalCwd)).isDirectory()) throw new Error("not a directory");
+      return canonicalCwd;
+    } catch (error) {
+      throw new PiHostError("CWD_NOT_ACCESSIBLE", `Working directory is not accessible: ${cwd}`, {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async createModelSettingsRuntime(): Promise<ModelRuntime> {
+    return await ModelRuntime.create({
+      authPath: join(this.agentDir, "auth.json"),
+      modelsPath: join(this.agentDir, "models.json"),
+      modelsStorePath: join(this.agentDir, "models-store.json"),
+      allowModelNetwork: false,
+    });
+  }
+
+  private async projectModelScope(
+    patterns: string[] | undefined,
+    runtime: ModelRuntime,
+  ): Promise<ModelScopeProjection> {
+    const availableModels = [...runtime.getAvailableSnapshot()];
+    if (!patterns || patterns.length === 0) {
+      return {
+        unrestricted: true,
+        enabledKeys: new Set(availableModels.map((model) => modelKey(model.provider, model.id))),
+        matchedPatterns: new Map(),
+        diagnostics: [],
+      };
+    }
+
+    const resolved = await resolveModelScopeWithDiagnostics(patterns, runtime);
+    const enabledKeys = new Set(
+      resolved.scopedModels.map(({ model }) => modelKey(model.provider, model.id)),
+    );
+    const matchedPatterns = new Map<string, string[]>();
+    for (const pattern of patterns) {
+      const match = await resolveModelScopeWithDiagnostics([pattern], runtime);
+      for (const { model } of match.scopedModels) {
+        const key = modelKey(model.provider, model.id);
+        matchedPatterns.set(key, [...(matchedPatterns.get(key) ?? []), pattern]);
+      }
+    }
+    return {
+      unrestricted: false,
+      enabledKeys,
+      matchedPatterns,
+      diagnostics: resolved.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        pattern: diagnostic.pattern,
+      })),
+    };
+  }
+
+  private async readModelCacheMetadata(): Promise<{
+    entries: Map<string, ModelCacheMetadata>;
+    invalid: boolean;
+  }> {
+    const path = join(this.agentDir, "models-store.json");
+    try {
+      const metadata = await stat(path);
+      if (!metadata.isFile() || metadata.size > 32 * 1_024 * 1_024) {
+        return { entries: new Map(), invalid: true };
+      }
+      const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      const entries = new Map<string, ModelCacheMetadata>();
+      for (const [providerId, rawEntry] of Object.entries(parsed)) {
+        if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry)) continue;
+        const entry = rawEntry as Record<string, unknown>;
+        entries.set(providerId, {
+          ...(typeof entry.checkedAt === "number" && Number.isFinite(entry.checkedAt)
+            ? { checkedAt: entry.checkedAt }
+            : {}),
+          ...(typeof entry.lastModified === "number" && Number.isFinite(entry.lastModified)
+            ? { lastModified: entry.lastModified }
+            : {}),
+        });
+      }
+      return { entries, invalid: false };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { entries: new Map(), invalid: false };
+      }
+      return { entries: new Map(), invalid: true };
+    }
+  }
+
+  private async getModelSettings(cwd: string, refreshNetwork: boolean): Promise<unknown> {
+    const canonicalCwd = await this.canonicalModelSettingsCwd(cwd);
+    const runtime = await this.createModelSettingsRuntime();
+    const refresh: ModelRefreshAttempt = {
+      attempted: refreshNetwork,
+      aborted: false,
+      failed: false,
+      providerErrors: new Set(),
+    };
+    const networkDisabled = process.env.PI_OFFLINE !== undefined;
+
+    if (refreshNetwork && !networkDisabled) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const result = await runtime.refresh({
+          allowNetwork: true,
+          force: true,
+          signal: controller.signal,
+        });
+        refresh.aborted = result.aborted;
+        refresh.providerErrors = new Set(result.errors.keys());
+      } catch {
+        refresh.failed = true;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    const settings = SettingsManager.create(canonicalCwd, this.agentDir);
+    const settingsErrors = settings.drainErrors();
+    const globalSettings = settings.getGlobalSettings();
+    const projectSettings = settings.getProjectSettings();
+    const globalPatterns = globalSettings.enabledModels;
+    const effectivePatterns = settings.getEnabledModels();
+    const [globalScope, effectiveScope, cache] = await Promise.all([
+      this.projectModelScope(globalPatterns, runtime),
+      this.projectModelScope(effectivePatterns, runtime),
+      this.readModelCacheMetadata(),
+    ]);
+
+    const globalDefaultProvider = globalSettings.defaultProvider;
+    const globalDefaultModelId = globalSettings.defaultModel;
+    const effectiveDefaultProvider = settings.getDefaultProvider();
+    const effectiveDefaultModelId = settings.getDefaultModel();
+
+    const scope = (
+      patterns: string[] | undefined,
+      projection: ModelScopeProjection,
+      defaultProvider: string | undefined,
+      defaultModelId: string | undefined,
+    ) => {
+      const defaultKey = defaultProvider && defaultModelId
+        ? modelKey(defaultProvider, defaultModelId)
+        : undefined;
+      return {
+        enabledModels: patterns ?? [],
+        unrestricted: projection.unrestricted,
+        defaultProvider: defaultProvider ?? null,
+        defaultModelId: defaultModelId ?? null,
+        defaultInScope: defaultKey ? projection.enabledKeys.has(defaultKey) : null,
+        diagnostics: projection.diagnostics,
+      };
+    };
+
+    const providers = runtime.getProviders()
+      .map((provider) => {
+        const auth = runtime.getProviderAuthStatus(provider.id);
+        const cached = cache.entries.get(provider.id);
+        const dynamic = typeof provider.refreshModels === "function";
+        const methods = [
+          ...(provider.auth.apiKey ? [{
+            type: "api_key",
+            label: provider.auth.apiKey.name,
+            interactive: typeof provider.auth.apiKey.login === "function",
+          }] : []),
+          ...(provider.auth.oauth ? [{
+            type: "oauth",
+            label: provider.auth.oauth.loginLabel ?? provider.auth.oauth.name,
+            interactive: true,
+          }] : []),
+        ];
+        const models = (auth.configured ? runtime.getModels(provider.id) : [])
+          .map((model) => {
+            const safe = safeModel(model);
+            if (!safe) return null;
+            const key = modelKey(model.provider, model.id);
+            return {
+              model: safe,
+              globalEnabled: globalScope.enabledKeys.has(key),
+              enabled: effectiveScope.enabledKeys.has(key),
+              globalMatchedPatterns: globalScope.matchedPatterns.get(key) ?? [],
+              matchedPatterns: effectiveScope.matchedPatterns.get(key) ?? [],
+            };
+          })
+          .filter((model) => model !== null)
+          .sort((left, right) => {
+            return (left.model.name ?? left.model.id)
+              .localeCompare(right.model.name ?? right.model.id);
+          });
+        return {
+          id: provider.id,
+          name: provider.name,
+          auth: {
+            configured: auth.configured,
+            source: auth.source ?? null,
+            methods,
+          },
+          catalog: {
+            kind: dynamic ? (cached ? "cached" : "builtIn") : "static",
+            checkedAt: cached?.checkedAt ? new Date(cached.checkedAt).toISOString() : null,
+            lastModified: cached?.lastModified ? new Date(cached.lastModified).toISOString() : null,
+            refreshFailed: refresh.providerErrors.has(provider.id),
+          },
+          models,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+
+    return {
+      cwd: canonicalCwd,
+      providers,
+      global: scope(
+        globalPatterns,
+        globalScope,
+        globalDefaultProvider,
+        globalDefaultModelId,
+      ),
+      effective: scope(
+        effectivePatterns,
+        effectiveScope,
+        effectiveDefaultProvider,
+        effectiveDefaultModelId,
+      ),
+      projectOverrides: {
+        enabledModels: projectSettings.enabledModels !== undefined,
+        defaultModel: projectSettings.defaultProvider !== undefined
+          || projectSettings.defaultModel !== undefined,
+      },
+      settingsErrors: settingsErrors.map((error) => ({
+        scope: error.scope,
+        message: error.scope === "global"
+          ? "Pi 全局设置无法读取，D Code 不会覆盖原文件。"
+          : "当前项目 Pi 设置无法读取，已保留全局设置视图。",
+      })),
+      cacheInvalid: cache.invalid,
+      refresh: {
+        attempted: refresh.attempted,
+        aborted: refresh.aborted,
+        failed: refresh.failed,
+        networkDisabled,
+      },
+    };
+  }
+
+  private throwForGlobalSettingsErrors(settings: SettingsManager): void {
+    const globalError = settings.drainErrors().find((error) => error.scope === "global");
+    if (globalError) {
+      throw new PiHostError(
+        "MODEL_SETTINGS_UNREADABLE",
+        "Pi global settings could not be read; the existing file was preserved",
+      );
+    }
+  }
+
+  private async setGlobalEnabledModels(cwd: string, patterns: string[]): Promise<unknown> {
+    const canonicalCwd = await this.canonicalModelSettingsCwd(cwd);
+    const normalized = [...new Set(patterns.map((pattern) => pattern.trim()))];
+    const settings = SettingsManager.create(canonicalCwd, this.agentDir);
+    this.throwForGlobalSettingsErrors(settings);
+    settings.setEnabledModels(normalized.length > 0 ? normalized : undefined);
+    await settings.flush();
+    this.throwForGlobalSettingsErrors(settings);
+    return await this.getModelSettings(canonicalCwd, false);
+  }
+
+  private async setGlobalDefaultModel(
+    cwd: string,
+    provider: string,
+    modelId: string,
+  ): Promise<unknown> {
+    const canonicalCwd = await this.canonicalModelSettingsCwd(cwd);
+    const runtime = await this.createModelSettingsRuntime();
+    const model = runtime.getModel(provider, modelId);
+    if (!model || !runtime.hasConfiguredAuth(provider)) {
+      throw new PiHostError(
+        "MODEL_NOT_AVAILABLE",
+        `Model is not available with configured Pi authentication: ${provider}/${modelId}`,
+      );
+    }
+
+    const settings = SettingsManager.create(canonicalCwd, this.agentDir);
+    this.throwForGlobalSettingsErrors(settings);
+    const globalScope = await this.projectModelScope(
+      settings.getGlobalSettings().enabledModels,
+      runtime,
+    );
+    if (!globalScope.enabledKeys.has(modelKey(provider, modelId))) {
+      throw new PiHostError(
+        "MODEL_NOT_ENABLED",
+        `Model is outside the global enabledModels scope: ${provider}/${modelId}`,
+      );
+    }
+
+    settings.setDefaultModelAndProvider(provider, modelId);
+    await settings.flush();
+    this.throwForGlobalSettingsErrors(settings);
+    return await this.getModelSettings(canonicalCwd, false);
+  }
+
+  private async startModelAuth(
+    cwd: string,
+    flowId: string,
+    providerId: string,
+    authType: AuthType,
+  ): Promise<unknown> {
+    const canonicalCwd = await this.canonicalModelSettingsCwd(cwd);
+    const runtime = await this.createModelSettingsRuntime();
+    const provider = runtime.getProvider(providerId);
+    if (!provider) {
+      throw new PiHostError("MODEL_AUTH_NOT_AVAILABLE", "The requested Provider is not available");
+    }
+    const method = authType === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
+    const interactive = authType === "oauth" || typeof provider.auth.apiKey?.login === "function";
+    if (!method || !interactive) {
+      throw new PiHostError(
+        "MODEL_AUTH_NOT_INTERACTIVE",
+        "This Provider must be configured through its ambient Pi or system environment",
+      );
+    }
+    try {
+      await this.modelAuth.login(flowId, runtime, providerId, authType);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new PiHostError("MODEL_AUTH_CANCELLED", "Provider authentication was cancelled");
+      }
+      throw new PiHostError("MODEL_AUTH_FAILED", "Provider authentication failed");
+    }
+    return await this.getModelSettings(canonicalCwd, false);
+  }
+
+  private handleModelAuthResponse(params: Record<string, unknown>): unknown {
+    const accepted = this.modelAuth.respond(
+      params.flowId as string,
+      params.requestId as string,
+      typeof params.value === "string" ? params.value : undefined,
+      params.cancelled === true,
+    );
+    if (!accepted) throw new PiHostError("MODEL_AUTH_REQUEST_NOT_FOUND", "Authentication prompt is no longer active");
+    return { accepted: true };
+  }
+
+  private handleModelAuthCancel(params: Record<string, unknown>): unknown {
+    const cancelled = this.modelAuth.cancel(params.flowId as string);
+    return { cancelled };
   }
 
   private getThinkingLevels(): unknown {

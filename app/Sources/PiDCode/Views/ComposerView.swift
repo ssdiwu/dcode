@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ComposerView: View {
@@ -5,6 +6,7 @@ struct ComposerView: View {
     @FocusState private var focused: Bool
     @State private var showingContext = false
     @State private var showingFollowUpQueue = true
+    @AppStorage("dcode.runningMessageDeliveryMode") private var runningDeliveryRawValue = RunningMessageDeliveryMode.steer.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,25 +65,27 @@ struct ComposerView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                if model.currentRunState != nil || model.currentFollowUpQueue != nil {
+                if model.currentRunState?.phase.requiresInteractionDock == true
+                    || model.currentFollowUpQueue != nil
+                    || model.pendingSteer != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
-                TextField(
-                    composerPlaceholder,
-                    text: text,
-                    axis: .vertical
-                )
-                .textFieldStyle(.plain)
-                .font(.body)
-                .lineLimit(3...7)
+                ZStack(alignment: .topLeading) {
+                    ComposerTextEditor(
+                        text: text,
+                        isEnabled: composerIsEnabled,
+                        onSubmit: submitComposer
+                    )
+                    if text.wrappedValue.isEmpty {
+                        Text(composerPlaceholder)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 1)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .frame(minHeight: 66, maxHeight: 126, alignment: .topLeading)
                 .focused($focused)
-                .disabled(
-                    model.isCreatingSession
-                        || model.isSendingRequest
-                        || model.pendingPrompt != nil
-                        || model.isMutatingFollowUpQueue
-                )
                 .accessibilityLabel("消息输入")
 
                 runtimeControls
@@ -97,6 +101,34 @@ struct ComposerView: View {
     private var runtimeControls: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 4)
+
+            if model.hasActiveRun {
+                Menu {
+                    ForEach(RunningMessageDeliveryMode.allCases) { mode in
+                        Button {
+                            runningDeliveryRawValue = mode.rawValue
+                        } label: {
+                            if mode == runningDeliveryMode {
+                                Label(mode.label, systemImage: "checkmark")
+                            } else {
+                                Text(mode.label)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: runningDeliveryMode == .steer ? "arrow.turn.up.right" : "text.badge.plus")
+                        Text(runningDeliveryMode.label)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .fixedSize()
+                }
+                .menuStyle(.borderlessButton)
+                .help(runningDeliveryMode.detail)
+                .accessibilityLabel("运行中发送方式：\(runningDeliveryMode.label)")
+            }
 
             Button {
                 showingContext.toggle()
@@ -125,9 +157,9 @@ struct ComposerView: View {
 
             if model.shouldQueueComposerText {
                 Button {
-                    Task { await model.sendPrompt() }
+                    submitComposer()
                 } label: {
-                    Image(systemName: "text.badge.plus")
+                    Image(systemName: model.hasActiveRun && runningDeliveryMode == .steer ? "arrow.up" : "text.badge.plus")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(
@@ -137,15 +169,14 @@ struct ComposerView: View {
                         .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!sendEnabled)
-                .help("加入后续消息（⌘↩）")
-                .accessibilityLabel("加入后续消息队列")
+                .help(submitHelp)
+                .accessibilityLabel(submitAccessibilityLabel)
             }
 
             if !model.isStreaming && !model.shouldQueueComposerText {
                 Button {
-                    Task { await model.sendPrompt() }
+                    submitComposer()
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.bold))
@@ -157,9 +188,8 @@ struct ComposerView: View {
                         .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!sendEnabled)
-                .help("发送（⌘↩）")
+                .help("发送（↩）")
                 .accessibilityLabel(
                     model.isNewSessionDraftActive
                         ? "发送并创建会话"
@@ -172,7 +202,7 @@ struct ComposerView: View {
 
     private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            if let runState = model.currentRunState {
+            if let runState = model.currentRunState, runState.phase.requiresInteractionDock {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: runStatusIcon(runState.phase))
                         .foregroundStyle(runStatusColor(runState.phase))
@@ -212,8 +242,26 @@ struct ComposerView: View {
                 }
             }
 
+            if let pendingSteer = model.pendingSteer {
+                if model.currentRunState?.phase.requiresInteractionDock == true { Divider() }
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pendingSteer.accepted ? "介入信息已交给 Pi" : "正在提交介入信息")
+                            .font(.caption.weight(.semibold))
+                        Text("等待当前工具安全结束后应用；若本轮异常结束，正文会恢复到输入框。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "arrow.turn.up.right")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
             if let queue {
-                if model.currentRunState != nil { Divider() }
+                if model.currentRunState?.phase.requiresInteractionDock == true || model.pendingSteer != nil {
+                    Divider()
+                }
                 followUpQueue(queue)
             }
         }
@@ -283,7 +331,7 @@ struct ComposerView: View {
     private func runStatusDetail(_ state: SessionRunState) -> String {
         switch state.phase {
         case .running:
-            "当前 Agent 正在处理；后续消息只进入 D Code 队列。"
+            "当前 Agent 正在处理；可选择立即介入，或等待本轮结束后再发送。"
         case .waitingForUser:
             state.waitingFor?.instruction ?? "请在结构化请求中完成处理；普通队列不会截获答案。"
         case .stopRequested:
@@ -525,15 +573,16 @@ struct ComposerView: View {
     private var contextRemainingRing: some View {
         ZStack {
             Circle()
-                .stroke(Color.secondary.opacity(0.22), lineWidth: 3)
-            if let remainingPercent = model.hostState?.contextUsage?.remainingPercent {
+                .stroke(Color.accentColor, lineWidth: 3)
+            if let usedFraction = model.hostState?.contextUsage?.usedFraction {
                 Circle()
-                    .trim(from: 0, to: remainingPercent / 100)
+                    .trim(from: 0, to: usedFraction)
                     .stroke(
-                        Color.secondary,
+                        Color.white.opacity(0.94),
                         style: StrokeStyle(lineWidth: 3, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
+                    .animation(.smooth(duration: 0.25), value: usedFraction)
             }
         }
         .accessibilityHidden(true)
@@ -571,7 +620,15 @@ struct ComposerView: View {
     }
 
     private var sendEnabled: Bool {
-        model.canSubmitComposerText
+        model.canSubmitComposerText(deliveryMode: runningDeliveryMode)
+    }
+
+    private var composerIsEnabled: Bool {
+        !model.isCreatingSession
+            && !model.isSendingRequest
+            && model.pendingPrompt == nil
+            && model.pendingSteer == nil
+            && !model.isMutatingFollowUpQueue
     }
 
     private var commandSuggestions: [CommandDescriptor] {
@@ -610,8 +667,32 @@ struct ComposerView: View {
             return "输入第一条消息；发送后才会创建 Pi 会话"
         }
         return model.shouldQueueComposerText
-            ? "写下下一步，加入后续消息队列"
+            ? (model.hasActiveRun && runningDeliveryMode == .steer
+                ? "输入要立即介入当前运行的信息"
+                : "写下下一步，加入后续消息队列")
             : "交给 D Code 一项工作，或输入 / 使用命令"
+    }
+
+    private var runningDeliveryMode: RunningMessageDeliveryMode {
+        RunningMessageDeliveryMode(rawValue: runningDeliveryRawValue) ?? .steer
+    }
+
+    private var submitHelp: String {
+        if model.hasActiveRun, runningDeliveryMode == .steer {
+            return "立即介入当前运行（↩）"
+        }
+        return "加入后续消息队列（↩）"
+    }
+
+    private var submitAccessibilityLabel: String {
+        model.hasActiveRun && runningDeliveryMode == .steer
+            ? "立即介入当前运行"
+            : "加入后续消息队列"
+    }
+
+    private func submitComposer() {
+        guard sendEnabled else { return }
+        Task { await model.sendPrompt(deliveryMode: runningDeliveryMode) }
     }
 
     private func followUpQueueLabel(_ queue: FollowUpQueueRecord) -> String {
@@ -630,6 +711,92 @@ struct ComposerView: View {
         case "max": "最大"
         case let value?: value
         case nil: "思考"
+        }
+    }
+}
+
+enum ComposerKeyPolicy {
+    static func shouldSubmit(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard keyCode == 36 || keyCode == 76 else { return false }
+        return !modifiers.contains(.shift) && !modifiers.contains(.option)
+    }
+}
+
+final class ComposerNSTextView: NSTextView {
+    var submit: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if ComposerKeyPolicy.shouldSubmit(keyCode: event.keyCode, modifiers: event.modifierFlags) {
+            submit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
+private struct ComposerTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let isEnabled: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+
+        let textView = ComposerNSTextView()
+        textView.delegate = context.coordinator
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = text
+        textView.submit = onSubmit
+        textView.setAccessibilityLabel("消息输入")
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
+        context.coordinator.parent = self
+        textView.submit = onSubmit
+        textView.isEditable = isEnabled
+        textView.isSelectable = true
+        if textView.string != text {
+            context.coordinator.isUpdating = true
+            let selection = textView.selectedRange()
+            textView.string = text
+            textView.setSelectedRange(NSRange(
+                location: min(selection.location, text.utf16.count),
+                length: 0
+            ))
+            context.coordinator.isUpdating = false
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerTextEditor
+        var isUpdating = false
+
+        init(_ parent: ComposerTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isUpdating,
+                  let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
         }
     }
 }

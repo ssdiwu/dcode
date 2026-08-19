@@ -16,17 +16,17 @@ enum HostCompatibilityError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedProtocol(version):
-            "D Code 0.0.6 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+            "D Code 0.0.7 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
         case let .incompatibleHostVersion(version):
-            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.6。请重新构建 App，避免混用旧 Host。"
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.7。请重新构建 App，避免混用旧 Host。"
         case let .missingCapabilities(capabilities):
-            "当前 Host 缺少 0.0.6 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+            "当前 Host 缺少 0.0.7 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
         }
     }
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.6"
+    static let appVersion = "0.0.7"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -47,6 +47,9 @@ enum HostCompatibility {
         "sessionRunCorrelation",
         "sessionRunState",
         "preSessionModelSelection",
+        "modelSettings",
+        "sessionSteer",
+        "modelAuthentication",
     ]
 
     static func validate(_ hello: HostHello) throws {
@@ -169,6 +172,11 @@ struct ContextUsage: Codable, Equatable, Sendable {
         guard let percent else { return nil }
         return min(max(100 - percent, 0), 100)
     }
+
+    var usedFraction: Double? {
+        guard let percent else { return nil }
+        return min(max(percent / 100, 0), 1)
+    }
 }
 
 struct FastModeState: Codable, Equatable, Sendable {
@@ -257,4 +265,16 @@ struct Acknowledgement: Codable, Sendable {
     let closed: Bool?
     let shuttingDown: Bool?
     let level: String?
+}
+
+struct SessionSteerResult: Codable, Equatable, Sendable {
+    let accepted: Bool
+    let steerID: String
+    let runID: String
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case steerID = "steerId"
+        case runID = "runId"
+    }
 }

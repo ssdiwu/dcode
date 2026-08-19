@@ -223,6 +223,75 @@ final class FollowUpQueueTests: XCTestCase {
     }
 
     @MainActor
+    func testAcceptedSteerRestoresItsDraftWhenTheRunDoesNotCompleteNormally() async throws {
+        let root = temporaryDirectory("steer-restore")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, queueURL: root.appending(path: "queues.json"))
+        let metadataLoaded = await model.loadSessionMetadata()
+        XCTAssertTrue(metadataLoaded)
+        prepareRunningSession(model, runID: "run-steer")
+        let target = try XCTUnwrap(model.currentDraftTarget)
+        model.pendingSteer = PendingSteerDraft(
+            sessionID: "session-a",
+            runID: "run-steer",
+            steerID: "steer-a",
+            draft: "必须恢复的介入正文",
+            draftTarget: target,
+            accepted: true
+        )
+        model.composerText = ""
+
+        model.handle(HostEvent(name: "session.runStateChanged", data: .object([
+            "sessionId": .string("session-a"),
+            "runId": .string("run-steer"),
+            "phase": .string("aborted"),
+            "startedAt": .string(timestamp),
+            "updatedAt": .string(timestamp),
+            "completedAt": .string(timestamp),
+            "inputPersisted": .bool(true),
+            "retryable": .bool(false),
+        ])))
+
+        XCTAssertNil(model.pendingSteer)
+        XCTAssertEqual(model.composerText, "必须恢复的介入正文")
+    }
+
+    @MainActor
+    func testPendingSteerShutdownKeepsThePersistedDraftInsteadOfSavingTheEmptyComposer() async throws {
+        let root = temporaryDirectory("steer-shutdown")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draftURL = root.appending(path: "drafts.json")
+        let model = AppModel(
+            projectStore: ProjectStore(fileURL: root.appending(path: "projects.json")),
+            sessionDraftStore: SessionDraftStore(fileURL: draftURL),
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "queues.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
+        )
+        let metadataLoaded = await model.loadSessionMetadata()
+        XCTAssertTrue(metadataLoaded)
+        prepareRunningSession(model, runID: "run-steer-shutdown")
+        let target = try XCTUnwrap(model.currentDraftTarget)
+        model.updateComposerText("关闭前必须保留")
+        model.pendingSteer = PendingSteerDraft(
+            sessionID: "session-a",
+            runID: "run-steer-shutdown",
+            steerID: "steer-shutdown",
+            draft: "关闭前必须保留",
+            draftTarget: target,
+            accepted: true
+        )
+        model.composerText = ""
+
+        await model.shutdown()
+
+        let restored = try await SessionDraftStore(fileURL: draftURL).load()
+        XCTAssertEqual(restored.records.first(where: { $0.target.stableID == target.stableID })?.text, "关闭前必须保留")
+    }
+
+    @MainActor
     func testInterruptedDispatchAndRunRecoverAsExplicitUnknownStates() async throws {
         let root = temporaryDirectory("restart-normalization")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -427,6 +496,7 @@ final class FollowUpQueueTests: XCTestCase {
         agent_dir = os.environ["PI_CODING_AGENT_DIR"]
         gate = os.path.join(agent_dir, "finish-first")
         prompts_file = os.path.join(agent_dir, "prompts.json")
+        steers_file = os.path.join(agent_dir, "steers.json")
         session_id = "session-a"
         session_path = os.path.join(agent_dir, "session-a.jsonl")
         cwd = agent_dir
@@ -438,6 +508,7 @@ final class FollowUpQueueTests: XCTestCase {
             }
         ]
         prompts = []
+        steers = []
         streaming = False
         run_state = None
 
@@ -451,6 +522,9 @@ final class FollowUpQueueTests: XCTestCase {
             "sessionRunCorrelation": True,
             "sessionRunState": True,
             "preSessionModelSelection": True,
+            "modelSettings": True,
+            "sessionSteer": True,
+            "modelAuthentication": True,
         }
 
         def emit_event(name, data=None):
@@ -502,6 +576,12 @@ final class FollowUpQueueTests: XCTestCase {
                 json.dump(prompts, handle, ensure_ascii=False)
             os.replace(temporary, prompts_file)
 
+        def persist_steers():
+            temporary = steers_file + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump(steers, handle, ensure_ascii=False)
+            os.replace(temporary, steers_file)
+
         def finish_run(ordinal, prompt_id, user_id):
             global streaming, run_state
             if ordinal == 1:
@@ -535,7 +615,7 @@ final class FollowUpQueueTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.6", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.7", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":
@@ -576,6 +656,12 @@ final class FollowUpQueueTests: XCTestCase {
                 emit_event("session.promptCompleted", {"sessionId": session_id, "promptId": prompt_id, "outcome": "persisted", "entryId": user_id})
                 result = {"accepted": True, "completed": False}
                 threading.Thread(target=finish_run, args=(ordinal, prompt_id, user_id), daemon=True).start()
+            elif method == "session.steer":
+                with state_lock:
+                    steers.append(params["message"])
+                    persist_steers()
+                    active_run_id = run_state["runId"] if run_state else ""
+                result = {"accepted": True, "steerId": params["steerId"], "runId": active_run_id}
             else:
                 result = {"shuttingDown": True}
             emit_response(request, result)
@@ -613,15 +699,26 @@ final class FollowUpQueueTests: XCTestCase {
         await model.sendPrompt()
         XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["  second  ", "third"])
 
+        model.updateComposerText("change direction now")
+        await model.sendPrompt(deliveryMode: .steer)
+        XCTAssertTrue(model.pendingSteer?.accepted == true)
+        XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["  second  ", "third"])
+
         FileManager.default.createFile(atPath: agentDirectory.appending(path: "finish-first").path, contents: Data())
         let queueDrained = await waitUntil(timeout: .seconds(5)) {
-            model.followUpQueues.isEmpty && !model.isStreaming && model.pendingPrompt == nil
+            model.followUpQueues.isEmpty
+                && !model.isStreaming
+                && model.pendingPrompt == nil
+                && model.pendingSteer == nil
         }
         XCTAssertTrue(queueDrained)
+        XCTAssertEqual(model.composerText, "")
 
         let promptData = try Data(contentsOf: agentDirectory.appending(path: "prompts.json"))
         let prompts = try JSONDecoder().decode([String].self, from: promptData)
         XCTAssertEqual(prompts, ["first", "  second  ", "third"])
+        let steerData = try Data(contentsOf: agentDirectory.appending(path: "steers.json"))
+        XCTAssertEqual(try JSONDecoder().decode([String].self, from: steerData), ["change direction now"])
         await model.shutdown()
     }
 

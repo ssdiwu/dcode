@@ -75,6 +75,45 @@ test("method parameter validation rejects invalid values", () => {
     () => validateMethodParams("session.getModels", { cwd: 42 }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("modelSettings.get", { cwd: "/work" }));
+  assert.doesNotThrow(() => validateMethodParams("modelSettings.refresh", { cwd: "/work" }));
+  assert.doesNotThrow(() => validateMethodParams("modelSettings.setEnabledModels", {
+    cwd: "/work",
+    enabledModels: ["openai/gpt-*", "anthropic/claude:high"],
+  }));
+  assert.doesNotThrow(() => validateMethodParams("modelSettings.setEnabledModels", {
+    cwd: "/work",
+    enabledModels: [],
+  }));
+  assert.doesNotThrow(() => validateMethodParams("modelSettings.setDefaultModel", {
+    cwd: "/work",
+    provider: "openai",
+    modelId: "gpt-5.5",
+  }));
+  assert.throws(
+    () => validateMethodParams("modelSettings.setDefaultModel", {
+      cwd: "/work",
+      provider: "x".repeat(513),
+      modelId: "gpt-5.5",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("modelSettings.setDefaultModel", {
+      cwd: "/work",
+      provider: "openai",
+      modelId: "x".repeat(513),
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("modelSettings.setEnabledModels", { cwd: "/work", enabledModels: ["  "] }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("modelSettings.setDefaultModel", { cwd: "/work", provider: "openai" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("content.renderMermaid", { source: "x".repeat(100_001) }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
@@ -117,6 +156,38 @@ test("method parameter validation rejects invalid values", () => {
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
   assert.doesNotThrow(() => validateMethodParams("session.prompt", { message: "hello", promptId: "prompt-1" }));
+  assert.doesNotThrow(() => validateMethodParams("session.steer", {
+    message: "change direction",
+    steerId: "steer-1",
+    expectedRunId: "run-active",
+  }));
+  assert.throws(
+    () => validateMethodParams("session.steer", {
+      message: " /dangerous-command",
+      steerId: "steer-command",
+      expectedRunId: "run-active",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("session.steer", {
+      message: "missing run identity",
+      steerId: "steer-missing-run",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("modelAuth.start", {
+    cwd: "/work",
+    flowId: "auth-1",
+    provider: "openai",
+    authType: "api_key",
+  }));
+  assert.doesNotThrow(() => validateMethodParams("modelAuth.respond", {
+    flowId: "auth-1",
+    requestId: "request-1",
+    value: "secret-value",
+  }));
+  assert.doesNotThrow(() => validateMethodParams("modelAuth.cancel", { flowId: "auth-1" }));
   assert.doesNotThrow(() => validateMethodParams("session.prompt", {
     message: "rewrite",
     promptId: "prompt-path",

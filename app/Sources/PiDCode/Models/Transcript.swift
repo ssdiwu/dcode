@@ -8,6 +8,37 @@ enum TranscriptRole: String, Sendable {
     case system
 }
 
+struct AssistantUsage: Sendable, Equatable {
+    let input: Int?
+    let output: Int?
+    let cacheRead: Int?
+    let cacheWrite: Int?
+    let totalTokens: Int?
+
+    static func parse(_ value: JSONValue?) -> AssistantUsage? {
+        guard let object = value?.objectValue else { return nil }
+        let usage = AssistantUsage(
+            input: nonnegativeInt(object["input"]),
+            output: nonnegativeInt(object["output"]),
+            cacheRead: nonnegativeInt(object["cacheRead"]),
+            cacheWrite: nonnegativeInt(object["cacheWrite"]),
+            totalTokens: nonnegativeInt(object["totalTokens"])
+        )
+        return usage.input == nil
+            && usage.output == nil
+            && usage.cacheRead == nil
+            && usage.cacheWrite == nil
+            && usage.totalTokens == nil
+            ? nil
+            : usage
+    }
+
+    private static func nonnegativeInt(_ value: JSONValue?) -> Int? {
+        guard let value = value?.intValue, value >= 0 else { return nil }
+        return value
+    }
+}
+
 struct ToolCallPresentation: Sendable, Equatable {
     let id: String
     let name: String
@@ -102,6 +133,7 @@ struct TranscriptItem: Identifiable, Sendable, Equatable {
     let blocks: [TranscriptBlock]
     let editableText: String?
     let assistantStopReason: String?
+    let assistantUsage: AssistantUsage?
 
     init(
         id: String,
@@ -110,7 +142,8 @@ struct TranscriptItem: Identifiable, Sendable, Equatable {
         persistedAt: Date? = nil,
         blocks: [TranscriptBlock],
         editableText: String? = nil,
-        assistantStopReason: String? = nil
+        assistantStopReason: String? = nil,
+        assistantUsage: AssistantUsage? = nil
     ) {
         self.id = id
         self.role = role
@@ -119,6 +152,7 @@ struct TranscriptItem: Identifiable, Sendable, Equatable {
         self.blocks = blocks
         self.editableText = editableText
         self.assistantStopReason = assistantStopReason
+        self.assistantUsage = assistantUsage
     }
 
     var plainText: String {
@@ -177,7 +211,8 @@ enum TranscriptParser {
                 timestamp: timestamp,
                 persistedAt: persistedAt,
                 blocks: blocks,
-                assistantStopReason: message["stopReason"]?.stringValue
+                assistantStopReason: message["stopReason"]?.stringValue,
+                assistantUsage: AssistantUsage.parse(message["usage"])
             )
         case "toolResult":
             let callID = message["toolCallId"]?.stringValue ?? id

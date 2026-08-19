@@ -66,7 +66,10 @@ enum JSONValue: Codable, Equatable, Sendable {
     }
 
     var intValue: Int? {
-        guard case let .number(value) = self, value.rounded() == value else { return nil }
+        guard case let .number(value) = self,
+              value.rounded() == value,
+              value >= Double(Int.min),
+              value < Double(Int.max) else { return nil }
         return Int(value)
     }
 

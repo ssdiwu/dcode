@@ -277,23 +277,146 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testAboutMetadataUsesBundleVersionAndCanonicalGitHubLinks() {
         XCTAssertEqual(
             AboutAppMetadata.versionText(infoDictionary: [
-                "CFBundleShortVersionString": "0.0.6",
-                "CFBundleVersion": "6",
+                "CFBundleShortVersionString": "0.0.7",
+                "CFBundleVersion": "7",
             ]),
-            "版本 0.0.6（6）"
+            "版本 0.0.7（7）"
         )
         XCTAssertEqual(AboutAppMetadata.versionText(infoDictionary: [:]), "版本未知")
         XCTAssertEqual(AboutAppMetadata.authorURL.absoluteString, "https://github.com/ssdiwu")
         XCTAssertEqual(AboutAppMetadata.projectURL.absoluteString, "https://github.com/ssdiwu/dcode")
     }
 
+    func testModelSettingsSnapshotKeepsCatalogScopeAndRuleIdentitySeparate() throws {
+        let source = #"""
+        {
+          "cwd":"/tmp/project",
+          "providers":[{
+            "id":"openai",
+            "name":"OpenAI",
+            "auth":{"configured":true,"source":"auth.json","methods":[{"type":"api_key","label":"OpenAI API key","interactive":true}]},
+            "catalog":{"kind":"cached","checkedAt":"2026-08-16T10:00:00.000Z","lastModified":null,"refreshFailed":false},
+            "models":[{
+              "model":{"provider":"openai","id":"gpt-test","name":"GPT Test","contextWindow":128000},
+              "globalEnabled":true,
+              "enabled":false,
+              "globalMatchedPatterns":["openai/gpt-*"],
+              "matchedPatterns":[]
+            }]
+          }],
+          "global":{"enabledModels":["openai/gpt-*"],"unrestricted":false,"defaultProvider":"openai","defaultModelId":"gpt-test","defaultInScope":true,"diagnostics":[]},
+          "effective":{"enabledModels":["xai/*"],"unrestricted":false,"defaultProvider":"openai","defaultModelId":"gpt-test","defaultInScope":false,"diagnostics":[]},
+          "projectOverrides":{"enabledModels":true,"defaultModel":false},
+          "settingsErrors":[],
+          "cacheInvalid":false,
+          "refresh":{"attempted":false,"aborted":false,"failed":false,"networkDisabled":false}
+        }
+        """#
+        let snapshot = try JSONDecoder().decode(ModelSettingsSnapshot.self, from: Data(source.utf8))
+
+        XCTAssertEqual(snapshot.globalDefaultModel?.model.qualifiedName, "openai/gpt-test")
+        XCTAssertEqual(snapshot.selectableDefaultModels.map(\.id), ["openai/gpt-test"])
+        XCTAssertTrue(snapshot.projectOverrides.isActive)
+        XCTAssertTrue(snapshot.providers[0].models[0].globalEnabled)
+        XCTAssertEqual(snapshot.providers[0].auth.availableMethods.map(\.type), ["api_key"])
+        XCTAssertFalse(snapshot.providers[0].models[0].enabled)
+        XCTAssertFalse(snapshot.providers[0].models[0].isExactlyEnabled)
+        XCTAssertFalse(snapshot.providers[0].models[0].canRemoveExactRule)
+
+        let hostModel = snapshot.providers[0].models[0].model
+        let exactOnly = ModelSettingsModel(
+            model: hostModel,
+            globalEnabled: true,
+            enabled: true,
+            globalMatchedPatterns: [hostModel.qualifiedName],
+            matchedPatterns: [hostModel.qualifiedName]
+        )
+        let overlapping = ModelSettingsModel(
+            model: hostModel,
+            globalEnabled: true,
+            enabled: true,
+            globalMatchedPatterns: [hostModel.qualifiedName, "openai/gpt-*"],
+            matchedPatterns: [hostModel.qualifiedName, "openai/gpt-*"]
+        )
+        XCTAssertTrue(exactOnly.canRemoveExactRule)
+        XCTAssertFalse(overlapping.canRemoveExactRule)
+
+        let exact = ModelSettingsRulePolicy.addingExactModel(
+            snapshot.providers[0].models[0],
+            to: [" openai/gpt-* ", "openai/gpt-*"]
+        )
+        XCTAssertEqual(exact, ["openai/gpt-*", "openai/gpt-test"])
+        XCTAssertEqual(
+            ModelSettingsRulePolicy.removingExactModel(snapshot.providers[0].models[0], from: exact),
+            ["openai/gpt-*"]
+        )
+
+        XCTAssertEqual(
+            ModelSettingsRefreshState(
+                attempted: true,
+                aborted: true,
+                failed: false,
+                networkDisabled: false
+            ).statusMessage,
+            "目录刷新超时或已中止，已保留刷新前目录。"
+        )
+        XCTAssertEqual(
+            ModelSettingsRefreshState(
+                attempted: true,
+                aborted: false,
+                failed: true,
+                networkDisabled: false
+            ).statusMessage,
+            "目录刷新失败，已保留刷新前目录；可稍后重试。"
+        )
+
+        let authPrompt = ModelAuthPrompt(data: .object([
+            "flowId": .string("flow-1"),
+            "requestId": .string("request-1"),
+            "prompt": .object([
+                "type": .string("secret"),
+                "message": .string("输入 API Key"),
+                "placeholder": .string("sk-…"),
+            ]),
+        ]))
+        XCTAssertEqual(authPrompt?.type, "secret")
+        XCTAssertEqual(authPrompt?.placeholder, "sk-…")
+        let authEvent = ModelAuthEventPresentation(data: .object([
+            "event": .object([
+                "type": .string("auth_url"),
+                "url": .string("https://example.com/login"),
+                "instructions": .string("在浏览器中继续"),
+            ]),
+        ]))
+        XCTAssertEqual(authEvent?.url, "https://example.com/login")
+        XCTAssertEqual(authEvent?.message, "在浏览器中继续")
+        let unsafeAuthPrompt = ModelAuthPrompt(data: .object([
+            "flowId": .string("flow-unsafe"),
+            "requestId": .string("request-unsafe"),
+            "prompt": .object([
+                "type": .string("text"),
+                "message": .string("authorization: Bearer abc.def"),
+                "placeholder": .string("api_key=topsecret"),
+            ]),
+        ]))
+        XCTAssertFalse(unsafeAuthPrompt?.message.contains("abc.def") == true)
+        XCTAssertFalse(unsafeAuthPrompt?.placeholder?.contains("topsecret") == true)
+        let unsafeAuthEvent = ModelAuthEventPresentation(data: .object([
+            "event": .object([
+                "type": .string("progress"),
+                "message": .string("access_token=secret-value"),
+            ]),
+        ]))
+        XCTAssertFalse(unsafeAuthEvent?.message?.contains("secret-value") == true)
+    }
+
     func testConversationRoundHidesIntermediateWorkAndKeepsFinalAnswer() throws {
         let source = #"""
         [
           {"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T10:00:00.000Z","message":{"role":"user","content":"检查项目","timestamp":1767261600000}},
-          {"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先读取"},{"type":"text","text":"我先检查。"},{"type":"toolCall","id":"call-read","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse","timestamp":1767261601000}},
+          {"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先读取"},{"type":"text","text":"我先检查。"},{"type":"toolCall","id":"call-read","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse","usage":{"input":1000,"output":50,"totalTokens":1050},"timestamp":1767261601000}},
           {"type":"message","id":"r1","parentId":"a1","timestamp":"2026-01-01T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-read","toolName":"read","content":[{"type":"text","text":"[README.md#A1B2C3D4]\\n1:# D Code"}],"isError":false,"timestamp":1767261603000}},
-          {"type":"message","id":"a2","parentId":"r1","timestamp":"2026-01-01T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"已经确认"},{"type":"text","text":"项目状态正常。"}],"stopReason":"stop","timestamp":1767261604000}}
+          {"type":"message","id":"a2","parentId":"r1","timestamp":"2026-01-01T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"已经确认"},{"type":"text","text":"项目状态正常。"}],"stopReason":"stop","usage":{"input":1200,"output":80,"totalTokens":1280},"timestamp":1767261604000}}
         ]
         """#
         let entries = try JSONDecoder().decode([JSONValue].self, from: Data(source.utf8))
@@ -306,8 +429,78 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(round.processItems.map(\.id), ["a1", "r1", "a2-process"])
         XCTAssertFalse(round.entryIDs.contains("a2-process"))
         XCTAssertEqual(round.toolCount, 1)
+        XCTAssertEqual(round.totalTokens, 2_330)
         XCTAssertEqual(try XCTUnwrap(round.duration), 5, accuracy: 0.001)
         XCTAssertEqual(ConversationTimingFormatter.durationText(round.duration), "5 秒")
+    }
+
+    func testConversationRoundRejectsInvalidUsageAndDoesNotTreatRecoveredToolErrorsAsFinalFailure() {
+        let user = TranscriptItem(
+            id: "user",
+            role: .user,
+            timestamp: Date(timeIntervalSince1970: 0),
+            blocks: [.text(id: "user-text", value: "run")]
+        )
+        let invalidUsage = AssistantUsage.parse(.object([
+            "input": .number(-1),
+            "totalTokens": .number(-20),
+        ]))
+        XCTAssertNil(invalidUsage)
+        XCTAssertNil(AssistantUsage.parse(.object([
+            "totalTokens": .number(1e100),
+        ])))
+
+        let toolFailure = TranscriptItem(
+            id: "tool",
+            role: .tool,
+            timestamp: Date(timeIntervalSince1970: 1),
+            blocks: [.toolResult(
+                id: "tool-result",
+                value: ToolResultPresentation(
+                    id: "call",
+                    name: "read",
+                    content: "temporary failure",
+                    details: nil,
+                    isError: true
+                )
+            )]
+        )
+        let intermediate = TranscriptItem(
+            id: "assistant-intermediate",
+            role: .assistant,
+            timestamp: Date(timeIntervalSince1970: 2),
+            blocks: [.toolCall(
+                id: "call",
+                value: ToolCallPresentation(id: "call", name: "read", arguments: "{}")
+            )],
+            assistantStopReason: "toolUse",
+            assistantUsage: AssistantUsage(
+                input: nil,
+                output: nil,
+                cacheRead: nil,
+                cacheWrite: nil,
+                totalTokens: Int.max
+            )
+        )
+        let final = TranscriptItem(
+            id: "assistant-final",
+            role: .assistant,
+            timestamp: Date(timeIntervalSince1970: 3),
+            blocks: [.text(id: "answer", value: "recovered")],
+            assistantStopReason: "stop",
+            assistantUsage: AssistantUsage(
+                input: nil,
+                output: nil,
+                cacheRead: nil,
+                cacheWrite: nil,
+                totalTokens: 1
+            )
+        )
+
+        let round = ConversationRoundProjector.project([user, toolFailure, intermediate, final]).first
+        XCTAssertTrue(round?.hasError == true)
+        XCTAssertFalse(round?.finalAssistantFailed == true)
+        XCTAssertNil(round?.totalTokens)
     }
 
     func testMarkdownPresentationPreservesParagraphsAndListMarkers() {
@@ -548,6 +741,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(ConversationNavigation.index(at: 50, height: 100, count: 5), 2)
         XCTAssertEqual(ConversationNavigation.index(at: 100, height: 100, count: 5), 4)
         XCTAssertEqual(ConversationNavigation.yPosition(for: 2, height: 100, count: 5), 50, accuracy: 0.001)
+        XCTAssertEqual(ConversationNavigation.yPosition(for: 1, height: 600, count: 2), 34, accuracy: 0.001)
+        XCTAssertEqual(ConversationNavigation.index(at: 34, height: 600, count: 2), 1)
     }
 
     func testConversationNavigationSamplesDenseRailsAndKeepsBothEnds() {
@@ -625,6 +820,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             completedAt: nil,
             toolCount: 1,
             hasError: false,
+            totalTokens: nil,
             entryIDs: [],
             processEntryIDs: []
         )
@@ -659,10 +855,11 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             ConversationTimingFormatter.completionText(
                 duration: 635,
                 completedAt: sameYear,
+                totalTokens: 67_800,
                 relativeTo: reference,
                 calendar: calendar
             ),
-            "耗时 10 分钟 35 秒 · 8月9日 17:41 完成"
+            "8月9日 17:41 · 耗时 10 分钟 35 秒 · 67.8k token"
         )
         XCTAssertEqual(
             ConversationTimingFormatter.completionText(
@@ -671,20 +868,36 @@ final class ProtocolAndTranscriptTests: XCTestCase {
                 relativeTo: reference,
                 calendar: calendar
             ),
-            "2025年12月31日 23:59 完成"
+            "2025年12月31日 23:59"
         )
         XCTAssertEqual(
             ConversationTimingFormatter.completionText(
                 duration: 12,
                 completedAt: sameYear,
-                didFail: true,
                 relativeTo: reference,
                 calendar: calendar
             ),
-            "耗时 12 秒 · 8月9日 17:41 失败"
+            "8月9日 17:41 · 耗时 12 秒"
+        )
+        XCTAssertEqual(
+            ConversationTimingFormatter.completionText(
+                duration: 12,
+                completedAt: nil,
+                totalTokens: 1_250,
+                relativeTo: reference,
+                calendar: calendar
+            ),
+            "耗时 12 秒 · 1.2k token"
         )
         XCTAssertNil(ConversationTimingFormatter.completionText(
-            duration: 12,
+            duration: nil,
+            completedAt: nil,
+            totalTokens: 0,
+            relativeTo: reference,
+            calendar: calendar
+        ))
+        XCTAssertNil(ConversationTimingFormatter.completionText(
+            duration: nil,
             completedAt: nil,
             relativeTo: reference,
             calendar: calendar
@@ -1189,8 +1402,22 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
         XCTAssertEqual(state.contextUsage, ContextUsage(tokens: 128_000, contextWindow: 256_000, percent: 50))
         XCTAssertEqual(state.contextUsage?.remainingPercent, 50)
+        XCTAssertEqual(state.contextUsage?.usedFraction, 0.5)
         XCTAssertEqual(ContextUsage(tokens: 300, contextWindow: 256, percent: 117).remainingPercent, 0)
+        XCTAssertEqual(ContextUsage(tokens: 300, contextWindow: 256, percent: 117).usedFraction, 1)
         XCTAssertEqual(ContextUsage(tokens: nil, contextWindow: 256, percent: nil).remainingPercent, nil)
+        XCTAssertNil(ContextUsage(tokens: nil, contextWindow: 256, percent: nil).usedFraction)
+        XCTAssertFalse(SessionRunPhase.completed.requiresInteractionDock)
+        XCTAssertTrue(SessionRunPhase.running.requiresInteractionDock)
+        XCTAssertTrue(SessionRunPhase.failed.requiresInteractionDock)
+        XCTAssertTrue(SessionRunPhase.unknown.requiresInteractionDock)
+        XCTAssertEqual(RunningMessageDeliveryMode.steer.label, "立即介入")
+        XCTAssertEqual(RunningMessageDeliveryMode.queue.label, "排队等待")
+        XCTAssertTrue(ComposerKeyPolicy.shouldSubmit(keyCode: 36, modifiers: []))
+        XCTAssertTrue(ComposerKeyPolicy.shouldSubmit(keyCode: 36, modifiers: [.command]))
+        XCTAssertFalse(ComposerKeyPolicy.shouldSubmit(keyCode: 36, modifiers: [.shift]))
+        XCTAssertFalse(ComposerKeyPolicy.shouldSubmit(keyCode: 36, modifiers: [.option]))
+        XCTAssertFalse(ComposerKeyPolicy.shouldSubmit(keyCode: 0, modifiers: []))
         XCTAssertEqual(
             state.fastMode,
             FastModeState(
@@ -1216,12 +1443,15 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRunCorrelation"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionRunState"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("preSessionModelSelection"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("modelSettings"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionSteer"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("modelAuthentication"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.6",
+            hostVersion: "0.0.7",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1242,7 +1472,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.6",
+            hostVersion: "0.0.7",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1293,8 +1523,62 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         model.applyRefreshedTranscript([persisted])
         XCTAssertTrue(model.isStreaming)
         XCTAssertEqual(model.streamingText, "")
-        XCTAssertEqual(model.streamingThinking, "")
+        XCTAssertEqual(model.streamingThinking, "next thought")
         XCTAssertEqual(model.streamingTools.map(\.id), ["running"])
+    }
+
+    func testStreamingThinkingSurvivesToolAndAssistantBoundariesUntilTheRunSettles() {
+        let model = AppModel()
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("agent_start"),
+            "runId": .string("run-thinking"),
+        ])))
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("message_start"),
+            "message": .object(["role": .string("assistant")]),
+        ])))
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("message_update"),
+            "assistantMessageEvent": .object([
+                "type": .string("thinking_delta"),
+                "delta": .string("先检查配置。"),
+            ]),
+        ])))
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("tool_execution_start"),
+            "toolCallId": .string("tool-1"),
+            "toolName": .string("read"),
+            "args": .object(["path": .string("README.md")]),
+        ])))
+        XCTAssertEqual(model.streamingThinking, "先检查配置。")
+
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("message_start"),
+            "message": .object(["role": .string("assistant")]),
+        ])))
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("message_update"),
+            "assistantMessageEvent": .object([
+                "type": .string("thinking_delta"),
+                "delta": .string("再核对结果。"),
+            ]),
+        ])))
+        XCTAssertEqual(model.streamingThinking, "先检查配置。\n\n再核对结果。")
+
+        let oversized = String(repeating: "界", count: AppModel.maximumStreamingThinkingUTF16Count + 5_000)
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("message_update"),
+            "assistantMessageEvent": .object([
+                "type": .string("thinking_delta"),
+                "delta": .string(oversized),
+            ]),
+        ])))
+        XCTAssertLessThanOrEqual(
+            model.streamingThinking.utf16.count,
+            AppModel.maximumStreamingThinkingUTF16Count
+        )
+        XCTAssertTrue(model.streamingThinking.hasPrefix("…较早的实时思考已省略…\n\n"))
+        XCTAssertTrue(model.streamingThinking.hasSuffix(String(repeating: "界", count: 1_000)))
     }
 
     func testRetryingAgentEndDoesNotHideTheCurrentActivityBeforeSettled() {
@@ -1460,6 +1744,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionRunCorrelation": True,
             "sessionRunState": True,
             "preSessionModelSelection": True,
+            "modelSettings": True,
+            "sessionSteer": True,
+            "modelAuthentication": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -1470,7 +1757,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.6",
+                    "hostVersion": "0.0.7",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1574,6 +1861,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionRunCorrelation": True,
             "sessionRunState": True,
             "preSessionModelSelection": True,
+            "modelSettings": True,
+            "sessionSteer": True,
+            "modelAuthentication": True,
         }
         agent_dir = sys.argv[2]
         create_marker = os.path.join(agent_dir, "create-requested")
@@ -1637,7 +1927,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.6",
+                    "hostVersion": "0.0.7",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1933,6 +2223,9 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionRunCorrelation": True,
             "sessionRunState": True,
             "preSessionModelSelection": True,
+            "modelSettings": True,
+            "sessionSteer": True,
+            "modelAuthentication": True,
         }
         agent_dir = sys.argv[2]
         created = None
@@ -1954,7 +2247,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.6", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.7", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":

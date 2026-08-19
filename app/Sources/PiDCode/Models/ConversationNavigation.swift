@@ -12,6 +12,7 @@ struct ConversationNavigationItem: Identifiable, Equatable, Sendable {
 enum ConversationNavigation {
     static let minimumPersistentWidth: CGFloat = 640
     static let minimumRoundCount = 2
+    static let maximumRoundSpacing: CGFloat = 22
 
     static func items(from rounds: [ConversationRound]) -> [ConversationNavigationItem] {
         rounds.map { round in
@@ -43,9 +44,8 @@ enum ConversationNavigation {
     static func index(at y: CGFloat, height: CGFloat, count: Int, verticalInset: CGFloat = 12) -> Int? {
         guard count > 0, height > 0 else { return nil }
         guard count > 1 else { return 0 }
-        let usableHeight = max(1, height - (verticalInset * 2))
-        let normalized = min(1, max(0, (y - verticalInset) / usableHeight))
-        return min(count - 1, max(0, Int((normalized * CGFloat(count - 1)).rounded())))
+        let spacing = roundSpacing(height: height, count: count, verticalInset: verticalInset)
+        return min(count - 1, max(0, Int(((y - verticalInset) / spacing).rounded())))
     }
 
     static func yPosition(
@@ -56,8 +56,14 @@ enum ConversationNavigation {
     ) -> CGFloat {
         guard count > 1 else { return max(0, height / 2) }
         let clampedIndex = min(count - 1, max(0, index))
+        let spacing = roundSpacing(height: height, count: count, verticalInset: verticalInset)
+        return verticalInset + (CGFloat(clampedIndex) * spacing)
+    }
+
+    private static func roundSpacing(height: CGFloat, count: Int, verticalInset: CGFloat) -> CGFloat {
+        guard count > 1 else { return 1 }
         let usableHeight = max(1, height - (verticalInset * 2))
-        return verticalInset + (CGFloat(clampedIndex) / CGFloat(count - 1) * usableHeight)
+        return max(1, min(maximumRoundSpacing, usableHeight / CGFloat(count - 1)))
     }
 
     static func renderedIndices(count: Int, height: CGFloat, minimumSpacing: CGFloat = 6) -> [Int] {

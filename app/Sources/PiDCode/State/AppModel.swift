@@ -59,9 +59,21 @@ struct PendingPromptDraft: Equatable {
     var isFollowUpDispatch: Bool { followUpQueueID != nil && followUpItemID != nil }
 }
 
+struct PendingSteerDraft: Equatable {
+    let sessionID: String
+    let runID: String
+    let steerID: String
+    let draft: String
+    let draftTarget: SessionDraftTarget?
+    var accepted: Bool
+}
+
 @MainActor
 @Observable
 final class AppModel {
+    static let maximumStreamingThinkingUTF16Count = 100_000
+    private static let truncatedStreamingThinkingPrefix = "…较早的实时思考已省略…\n\n"
+
     var connectionState: HostConnectionState = .idle
     var hostHello: HostHello?
     var projects: [DCodeProject] = []
@@ -104,6 +116,11 @@ final class AppModel {
     var availableModels: [HostModel] = []
     var isLoadingNewSessionModels = false
     var newSessionModelIssue: String?
+    var modelSettings: ModelSettingsSnapshot?
+    var isLoadingModelSettings = false
+    var isMutatingModelSettings = false
+    var modelSettingsError: String?
+    var modelAuthFlow: ModelAuthFlow?
     private(set) var newSessionDefaultModel: HostModel?
     private(set) var newSessionDefaultThinkingLevel: String?
     var availableThinkingLevels: [String] = []
@@ -141,6 +158,7 @@ final class AppModel {
     var followUpQueues: [FollowUpQueueRecord] = []
     var followUpQueueIssue: String?
     var isMutatingFollowUpQueue = false
+    var pendingSteer: PendingSteerDraft?
     private var isSettlingFollowUpRun = false
     var pathSheetPresented = false
     var copySheetMode: SessionCopyMode?
@@ -150,12 +168,14 @@ final class AppModel {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var openGeneration = UUID()
     @ObservationIgnored private var newSessionModelLoadGeneration = UUID()
+    @ObservationIgnored private var modelSettingsLoadGeneration = UUID()
     @ObservationIgnored private var snapshotCommitGeneration = UUID()
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     @ObservationIgnored private var mermaidCache: [String: MermaidRenderResult] = [:]
     @ObservationIgnored private var mermaidCacheOrder: [String] = []
     @ObservationIgnored private var mermaidTasks: [String: Task<MermaidRenderResult, Never>] = [:]
     @ObservationIgnored private var didEndStreamingAssistantMessage = false
+    @ObservationIgnored private var separatesNextThinkingDelta = false
     @ObservationIgnored private var workspaceFileLoadIDs: [String: UUID] = [:]
     var pendingPrompt: PendingPromptDraft?
     @ObservationIgnored private let projectStore: ProjectStore
@@ -244,6 +264,7 @@ final class AppModel {
             || pendingPrompt != nil
             || isMutatingArchive
             || isSettlingFollowUpRun
+            || pendingSteer != nil
             || hasActiveRun
             || currentRunState?.phase == .unknown
     }
@@ -327,12 +348,17 @@ final class AppModel {
     }
 
     var canSubmitComposerText: Bool {
+        canSubmitComposerText(deliveryMode: .queue)
+    }
+
+    func canSubmitComposerText(deliveryMode: RunningMessageDeliveryMode) -> Bool {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty,
               readyClient != nil,
               !isCreatingSession,
               !isSendingRequest,
               pendingPrompt == nil,
+              pendingSteer == nil,
               !isMutatingFollowUpQueue,
               currentRunState?.phase != .unknown else { return false }
         if isNewSessionDraftActive {
@@ -342,6 +368,15 @@ final class AppModel {
                 && selectedNewSessionModel != nil
         }
         guard selectedSessionID != nil else { return false }
+        if hasActiveRun, deliveryMode == .steer {
+            return canWrite
+                && isStreaming
+                && currentRunState?.phase == .running
+                && extensionDialogs.isEmpty
+                && pendingPathDraft == nil
+                && !text.hasPrefix("/")
+                && canPersistSessionDrafts
+        }
         if shouldQueueComposerText {
             return followUpQueueStoreWritable
                 && followUpQueueIssue == nil
@@ -793,6 +828,203 @@ final class AppModel {
 
     func dismissSettings() {
         workbenchDestination = .workspace
+    }
+
+    var modelSettingsCwd: String {
+        if let selectedSessionID,
+           let cwd = inspection?.summary.id == selectedSessionID ? inspection?.summary.cwd : selectedSummary?.cwd {
+            return cwd
+        }
+        if selectedSessionID == nil, let draftPath = newSessionDraft?.directoryPath {
+            return draftPath
+        }
+        if let projectPath = selectedProject?.sourceFolders.first?.path {
+            return projectPath
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    func reloadModelSettings(refreshCatalog: Bool = false) async {
+        guard let client = readyClient else {
+            modelSettingsError = "Pi Host 尚未就绪，暂时无法读取模型设置。"
+            return
+        }
+        let cwd = modelSettingsCwd
+        let generation = UUID()
+        modelSettingsLoadGeneration = generation
+        isLoadingModelSettings = true
+        modelSettingsError = nil
+        defer {
+            if modelSettingsLoadGeneration == generation {
+                isLoadingModelSettings = false
+            }
+        }
+        do {
+            let result: ModelSettingsSnapshot = try await client.request(
+                refreshCatalog ? "modelSettings.refresh" : "modelSettings.get",
+                params: ["cwd": .string(cwd)]
+            )
+            guard modelSettingsLoadGeneration == generation, modelSettingsCwd == cwd else { return }
+            modelSettings = result
+        } catch {
+            guard modelSettingsLoadGeneration == generation else { return }
+            modelSettingsError = DiagnosticSanitizer.redact(error.localizedDescription)
+        }
+    }
+
+    func updateGlobalEnabledModels(_ rules: [String]) async {
+        guard let client = readyClient,
+              !isLoadingModelSettings,
+              !isMutatingModelSettings else { return }
+        let cwd = modelSettingsCwd
+        isMutatingModelSettings = true
+        modelSettingsError = nil
+        defer { isMutatingModelSettings = false }
+        do {
+            let normalized = ModelSettingsRulePolicy.normalized(rules)
+            let result: ModelSettingsSnapshot = try await client.request(
+                "modelSettings.setEnabledModels",
+                params: [
+                    "cwd": .string(cwd),
+                    "enabledModels": .array(normalized.map(JSONValue.string)),
+                ]
+            )
+            guard modelSettingsCwd == cwd else { return }
+            modelSettings = result
+            await reloadModelChoicesAfterSettingsChange()
+        } catch {
+            if modelSettingsCwd == cwd {
+                modelSettingsError = DiagnosticSanitizer.redact(error.localizedDescription)
+            }
+        }
+    }
+
+    func updateGlobalDefaultModel(_ model: HostModel) async {
+        guard let client = readyClient,
+              !isLoadingModelSettings,
+              !isMutatingModelSettings else { return }
+        let cwd = modelSettingsCwd
+        isMutatingModelSettings = true
+        modelSettingsError = nil
+        defer { isMutatingModelSettings = false }
+        do {
+            let result: ModelSettingsSnapshot = try await client.request(
+                "modelSettings.setDefaultModel",
+                params: [
+                    "cwd": .string(cwd),
+                    "provider": .string(model.provider),
+                    "modelId": .string(model.id),
+                ]
+            )
+            guard modelSettingsCwd == cwd else { return }
+            modelSettings = result
+            await reloadModelChoicesAfterSettingsChange()
+        } catch {
+            if modelSettingsCwd == cwd {
+                modelSettingsError = DiagnosticSanitizer.redact(error.localizedDescription)
+            }
+        }
+    }
+
+    func startModelAuthentication(
+        provider: ModelSettingsProvider,
+        method: ModelSettingsAuthMethod
+    ) async {
+        guard method.interactive,
+              modelAuthFlow == nil,
+              let client = readyClient else { return }
+        let flowID = UUID().uuidString
+        modelAuthFlow = ModelAuthFlow(
+            id: flowID,
+            providerID: provider.id,
+            providerName: provider.name,
+            method: method,
+            prompt: nil,
+            events: [],
+            error: nil
+        )
+        do {
+            let result: ModelSettingsSnapshot = try await client.request(
+                "modelAuth.start",
+                params: [
+                    "cwd": .string(modelSettingsCwd),
+                    "flowId": .string(flowID),
+                    "provider": .string(provider.id),
+                    "authType": .string(method.type),
+                ]
+            )
+            guard modelAuthFlow?.id == flowID else { return }
+            modelSettings = result
+            modelAuthFlow = nil
+            await reloadModelChoicesAfterSettingsChange()
+            showNotice("\(provider.name) 已通过 Pi 完成关联。", level: "info")
+        } catch {
+            guard modelAuthFlow?.id == flowID else { return }
+            if let clientError = error as? PiHostClientError,
+               case let .hostFailure(payload) = clientError,
+               payload.code == "MODEL_AUTH_CANCELLED" {
+                modelAuthFlow = nil
+                return
+            }
+            modelAuthFlow?.prompt = nil
+            modelAuthFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
+        }
+    }
+
+    func respondToModelAuthPrompt(_ prompt: ModelAuthPrompt, value: String?, cancelled: Bool = false) async {
+        guard let client = readyClient,
+              modelAuthFlow?.id == prompt.flowID,
+              modelAuthFlow?.prompt?.id == prompt.id else { return }
+        modelAuthFlow?.prompt = nil
+        var params: [String: JSONValue] = [
+            "flowId": .string(prompt.flowID),
+            "requestId": .string(prompt.id),
+            "cancelled": .bool(cancelled),
+        ]
+        if !cancelled { params["value"] = .string(value ?? "") }
+        do {
+            let _: Acknowledgement = try await client.request("modelAuth.respond", params: params)
+        } catch {
+            guard modelAuthFlow?.id == prompt.flowID else { return }
+            modelAuthFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    func cancelModelAuthentication() async -> Bool {
+        guard let flow = modelAuthFlow else { return true }
+        if flow.error != nil {
+            modelAuthFlow = nil
+            return true
+        }
+        guard let client = readyClient else {
+            modelAuthFlow = nil
+            return true
+        }
+        do {
+            let result: ModelAuthCancelResult = try await client.request(
+                "modelAuth.cancel",
+                params: ["flowId": .string(flow.id)]
+            )
+            guard result.cancelled else {
+                modelAuthFlow?.error = "Pi Host 未确认认证流程已经停止，请重试关闭。"
+                return false
+            }
+            modelAuthFlow = nil
+            return true
+        } catch {
+            guard modelAuthFlow?.id == flow.id else { return true }
+            modelAuthFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
+            return false
+        }
+    }
+
+    private func reloadModelChoicesAfterSettingsChange() async {
+        if isNewSessionDraftActive {
+            await reloadNewSessionModels()
+        } else if selectedSessionID != nil {
+            await loadRuntimeControls(includeCommands: false)
+        }
     }
 
     func toggleProject(_ projectID: UUID) {
@@ -1329,7 +1561,7 @@ final class AppModel {
 
     @discardableResult
     private func flushCurrentDraft() async -> Bool {
-        if pendingPrompt == nil { persistCurrentDraftInMemory() }
+        if pendingPrompt == nil, pendingSteer == nil { persistCurrentDraftInMemory() }
         draftSaveTask?.cancel()
         draftSaveTask = nil
         guard sessionDraftStoreWritable else { return false }
@@ -2358,9 +2590,13 @@ final class AppModel {
         }
     }
 
-    func sendPrompt() async {
+    func sendPrompt(deliveryMode: RunningMessageDeliveryMode = .queue) async {
         if isNewSessionDraftActive {
             await createSessionFromDraftAndSend()
+            return
+        }
+        if hasActiveRun, deliveryMode == .steer {
+            await steerFromComposer()
             return
         }
         if shouldQueueComposerText {
@@ -2368,6 +2604,90 @@ final class AppModel {
             return
         }
         await sendPromptToSelectedSession()
+    }
+
+    private func steerFromComposer() async {
+        guard let client = readyClient,
+              let sessionID = selectedSessionID,
+              let runID = currentSessionRunID,
+              isStreaming,
+              currentRunState?.phase == .running,
+              canWrite,
+              pendingPathDraft == nil,
+              extensionDialogs.isEmpty,
+              pendingSteer == nil,
+              canPersistSessionDrafts else { return }
+        let draft = composerText
+        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, !message.hasPrefix("/") else { return }
+        guard await flushCurrentDraft() else { return }
+
+        let steerID = UUID().uuidString
+        pendingSteer = PendingSteerDraft(
+            sessionID: sessionID,
+            runID: runID,
+            steerID: steerID,
+            draft: draft,
+            draftTarget: currentDraftTarget,
+            accepted: false
+        )
+        composerText = ""
+        isSendingRequest = true
+        defer { isSendingRequest = false }
+        do {
+            let result: SessionSteerResult = try await client.request("session.steer", params: [
+                "message": .string(message),
+                "steerId": .string(steerID),
+                "expectedRunId": .string(runID),
+            ])
+            guard result.accepted,
+                  result.steerID == steerID,
+                  result.runID == runID else {
+                throw PiHostClientError.invalidEnvelope("session.steer 未确认请求的 Steer / Run 身份")
+            }
+            guard pendingSteer?.steerID == steerID else { return }
+            pendingSteer?.accepted = true
+            if let currentRunState { settlePendingSteer(for: currentRunState) }
+        } catch {
+            restorePendingSteer(steerID: steerID)
+            present(error, title: "无法立即介入当前运行")
+        }
+    }
+
+    private func settlePendingSteer(for state: SessionRunState) {
+        guard let pendingSteer,
+              pendingSteer.accepted,
+              pendingSteer.sessionID == state.sessionID,
+              pendingSteer.runID == state.runID,
+              !state.phase.isActive else { return }
+        self.pendingSteer = nil
+        if state.phase == .completed {
+            if let target = pendingSteer.draftTarget {
+                setDraftText("", for: target)
+                scheduleDraftSave()
+            }
+            showNotice("介入信息已由 Pi 应用。", level: "info")
+            return
+        }
+        restoreSteerDraft(pendingSteer)
+        showNotice("当前运行未正常完成，介入正文已恢复到输入框。", level: "warning")
+    }
+
+    private func restorePendingSteer(steerID: String) {
+        guard let pendingSteer, pendingSteer.steerID == steerID else { return }
+        self.pendingSteer = nil
+        restoreSteerDraft(pendingSteer)
+    }
+
+    private func restoreSteerDraft(_ pending: PendingSteerDraft) {
+        let restored = combineDraft(pending.draft, with: composerText)
+        if pending.sessionID == selectedSessionID {
+            composerText = restored
+        }
+        if let target = pending.draftTarget {
+            setDraftText(restored, for: target)
+            scheduleDraftSave()
+        }
     }
 
     func retryCurrentRunSafely() async {
@@ -3489,7 +3809,6 @@ final class AppModel {
         optimisticUserMessage = nil
         if didEndStreamingAssistantMessage {
             streamingText = ""
-            streamingThinking = ""
             streamingTools.removeAll(where: { !$0.isRunning })
             didEndStreamingAssistantMessage = false
         }
@@ -3512,6 +3831,7 @@ final class AppModel {
         streamingThinking = ""
         streamingTools = []
         didEndStreamingAssistantMessage = false
+        separatesNextThinkingDelta = false
     }
 
     private func clearActiveSessionPresentation() {
@@ -3609,6 +3929,7 @@ final class AppModel {
         currentRunState = state
         currentSessionRunID = state.phase.isActive ? state.runID : nil
         isStreaming = state.phase.isActive
+        settlePendingSteer(for: state)
         recordCompletedRun(state)
         scheduleFollowUpSettlement(for: state)
         if let summary = inspection?.summary, summary.id == state.sessionID {
@@ -3634,6 +3955,7 @@ final class AppModel {
         )
         currentSessionRunID = nil
         isStreaming = false
+        if let state = currentRunState { settlePendingSteer(for: state) }
     }
 
     func handle(_ event: HostEvent) {
@@ -3782,6 +4104,39 @@ final class AppModel {
                 title: "当前交互无法完成",
                 message: "当前会话请求了 D Code 尚未提供的交互：\(capability)。该操作未执行。"
             )
+        case "modelAuth.request":
+            guard let prompt = ModelAuthPrompt(data: event.data),
+                  modelAuthFlow?.id == prompt.flowID else { return }
+            modelAuthFlow?.prompt = prompt
+            modelAuthFlow?.error = nil
+        case "modelAuth.promptClosed":
+            if let flowID = event.data?["flowId"]?.stringValue,
+               let requestID = event.data?["requestId"]?.stringValue,
+               modelAuthFlow?.id == flowID,
+               modelAuthFlow?.prompt?.id == requestID {
+                modelAuthFlow?.prompt = nil
+            }
+        case "modelAuth.event":
+            guard let flowID = event.data?["flowId"]?.stringValue,
+                  modelAuthFlow?.id == flowID,
+                  let presentation = ModelAuthEventPresentation(data: event.data) else { return }
+            modelAuthFlow?.events.append(presentation)
+            if let count = modelAuthFlow?.events.count, count > 12 {
+                modelAuthFlow?.events.removeFirst(count - 12)
+            }
+            modelAuthFlow?.error = nil
+        case "modelAuth.completed":
+            if event.data?["flowId"]?.stringValue == modelAuthFlow?.id {
+                modelAuthFlow?.prompt = nil
+                if let presentation = ModelAuthEventPresentation(data: .object([
+                    "event": .object([
+                        "type": .string("progress"),
+                        "message": .string("认证完成，正在刷新模型目录…"),
+                    ]),
+                ])) {
+                    modelAuthFlow?.events.append(presentation)
+                }
+            }
         case "host.stderr", "host.outputError", "protocol.decodeError":
             showNotice(event.data?["message"]?.stringValue ?? "Host 诊断事件", level: "error")
         case "host.processEnded":
@@ -3830,7 +4185,7 @@ final class AppModel {
         case "message_start":
             if data?["message"]?["role"]?.stringValue == "assistant" {
                 streamingText = ""
-                streamingThinking = ""
+                separatesNextThinkingDelta = !streamingThinking.isEmpty
                 didEndStreamingAssistantMessage = false
             }
         case "message_update":
@@ -3841,7 +4196,13 @@ final class AppModel {
                 streamingText += update?["delta"]?.stringValue ?? ""
             case "thinking_delta":
                 didEndStreamingAssistantMessage = false
-                streamingThinking += update?["delta"]?.stringValue ?? ""
+                let delta = update?["delta"]?.stringValue ?? ""
+                var addition = delta
+                if !delta.isEmpty, separatesNextThinkingDelta {
+                    addition = "\n\n" + delta
+                    separatesNextThinkingDelta = false
+                }
+                appendStreamingThinking(addition)
             case "error":
                 showNotice(update?["error"]?.stringValue ?? "模型流式响应失败。", level: "error")
             default:
@@ -3849,7 +4210,6 @@ final class AppModel {
             }
         case "tool_execution_start":
             streamingText = ""
-            streamingThinking = ""
             let id = data?["toolCallId"]?.stringValue ?? UUID().uuidString
             streamingTools.append(StreamingTool(
                 id: id,
@@ -3903,6 +4263,18 @@ final class AppModel {
         if let result = data?["result"] { streamingTools[index].details = result.prettyPrinted }
         streamingTools[index].isRunning = !finished
         streamingTools[index].isError = data?["isError"]?.boolValue ?? false
+    }
+
+    private func appendStreamingThinking(_ delta: String) {
+        guard !delta.isEmpty else { return }
+        let combined = streamingThinking + delta
+        guard combined.utf16.count > Self.maximumStreamingThinkingUTF16Count else {
+            streamingThinking = combined
+            return
+        }
+        let prefix = Self.truncatedStreamingThinkingPrefix
+        let available = max(0, Self.maximumStreamingThinkingUTF16Count - prefix.utf16.count)
+        streamingThinking = prefix + String(decoding: combined.utf16.suffix(available), as: UTF16.self)
     }
 
     private func updateStatus(_ data: JSONValue?) {

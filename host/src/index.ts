@@ -129,7 +129,10 @@ function schedule(value: unknown): void {
   let bypassQueue = false;
   try {
     const method = parseRequest(value).method;
-    bypassQueue = method === "extension.respond" || method === "session.search";
+    bypassQueue = method === "extension.respond"
+      || method === "modelAuth.respond"
+      || method === "modelAuth.cancel"
+      || method === "session.search";
   } catch {
     // Invalid envelopes stay on the serial path and are reported by handleValue.
   }

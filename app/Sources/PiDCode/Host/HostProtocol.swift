@@ -84,6 +84,26 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "会话仍在运行、执行工具或持有可写状态。请等待它结束后重试。"
             case "INVALID_SESSION":
                 "Pi 会话包含未完成或损坏的记录。D Code 已保留上一次完整历史；请等待 Pi 完成写入，持续出现时再检查会话文件。"
+            case "MODEL_SETTINGS_UNREADABLE":
+                "Pi 全局模型设置无法读取。D Code 已保留原文件，没有写入任何内容。"
+            case "MODEL_NOT_AVAILABLE":
+                "这个模型当前不在 Pi 目录中，或对应 Provider 尚未完成认证。"
+            case "MODEL_NOT_ENABLED":
+                "这个模型不在 Pi 的全局启用范围内；请先把它加入启用规则。"
+            case "SESSION_NOT_RUNNING":
+                "当前 Pi 运行已经结束，无法再介入；正文仍保留在输入框。"
+            case "SESSION_RUN_CHANGED":
+                "当前 Pi 运行已经变化，本次介入没有发送；正文已恢复到输入框。"
+            case "SESSION_WAITING_FOR_USER":
+                "请先完成当前结构化选择、确认或输入，再发送普通消息。"
+            case "STEER_REJECTED":
+                "Pi 未接受本次介入信息，正文已恢复到输入框。"
+            case "MODEL_AUTH_CANCELLED":
+                "Provider 认证已取消。"
+            case "MODEL_AUTH_NOT_INTERACTIVE":
+                "该 Provider 需要在 Pi 或系统环境中配置，不能在 D Code 内直接认证。"
+            case "MODEL_AUTH_FAILED":
+                "Provider 认证失败；凭据未由 D Code 保存，请检查网络或重新认证。"
             default:
                 "\(error.message)（\(error.code)）"
             }

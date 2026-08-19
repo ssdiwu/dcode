@@ -9,12 +9,22 @@ struct ConversationRound: Identifiable, Equatable, Sendable {
     let completedAt: Date?
     let toolCount: Int
     let hasError: Bool
+    let totalTokens: Int?
     let entryIDs: Set<String>
     let processEntryIDs: Set<String>
 
     var duration: TimeInterval? {
         guard let startedAt, let completedAt else { return nil }
         return max(0, completedAt.timeIntervalSince(startedAt))
+    }
+
+    var finalAssistantFailed: Bool {
+        guard let finalAssistant else { return hasError }
+        if ["error", "aborted"].contains(finalAssistant.assistantStopReason) { return true }
+        return finalAssistant.blocks.contains { block in
+            if case .error = block { return true }
+            return false
+        }
     }
 }
 
@@ -89,6 +99,7 @@ enum ConversationRoundProjector {
             ?? allItems.compactMap { $0.timestamp ?? $0.persistedAt }.min()
         let completedAt = allItems.compactMap(\.persistedAt).max()
             ?? allItems.compactMap(\.timestamp).max()
+        let totalTokens = safeTotalTokens(in: responses)
 
         return ConversationRound(
             id: user?.id ?? first.id,
@@ -99,6 +110,7 @@ enum ConversationRoundProjector {
             completedAt: finalAssistant == nil && !hasError ? nil : completedAt,
             toolCount: toolIDs.count,
             hasError: hasError,
+            totalTokens: totalTokens,
             entryIDs: Set(group.map(\.id)),
             processEntryIDs: processEntryIDs
         )
@@ -114,6 +126,19 @@ enum ConversationRoundProjector {
         guard hasVisibleContent else { return false }
         if item.assistantStopReason != nil { return true }
         return !item.blocks.contains { if case .toolCall = $0 { return true }; return false }
+    }
+
+    private static func safeTotalTokens(in responses: [TranscriptItem]) -> Int? {
+        var foundUsage = false
+        var total = 0
+        for item in responses {
+            guard let value = item.assistantUsage?.totalTokens else { continue }
+            foundUsage = true
+            let (nextTotal, overflow) = total.addingReportingOverflow(value)
+            guard !overflow else { return nil }
+            total = nextTotal
+        }
+        return foundUsage ? total : nil
     }
 }
 
@@ -139,16 +164,34 @@ enum ConversationTimingFormatter {
     static func completionText(
         duration: TimeInterval?,
         completedAt: Date?,
-        didFail: Bool = false,
+        totalTokens: Int? = nil,
         relativeTo referenceDate: Date = Date(),
         calendar: Calendar = .autoupdatingCurrent
     ) -> String? {
-        guard let completedAt else { return nil }
         var parts: [String] = []
+        if let completedAt {
+            parts.append(dateTimeText(completedAt, relativeTo: referenceDate, calendar: calendar))
+        }
         if let duration = durationText(duration) { parts.append("耗时 \(duration)") }
-        let outcome = didFail ? "失败" : "完成"
-        parts.append("\(dateTimeText(completedAt, relativeTo: referenceDate, calendar: calendar)) \(outcome)")
-        return parts.joined(separator: " · ")
+        if let totalTokens, totalTokens > 0 { parts.append("\(tokenText(totalTokens)) token") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func tokenText(_ tokens: Int) -> String {
+        let value = max(0, tokens)
+        if value < 1_000 { return "\(value)" }
+        let divisor: Double
+        let suffix: String
+        if value < 1_000_000 {
+            divisor = 1_000
+            suffix = "k"
+        } else {
+            divisor = 1_000_000
+            suffix = "m"
+        }
+        let compact = String(format: "%.1f", Double(value) / divisor)
+            .replacingOccurrences(of: ".0", with: "")
+        return "\(compact)\(suffix)"
     }
 
     static func timestampText(
@@ -197,7 +240,8 @@ private extension TranscriptItem {
             persistedAt: persistedAt,
             blocks: blocks,
             editableText: editableText,
-            assistantStopReason: assistantStopReason
+            assistantStopReason: assistantStopReason,
+            assistantUsage: assistantUsage
         )
     }
 }

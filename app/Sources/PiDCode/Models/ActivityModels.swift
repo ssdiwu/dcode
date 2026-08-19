@@ -26,6 +26,34 @@ enum SessionRunPhase: String, Codable, Sendable {
         case .completed, .failed, .aborted, .unknown: false
         }
     }
+
+    var requiresInteractionDock: Bool {
+        switch self {
+        case .completed, .aborted: false
+        case .running, .waitingForUser, .stopRequested, .failed, .unknown: true
+        }
+    }
+}
+
+enum RunningMessageDeliveryMode: String, CaseIterable, Identifiable, Sendable {
+    case steer
+    case queue
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .steer: "立即介入"
+        case .queue: "排队等待"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .steer: "在当前工具安全结束后、下一次模型调用前交给 Pi。"
+        case .queue: "等待当前一轮正常结束后，再作为下一条消息发送。"
+        }
+    }
 }
 
 enum SessionRunWaitKind: String, Codable, Sendable {

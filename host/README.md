@@ -21,6 +21,8 @@
 - 既有会话先以共享观察态打开：Host 只轮询当前文件身份，变化时通知 App 从已知路径刷新；发送或修改运行设置时再以写入意图取得 Session Lease，并持续检测外部写入；
 - 使用固定 Pi SDK 加载现有 settings、模型、会话、流式事件及可兼容的结构化扩展能力；
 - 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，Host 不另建产品队列；
+- 运行中可在 Host Run State 仍为 `running` 时使用 Pi 原生 steer 介入下一安全模型边界；它不替换 Run ID，也不伪装成立即中止工具；
+- 模型设置主目录只投影已认证 Provider 的模型；未认证 Provider 通过独立认证桥调用 Pi `ModelRuntime.login`，支持 API Key / OAuth prompt、浏览器链接、设备代码、取消与脱敏错误，凭据只由 Pi 持久化；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；
@@ -50,6 +52,7 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/resource-policy.ts`：在 Extension Factory（扩展工厂）执行前排除外部 `pi-dfast`，其余启用扩展仍交由固定 Pi SDK 加载。
 - `src/session-lease.ts`：会话租约、静默检查和外部写入检测。
 - `src/extension-ui.ts`：标准结构化扩展 UI，以及 TUI 能力的显式 unsupported 边界。
+- `src/model-auth.ts`：Pi Provider 认证 prompt / event 的有界原生桥与旁路响应生命周期。
 - `src/pi-host.ts`：Pi SDK 会话生命周期与协议动作。
 - `src/index.ts`：stdin/stdout Host 进程入口。
 - `test/`：只使用临时写入范围的公开行为测试。

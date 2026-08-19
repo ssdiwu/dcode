@@ -83,10 +83,24 @@ struct SettingsView: View {
                 .padding(.top, PiDCodeMetrics.spacingStandard)
                 .padding(.bottom, PiDCodeMetrics.spacingTight)
 
+            Text("Pi")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, PiDCodeMetrics.spacingStandard)
+
+            SettingsNavigationRow(
+                title: "模型",
+                systemImage: "cpu",
+                selected: page == .models
+            ) {
+                model.presentSettings(.models)
+            }
+
             Text("偏好")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, PiDCodeMetrics.spacingStandard)
+                .padding(.top, PiDCodeMetrics.spacingSection)
 
             SettingsNavigationRow(
                 title: "外观",
@@ -142,6 +156,9 @@ struct SettingsView: View {
     @ViewBuilder
     private var pageContent: some View {
         switch page {
+        case .models:
+            ModelSettingsView()
+
         case .appearance:
             SettingsPageContainer(
                 title: "外观",

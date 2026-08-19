@@ -12,10 +12,18 @@ export const HOST_METHODS = [
   "session.open",
   "session.close",
   "session.prompt",
+  "session.steer",
   "session.abort",
   "session.getState",
   "session.getCommands",
   "session.getModels",
+  "modelSettings.get",
+  "modelSettings.refresh",
+  "modelSettings.setEnabledModels",
+  "modelSettings.setDefaultModel",
+  "modelAuth.start",
+  "modelAuth.respond",
+  "modelAuth.cancel",
   "session.getThinkingLevels",
   "session.setModel",
   "session.setName",
@@ -186,6 +194,47 @@ function optionalSessionOrigin(params: Record<string, unknown>): void {
   }
 }
 
+function requireCwd(params: Record<string, unknown>): string {
+  const cwd = requireString(params, "cwd");
+  if (cwd.length > 4_096) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      "Expected params.cwd to be a non-empty string up to 4096 characters",
+    );
+  }
+  return cwd;
+}
+
+function requireModelPatterns(params: Record<string, unknown>): string[] {
+  const value = params.enabledModels;
+  if (!Array.isArray(value) || value.length > 256) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      "Expected params.enabledModels to be an array containing at most 256 patterns",
+    );
+  }
+  for (const pattern of value) {
+    if (typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > 512) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected every params.enabledModels item to be non-empty and at most 512 characters",
+      );
+    }
+  }
+  return value;
+}
+
+function requireModelIdentifier(params: Record<string, unknown>, key: string): string {
+  const value = requireString(params, key);
+  if (value.trim().length === 0 || value.length > 512) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      `Expected params.${key} to be non-empty and at most 512 characters`,
+    );
+  }
+  return value;
+}
+
 export function isHostMethod(method: string): method is HostMethod {
   return (HOST_METHODS as readonly string[]).includes(method);
 }
@@ -243,6 +292,19 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       }
       return;
     }
+    case "modelSettings.get":
+    case "modelSettings.refresh":
+      requireCwd(params);
+      return;
+    case "modelSettings.setEnabledModels":
+      requireCwd(params);
+      requireModelPatterns(params);
+      return;
+    case "modelSettings.setDefaultModel":
+      requireCwd(params);
+      requireModelIdentifier(params, "provider");
+      requireModelIdentifier(params, "modelId");
+      return;
     case "session.close": {
       const expectedSessionId = optionalString(params, "expectedSessionId");
       if (expectedSessionId !== undefined && (expectedSessionId.length === 0 || expectedSessionId.length > 4_096)) {
@@ -395,6 +457,72 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
             "Expected params.pathAction.entryId to be a non-empty string up to 128 characters",
           );
         }
+      }
+      return;
+    }
+    case "session.steer": {
+      const message = requireString(params, "message", { allowEmpty: true });
+      if (message.trim().length === 0 || message.length > 200_000) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.message to contain non-whitespace text up to 200000 characters",
+        );
+      }
+      if (message.trimStart().startsWith("/")) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Slash commands cannot be delivered as steering messages",
+        );
+      }
+      const steerId = requireString(params, "steerId");
+      const expectedRunId = requireString(params, "expectedRunId");
+      if (steerId.length > 128 || expectedRunId.length > 128) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected steer and run identifiers to be at most 128 characters",
+        );
+      }
+      return;
+    }
+    case "modelAuth.start": {
+      requireCwd(params);
+      const flowId = requireString(params, "flowId");
+      if (flowId.length > 128) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.flowId to be at most 128 characters");
+      }
+      requireModelIdentifier(params, "provider");
+      if (params.authType !== "api_key" && params.authType !== "oauth") {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          'Expected params.authType to be "api_key" or "oauth"',
+        );
+      }
+      return;
+    }
+    case "modelAuth.respond": {
+      const flowId = requireString(params, "flowId");
+      const requestId = requireString(params, "requestId");
+      if (flowId.length > 128 || requestId.length > 128) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected auth flow and request identifiers to be at most 128 characters",
+        );
+      }
+      if (params.cancelled !== undefined && typeof params.cancelled !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.cancelled to be a boolean");
+      }
+      if (params.cancelled !== true) {
+        const value = requireString(params, "value", { allowEmpty: true });
+        if (value.length > 16_384) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.value to be at most 16384 characters");
+        }
+      }
+      return;
+    }
+    case "modelAuth.cancel": {
+      const flowId = requireString(params, "flowId");
+      if (flowId.length > 128) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.flowId to be at most 128 characters");
       }
       return;
     }
