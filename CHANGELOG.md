@@ -6,6 +6,19 @@
 
 ### Added
 
+- 实现 `0.0.8` 工程内构候选：AppModel 领域状态下沉为 `SearchModel`、`ActivityModel`、`ModelSettingsState`、`FollowUpModel` 四个 `@Observable` 子模型，事件分发按会话 / 扩展 / 认证 / 宿主生命周期拆为独立扩展文件，行为零变化。
+- 宿主依赖收敛为 `HostProviding` 协议并支持注入：新增 `FakeHostClient` 测试基座与 8 个无真实 Pi 依赖的状态机集成用例（握手、失败清理、进程退出、Run 状态与注意力、搜索索引、认证事件流、重启要求）。
+- 新增渲染冒烟基线：RootView / ConversationView / ComposerView / ModelSettingsView 真实宿主渲染与 UserHomeView / ConversationRoundRail 结构断言；`swift test` 由 141 增至 156 用例。
+- 按发布纪律在 `THIRD_PARTY_NOTICES.md` 登记测试专用依赖 ViewInspector 0.10.3（MIT，精确锁版，不进入 app bundle）。
+
+### Changed
+
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.8`。
+
+## [0.0.7] - 2026-08-20
+
+### Added
+
 - 实现 `0.0.7` Model Settings（模型设置）候选：Settings 主目录只按已认证 Provider 展示 Pi 模型、缓存 / 显式刷新、全局 `enabledModels` 精确与通配规则以及全局默认模型；未认证 Provider 收拢到页面底部的关联入口，并通过 Pi 原生 API Key / OAuth 登录合同关联，项目级覆盖保持只读，自定义 Provider 编辑不进入本版。
 - 最终助手回复下方常驻显示完成或失败、完成时间、耗时与本轮 Pi Assistant Message 已持久化 `usage.totalTokens` 合计；工具过程失败后成功恢复不会误标整轮失败，缺失或异常数据不估算，费用金额与跨会话统计仍留在独立版本。
 - 运行中的 Composer 新增“立即介入 / 排队等待”选择：立即介入使用 Pi steer 在下一安全模型边界进入当前 Run，排队等待继续使用 D Code 可编辑、可重排、可恢复的耐久 Follow-up Queue；介入失败或运行异常时恢复原正文。

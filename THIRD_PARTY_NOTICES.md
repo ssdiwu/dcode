@@ -59,5 +59,17 @@ license text. Their exact versions are listed in
 `legal/Missing-NPM-License-Notices.txt`, which is copied into the application
 bundle together with the applicable MIT and Apache 2.0 terms.
 
+## Development-only Swift dependencies
+
+### ViewInspector 0.10.3
+
+- Project: <https://github.com/nalexn/ViewInspector>
+- License: MIT. Copyright (c) 2020 Alexey Nekrasov.
+
+`ViewInspector` is pinned by the root `Package.swift` and used exclusively by
+the `PiDCodeTests` target for view-hierarchy assertions in `swift test`. It is
+not linked into the `PiDCode` executable and is not distributed inside the
+`D Code.app` bundle.
+
 This file is an attribution and distribution notice. It does not replace or
 modify any third-party license.

@@ -6,7 +6,8 @@
 
 | 文档 | 状态 | 职责 |
 |---|---|---|
-| [0008-0.0.7 模型设置与回复运行信息产品需求](0008-0.0.7-模型设置与回复运行信息产品需求.md) | Active Implementation | `0.0.7` 的已认证 Pi 模型目录、Provider 关联、缓存刷新、模型行全局启用、默认模型、只读项目覆盖、steer / queue 发送方式、Context / Thinking / 轮次导航与最终助手回复时间 / 耗时 / token 状态行权威；自定义 Provider 编辑、项目设置写入、登出与费用统计不进入本版。 |
+| [0009-0.0.8 AppModel 域拆分与测试基线产品需求](0009-0.0.8-AppModel-域拆分与测试基线产品需求.md) | Active Implementation | `0.0.8` 的 AppModel 领域子模型、`HostProviding` 注入、Fake-host 集成测试与渲染冒烟权威；行为零变化，转录 / 流式 / 结算时序拆分与新用户能力不进入本版。 |
+| [0008-0.0.7 模型设置与回复运行信息产品需求](0008-0.0.7-模型设置与回复运行信息产品需求.md) | Implementation Candidate | `0.0.7` 的已认证 Pi 模型目录、Provider 关联、缓存刷新、模型行全局启用、默认模型、只读项目覆盖、steer / queue 发送方式、Context / Thinking / 轮次导航与最终助手回复时间 / 耗时 / token 状态行权威；自定义 Provider 编辑、项目设置写入、登出与费用统计不进入本版。真实 Pi steer、Provider 登录、浅色外观与 VoiceOver 人工验收继续如实保留。 |
 | [0007-0.0.6 活动视图与运行状态产品需求](0007-0.0.6-活动视图与运行状态产品需求.md) | Published Source Tag | `v0.0.6` 的 Activity View、可靠 Run State、完成关注态、Interaction Dock、会话前模型选择与 Context 圆环权威；源码与标签已推送，未完成的真实 Run / 蓝点 / 停止重试、首条真实 Prompt 与完整无障碍人工验收继续如实保留。后台多会话执行不进入本版。 |
 | [0006-0.0.5 后续消息队列产品需求](0006-0.0.5-后续消息队列产品需求.md) | Published Source Tag | `v0.0.5` 的后续消息队列、新会话延迟创建、Composer 焦点与左右栏宽度收口权威；源码与标签已推送，未完成的真实 Pi、重启时序与无障碍人工验收继续如实保留。完整 Interaction Dock、Steer、多 Agent 与跨 Session 调度不进入本版。 |
 | [0005-0.0.4 Workspace Tab 与只读文件预览产品需求](0005-0.0.4-工作区标签与只读文件预览产品需求.md) | Published Source Tag | `v0.0.4` 的唯一会话主页面、按需文件标签、受限只读文件预览、全局置顶区、Hover 会话详情、会话级 Plan / 已确认文件变更摘要与 `v0.0.3` 后界面回归收口权威；源码与标签已推送，未完成的人工验收继续如实保留。 |
