@@ -166,22 +166,18 @@ Swift 以稳定 Session ID 为第一身份，将收到的记录原子保存到 `
 
 该账本是覆盖可能不完整的本机派生资料，不是 Pi Session、源码或 Git 的第二权威。它不保存工具参数正文、文件内容或完整 patch；同一文件反复编辑与撤销会累计活动，因此 `+ / -` 不能解释为 Project 当前 Git 净差异。
 
-## 会话观察与写入所有权
+## 会话打开与写入所有权（ADR 0018：打开即接管）
 
-### 观察
+`session.open` 只有一条可写路径，没有只读观察模式（`0.0.9` 起，取代 ADR 0006 的“默认观察、按需写入”）。打开必须依次通过：
 
-`session.open` 的内部 `mode=readOnly` 代表 Session Observation：只挂载已解析快照，不创建 `AgentSession`，也不创建租约。Host 以轻量 stat 轮询当前文件的 device、inode、size 与 mtime；变化后发出 `session.changed`，Swift 再用 `session.refresh` 从已知路径取得最新活动分支。无变化时不重复解析完整 JSONL，不重新扫描全部 Session 目录。该内部模式不映射为用户可见的“只读会话”；App 始终保留正常 transcript 与 Composer。空会话、旧会话或损坏前恢复出的会话若没有完整模型元数据，Host 必须在 wire 上返回 `model: null`，而不是空对象；观察仍可打开，首次取得写权后的模型选择由 writable runtime 决定。
-
-### 可写
-
-`mode=writable` 必须依次通过：
-
-1. stable session ID 定位到唯一 JSONL；
-2. 对既有会话，Protocol 以 `writeIntent=true` 表达本次用户 Write Intent；它由发送或修改运行设置触发，不对应一张额外确认页；新建会话由 Host 自己保证初始独占；
-3. 原子创建该 session ID 的 Session Lease，已有租约时返回 `SESSION_IN_USE`；
-4. 静默窗口前后文件规范路径、device、inode、size、mtime 与 leaf ID 不变；
+1. stable session ID 定位到唯一 JSONL；校验会话版本与搜索目标摘要（`expectedEntryId` / `expectedEntryDigest`），失败在关闭当前会话之前发生，当前会话不受影响；
+2. 关闭当前活动会话并释放其租约；
+3. 原子取得该 session ID 的 Session Lease（`force`）：已有存活属主（另一个 D Code 实例）时把旧锁目录原子 rename 后重建，直接抢占；旧属主在下一秒的属主自检中发现 owner 记录消失或 nonce 变化，抛 `LEASE_STOLEN` 并以 `session.conflict` 诚实退出，不伪装仍可写；
+4. 静默窗口前后文件规范路径、device、inode、size、mtime 与 leaf ID 不变；文件仍在变（Pi CLI 在途写入）时轮询到稳定后完成接管，有限重试超时返回 `SESSION_NOT_IDLE`——等待的是文件稳定，不是用户；
 5. Pi SDK 成功打开会话并绑定扩展 UI context；
-6. 运行期间每次写入前后及定时轮询持续核对租约指纹与 runtime snapshot。
+6. 运行期间每次写入前后及定时轮询持续核对租约指纹（含属主自检）与 runtime snapshot；外部写入触发 `session.conflict`（abort、保留草稿），Swift 以原生冲突卡呈现并可一键重新接管。
+
+空会话、旧会话或损坏前恢复出的会话若没有完整模型元数据，Host 在 wire 上返回 `model: null`，而不是空对象；可写运行时自行解析实际使用的模型。
 
 按需写入不依赖 CLI 插件、Handoff ID 或 D Code 创建来源标记；该标记只控制 Recent 导航可见性，不是写入锁。Write Intent 不是对非协作进程的技术锁：如果 Pi CLI 或其它进程在 D Code 写入期间继续写入，Host 会检测冲突并立即停止。App 随后关闭冲突运行时、释放自己的租约、回到观察态并刷新最新历史；不能承诺在两个进程同时开始写入时无缝合并在途操作。
 
@@ -213,6 +209,6 @@ npm test
 
 此前真实 `~/.pi/agent` 只读 smoke test 验证过 stable session ID、模型、thinking level 与 Active Plan，隔离副本也完成过一次真实续写和重启恢复。该人工证据早于本次 TUI 兼容路径移除，因此只能证明会话主链路的历史基线，不能外推为当前所有已安装扩展仍可完成自定义交互；当前 custom/widget 合同以源码和自动测试中的明确 unsupported 行为为准。
 
-早期无插件直接接管曾在临时 agentDir 的真实 `.app` 上完成历史验收，但当时使用“先只读、再确认”的界面，已由 ADR 0006 取代，不能作为当前 UI 证据。当前自动测试证明观察态不创建租约、外部变化发出 `session.changed` 并可从已知路径刷新；冲突后的 writable runtime 能释放租约并重新进入观察。第二个 Host 在首个租约释放前仍得到 `SESSION_IN_USE`，静默窗口变化与未知外部条目仍得到明确冲突。
+早期无插件直接接管曾在临时 agentDir 的真实 `.app` 上完成历史验收，但当时使用“先只读、再确认”的界面，已由 ADR 0006 及其后的 ADR 0018（打开即接管）取代，不能作为当前 UI 证据。当前自动测试证明：打开即取得租约并在关闭时释放；外部写入触发 `session.conflict` 且可经重新打开恢复可写；第二个 Host 打开同一会话直接抢占（`force`），首个实例以 `LEASE_STOLEN` 诚实退出；静默窗口内持续变化有限重试后返回 `SESSION_NOT_IDLE`。
 
 旧全量发现基线曾在真实 `~/.pi/agent` 上完成只读窗口冒烟：Host 握手、最近 60 个扫描结果、当前 stable Session ID 精确搜索、1,202 条当前历史与原生目录选择面板均可达。另以真实 Mermaid 会话验证 flowchart、sequence、state 与 class 的原生呈现、`110%` 缩放、源码复制、图片剪贴板和 `2724 × 398` PNG 导出；gantt 与 pie 显式显示不支持错误并回退原始源码。arm64 本机 App 由 LaunchServices/Finder 路径启动后，进程命令行确认只使用包内 Node 与 Host，`host.hello` 成功、扫描器可返回 60 个真实会话，Finder 环境包含 Homebrew/用户命令目录；App bundle 通过 `codesign --verify --deep --strict`，关窗后内嵌 Node 子进程退出。1233 个 JSONL、约 2.4 GiB 的现实目录下，`session.list(limit=60)` 实测 0.747 秒，随后按 ID `session.inspect` 实测 0.337 秒。该证据只证明扫描器与会话主链路的历史性能，不再代表 `0.0.1` Recent 的产品可见集合，也不证明当前真实会话的最终可写接管或对外分发已经完成。

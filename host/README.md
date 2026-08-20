@@ -27,7 +27,7 @@
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；
 - 通过精确固定的 `grok-mermaid` 提供原生 Unicode Mermaid 渲染，并对不支持的类型返回结构化失败；
-- 临时目录自动测试覆盖快速创建的隐藏暂存与原子发布、空会话隔离复核/失败恢复/废纸篓安全边界、路径选择与回滚、完整流式复制、record 语义损坏拒绝、临时租约释放、提交前 Busy 复核、归档前置排除、无模型旧会话观察，以及搜索、Project/Recent、观察、冲突、极速、扩展与进程生命周期回归；精确测试数量和版本验证记录见[版本实施方案](../doc/40-版本实施方案/README.md)，真实 `~/.pi` 只读 smoke test 不改原会话。
+- 临时目录自动测试覆盖快速创建的隐藏暂存与原子发布、空会话隔离复核/失败恢复/废纸篓安全边界、路径选择与回滚、完整流式复制、record 语义损坏拒绝、临时租约释放、提交前 Busy 复核、归档前置排除，以及搜索、Project/Recent、打开即接管（force 抢占与 LEASE_STOLEN 退出）、冲突重开、极速、扩展与进程生命周期回归；精确测试数量和版本验证记录见[版本实施方案](../doc/40-版本实施方案/README.md)，真实 `~/.pi` smoke test 不改原会话。
 
 ## 命令
 

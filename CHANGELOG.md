@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-08-20
+
 ### Added
 
 - 实现 `0.0.9` 打开即接管候选（ADR 0018，取代 ADR 0006 默认观察立场）：所有打开路径一律可写取得租约，只读观察模式及其降级面（空上下文用量、清空命令、不可用构成占比）全部删除；过期搜索目标在关闭当前会话之前被拒。
@@ -15,12 +17,16 @@
 
 - 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.9`；Host 协议删除只读分支与 `writeIntent` / `preserveActive` 参数及 `SESSION_READ_ONLY` / `WRITE_INTENT_REQUIRED` 错误。
 
+## [0.0.8] - 2026-08-20
+
+### Added
+
 - 实现 `0.0.8` 工程内构候选：AppModel 领域状态下沉为 `SearchModel`、`ActivityModel`、`ModelSettingsState`、`FollowUpModel` 四个 `@Observable` 子模型，事件分发按会话 / 扩展 / 认证 / 宿主生命周期拆为独立扩展文件，行为零变化。
 - 宿主依赖收敛为 `HostProviding` 协议并支持注入：新增 `FakeHostClient` 测试基座与 8 个无真实 Pi 依赖的状态机集成用例（握手、失败清理、进程退出、Run 状态与注意力、搜索索引、认证事件流、重启要求）。
 - 新增渲染冒烟基线：RootView / ConversationView / ComposerView / ModelSettingsView 真实宿主渲染与 UserHomeView / ConversationRoundRail 结构断言；`swift test` 由 141 增至 167 用例。
 - 按发布纪律在 `THIRD_PARTY_NOTICES.md` 登记测试专用依赖 ViewInspector 0.10.3（MIT，精确锁版，不进入 app bundle）。
 - dgoal 结构化状态融入（ADR 0017）：Host 透传 `dgoal-work-v1` 的完整 goal（含 paused）与 `pendingProposal`；Active Plan 详情原生呈现保障档位（软性清单 / 执行 / 目标终审 / 阶段审核）、升级历史、验收标准、阶段 / 终审独立审核结果与审核模型、条目证据、暂停原因与耗时；待批提案在 Composer 交互坞获得原生批准卡，一键发送 `/dgoal review` 并由 dgoal 原生门禁对话框完成批准 / 拒绝 / 反馈。
-- 上下文构成占比（ADR 0017）：Host 新增 `session.contextBreakdown` 方法与能力位，按消息种类（用户 / 助手 / 思考 / 工具结果）以 Pi 同口径估算分项、真实总量锚定并反推系统与工具；圆环弹层展示各部分占比条形与剩余可用，估算如实标注，只读会话返回不可用原因。
+- 上下文构成占比（ADR 0017）：Host 新增 `session.contextBreakdown` 方法与能力位，按消息种类（用户 / 助手 / 思考 / 工具结果）以 Pi 同口径估算分项、真实总量锚定并反推系统与工具；圆环弹层展示各部分占比条形与剩余可用，估算如实标注，只读会话返回不可用原因（只读态已在 `0.0.9` 随打开即接管删除）。
 
 ### Changed
 
