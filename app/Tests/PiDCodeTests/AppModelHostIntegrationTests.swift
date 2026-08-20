@@ -1,3 +1,4 @@
+import SwiftUI
 import Foundation
 import XCTest
 @testable import PiDCode
@@ -282,5 +283,128 @@ final class SessionTakeoverIntegrationTests: XCTestCase {
         ])))
 
         XCTAssertEqual(harness.model.sessionConflict?.isTakeover, true)
+    }
+}
+
+// MARK: - 动作级权限
+
+@MainActor
+final class PermissionIntegrationTests: XCTestCase {
+    func testPermissionRequestDrivesCardAndRespondClearsIt() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-a"
+
+        await harness.client.emit(HostEvent(name: "permission.request", data: .object([
+            "requestId": .string("t1"),
+            "sessionId": .string("session-a"),
+            "tool": .string("bash"),
+            "summary": .string("npm test"),
+            "targets": .array([.string("/tmp/project")]),
+            "risk": .string("command"),
+            "riskLabel": .string("命令执行"),
+            "scopeHint": .string("授权后不再询问"),
+        ])))
+        let request = try XCTUnwrap(harness.model.permission.pendingRequest)
+        XCTAssertTrue(request.supportsScopeGrant)
+        XCTAssertEqual(request.tool, "bash")
+
+        await harness.model.respondToPermissionRequest(request, decision: "allowScope")
+
+        XCTAssertNil(harness.model.permission.pendingRequest, "回传后清除权限卡")
+        let requests = await harness.client.requests
+        let respond = try XCTUnwrap(requests.last { $0.method == "permission.respond" })
+        XCTAssertEqual(respond.params["decision"]?.stringValue, "allowScope")
+        XCTAssertEqual(respond.params["requestId"]?.stringValue, "t1")
+    }
+
+    func testHighRiskRequestHidesScopeGrantOption() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-a"
+
+        await harness.client.emit(HostEvent(name: "permission.request", data: .object([
+            "requestId": .string("w1"),
+            "sessionId": .string("session-a"),
+            "tool": .string("write"),
+            "summary": .string("/tmp/outside/a.txt"),
+            "targets": .array([.string("/tmp/outside/a.txt")]),
+            "risk": .string("fileWriteOutside"),
+            "riskLabel": .string("项目外写入（高）"),
+            "scopeHint": .string("只能本次允许或拒绝"),
+        ])))
+
+        let request = try XCTUnwrap(harness.model.permission.pendingRequest)
+        XCTAssertTrue(request.isHighRisk)
+        XCTAssertFalse(request.supportsScopeGrant, "项目外写入不给范围授权")
+    }
+
+    func testPermissionUpdatedRefreshesGrantsAndSettingsPageListsThem() async throws {
+        let harness = HostTestHarness()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "session.list": .object(["sessions": .array([])])
+            case "permission.list": .object([
+                "grants": .array([
+                    .object([
+                        "id": .string("g1"),
+                        "kind": .string("bashPrefix"),
+                        "root": .string("/tmp/project"),
+                        "pattern": .string("npm test"),
+                        "createdAt": .string("2026-08-20T08:00:00.000Z"),
+                        "createdBySession": .string("session-a"),
+                    ]),
+                ]),
+                "audit": .array([
+                    .object([
+                        "at": .string("2026-08-20T08:00:01.000Z"),
+                        "sessionId": .string("session-a"),
+                        "tool": .string("bash"),
+                        "summary": .string("npm test"),
+                        "risk": .string("命令执行"),
+                        "decision": .string("allowScope"),
+                    ]),
+                ]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-a"
+
+        await harness.model.loadPermissions()
+
+        XCTAssertEqual(harness.model.permission.grants.first?.pattern, "npm test")
+        XCTAssertEqual(harness.model.permission.audit.first?.decisionLabel, "范围允许")
+
+        let host = NSHostingView(
+            rootView: PermissionsSettingsView().environment(harness.model).frame(width: 520, height: 480)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero)
+    }
+
+    func testComposerRendersPermissionCard() {
+        let model = AppModel()
+        model.selectedSessionID = "session-render"
+        model.permission.pendingRequest = PermissionRequestPresentation(
+            requestID: "t1",
+            sessionID: "session-render",
+            tool: "bash",
+            summary: "git push origin main",
+            targets: [],
+            risk: "commandHighRisk",
+            riskLabelText: "高风险命令（高）",
+            scopeHint: "授权后，该目录下以「git push」开头的命令不再询问"
+        )
+
+        let host = NSHostingView(
+            rootView: ComposerView().environment(model).frame(width: 900, height: 260)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero)
     }
 }

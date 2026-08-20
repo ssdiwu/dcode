@@ -20,3 +20,4 @@
 | [0016](0016-AppModel-域拆分与宿主注入测试边界.md) | AppModel 域拆分与宿主注入测试边界 | `0.0.8` 起领域状态下沉到 `@Observable` 子模型，宿主依赖收敛为 `HostProviding` 协议供 Fake-host 集成测试注入；渲染冒烟采用 ViewInspector + 真实宿主混合策略。 |
 | [0017](0017-dgoal-结构化状态融入与上下文构成呈现边界.md) | dgoal 结构化状态融入与上下文构成呈现边界 | `0.0.8` 起原生呈现 dgoal Work List / Plan Contract 与待批提案批准卡，批准经 `/dgoal review` 走 dgoal 自有门禁；上下文弹层提供按部分估算的构成占比。 |
 | [0018](0018-打开即接管与单写入所有权.md) | 打开即接管与单写入所有权 | `0.0.9` 起打开会话即取得写入所有权，只读观察模式删除；D Code 实例间租约可抢占（LEASE_STOLEN 诚实退出），静默窗口保留为防撕裂护栏，冲突以原生卡片一键重接。取代 0006 的默认观察立场。 |
+| [0019](0019-Project-Trust-与动作级权限边界.md) | Project Trust 与动作级权限边界 | `0.0.10` 起 Host 内置工具调用权限闸门：读取放行，bash 按前缀、写入按授权根、项目外与自定义工具逐次询问；授权持久化于 `pi-dcode/permissions-v1.json` 并可撤销，决策留审计。只在 D Code Host 内生效，不约束 Pi CLI。 |

@@ -24,6 +24,8 @@ import {
   type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { diagramKind, render } from "grok-mermaid";
+import { PermissionStore } from "./permission-store.js";
+import { PermissionGateController, createPermissionGuardExtension } from "./permission-guard.js";
 import {
   DCodeFastController,
   createDCodeFastExtension,
@@ -54,7 +56,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.9";
+const HOST_VERSION = "0.0.10";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -408,6 +410,7 @@ export class PiHost {
             projectCwdScope: true,
             contextUsage: true,
             contextBreakdown: true,
+            permissionGate: true,
             fastMode: true,
             sessionExternalSync: true,
             dcodeSessionOrigin: true,
@@ -510,6 +513,15 @@ export class PiHost {
         return this.getState();
       case "session.contextBreakdown":
         return this.getContextBreakdown();
+      case "permission.respond":
+        return this.respondPermission(
+          params.requestId as string,
+          params.decision as "allowOnce" | "allowScope" | "deny",
+        );
+      case "permission.list":
+        return await this.listPermissions();
+      case "permission.revoke":
+        return await this.revokePermission(params.grantId as string);
       case "session.getCommands":
         return this.getCommands();
       case "session.getModels":
@@ -1012,12 +1024,22 @@ export class PiHost {
       }
       await lease.assertUnchanged();
       const fastMode = new DCodeFastController();
+      const permissionGate = new PermissionGateController(
+        (event, data) => { this.options.emit(event, data); },
+        await this.permissionStore(),
+        sessionId,
+        manager.getCwd(),
+      );
+      this.activePermissionGate = permissionGate;
       const sourceSettingsManager = SettingsManager.create(manager.getCwd(), this.agentDir);
       const resourceLoader = new DCodeResourceLoader({
         cwd: manager.getCwd(),
         agentDir: this.agentDir,
         sourceSettingsManager,
-        extensionFactories: [{ name: "dcode-fast", hidden: true, factory: createDCodeFastExtension(fastMode) }],
+        extensionFactories: [
+          { name: "dcode-fast", hidden: true, factory: createDCodeFastExtension(fastMode) },
+          { name: "dcode-permission", hidden: true, factory: createPermissionGuardExtension(permissionGate) },
+        ],
       });
       await resourceLoader.reload();
       const created = await createAgentSession({
@@ -1150,6 +1172,8 @@ export class PiHost {
     const active = this.active;
     if (!active) return;
     this.active = undefined;
+    this.activePermissionGate?.settleAll();
+    this.activePermissionGate = undefined;
     clearInterval(active.conflictTimer);
     active.closing = true;
     active.ui.cancelAll("Session closing");
@@ -1601,6 +1625,30 @@ export class PiHost {
     };
   }
 
+  private respondPermission(requestId: string, decision: "allowOnce" | "allowScope" | "deny"): unknown {
+    const gate = this.activePermissionGate;
+    if (!gate) throw new PiHostError("PERMISSION_NO_SESSION", "No open session owns this permission request");
+    if (!gate.settle(requestId, decision)) {
+      throw new PiHostError("PERMISSION_REQUEST_STALE", "The permission request is no longer pending");
+    }
+    return { resolved: true };
+  }
+
+  private async listPermissions(): Promise<unknown> {
+    const store = await this.permissionStore();
+    return { grants: store.grants, audit: store.audit };
+  }
+
+  private async revokePermission(grantId: string): Promise<unknown> {
+    const store = await this.permissionStore();
+    if (!store.revoke(grantId)) {
+      throw new PiHostError("PERMISSION_GRANT_NOT_FOUND", "No grant with this id");
+    }
+    await store.save();
+    this.options.emit("permission.updated", { grants: store.grants });
+    return { revoked: true, grants: store.grants };
+  }
+
   private getState(): unknown {
     const active = this.requireActive();
     return {
@@ -1708,6 +1756,13 @@ export class PiHost {
   }
 
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
+  private permissionStorePromise: Promise<PermissionStore> | undefined;
+  private activePermissionGate: PermissionGateController | undefined;
+
+  private permissionStore(): Promise<PermissionStore> {
+    this.permissionStorePromise ??= PermissionStore.open(this.agentDir);
+    return this.permissionStorePromise;
+  }
 
   /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
   private sharedModelRuntime(): Promise<ModelRuntime> {

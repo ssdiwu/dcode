@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-08-20
+
+### Added
+
+- 实现 `0.0.10` 动作级权限候选（ADR 0019）：D Code Host 打开会话时注入工具调用闸门——读取放行；bash 与文件写入先查授权表，未决动作挂起并以原生权限卡询问，提供"本次允许 / 范围允许 / 拒绝"（项目外写入与自定义工具无范围键）；高风险命令（rm、`git push`、`curl|sh`、sudo 等）以高险标记呈现。
+- 授权按"会话工作目录"域持久化：bash 以命令前缀（程序名 + 已知子命令，前缀后必须结尾或空白）、写入以授权根内整体生效；存储于 `~/.pi/agent/pi-dcode/permissions-v1.json`（版本化原子写），决策审计保留最近 200 条。
+- 设置新增"动作权限"页：授权列表（类型 / 根 / 前缀 / 授予时间）单条撤销、最近决策记录查看；`permission.updated` 事件同步各窗口。
+- 协议新增 `permission.respond` / `permission.list` / `permission.revoke` 方法、`permission.request` / `permission.updated` 事件与 `permissionGate` 能力位。
+
+### Changed
+
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.10`。
+
 ## [0.0.9] - 2026-08-20
 
 ### Added

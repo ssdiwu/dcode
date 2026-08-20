@@ -514,7 +514,7 @@ final class FollowUpQueueTests: XCTestCase {
 
         capabilities = {
             "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
-            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True, "contextBreakdown": True,
+            "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True, "contextBreakdown": True, "permissionGate": True,
             "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
             "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
             "sessionTrash": True, "sessionVisibilityExclusions": True,
@@ -615,7 +615,7 @@ final class FollowUpQueueTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.9", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.10", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":

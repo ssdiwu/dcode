@@ -16,6 +16,9 @@ export const HOST_METHODS = [
   "session.abort",
   "session.getState",
   "session.contextBreakdown",
+  "permission.respond",
+  "permission.list",
+  "permission.revoke",
   "session.getCommands",
   "session.getModels",
   "modelSettings.get",
@@ -279,11 +282,31 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.abort":
     case "session.getState":
     case "session.contextBreakdown":
+    case "permission.list":
     case "session.getCommands":
     case "session.getThinkingLevels":
     case "session.refresh":
     case "host.shutdown":
       return;
+    case "permission.respond": {
+      const requestId = optionalString(params, "requestId");
+      const decision = optionalString(params, "decision");
+      if (requestId === undefined || decision === undefined
+        || !["allowOnce", "allowScope", "deny"].includes(decision)) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Expected params.requestId string and params.decision in allowOnce|allowScope|deny",
+        );
+      }
+      return;
+    }
+    case "permission.revoke": {
+      const grantId = optionalString(params, "grantId");
+      if (grantId === undefined) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.grantId string");
+      }
+      return;
+    }
     case "session.getModels": {
       const cwd = optionalString(params, "cwd");
       if (cwd !== undefined && (cwd.length === 0 || cwd.length > 4_096)) {

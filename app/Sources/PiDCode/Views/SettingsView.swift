@@ -133,6 +133,15 @@ struct SettingsView: View {
                 model.presentArchivedSessions()
             }
 
+            SettingsNavigationRow(
+                title: "动作权限",
+                systemImage: "lock.shield",
+                badge: model.permission.grants.count,
+                selected: page == .permissions
+            ) {
+                model.presentSettings(.permissions)
+            }
+
             Text("应用")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
@@ -231,6 +240,9 @@ struct SettingsView: View {
 
         case .archivedSessions:
             ArchivedSessionsView()
+
+        case .permissions:
+            PermissionsSettingsView()
 
         case .about:
             AboutView()
@@ -398,5 +410,83 @@ private struct SettingsValueRow<Trailing: View>: View {
         .padding(.horizontal, 20)
         .padding(.vertical, PiDCodeMetrics.spacingGroup)
         .frame(minHeight: 72)
+    }
+}
+
+/// 动作级权限管理：授权列表（可撤销）与最近审计记录。
+struct PermissionsSettingsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Form {
+            Section {
+                if model.permission.isLoading {
+                    HStack { ProgressView().controlSize(.small); Text("读取授权表…").foregroundStyle(.secondary) }
+                } else if let issue = model.permission.issue {
+                    Text(issue).foregroundStyle(.secondary)
+                } else if model.permission.grants.isEmpty {
+                    Text("还没有任何范围授权。工具调用会逐次询问。")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.permission.grants) { grant in
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(grant.kindLabel).font(.callout.weight(.medium))
+                                Text(grant.displayTarget)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text("授予于 \(grant.createdAt)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer(minLength: 8)
+                            Button("撤销") {
+                                Task { await model.revokePermissionGrant(grant) }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
+            } header: {
+                Text("范围授权（\(model.permission.grants.count)）")
+            } footer: {
+                Text("范围授权按会话工作目录生效：命令按前缀、写入按授权根。撤销后下一次同类动作会再次询问。")
+            }
+
+            Section("最近决策记录") {
+                if model.permission.audit.isEmpty {
+                    Text("暂无记录。").foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.permission.audit.suffix(30).reversed()) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(entry.decisionLabel)
+                                    .font(.caption.weight(.semibold))
+                                Text(entry.tool)
+                                    .font(.caption.monospaced())
+                                Text(entry.risk)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(String(entry.at.prefix(19)).replacingOccurrences(of: "T", with: " "))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Text(entry.summary)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            await model.loadPermissions()
+        }
     }
 }

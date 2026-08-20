@@ -138,6 +138,7 @@ final class AppModel {
     let modelSettings = ModelSettingsState()
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
+    let permission = PermissionModel()
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
     var pinnedSessions: [PinnedSessionRecord] = []
@@ -3927,6 +3928,80 @@ final class AppModel {
         }
     }
 
+    private static func decodeGrants(_ value: JSONValue) -> [PermissionGrantRecord] {
+        guard let data = try? JSONEncoder().encode(value) else { return [] }
+        let decoded = try? JSONDecoder().decode(PermissionGrantList.self, from: data)
+        return decoded?.grants ?? []
+    }
+
+    private func handlePermissionHostEvent(_ event: HostEvent) {
+        switch event.name {
+        case "permission.request":
+            guard let request = PermissionRequestParser.parse(event.data),
+                  request.sessionID == selectedSessionID || selectedSessionID == nil else { return }
+            permission.pendingRequest = request
+        case "permission.updated":
+            if let grants = event.data?["grants"] {
+                permission.grants = Self.decodeGrants(grants)
+            }
+        default:
+            break
+        }
+    }
+
+    /// 权限卡回传：把本次决策交给 Host 闸门，未决请求被结算后清除。
+    func respondToPermissionRequest(_ request: PermissionRequestPresentation, decision: String) async {
+        guard permission.pendingRequest?.requestID == request.requestID, !permission.isResponding else { return }
+        permission.isResponding = true
+        defer { permission.isResponding = false }
+        guard let client = readyClient else {
+            permission.pendingRequest = nil
+            return
+        }
+        let params: [String: JSONValue] = [
+            "requestId": .string(request.requestID),
+            "decision": .string(decision),
+        ]
+        do {
+            let response: JSONValue = try await client.request("permission.respond", params: params)
+            _ = response
+        } catch {
+            showNotice("权限决策未能送达：工具调用按拒绝处理。", level: "warning")
+        }
+        permission.clearRequest(request.requestID)
+    }
+
+    func revokePendingPermission(_ request: PermissionRequestPresentation) async {
+        await respondToPermissionRequest(request, decision: "deny")
+    }
+
+    /// 设置页进入或授权变化后刷新授权表与审计。
+    func loadPermissions() async {
+        guard let client = readyClient, !permission.isLoading else { return }
+        permission.isLoading = true
+        defer { permission.isLoading = false }
+        do {
+            let result: PermissionListResult = try await client.request("permission.list")
+            permission.grants = result.grants
+            permission.audit = result.audit
+            permission.issue = nil
+        } catch {
+            permission.issue = "无法读取权限授权表：\(DiagnosticSanitizer.redact(error.localizedDescription))"
+        }
+    }
+
+    func revokePermissionGrant(_ grant: PermissionGrantRecord) async {
+        guard let client = readyClient else { return }
+        do {
+            let result: PermissionListResult = try await client.request("permission.revoke", params: [
+                "grantId": .string(grant.id),
+            ])
+            permission.grants = result.grants
+        } catch {
+            showNotice("撤销授权失败：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "error")
+        }
+    }
+
     /// 冲突后一键重新接管：重新以可写打开当前会话（打开即接管语义）。
     func retakeSessionOwnership() async {
         guard let conflict = sessionConflict,
@@ -4023,6 +4098,8 @@ final class AppModel {
             handleExtensionHostEvent(event)
         case let name where name.hasPrefix("modelAuth."):
             handleModelAuthHostEvent(event)
+        case let name where name.hasPrefix("permission."):
+            handlePermissionHostEvent(event)
         case "host.stderr", "host.outputError", "protocol.decodeError",
              "host.processEnded", "host.restartRequired":
             handleHostLifecycleEvent(event)

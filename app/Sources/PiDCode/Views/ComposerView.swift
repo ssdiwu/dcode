@@ -69,7 +69,8 @@ struct ComposerView: View {
                     || model.currentFollowUpQueue != nil
                     || model.followUp.pendingSteer != nil
                     || model.pendingPlanProposal != nil
-                    || model.sessionConflict != nil {
+                    || model.sessionConflict != nil
+                    || model.permission.pendingRequest != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
                 ZStack(alignment: .topLeading) {
@@ -266,6 +267,11 @@ struct ComposerView: View {
                     Image(systemName: "arrow.turn.up.right")
                         .foregroundStyle(Color.accentColor)
                 }
+            }
+
+            if let request = model.permission.pendingRequest {
+                Divider()
+                permissionRequestCard(request)
             }
 
             if let conflict = model.sessionConflict {
@@ -672,6 +678,63 @@ struct ComposerView: View {
         case .thinking: .purple
         case .toolResult: .green
         }
+    }
+
+    /// 动作级权限卡：工具调用挂起等待决策；支持范围授权时给出三键。
+    private func permissionRequestCard(_ request: PermissionRequestPresentation) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "lock.shield")
+                .foregroundStyle(request.isHighRisk ? Color.orange : Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(request.tool)
+                        .font(.caption.monospaced().weight(.semibold))
+                    Text(request.riskLabelText)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(
+                            request.isHighRisk ? Color.orange.opacity(0.15) : Color.accentColor.opacity(0.12),
+                            in: Capsule()
+                        )
+                }
+                Text(request.summary)
+                    .font(.caption.monospaced())
+                    .lineLimit(2)
+                if !request.scopeHint.isEmpty {
+                    Text(request.scopeHint)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                Button {
+                    Task { await model.revokePendingPermission(request) }
+                } label: {
+                    Text("拒绝")
+                }
+                .controlSize(.small)
+                Button {
+                    Task { await model.respondToPermissionRequest(request, decision: "allowOnce") }
+                } label: {
+                    Text("本次允许")
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+                if request.supportsScopeGrant {
+                    Button {
+                        Task { await model.respondToPermissionRequest(request, decision: "allowScope") }
+                    } label: {
+                        Text("范围允许")
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .disabled(model.permission.isResponding)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// 冲突卡：外部写入或写入权被接管后，停止写入、保留草稿，一键重新接管。
