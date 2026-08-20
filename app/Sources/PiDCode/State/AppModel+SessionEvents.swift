@@ -102,7 +102,19 @@ extension AppModel {
             guard sessionID == selectedSessionID else { return }
             isStreaming = false
             markCurrentRunUnknown()
-            showNotice("检测到 Pi 的新写入，D Code 已停止本次写入并切回持续同步；草稿已保留。", level: "warning")
+            let conflictCode = event.data?["code"]?.stringValue
+            let stolen = conflictCode == "LEASE_STOLEN"
+            sessionConflict = SessionConflictPresentation(
+                sessionID: sessionID,
+                code: conflictCode,
+                isTakeover: stolen
+            )
+            showNotice(
+                stolen
+                    ? "写入所有权已被另一个 D Code 窗口接管；草稿已保留。"
+                    : "检测到 Pi 的新写入，D Code 已停止写入；草稿已保留，可重新接管。",
+                level: "warning"
+            )
             Task { [weak self] in
                 guard let self else { return }
                 await self.pauseFollowUpQueues(sessionID: sessionID, reason: .conflict)
@@ -110,7 +122,6 @@ extension AppModel {
                    self.pendingPrompt?.isFollowUpDispatch == true {
                     self.pendingPrompt = nil
                 }
-                await self.resumeObservationAfterConflict(sessionID)
             }
         case "session.changed":
             guard event.data?["sessionId"]?.stringValue == selectedSessionID else { return }

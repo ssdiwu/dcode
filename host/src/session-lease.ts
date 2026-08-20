@@ -33,7 +33,12 @@ export interface SessionLeaseOwner {
 }
 
 export class SessionLeaseError extends Error {
-  readonly code: "SESSION_IN_USE" | "SESSION_NOT_IDLE" | "EXTERNAL_WRITE_DETECTED" | "LEASE_OWNER_MISMATCH";
+  readonly code:
+    | "SESSION_IN_USE"
+    | "SESSION_NOT_IDLE"
+    | "EXTERNAL_WRITE_DETECTED"
+    | "LEASE_OWNER_MISMATCH"
+    | "LEASE_STOLEN";
   readonly details?: unknown;
 
   constructor(code: SessionLeaseError["code"], message: string, details?: unknown) {
@@ -200,6 +205,8 @@ export interface AcquireSessionLeaseOptions {
   quietWindowMs?: number;
   pid?: number;
   nonce?: string;
+  /** 打开即接管：发现存活属主时原子抢占（rename 旧锁目录），旧属主经 LEASE_STOLEN 诚实退出。 */
+  force?: boolean;
 }
 
 export class SessionLease {
@@ -221,7 +228,7 @@ export class SessionLease {
     await mkdir(leaseRoot, { recursive: true, mode: 0o700 });
     let acquired = false;
     let currentOwner: unknown;
-    for (let attempt = 0; attempt < 3 && !acquired; attempt += 1) {
+    for (let attempt = 0; attempt < 4 && !acquired; attempt += 1) {
       try {
         await mkdir(lockDirectory, { mode: 0o700 });
         acquired = true;
@@ -235,11 +242,23 @@ export class SessionLease {
         );
         currentOwner = resolution.currentOwner;
         if (!resolution.retry) {
-          throw new SessionLeaseError(
-            "SESSION_IN_USE",
-            `Session ${options.sessionId} already has a lease`,
-            currentOwner,
-          );
+          if (!options.force) {
+            throw new SessionLeaseError(
+              "SESSION_IN_USE",
+              `Session ${options.sessionId} already has a lease`,
+              currentOwner,
+            );
+          }
+          // 打开即接管：把存活属主的锁目录原子移走，属主记录随目录一起离开原路径；
+          // 旧属主在下次 assertUnchanged 自检时发现 owner 消失，以 LEASE_STOLEN 诚实退出。
+          const stolenDirectory = `${lockDirectory}.stolen-${randomUUID()}`;
+          try {
+            await rename(lockDirectory, stolenDirectory);
+          } catch (renameError) {
+            if (isMissingPathError(renameError)) continue;
+            throw renameError;
+          }
+          continue;
         }
       }
     }
@@ -288,12 +307,35 @@ export class SessionLease {
 
   async assertUnchanged(): Promise<void> {
     this.assertActive();
+    await this.assertStillOwner();
     const actual = await readSessionFingerprint(this.owner.sessionPath);
     if (!sameFingerprint(this.expectedFingerprint, actual)) {
       throw new SessionLeaseError(
         "EXTERNAL_WRITE_DETECTED",
         `Session ${this.owner.sessionId} changed outside the current lease`,
         { expected: this.expectedFingerprint, actual },
+      );
+    }
+  }
+
+  /** 属主自检：锁目录被抢占（rename 离开原路径）或 nonce 被替换时立即让位。 */
+  private async assertStillOwner(): Promise<void> {
+    let stored: { nonce?: unknown };
+    try {
+      stored = JSON.parse(await readFile(this.ownerPath, "utf8")) as { nonce?: unknown };
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        throw new SessionLeaseError(
+          "LEASE_STOLEN",
+          `Lease for session ${this.owner.sessionId} was taken over by another D Code instance`,
+        );
+      }
+      throw error;
+    }
+    if (stored.nonce !== this.owner.nonce) {
+      throw new SessionLeaseError(
+        "LEASE_STOLEN",
+        `Lease for session ${this.owner.sessionId} was taken over by another D Code instance`,
       );
     }
   }

@@ -142,7 +142,7 @@
 
 - 左侧列表把“耐久导航”和“当前活动扫描”分开理解；Otty 的运行、等待、完成、失败徽标证明紧凑状态可帮助用户跨会话发现需要关注的工作，但 D Code 用 `0.0.6` Activity View（活动视图）承载这一结果，而不是给默认 Project / Recent 导航增加任意排序器；
 - 右侧详情按对象职责拆分：当前目录与会话事实进入 Information Inspector（信息检查器），只读 Files 已由 `0.0.4` 建立，可信 Project 快捷动作进入 `0.0.8`，Exact Git Diff（精确 Git 差异）进入 `0.0.9`，Markdown / HTML 缓冲区与预览分别进入 `0.0.15–0.0.16`；
-- Outline 的“快速理解当前内容结构”思想由 D Code 已有 Session Path、Plan、对话导航尺和后续结构化产物导航吸收，不复制终端命令时间线；Process / Ports 只有在连续 dogfood 形成真实闭环缺口后才进入 `0.0.19+`。
+- Outline 的“快速理解当前内容结构”思想由 D Code 已有 Session Path、Plan、对话导航尺和后续结构化产物导航吸收，不复制终端命令时间线；Process / Ports 只有在连续 dogfood 形成真实闭环缺口后才进入 `0.0.20+`。
 
 **明确不借鉴**：不把 Otty 的 Tab 等同于 Pi Session，不加入 No Grouping / By Project / By Date、Created / Updated / Manual 等通用配置矩阵，不加入手工 Divider（分隔线），也不把终端进程、端口、Shell Outline 或任意 Pane / Split Runtime 搬进 D Code。`0.0.6` 首版使用产品语义固定的“等待处理 → 正在运行 → 新完成 → 其余按可证明活动时间”顺序；默认导航仍由置顶、Recent 与 Project 组织。
 

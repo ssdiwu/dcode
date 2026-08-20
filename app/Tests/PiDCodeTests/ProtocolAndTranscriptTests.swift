@@ -277,10 +277,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testAboutMetadataUsesBundleVersionAndCanonicalGitHubLinks() {
         XCTAssertEqual(
             AboutAppMetadata.versionText(infoDictionary: [
-                "CFBundleShortVersionString": "0.0.8",
+                "CFBundleShortVersionString": "0.0.9",
                 "CFBundleVersion": "7",
             ]),
-            "版本 0.0.8（7）"
+            "版本 0.0.9（7）"
         )
         XCTAssertEqual(AboutAppMetadata.versionText(infoDictionary: [:]), "版本未知")
         XCTAssertEqual(AboutAppMetadata.authorURL.absoluteString, "https://github.com/ssdiwu")
@@ -1451,7 +1451,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.8",
+            hostVersion: "0.0.9",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1472,7 +1472,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.8",
+            hostVersion: "0.0.9",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1757,7 +1757,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.8",
+                    "hostVersion": "0.0.9",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1927,7 +1927,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.8",
+                    "hostVersion": "0.0.9",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2247,7 +2247,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.8", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.9", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":

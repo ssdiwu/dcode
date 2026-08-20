@@ -68,7 +68,8 @@ struct ComposerView: View {
                 if model.activity.currentRunState?.phase.requiresInteractionDock == true
                     || model.currentFollowUpQueue != nil
                     || model.followUp.pendingSteer != nil
-                    || model.pendingPlanProposal != nil {
+                    || model.pendingPlanProposal != nil
+                    || model.sessionConflict != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
                 ZStack(alignment: .topLeading) {
@@ -265,6 +266,11 @@ struct ComposerView: View {
                     Image(systemName: "arrow.turn.up.right")
                         .foregroundStyle(Color.accentColor)
                 }
+            }
+
+            if let conflict = model.sessionConflict {
+                Divider()
+                conflictCard(conflict)
             }
 
             if let proposal = model.pendingPlanProposal {
@@ -666,6 +672,34 @@ struct ComposerView: View {
         case .thinking: .purple
         case .toolResult: .green
         }
+    }
+
+    /// 冲突卡：外部写入或写入权被接管后，停止写入、保留草稿，一键重新接管。
+    private func conflictCard(_ conflict: SessionConflictPresentation) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: conflict.isTakeover ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conflict.isTakeover ? "写入权已被其他 D Code 窗口接管" : "检测到 Pi 的新写入")
+                    .font(.caption.weight(.semibold))
+                Text(conflict.isTakeover
+                    ? "草稿已保留；重新接管会从另一个窗口取回写入权。"
+                    : "D Code 已停止写入并保留草稿；重新接管后可继续发送。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await model.retakeSessionOwnership() }
+            } label: {
+                Text("重新接管")
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isOpeningSession)
+            .help("重新以可写打开当前会话")
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// dgoal 待批计划提案卡：呈现提案并一键发起 `/dgoal review`，

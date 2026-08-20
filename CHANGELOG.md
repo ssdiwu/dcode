@@ -6,6 +6,15 @@
 
 ### Added
 
+- 实现 `0.0.9` 打开即接管候选（ADR 0018，取代 ADR 0006 默认观察立场）：所有打开路径一律可写取得租约，只读观察模式及其降级面（空上下文用量、清空命令、不可用构成占比）全部删除；过期搜索目标在关闭当前会话之前被拒。
+- D Code 实例间租约支持 force 抢占：后开窗口直接接管，先开窗口一秒内以 `LEASE_STOLEN` 冲突诚实退出；静默窗口保留为防撕裂护栏（在途写入轮询到稳定，超时如实报错）。
+- 冲突以 Composer 原生冲突卡呈现（区分外部写入与写入权被接管），“重新接管”一键恢复可写；草稿保留、队列暂停、Run 标记未知语义不变。
+- Host 内 ModelRuntime 单例复用（修复新会话每次激活全量解析模型库的已证性能问题）；`AppStart` / `ComposerTextUpdate` os_signpost 埋点供 Instruments 实测冷启动输入卡顿。
+
+### Changed
+
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.9`；Host 协议删除只读分支与 `writeIntent` / `preserveActive` 参数及 `SESSION_READ_ONLY` / `WRITE_INTENT_REQUIRED` 错误。
+
 - 实现 `0.0.8` 工程内构候选：AppModel 领域状态下沉为 `SearchModel`、`ActivityModel`、`ModelSettingsState`、`FollowUpModel` 四个 `@Observable` 子模型，事件分发按会话 / 扩展 / 认证 / 宿主生命周期拆为独立扩展文件，行为零变化。
 - 宿主依赖收敛为 `HostProviding` 协议并支持注入：新增 `FakeHostClient` 测试基座与 8 个无真实 Pi 依赖的状态机集成用例（握手、失败清理、进程退出、Run 状态与注意力、搜索索引、认证事件流、重启要求）。
 - 新增渲染冒烟基线：RootView / ConversationView / ComposerView / ModelSettingsView 真实宿主渲染与 UserHomeView / ConversationRoundRail 结构断言；`swift test` 由 141 增至 167 用例。

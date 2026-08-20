@@ -12,6 +12,7 @@ import {
   SessionManager,
   SettingsManager,
   VERSION as PI_VERSION,
+  buildSessionContext,
   collectEntriesForBranchSummary,
   createAgentSession,
   estimateTokens,
@@ -31,7 +32,7 @@ import {
 } from "./dcode-fast.js";
 import { ExtensionUIBridge } from "./extension-ui.js";
 import type { HostMethod } from "./protocol.js";
-import { SessionLease, sessionSnapshotDigest } from "./session-lease.js";
+import { SessionLease, SessionLeaseError, sessionSnapshotDigest } from "./session-lease.js";
 import {
   SessionReader,
   D_CODE_SESSION_ORIGIN_TYPE,
@@ -53,7 +54,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.8";
+const HOST_VERSION = "0.0.9";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -106,20 +107,7 @@ export class PiHostError extends Error {
   }
 }
 
-interface ReadOnlySession {
-  mode: "readOnly";
-  inspection: SessionInspection;
-  pinnedLeafId?: string | null;
-  modelRuntime: ModelRuntime;
-  observedVersion: SessionFileVersion;
-  notifiedVersion?: SessionFileVersion;
-  refreshTimer?: ReturnType<typeof setInterval>;
-  isChecking: boolean;
-  lastSyncError?: string;
-}
-
 interface WritableSession {
-  mode: "writable";
   inspection: SessionInspection;
   session: AgentSession;
   lease: SessionLease;
@@ -139,7 +127,7 @@ interface WritableSession {
   lastRunState?: RunState;
 }
 
-type ActiveSession = ReadOnlySession | WritableSession;
+type ActiveSession = WritableSession;
 
 interface PromptCallContext {
   active: WritableSession;
@@ -471,11 +459,8 @@ export class PiHost {
       case "session.open":
         return await this.openSession(
           params.sessionId as string,
-          params.mode === "writable" ? "writable" : "readOnly",
-          params.writeIntent === true,
           typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
           typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
-          params.preserveActive === true,
           leafIdForPathId(params.pathId),
         );
       case "session.close":
@@ -671,7 +656,7 @@ export class PiHost {
     let assertSourceStable: () => Promise<void>;
 
     try {
-      if (current?.mode === "writable" && current.inspection.summary.id === sessionId) {
+      if (current && current.inspection.summary.id === sessionId) {
         this.assertCopyIdle(current);
         await this.assertLeaseStable(current);
         const stableVersion = await readSessionFileVersion(current.inspection.summary.path);
@@ -737,16 +722,7 @@ export class PiHost {
     const summary = await this.assertTrashEligible(sessionId);
     const summaryPath = summary.path;
     const current = this.active;
-    let restoreObservation: ReadOnlySession | undefined;
     if (current?.inspection.summary.id === sessionId) {
-      if (current.mode === "writable") {
-        throw new PiHostError(
-          "SESSION_BUSY",
-          "Close the writable session before moving it to the Trash",
-          { sessionId },
-        );
-      }
-      restoreObservation = current;
       await this.closeActive();
     }
 
@@ -813,14 +789,6 @@ export class PiHost {
             },
           );
         }
-      }
-      if (restoreObservation && movedPath === summaryPath) {
-        this.installReadOnlyObservation(
-          restoreObservation.inspection,
-          restoreObservation.observedVersion,
-          restoreObservation.modelRuntime,
-          restoreObservation.pinnedLeafId,
-        );
       }
       throw failure;
     } finally {
@@ -986,171 +954,37 @@ export class PiHost {
     );
   }
 
-  private installReadOnlyObservation(
-    inspection: SessionInspection,
-    version: SessionFileVersion,
-    modelRuntime: ModelRuntime,
-    pinnedLeafId?: string | null,
-  ): Record<string, unknown> {
-    const active: ReadOnlySession = {
-      mode: "readOnly",
-      inspection,
-      pinnedLeafId,
-      modelRuntime,
-      observedVersion: version,
-      isChecking: false,
-    };
-    this.active = active;
-    active.refreshTimer = setInterval(() => { void this.checkReadOnlyChange(active); }, this.conflictPollMs);
-    active.refreshTimer.unref?.();
-    this.options.emit("session.opened", {
-      mode: active.mode,
-      sessionId: inspection.summary.id,
-      path: inspection.summary.path,
-    });
-    return { mode: active.mode, snapshot: inspection, state: this.getState() };
-  }
-
-  private async refreshCurrentForSearch(
-    active: ActiveSession,
-    expectedEntryId?: string,
-    expectedEntryDigest?: string,
-  ): Promise<Record<string, unknown>> {
-    if (active.mode === "writable") await this.assertLeaseStable(active);
-    const refreshed = await this.inspectStablePath(
-      active.inspection.summary.path,
-      active.inspection.summary.id,
-    );
-    this.assertSameSessionIdentity(active.inspection.header, refreshed.inspection.header);
-    this.assertExpectedEntry(refreshed.inspection, expectedEntryId, expectedEntryDigest);
-    if (active.mode === "writable") {
-      await this.assertLeaseStable(active);
-      if (refreshed.inspection.leafId === null) active.session.sessionManager.resetLeaf();
-      else active.session.sessionManager.branch(refreshed.inspection.leafId);
-      active.session.agent.state.messages = active.session.sessionManager.buildSessionContext().messages;
-      active.inspection = refreshed.inspection;
-      active.activePlan = refreshed.inspection.activePlan;
-      active.activeProposal = refreshed.inspection.activeProposal;
-    } else {
-      active.inspection = refreshed.inspection;
-      active.pinnedLeafId = undefined;
-      active.observedVersion = refreshed.version;
-      active.notifiedVersion = undefined;
-      active.lastSyncError = undefined;
-    }
-    return { mode: active.mode, snapshot: refreshed.inspection, state: this.getState() };
-  }
-
-  private async openReadOnlySession(
-    sessionId: string,
-    expectedEntryId?: string,
-    expectedEntryDigest?: string,
-    preserveActive = false,
-    selectedLeafId?: string | null,
-    knownPath?: string,
-  ): Promise<Record<string, unknown>> {
-    const current = this.active;
-    if (preserveActive && current?.inspection.summary.id === sessionId) {
-      return await this.refreshCurrentForSearch(current, expectedEntryId, expectedEntryDigest);
-    }
-
-    const preparedTarget = knownPath
-      ? await this.inspectStablePath(knownPath, sessionId, selectedLeafId)
-      : await this.inspectStableObservation(sessionId, selectedLeafId);
-    this.assertExpectedEntry(preparedTarget.inspection, expectedEntryId, expectedEntryDigest);
-    const targetRuntime = await ModelRuntime.create({
-      authPath: join(this.agentDir, "auth.json"),
-      modelsPath: join(this.agentDir, "models.json"),
-    });
-
-    let fallback: {
-      inspection: SessionInspection;
-      version: SessionFileVersion;
-      modelRuntime: ModelRuntime;
-      pinnedLeafId?: string | null;
-    } | undefined;
-    if (current) {
-      const stableCurrent = await this.inspectStablePath(
-        current.inspection.summary.path,
-        current.inspection.summary.id,
-        current.mode === "readOnly" ? current.pinnedLeafId : undefined,
-      );
-      this.assertSameSessionIdentity(current.inspection.header, stableCurrent.inspection.header);
-      fallback = {
-        inspection: stableCurrent.inspection,
-        version: stableCurrent.version,
-        modelRuntime: current.mode === "readOnly" ? current.modelRuntime : targetRuntime,
-        pinnedLeafId: current.mode === "readOnly" ? current.pinnedLeafId : undefined,
-      };
-    }
-
-    await this.closeActive();
-    try {
-      const finalTarget = await this.inspectStablePath(
-        preparedTarget.inspection.summary.path,
-        sessionId,
-        selectedLeafId,
-      );
-      this.assertSameSessionIdentity(preparedTarget.inspection.header, finalTarget.inspection.header);
-      this.assertExpectedEntry(finalTarget.inspection, expectedEntryId, expectedEntryDigest);
-      return this.installReadOnlyObservation(
-        finalTarget.inspection,
-        finalTarget.version,
-        targetRuntime,
-        selectedLeafId,
-      );
-    } catch (error) {
-      if (fallback) {
-        let restored = fallback;
-        try {
-          const refreshedFallback = await this.inspectStablePath(
-            fallback.inspection.summary.path,
-            fallback.inspection.summary.id,
-            fallback.pinnedLeafId,
-          );
-          this.assertSameSessionIdentity(fallback.inspection.header, refreshedFallback.inspection.header);
-          restored = {
-            inspection: refreshedFallback.inspection,
-            version: refreshedFallback.version,
-            modelRuntime: fallback.modelRuntime,
-            pinnedLeafId: fallback.pinnedLeafId,
-          };
-        } catch (restoreError) {
-          this.options.emit("session.syncError", {
-            sessionId: fallback.inspection.summary.id,
-            ...errorRecord(restoreError),
-          });
-        }
-        this.installReadOnlyObservation(
-          restored.inspection,
-          restored.version,
-          restored.modelRuntime,
-          restored.pinnedLeafId,
-        );
+  /** 打开即接管的租约获取：force 抢占其他 D Code 实例；静默窗口内文件仍在变时轮询等待稳定。 */
+  private async acquireLeaseUntilIdle(sessionId: string, sessionPath: string): Promise<SessionLease> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        return await SessionLease.acquire({
+          agentDir: this.leaseAgentDir,
+          sessionId,
+          sessionPath,
+          quietWindowMs: this.leaseQuietWindowMs,
+          force: true,
+        });
+      } catch (error) {
+        if (!(error instanceof SessionLeaseError) || error.code !== "SESSION_NOT_IDLE") throw error;
+        lastError = error;
+        await new Promise<void>((resolve) => setTimeout(resolve, this.leaseQuietWindowMs));
       }
-      throw error;
     }
+    throw new PiHostError(
+      "SESSION_NOT_IDLE",
+      "The session kept changing while D Code was taking it over",
+      { sessionId, cause: lastError instanceof Error ? lastError.message : String(lastError) },
+    );
   }
 
   private async openSession(
     sessionId: string,
-    mode: "readOnly" | "writable",
-    writeIntent = false,
     expectedEntryId?: string,
     expectedEntryDigest?: string,
-    preserveActive = false,
     selectedLeafId?: string | null,
   ): Promise<unknown> {
-    if (mode === "readOnly") {
-      return await this.openReadOnlySession(
-        sessionId,
-        expectedEntryId,
-        expectedEntryDigest,
-        preserveActive,
-        selectedLeafId,
-      );
-    }
-    await this.closeActive();
     this.assertWriteHealthy();
     const inspection = await this.reader.inspect(sessionId, selectedLeafId);
     if ((inspection.header.version ?? 1) !== CURRENT_SESSION_VERSION) {
@@ -1159,19 +993,12 @@ export class PiHost {
         `Session version ${inspection.header.version ?? 1} must be migrated outside writable open`,
       );
     }
-    if (!writeIntent) {
-      throw new PiHostError(
-        "WRITE_INTENT_REQUIRED",
-        "Writable open requires an explicit write intent",
-        { sessionId },
-      );
-    }
-    const lease = await SessionLease.acquire({
-      agentDir: this.leaseAgentDir,
-      sessionId,
-      sessionPath: inspection.summary.path,
-      quietWindowMs: this.leaseQuietWindowMs,
-    });
+    // 先校验搜索目标与版本，失败时不影响当前已打开的会话。
+    this.assertExpectedEntry(inspection, expectedEntryId, expectedEntryDigest);
+    await this.closeActive();
+    // 打开即接管：D Code 是一等公民。force 抢占其他 D Code 实例的租约；
+    // 静默窗口内文件仍在变（Pi CLI 在途写入）时轮询到稳定再完成接管，超时如实报错。
+    const lease = await this.acquireLeaseUntilIdle(sessionId, inspection.summary.path);
 
     let session: AgentSession | undefined;
     let ui: ExtensionUIBridge | undefined;
@@ -1226,7 +1053,6 @@ export class PiHost {
         });
       });
       active = {
-        mode,
         inspection,
         session,
         lease,
@@ -1289,9 +1115,9 @@ export class PiHost {
       active.activeProposal = synchronizedInspection.activeProposal;
       active.conflictTimer = setInterval(() => { void this.checkConflict(active); }, this.conflictPollMs);
       active.conflictTimer.unref?.();
-      this.options.emit("session.opened", { mode, sessionId, path: synchronizedInspection.summary.path });
+      this.options.emit("session.opened", { mode: "writable", sessionId, path: synchronizedInspection.summary.path });
       return {
-        mode,
+        mode: "writable" as const,
         snapshot: synchronizedInspection,
         state: this.getState(),
         extensions: {
@@ -1304,7 +1130,7 @@ export class PiHost {
       unsubscribe?.();
       ui?.cancelAll("Session open failed");
       session?.dispose();
-      if (this.active?.mode === "writable") {
+      if (this.active) {
         clearInterval(this.active.conflictTimer);
         this.active.fastMode.dispose();
       }
@@ -1324,11 +1150,6 @@ export class PiHost {
     const active = this.active;
     if (!active) return;
     this.active = undefined;
-    if (active.mode === "readOnly") {
-      if (active.refreshTimer) clearInterval(active.refreshTimer);
-      this.options.emit("session.closed", { mode: active.mode, sessionId: active.inspection.summary.id });
-      return;
-    }
     clearInterval(active.conflictTimer);
     active.closing = true;
     active.ui.cancelAll("Session closing");
@@ -1365,7 +1186,7 @@ export class PiHost {
         }
       }
       if (!safeToRelease) this.poisonWrites(active, "The previous runtime did not stop cleanly");
-      this.options.emit("session.closed", { mode: active.mode, sessionId: active.inspection.summary.id });
+      this.options.emit("session.closed", { mode: "writable", sessionId: active.inspection.summary.id });
     }
   }
 
@@ -1727,9 +1548,6 @@ export class PiHost {
    */
   private getContextBreakdown(): unknown {
     const active = this.requireActive();
-    if (active.mode !== "writable") {
-      return { available: false, reason: "readOnly" };
-    }
     const messages = active.session.sessionManager.buildSessionContext().messages;
     const parts = {
       user: 0,
@@ -1785,46 +1603,8 @@ export class PiHost {
 
   private getState(): unknown {
     const active = this.requireActive();
-    if (active.mode === "readOnly") {
-      const model = active.inspection.context.model
-        ? active.modelRuntime.getModel(
-            active.inspection.context.model.provider,
-            active.inspection.context.model.modelId,
-          )
-        : undefined;
-      const fastMode = createFastSnapshot(
-        restoreFastMode(active.inspection.entries),
-        active.inspection.context.model
-          ? {
-              provider: active.inspection.context.model.provider,
-              id: active.inspection.context.model.modelId,
-            }
-          : undefined,
-      );
-      return {
-        mode: active.mode,
-        sessionId: active.inspection.summary.id,
-        sessionFile: active.inspection.summary.path,
-        cwd: active.inspection.summary.cwd,
-        model: active.inspection.context.model
-          ? {
-              provider: active.inspection.context.model.provider,
-              id: active.inspection.context.model.modelId,
-            }
-          : null,
-        thinkingLevel: active.inspection.context.thinkingLevel,
-        activePlan: active.inspection.activePlan,
-        isStreaming: false,
-        runState: null,
-        writable: false,
-        contextUsage: model && model.contextWindow > 0
-          ? { tokens: null, contextWindow: model.contextWindow, percent: null }
-          : null,
-        fastMode,
-      };
-    }
     return {
-      mode: active.mode,
+      mode: "writable" as const,
       sessionId: active.session.sessionId,
       sessionFile: active.session.sessionFile,
       sessionName: active.session.sessionName,
@@ -1869,9 +1649,7 @@ export class PiHost {
     if (cwd === undefined) {
       const active = this.requireActive();
       canonicalCwd = active.inspection.summary.cwd;
-      runtime = active.mode === "writable"
-        ? active.session.modelRuntime
-        : active.modelRuntime;
+      runtime = active.session.modelRuntime;
     } else {
       try {
         canonicalCwd = await realpath(cwd);
@@ -1882,19 +1660,14 @@ export class PiHost {
         });
       }
 
-      runtime = await ModelRuntime.create({
-        authPath: join(this.agentDir, "auth.json"),
-        modelsPath: join(this.agentDir, "models.json"),
-        allowModelNetwork: false,
-      });
+      runtime = await this.sharedModelRuntime();
     }
 
     if (cwd === undefined) {
       const active = this.requireActive();
-      const canRefreshRuntime = active.mode === "readOnly"
-        || (!active.session.isStreaming
-          && !active.session.isCompacting
-          && active.session.pendingMessageCount === 0);
+      const canRefreshRuntime = !active.session.isStreaming
+        && !active.session.isCompacting
+        && active.session.pendingMessageCount === 0;
       if (canRefreshRuntime) {
         try {
           await runtime.refresh({ allowNetwork: false });
@@ -1934,13 +1707,21 @@ export class PiHost {
     }
   }
 
-  private async createModelSettingsRuntime(): Promise<ModelRuntime> {
-    return await ModelRuntime.create({
+  private modelRuntimePromise: Promise<ModelRuntime> | undefined;
+
+  /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
+  private sharedModelRuntime(): Promise<ModelRuntime> {
+    this.modelRuntimePromise ??= ModelRuntime.create({
       authPath: join(this.agentDir, "auth.json"),
       modelsPath: join(this.agentDir, "models.json"),
       modelsStorePath: join(this.agentDir, "models-store.json"),
       allowModelNetwork: false,
     });
+    return this.modelRuntimePromise;
+  }
+
+  private async createModelSettingsRuntime(): Promise<ModelRuntime> {
+    return await this.sharedModelRuntime();
   }
 
   private async projectModelScope(
@@ -2273,14 +2054,7 @@ export class PiHost {
 
   private getThinkingLevels(): unknown {
     const active = this.requireActive();
-    if (active.mode === "writable") {
-      return { levels: active.session.getAvailableThinkingLevels() };
-    }
-    const modelRef = active.inspection.context.model;
-    const model = modelRef
-      ? active.modelRuntime.getModel(modelRef.provider, modelRef.modelId)
-      : undefined;
-    return { levels: model ? getSupportedThinkingLevels(model) : ["off"] };
+    return { levels: active.session.getAvailableThinkingLevels() };
   }
 
   private async setModel(provider: string, modelId: string): Promise<unknown> {
@@ -2512,68 +2286,13 @@ export class PiHost {
 
   private async refreshActiveSession(): Promise<SessionInspection> {
     const active = this.requireActive();
-    if (active.mode === "writable") {
-      const inspection = await this.reader.inspectPath(
-        active.inspection.summary.path,
-        active.inspection.summary.id,
-        active.session.sessionManager.getLeafId(),
-      );
-      this.assertSameSessionIdentity(active.inspection.header, inspection.header);
-      return inspection;
-    }
-    const before = await readSessionFileVersion(active.inspection.summary.path);
     const inspection = await this.reader.inspectPath(
       active.inspection.summary.path,
       active.inspection.summary.id,
-      active.mode === "readOnly" ? active.pinnedLeafId : undefined,
+      active.session.sessionManager.getLeafId(),
     );
-    const after = await readSessionFileVersion(active.inspection.summary.path);
-    if (!sameSessionFileVersion(before, after)) {
-      throw new PiHostError(
-        "SESSION_CHANGED_DURING_REFRESH",
-        "The session changed while D Code was refreshing it",
-        { sessionId: active.inspection.summary.id },
-      );
-    }
     this.assertSameSessionIdentity(active.inspection.header, inspection.header);
-    active.inspection = inspection;
-    active.observedVersion = after;
-    active.notifiedVersion = undefined;
-    active.lastSyncError = undefined;
     return inspection;
-  }
-
-  private async checkReadOnlyChange(active: ReadOnlySession): Promise<void> {
-    if (this.active !== active || active.isChecking) return;
-    active.isChecking = true;
-    try {
-      const baseline = active.observedVersion;
-      const observed = await readSessionFileVersion(active.inspection.summary.path);
-      if (this.active !== active || !sameSessionFileVersion(active.observedVersion, baseline)) return;
-      if (!sameSessionFileVersion(active.observedVersion, observed)) {
-        this.searchIndex.invalidate();
-        active.lastSyncError = undefined;
-        if (active.notifiedVersion && sameSessionFileVersion(active.notifiedVersion, observed)) return;
-        active.notifiedVersion = observed;
-        this.options.emit("session.changed", {
-          sessionId: active.inspection.summary.id,
-          path: active.inspection.summary.path,
-        });
-      }
-    } catch (error) {
-      if (this.active !== active) return;
-      const record = errorRecord(error);
-      const signature = `${record.code}:${record.message}`;
-      if (active.lastSyncError !== signature) {
-        active.lastSyncError = signature;
-        this.options.emit("session.syncError", {
-          sessionId: active.inspection.summary.id,
-          ...record,
-        });
-      }
-    } finally {
-      active.isChecking = false;
-    }
   }
 
   private requireActive(): ActiveSession {
@@ -2593,7 +2312,6 @@ export class PiHost {
   private requireWritable(): WritableSession {
     this.assertWriteHealthy();
     const active = this.requireActive();
-    if (active.mode !== "writable") throw new PiHostError("SESSION_READ_ONLY", "The open session is read-only");
     if (active.conflict) throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
     return active;
   }

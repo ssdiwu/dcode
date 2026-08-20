@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import os
 
 struct AppIssue: Identifiable, Equatable {
     let id = UUID()
@@ -68,6 +69,13 @@ struct PendingSteerDraft: Equatable {
     var accepted: Bool
 }
 
+/// 会话冲突呈现：外部写入（EXTERNAL_WRITE_DETECTED）或写入权被其他 D Code 实例接管（LEASE_STOLEN）。
+struct SessionConflictPresentation: Equatable {
+    let sessionID: String
+    let code: String?
+    let isTakeover: Bool
+}
+
 /// 本轮运行以来上下文 token 的累计增减：added 为新增，released 为压缩或修剪释放。
 struct ContextDeltaPresentation: Equatable {
     let added: Int
@@ -80,6 +88,7 @@ struct ContextDeltaPresentation: Equatable {
 @Observable
 final class AppModel {
     static let maximumStreamingThinkingUTF16Count = 100_000
+    static let signposter = OSSignposter(subsystem: "com.dcode.app", category: "lifecycle")
     private static let truncatedStreamingThinkingPrefix = "…较早的实时思考已省略…\n\n"
 
     var connectionState: HostConnectionState = .idle
@@ -102,6 +111,7 @@ final class AppModel {
     var conversationRounds: [ConversationRound] = []
     var conversationNavigationItems: [ConversationNavigationItem] = []
     var hostState: HostState?
+    var sessionConflict: SessionConflictPresentation?
     var activePlan: ActivePlanPresentation?
     var pendingPlanProposal: PlanProposalPresentation?
     private(set) var contextDelta = ContextDeltaPresentation(added: 0, released: 0)
@@ -544,6 +554,8 @@ final class AppModel {
 
     func start() async {
         guard connectionState == .idle, client == nil else { return }
+        let startupState = Self.signposter.beginInterval("AppStart")
+        defer { Self.signposter.endInterval("AppStart", startupState) }
         connectionState = .connecting
         await loadProjects()
         guard await loadSessionMetadata() else {
@@ -1110,7 +1122,7 @@ final class AppModel {
         search.openError = nil
         let opened = await openSession(
             result.sessionId,
-            writable: false,
+            writable: true,
             expectedEntryID: result.entryId,
             expectedEntryDigest: result.entryDigest,
             preserveActive: true,
@@ -1428,6 +1440,8 @@ final class AppModel {
     }
 
     func updateComposerText(_ text: String) {
+        let typingState = Self.signposter.beginInterval("ComposerTextUpdate")
+        defer { Self.signposter.endInterval("ComposerTextUpdate", typingState) }
         composerText = text
         if isNewSessionDraftActive {
             newSessionDraft?.text = text
@@ -1495,7 +1509,7 @@ final class AppModel {
         await flushCurrentDraft()
         _ = await openSession(
             sessionID,
-            writable: false,
+            writable: true,
             pathID: path.id,
             draftTargetAfterOpen: .path(sessionID: sessionID, pathID: path.id)
         )
@@ -1731,7 +1745,7 @@ final class AppModel {
         }
         parkNewSessionDraft()
         await flushCurrentDraft()
-        await openSession(sessionID, writable: false)
+        await openSession(sessionID, writable: true)
     }
 
     func createSession(at directory: URL) async {
@@ -2161,7 +2175,7 @@ final class AppModel {
                     details: nil
                 ))
             }
-            let opened = await openSession(result.target.id, writable: false)
+            let opened = await openSession(result.target.id, writable: true)
             guard opened else {
                 issue = AppIssue(
                     title: "会话已复制，但暂时无法打开",
@@ -2276,7 +2290,7 @@ final class AppModel {
     func openArchivedSession(_ record: ArchivedSessionRecord) async {
         guard !isStreaming, !isOpeningSession, !isMutatingArchive, !isPromptTransactionActive else { return }
         await flushCurrentDraft()
-        _ = await openSession(record.sessionID, writable: false)
+        _ = await openSession(record.sessionID, writable: true)
     }
 
     func openLineageSourceSession(_ sessionID: String) async {
@@ -3700,12 +3714,7 @@ final class AppModel {
             } else {
                 recordSearchOpenFailure(error.localizedDescription)
             }
-            if writable {
-                _ = await openSession(id, writable: false)
-            } else {
-                await refreshSnapshot()
-                if hostState?.writable != true { availableCommands = [] }
-            }
+            await refreshSnapshot()
             return false
         }
     }
@@ -3741,6 +3750,7 @@ final class AppModel {
         updateSelectedSessionChangeSummary()
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
+        sessionConflict = nil
         hostState = result.state
         beginContextDeltaSession()
         activePlan = ActivePlanParser.parse(result.state?.activePlan ?? result.snapshot.activePlan)
@@ -3834,6 +3844,7 @@ final class AppModel {
         inspection = nil
         setTranscript([])
         hostState = nil
+        sessionConflict = nil
         beginContextDeltaSession()
         contextBreakdown = nil
         activePlan = nil
@@ -3914,6 +3925,16 @@ final class AppModel {
         } catch {
             // A session can close between an event and this refresh; the next explicit action reports it.
         }
+    }
+
+    /// 冲突后一键重新接管：重新以可写打开当前会话（打开即接管语义）。
+    func retakeSessionOwnership() async {
+        guard let conflict = sessionConflict,
+              conflict.sessionID == selectedSessionID,
+              !isOpeningSession else { return }
+        let sessionID = conflict.sessionID
+        sessionConflict = nil
+        _ = await openSession(sessionID, writable: true)
     }
 
     /// 批准卡入口：向当前会话发送 `/dgoal review`，由 dgoal 弹出原生启动门禁对话框。
@@ -4122,11 +4143,6 @@ final class AppModel {
         extensionDialogs.removeAll()
         extensionStatuses.removeAll()
         workingMessage = nil
-    }
-
-    func resumeObservationAfterConflict(_ sessionID: String) async {
-        guard selectedSessionID == sessionID else { return }
-        _ = await openSession(sessionID, writable: false)
     }
 
     func restorePendingPrompt(for sessionID: String) {

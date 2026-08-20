@@ -88,7 +88,7 @@ async function writeTargetSession(f: Fixture, sessionId = "search-target"): Prom
   return path;
 }
 
-test("host lists, inspects, and opens a read-only session", async () => {
+test("host lists, inspects, and opens with immediate takeover", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({ agentDir: f.agentDir, emit: (event, data) => events.push({ event, data }) });
@@ -112,7 +112,7 @@ test("host lists, inspects, and opens a read-only session", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.8");
+    assert.equal(hello.hostVersion, "0.0.9");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -134,31 +134,30 @@ test("host lists, inspects, and opens a read-only session", async () => {
     assert.equal(hello.capabilities.modelAuthentication, true);
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
-    const opened = await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" }) as { mode: string };
-    assert.equal(opened.mode, "readOnly");
+    const opened = await host.handle("session.open", { sessionId: f.sessionId }) as { mode: string };
+    assert.equal(opened.mode, "writable");
     const state = await host.handle("session.getState", {}) as {
+      mode: string;
       writable: boolean;
       sessionId: string;
       model: { provider: string; id: string } | null;
-      contextUsage: { tokens: null; contextWindow: number; percent: null } | null;
       fastMode: { enabled: boolean; active: boolean; reason: string } | null;
     };
-    assert.equal(state.writable, false);
+    assert.equal(state.mode, "writable");
+    assert.equal(state.writable, true);
     assert.equal(state.sessionId, f.sessionId);
     assert.equal(state.model?.provider, "openai");
     assert.equal(state.model?.id, "gpt-4o-mini");
-    assert.deepEqual(state.contextUsage, { tokens: null, contextWindow: 128_000, percent: null });
     assert.equal(state.fastMode?.enabled, false);
     assert.equal(state.fastMode?.active, false);
     const models = await host.handle("session.getModels", {}) as { models: unknown[] };
     const thinking = await host.handle("session.getThinkingLevels", {}) as { levels: string[] };
     assert.ok(models.models.length > 0);
     assert.ok(thinking.levels.includes("off"));
+    // 打开即接管：打开期间租约目录必须存在，关闭后释放。
+    await access(join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`));
+    await host.handle("session.close", { expectedSessionId: f.sessionId });
     await assert.rejects(access(join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`)));
-    await assert.rejects(
-      host.handle("session.prompt", { message: "no", promptId: "read-only-prompt" }),
-      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_READ_ONLY",
-    );
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
@@ -484,7 +483,7 @@ test("steering an active run uses Pi steer semantics without replacing the run i
   }
 });
 
-test("read-only open exposes incomplete legacy model metadata as null", async () => {
+test("takeover open exposes incomplete legacy model metadata as null", async () => {
   const f = await fixture();
   const path = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
   const entries = (await readFile(path, "utf8"))
@@ -503,15 +502,13 @@ test("read-only open exposes incomplete legacy model metadata as null", async ()
   try {
     const opened = await host.handle("session.open", {
       sessionId: f.sessionId,
-      mode: "readOnly",
     }) as {
       snapshot: { context: { model: unknown } };
-      state: { model: unknown; contextUsage: unknown };
+      state: { model: unknown };
     };
 
-    assert.equal(opened.snapshot.context.model, null);
-    assert.equal(opened.state.model, null);
-    assert.equal(opened.state.contextUsage, null);
+    assert.equal(opened.snapshot.context.model, null, "检查快照仍如实标记未知模型");
+    assert.ok(opened.state.model, "可写运行时会解析出一个可用模型");
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
@@ -1125,82 +1122,40 @@ test("copy rechecks current-session busy state immediately before publish", asyn
   }
 });
 
-test("read-only open retries when Pi appends between inspection and version capture", async () => {
-  const f = await fixture();
-  const host = new PiHost({ agentDir: f.agentDir, conflictPollMs: 60_000, emit: () => undefined });
-  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
-  const originalInspectPath = host.reader.inspectPath.bind(host.reader);
-  let appended = false;
-  host.reader.inspectPath = async (path, sessionId) => {
-    const inspection = await originalInspectPath(path, sessionId);
-    if (!appended) {
-      appended = true;
-      await appendFile(sessionPath, `${JSON.stringify({
-        type: "custom",
-        id: "open-race",
-        parentId: "assistant",
-        timestamp: new Date().toISOString(),
-        customType: "open-race",
-      })}\n`);
-    }
-    return inspection;
-  };
-  try {
-    const opened = await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "readOnly",
-    }) as { snapshot: { entries: Array<{ id?: string }> } };
-    assert.ok(opened.snapshot.entries.some((entry) => entry.id === "open-race"));
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
 test("a stale search target does not close the current session", async () => {
   const f = await fixture();
   const host = new PiHost({ agentDir: f.agentDir, conflictPollMs: 60_000, emit: () => undefined });
   try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
+    await host.handle("session.open", { sessionId: f.sessionId });
     await assert.rejects(
       host.handle("session.open", {
         sessionId: f.sessionId,
-        mode: "readOnly",
         expectedEntryId: "missing-search-entry",
       }),
       (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
     );
     const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
     assert.equal(state.sessionId, f.sessionId);
-    assert.equal(state.writable, false);
+    assert.equal(state.writable, true, "过期搜索目标不得关闭当前可写会话");
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
-test("searching within the current writable session keeps its runtime and lease", async () => {
+test("searching within the current writable session reopens with takeover and keeps the lease", async () => {
   const f = await fixture();
-  const events: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({
     agentDir: f.agentDir,
     leaseQuietWindowMs: 10,
     conflictPollMs: 60_000,
-    emit: (event, data) => events.push({ event, data }),
+    emit: () => undefined,
   });
   const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
   try {
-    await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "writable",
-      writeIntent: true,
-    });
-    const closedBefore = events.filter((event) => event.event === "session.closed").length;
+    await host.handle("session.open", { sessionId: f.sessionId });
     const opened = await host.handle("session.open", {
       sessionId: f.sessionId,
-      mode: "readOnly",
       expectedEntryId: "assistant",
-      preserveActive: true,
     }) as { mode: string; state: { writable: boolean } };
     assert.equal(opened.mode, "writable");
     assert.equal(opened.state.writable, true);
@@ -1208,9 +1163,7 @@ test("searching within the current writable session keeps its runtime and lease"
     await assert.rejects(
       host.handle("session.open", {
         sessionId: f.sessionId,
-        mode: "readOnly",
         expectedEntryId: "missing-search-entry",
-        preserveActive: true,
       }),
       (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
     );
@@ -1218,13 +1171,11 @@ test("searching within the current writable session keeps its runtime and lease"
     assert.equal(state.sessionId, f.sessionId);
     assert.equal(state.writable, true);
     await access(leasePath);
-    assert.equal(events.filter((event) => event.event === "session.closed").length, closedBefore);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
 test("a target append during current-session cleanup opens the final complete snapshot", async () => {
   const f = await fixture();
   const targetId = "search-append-target";
@@ -1262,258 +1213,42 @@ test("a target append during current-session cleanup opens the final complete sn
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
-test("a target branch change during cleanup restores the previous session as observation", async () => {
-  const f = await fixture();
-  const targetId = "search-branch-target";
-  const targetPath = await writeTargetSession(f, targetId);
-  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
-  try {
-    await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "writable",
-      writeIntent: true,
-    });
-    const internals = host as unknown as { closeActive: () => Promise<void> };
-    const originalClose = internals.closeActive.bind(host);
-    let branched = false;
-    internals.closeActive = async () => {
-      await originalClose();
-      if (branched) return;
-      branched = true;
-      await appendFile(join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`), `${JSON.stringify({
-        type: "custom",
-        id: "fallback-latest",
-        parentId: "assistant",
-        timestamp: new Date().toISOString(),
-        customType: "fallback-latest",
-      })}\n`);
-      await appendFile(targetPath, `${JSON.stringify({
-        type: "custom",
-        id: `${targetId}-alternate-leaf`,
-        parentId: `${targetId}-user`,
-        timestamp: new Date().toISOString(),
-        customType: "alternate",
-      })}\n`);
-    };
-    await assert.rejects(
-      host.handle("session.open", {
-        sessionId: targetId,
-        mode: "readOnly",
-        expectedEntryId: `${targetId}-assistant`,
-      }),
-      (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
-    );
-    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
-    assert.equal(state.sessionId, f.sessionId);
-    assert.equal(state.writable, false);
-    const refreshed = await host.handle("session.refresh", {}) as { entries: Array<{ id?: string }> };
-    assert.ok(refreshed.entries.some((entry) => entry.id === "fallback-latest"));
-    await assert.rejects(access(join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`)));
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
 test("a search result whose body changed under the same entry ID is stale", async () => {
   const f = await fixture();
   const targetId = "search-rewritten-target";
   const targetPath = await writeTargetSession(f, targetId);
   const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
   try {
-    await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "writable",
-      writeIntent: true,
-    });
-    const internals = host as unknown as { closeActive: () => Promise<void> };
-    const originalClose = internals.closeActive.bind(host);
-    let rewritten = false;
-    internals.closeActive = async () => {
-      await originalClose();
-      if (rewritten) return;
-      rewritten = true;
-      const entries = (await readFile(targetPath, "utf8"))
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const assistant = entries.find((entry) => entry.id === `${targetId}-assistant`);
-      if (!assistant) throw new Error("Missing assistant fixture entry");
-      assistant.message = {
-        ...(assistant.message as Record<string, unknown>),
-        content: [{ type: "text", text: "rewritten answer" }],
-      };
-      await writeFile(targetPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    await host.handle("session.open", { sessionId: f.sessionId });
+    const entries = (await readFile(targetPath, "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistant = entries.find((entry) => entry.id === `${targetId}-assistant`);
+    if (!assistant) throw new Error("Missing assistant fixture entry");
+    assistant.message = {
+      ...(assistant.message as Record<string, unknown>),
+      content: [{ type: "text", text: "rewritten answer" }],
     };
+    await writeFile(targetPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
     await assert.rejects(
       host.handle("session.open", {
         sessionId: targetId,
-        mode: "readOnly",
-        expectedEntryId: `${targetId}-assistant`,
+        expectedEntryId: "assistant",
         expectedEntryDigest: searchEntryDigest("assistant", "target answer"),
       }),
       (error: unknown) => error instanceof PiHostError && error.code === "SEARCH_TARGET_STALE",
     );
     const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
     assert.equal(state.sessionId, f.sessionId);
-    assert.equal(state.writable, false);
+    assert.equal(state.writable, true, "过期目标不得关闭当前会话");
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
 
-test("read-only open retries a transient invalid snapshot only when its file version changed", async () => {
-  const f = await fixture();
-  const host = new PiHost({ agentDir: f.agentDir, conflictPollMs: 60_000, emit: () => undefined });
-  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
-  const originalInspectPath = host.reader.inspectPath.bind(host.reader);
-  let firstAttempt = true;
-  host.reader.inspectPath = async (path, sessionId) => {
-    if (firstAttempt) {
-      firstAttempt = false;
-      await appendFile(sessionPath, "\n");
-      throw new Error("transient rewrite window");
-    }
-    return await originalInspectPath(path, sessionId);
-  };
-  try {
-    const opened = await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "readOnly",
-    }) as { snapshot: { summary: { id: string } } };
-    assert.equal(opened.snapshot.summary.id, f.sessionId);
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
-test("a read-only observation emits a change and refreshes from the known session path", async () => {
-  const f = await fixture();
-  const events: Array<{ event: string; data?: unknown }> = [];
-  const host = new PiHost({
-    agentDir: f.agentDir,
-    conflictPollMs: 10,
-    emit: (event, data) => events.push({ event, data }),
-  });
-  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
-  try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
-    await appendFile(sessionPath, `${JSON.stringify({
-      type: "custom",
-      id: "external-observed",
-      parentId: "assistant",
-      timestamp: new Date().toISOString(),
-      customType: "external-observed",
-      data: { source: "pi-cli" },
-    })}\n`);
-
-    await waitUntil(
-      () => events.some((entry) => entry.event === "session.changed"),
-      "session.changed",
-    );
-    const refreshed = await host.handle("session.refresh", {}) as {
-      entries: Array<{ id?: string }>;
-    };
-    assert.ok(refreshed.entries.some((entry) => entry.id === "external-observed"));
-    assert.equal(events.filter((entry) => entry.event === "session.changed").length, 1);
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
-test("observation never accepts a partial Pi entry and notifies once per file version", async () => {
-  const f = await fixture();
-  const events: Array<{ event: string; data?: unknown }> = [];
-  const host = new PiHost({
-    agentDir: f.agentDir,
-    conflictPollMs: 10,
-    emit: (event, data) => events.push({ event, data }),
-  });
-  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
-  const external = JSON.stringify({
-    type: "custom",
-    id: "completed-after-partial",
-    parentId: "assistant",
-    timestamp: new Date().toISOString(),
-    customType: "external-observed",
-  });
-  const split = Math.floor(external.length / 2);
-  try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
-    await appendFile(sessionPath, external.slice(0, split));
-    await waitUntil(
-      () => events.filter((entry) => entry.event === "session.changed").length === 1,
-      "the partial file version notification",
-    );
-    await assert.rejects(
-      host.handle("session.refresh", {}),
-      (error: unknown) => typeof error === "object"
-        && error !== null
-        && (error as { code?: unknown }).code === "INVALID_SESSION",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.equal(events.filter((entry) => entry.event === "session.changed").length, 1);
-
-    await appendFile(sessionPath, `${external.slice(split)}\n`);
-    await waitUntil(
-      () => events.filter((entry) => entry.event === "session.changed").length === 2,
-      "the completed file version notification",
-    );
-    const refreshed = await host.handle("session.refresh", {}) as { entries: Array<{ id?: string }> };
-    assert.ok(refreshed.entries.some((entry) => entry.id === "completed-after-partial"));
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
-test("observation rejects a replacement that reuses the session id with a different header identity", async () => {
-  const f = await fixture();
-  const events: Array<{ event: string; data?: unknown }> = [];
-  const host = new PiHost({
-    agentDir: f.agentDir,
-    conflictPollMs: 10,
-    emit: (event, data) => events.push({ event, data }),
-  });
-  const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
-  const original = await readFile(sessionPath, "utf8");
-  const replacement = original.split("\n").map((line, index) => {
-    if (index !== 0 || !line) return line;
-    const header = JSON.parse(line) as Record<string, unknown>;
-    return JSON.stringify({ ...header, cwd: join(f.root, "different-cwd") });
-  }).join("\n");
-  try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
-    await writeFile(sessionPath, replacement);
-    await waitUntil(
-      () => events.filter((entry) => entry.event === "session.changed").length === 1,
-      "the replacement notification",
-    );
-    await assert.rejects(
-      host.handle("session.refresh", {}),
-      (error: unknown) => error instanceof PiHostError && error.code === "SESSION_IDENTITY_CHANGED",
-    );
-    const unchanged = await host.handle("session.getState", {}) as { cwd: string };
-    assert.equal(unchanged.cwd, f.root);
-
-    await writeFile(sessionPath, original);
-    await waitUntil(
-      () => events.filter((entry) => entry.event === "session.changed").length === 2,
-      "the restored identity notification",
-    );
-    const refreshed = await host.handle("session.refresh", {}) as { summary: { cwd: string } };
-    assert.equal(refreshed.summary.cwd, f.root);
-  } finally {
-    await host.close();
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
-
-test("a writable conflict can release its lease and return to observation", async () => {
+test("a writable conflict stops writes and a takeover reopen resolves it", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({
@@ -1524,11 +1259,7 @@ test("a writable conflict can release its lease and return to observation", asyn
   });
   const sessionPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
   try {
-    await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "writable",
-      writeIntent: true,
-    });
+    await host.handle("session.open", { sessionId: f.sessionId });
     await appendFile(sessionPath, `${JSON.stringify({
       type: "custom",
       id: "external-conflict",
@@ -1540,22 +1271,21 @@ test("a writable conflict can release its lease and return to observation", asyn
       () => events.some((entry) => entry.event === "session.conflict"),
       "session.conflict",
     );
+    const conflicted = await host.handle("session.getState", {}) as { writable: boolean };
+    assert.equal(conflicted.writable, false, "冲突后停止写入");
 
-    const observed = await host.handle("session.open", {
+    const reopened = await host.handle("session.open", {
       sessionId: f.sessionId,
-      mode: "readOnly",
-    }) as { mode: string; snapshot: { entries: Array<{ id?: string }> } };
-    assert.equal(observed.mode, "readOnly");
-    assert.ok(observed.snapshot.entries.some((entry) => entry.id === "external-conflict"));
-    const state = await host.handle("session.getState", {}) as { writable: boolean };
-    assert.equal(state.writable, false);
+    }) as { mode: string; state: { writable: boolean }; snapshot: { entries: Array<{ id?: string }> } };
+    assert.equal(reopened.mode, "writable");
+    assert.equal(reopened.state.writable, true);
+    assert.ok(reopened.snapshot.entries.some((entry) => entry.id === "external-conflict"), "重开接管能看到外部写入的条目");
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
-test("an abort failure retains the lease, preserves observation, and poisons later writes", async () => {
+test("an abort failure retains the lease and poisons later writes", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({
@@ -1570,7 +1300,7 @@ test("an abort failure retains the lease, preserves observation, and poisons lat
     active?: { session: { abort: () => Promise<void> } };
   };
   try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    await host.handle("session.open", { sessionId: f.sessionId });
     assert.ok(internals.active);
     internals.active.session.abort = async () => { throw new Error("abort failed"); };
     await appendFile(sessionPath, `${JSON.stringify({
@@ -1584,17 +1314,11 @@ test("an abort failure retains the lease, preserves observation, and poisons lat
       () => events.some((entry) => entry.event === "session.conflict"),
       "session.conflict",
     );
-
-    const observed = await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "readOnly",
-    }) as { mode: string; snapshot: { entries: Array<{ id?: string }> } };
-    assert.equal(observed.mode, "readOnly");
-    assert.ok(observed.snapshot.entries.some((entry) => entry.id === "external-abort-failure"));
+    await host.handle("session.close", {});
     await access(leasePath);
     assert.ok(events.some((entry) => entry.event === "host.restartRequired"));
     await assert.rejects(
-      host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true }),
+      host.handle("session.open", { sessionId: f.sessionId }),
       (error: unknown) => error instanceof PiHostError && error.code === "HOST_RESTART_REQUIRED",
     );
     await assert.rejects(
@@ -1608,8 +1332,7 @@ test("an abort failure retains the lease, preserves observation, and poisons lat
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
-test("an unverifiable lease release does not block observation or delete the lock", async () => {
+test("an unverifiable lease release keeps the lock and poisons the host", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({
@@ -1621,20 +1344,15 @@ test("an unverifiable lease release does not block observation or delete the loc
   const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
   const ownerPath = join(leasePath, "owner.json");
   try {
-    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    await host.handle("session.open", { sessionId: f.sessionId });
     const owner = JSON.parse(await readFile(ownerPath, "utf8")) as Record<string, unknown>;
     await writeFile(ownerPath, `${JSON.stringify({ ...owner, nonce: "different-owner" })}\n`);
-
-    const observed = await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "readOnly",
-    }) as { mode: string };
-    assert.equal(observed.mode, "readOnly");
+    await host.handle("session.close", {});
     await access(leasePath);
     assert.ok(events.some((entry) => entry.event === "session.cleanupError"));
     assert.ok(events.some((entry) => entry.event === "host.restartRequired"));
     await assert.rejects(
-      host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true }),
+      host.handle("session.open", { sessionId: f.sessionId }),
       (error: unknown) => error instanceof PiHostError && error.code === "HOST_RESTART_REQUIRED",
     );
   } finally {
@@ -1642,58 +1360,21 @@ test("an unverifiable lease release does not block observation or delete the loc
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
-test("writable open requires explicit write intent and releases its lease", async () => {
+test("writable open takes over immediately and releases its lease on close", async () => {
   const f = await fixture();
-  const events: Array<{ event: string; data?: unknown }> = [];
-  const host = new PiHost({
-    agentDir: f.agentDir,
-    leaseAgentDir: f.agentDir,
-    leaseQuietWindowMs: 1,
-    conflictPollMs: 60_000,
-    emit: (event, data) => events.push({ event, data }),
-  });
+  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
+  const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
   try {
-    await assert.rejects(
-      host.handle("session.open", { sessionId: f.sessionId, mode: "writable" }),
-      (error: unknown) => typeof error === "object"
-        && error !== null
-        && (error as { code?: unknown }).code === "WRITE_INTENT_REQUIRED",
-    );
-    const opened = await host.handle("session.open", {
-      sessionId: f.sessionId,
-      mode: "writable",
-      writeIntent: true,
-    }) as { mode: string; extensions: { loaded: number; errors: unknown[] } };
+    const opened = await host.handle("session.open", { sessionId: f.sessionId }) as { mode: string };
     assert.equal(opened.mode, "writable");
-    assert.equal(opened.extensions.loaded, 0);
-    assert.deepEqual(opened.extensions.errors, []);
-    const state = await host.handle("session.getState", {}) as {
-      writable: boolean;
-      sessionId: string;
-      fastMode: { enabled: boolean; active: boolean; reason: string };
-    };
-    assert.equal(state.writable, true);
-    assert.equal(state.sessionId, f.sessionId);
-    assert.equal(state.fastMode.enabled, false);
-    const fast = await host.handle("session.setFastMode", { enabled: true }) as {
-      enabled: boolean;
-      active: boolean;
-      reason: string;
-    };
-    assert.equal(fast.enabled, true);
-    assert.equal(fast.active, false);
-    assert.notEqual(fast.reason, "supported");
-    const updatedState = await host.handle("session.getState", {}) as { fastMode: { enabled: boolean } };
-    assert.equal(updatedState.fastMode.enabled, true);
-    assert.ok(events.some((entry) => entry.event === "session.opened"));
-    await host.handle("session.close", {});
+    await access(leasePath);
+    await host.handle("session.close", { expectedSessionId: f.sessionId });
+    await assert.rejects(access(leasePath));
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
 test("a writable session rename persists through Pi session_info and can restore the automatic title", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
@@ -1909,29 +1590,39 @@ test("writable open does not install a configured external pi-dfast package", as
   }
 });
 
-test("a second direct takeover is rejected until the first owner releases its lease", async () => {
+test("a second takeover force-steals the lease and the first owner exits with LEASE_STOLEN", async () => {
   const f = await fixture();
-  const first = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 1, conflictPollMs: 60_000, emit: () => undefined });
-  const second = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 1, conflictPollMs: 60_000, emit: () => undefined });
-  const params = { sessionId: f.sessionId, mode: "writable", writeIntent: true };
+  const firstEvents: Array<{ event: string; data?: unknown }> = [];
+  const first = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 10,
+    conflictPollMs: 10,
+    emit: (event, data) => firstEvents.push({ event, data }),
+  });
+  const second = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 10, conflictPollMs: 60_000, emit: () => undefined });
+  const leasePath = join(f.agentDir, "pi-dcode", "leases", `${f.sessionId}.lock`);
   try {
-    await first.handle("session.open", params);
-    await assert.rejects(
-      second.handle("session.open", params),
-      (error: unknown) => typeof error === "object"
-        && error !== null
-        && (error as { code?: unknown }).code === "SESSION_IN_USE",
+    await first.handle("session.open", { sessionId: f.sessionId });
+    const stolen = await second.handle("session.open", { sessionId: f.sessionId }) as { mode: string };
+    assert.equal(stolen.mode, "writable", "打开即接管：第二个实例直接抢占成功");
+    await access(join(leasePath, "owner.json"));
+    await waitUntil(
+      () => firstEvents.some(
+        (entry) => entry.event === "session.conflict"
+          && (entry.data as { code?: unknown } | undefined)?.code === "LEASE_STOLEN",
+      ),
+      "the first owner to detect LEASE_STOLEN",
     );
-    await first.handle("session.close", {});
-    const reopened = await second.handle("session.open", params) as { mode: string };
-    assert.equal(reopened.mode, "writable");
+    await assert.rejects(
+      first.handle("session.prompt", { message: "no", promptId: "stolen-prompt" }),
+      (error: unknown) => error instanceof PiHostError,
+    );
   } finally {
     await first.close();
     await second.close();
     await rm(f.root, { recursive: true, force: true });
   }
 });
-
 test("host commits a Pi session without opening a runtime or taking a lease", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-dcode-create-test-"));
   const agentDir = join(root, "agent");
@@ -2285,8 +1976,8 @@ test("trash restores the source when a descendant appears during the isolated ch
   }
 });
 
-test("trash failure restores an active read-only observation without changing the source", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-restore-observation-test-"));
+test("trash failure keeps the source file unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-trash-failure-test-"));
   const agentDir = join(root, "agent");
   const blockedTrashPath = join(root, "Trash-is-a-file");
   await mkdir(agentDir, { recursive: true });
@@ -2302,18 +1993,13 @@ test("trash failure restores an active read-only observation without changing th
     const created = await host.handle("session.create", { cwd: root }) as {
       session: { id: string; path: string };
     };
-    await host.handle("session.open", { sessionId: created.session.id, mode: "readOnly" });
     await assert.rejects(host.handle("session.trash", { sessionId: created.session.id }));
     await access(created.session.path);
-    const state = await host.handle("session.getState", {}) as { sessionId: string; writable: boolean };
-    assert.equal(state.sessionId, created.session.id);
-    assert.equal(state.writable, false);
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });
   }
 });
-
 test("owned message persistence does not race the conflict poller", async () => {
   const f = await fixture();
   const emitted: Array<{ event: string; data?: unknown }> = [];

@@ -240,3 +240,47 @@ private extension JSONValue {
         return try decoder.decode(JSONValue.self, from: Data(text.utf8))
     }
 }
+
+// MARK: - 打开即接管与冲突重接
+
+@MainActor
+final class SessionTakeoverIntegrationTests: XCTestCase {
+    func testConflictStopsWritesShowsCardAndRetakeReopens() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-a"
+        harness.model.updateComposerText("保留的草稿")
+
+        await harness.client.emit(HostEvent(name: "session.conflict", data: .object([
+            "sessionId": .string("session-a"),
+            "code": .string("EXTERNAL_WRITE_DETECTED"),
+            "message": .string("Session changed outside the current lease"),
+        ])))
+
+        XCTAssertEqual(harness.model.sessionConflict?.sessionID, "session-a")
+        XCTAssertFalse(harness.model.isStreaming)
+        XCTAssertEqual(harness.model.composerText, "保留的草稿", "冲突必须保留草稿")
+
+        await harness.model.retakeSessionOwnership()
+
+        XCTAssertNil(harness.model.sessionConflict, "重接后清除冲突呈现")
+        let methods = await harness.client.recordedMethods()
+        XCTAssertEqual(methods.filter { $0 == "session.open" }.count, 1, "重新接管即重新以可写打开")
+    }
+
+    func testTakeoverConflictMessageDistinguishesStolenLease() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-a"
+
+        await harness.client.emit(HostEvent(name: "session.conflict", data: .object([
+            "sessionId": .string("session-a"),
+            "code": .string("LEASE_STOLEN"),
+            "message": .string("Lease was taken over by another D Code instance"),
+        ])))
+
+        XCTAssertEqual(harness.model.sessionConflict?.isTakeover, true)
+    }
+}
