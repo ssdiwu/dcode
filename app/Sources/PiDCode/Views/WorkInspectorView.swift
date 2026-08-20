@@ -447,6 +447,9 @@ private struct SessionInspectorView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    inspectorSection("运行证据") {
+                        VerificationEvidenceSection()
+                    }
                 }
                 .padding(14)
             }
@@ -704,6 +707,132 @@ private struct GitDiffLineView: View {
         case .added: .green
         case .removed: .red
         case .context: .clear
+        }
+    }
+}
+
+/// 会话级运行证据：真实 bash 执行的命令、退出推导、耗时与 revision。
+/// 证据来自 Host 转发的工具执行事实；Agent 文案宣称不构成证据。
+struct VerificationEvidenceSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if model.verificationEvidence.isEmpty {
+            Text("本会话还没有可复核的命令执行记录。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(model.verificationEvidence.prefix(20)) { record in
+                    VerificationEvidenceRow(record: record)
+                }
+                Text("证据来自真实工具运行 · Agent 文案不构成证据 · 不是发布门禁")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+struct VerificationEvidenceRow: View {
+    let record: VerificationEvidenceRecord
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: symbol)
+                        .foregroundStyle(symbolColor)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(record.command)
+                            .font(.caption.monospaced())
+                            .lineLimit(expanded ? nil : 1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Text(exitLabel)
+                                .font(.caption2.weight(.semibold))
+                            Text(ConversationTimingFormatter.durationText(Double(record.durationMs) / 1_000) ?? "")
+                                .font(.caption2.monospacedDigit())
+                            if let revision = record.gitRevision {
+                                Text(String(revision.prefix(7)))
+                                    .font(.caption2.monospaced())
+                                } else {
+                                Text("revision 待补")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 2) {
+                    LabeledContent("Run") {
+                        Text(record.runId)
+                            .font(.caption2.monospaced())
+                            .textSelection(.enabled)
+                    }
+                    LabeledContent("开始") {
+                        Text(record.startedAt.formatted(date: .abbreviated, time: .standard))
+                    }
+                    LabeledContent("工作目录") {
+                        Text(record.cwd)
+                            .font(.caption2.monospaced())
+                    }
+                    if let provider = record.modelProvider, let modelId = record.modelId {
+                        LabeledContent("模型") {
+                            Text("\(provider)/\(modelId)")
+                                .font(.caption2.monospaced())
+                        }
+                    }
+                    if let revision = record.gitRevision {
+                        LabeledContent("Revision") {
+                            Text(revision)
+                                .font(.caption2.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .font(.caption2)
+                .padding(.leading, 18)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var symbol: String {
+        switch record.exitKind {
+        case "ok": "checkmark.circle.fill"
+        case "failure": "xmark.circle.fill"
+        default: "questionmark.circle"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch record.exitKind {
+        case "ok": .green
+        case "failure": .red
+        default: .secondary
+        }
+    }
+
+    private var exitLabel: String {
+        switch record.exitKind {
+        case "ok": "退出 0"
+        case "failure": record.exitCode.map { "退出 \($0)" } ?? "失败"
+        default: "退出未知"
         }
     }
 }

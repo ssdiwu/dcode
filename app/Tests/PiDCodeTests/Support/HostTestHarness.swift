@@ -35,6 +35,9 @@ final class HostTestHarness {
             sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
             sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
             sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            verificationStore: VerificationEvidenceStore(
+                fileURL: root.appending(path: "verification-evidence.json")
+            ),
             followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "followups.json")),
             activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
             hostConfiguration: configuration,

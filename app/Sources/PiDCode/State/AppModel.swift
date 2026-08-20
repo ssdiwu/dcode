@@ -139,6 +139,7 @@ final class AppModel {
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
     let permission = PermissionModel()
+    private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
     var pinnedSessions: [PinnedSessionRecord] = []
@@ -180,6 +181,9 @@ final class AppModel {
     @ObservationIgnored private let sessionArchiveStore: SessionArchiveStore
     @ObservationIgnored private let sessionPinStore: SessionPinStore
     @ObservationIgnored private let sessionChangeStore: SessionChangeStore
+    @ObservationIgnored private let verificationStore: VerificationEvidenceStore
+    @ObservationIgnored private var inFlightCommands: [String: (command: String, startedAt: Date)] = [:]
+    @ObservationIgnored private var revisionCache: [String: (revision: String, at: Date)] = [:]
     @ObservationIgnored private let followUpQueueStore: FollowUpQueueStore
     @ObservationIgnored private let activityAttentionStore: ActivityAttentionStore
     @ObservationIgnored private let hostConfiguration: HostLaunchConfiguration?
@@ -216,6 +220,10 @@ final class AppModel {
         sessionArchiveStore: SessionArchiveStore = SessionArchiveStore(),
         sessionPinStore: SessionPinStore = SessionPinStore(),
         sessionChangeStore: SessionChangeStore = SessionChangeStore(),
+        verificationStore: VerificationEvidenceStore = VerificationEvidenceStore(
+            fileURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "D Code/verification-evidence-v1.json")
+        ),
         followUpQueueStore: FollowUpQueueStore = FollowUpQueueStore(),
         activityAttentionStore: ActivityAttentionStore = ActivityAttentionStore(),
         hostConfiguration: HostLaunchConfiguration? = nil,
@@ -230,6 +238,7 @@ final class AppModel {
         self.sessionArchiveStore = sessionArchiveStore
         self.sessionPinStore = sessionPinStore
         self.sessionChangeStore = sessionChangeStore
+        self.verificationStore = verificationStore
         self.followUpQueueStore = followUpQueueStore
         self.activityAttentionStore = activityAttentionStore
         self.hostConfiguration = hostConfiguration
@@ -3752,6 +3761,7 @@ final class AppModel {
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
         sessionConflict = nil
+        await reloadVerificationEvidence()
         hostState = result.state
         beginContextDeltaSession()
         activePlan = ActivePlanParser.parse(result.state?.activePlan ?? result.snapshot.activePlan)
@@ -3846,6 +3856,7 @@ final class AppModel {
         setTranscript([])
         hostState = nil
         sessionConflict = nil
+        verificationEvidence = []
         beginContextDeltaSession()
         contextBreakdown = nil
         activePlan = nil
@@ -3926,6 +3937,69 @@ final class AppModel {
         } catch {
             // A session can close between an event and this refresh; the next explicit action reports it.
         }
+    }
+
+    /// bash 工具执行的证据入账：起点记命令与时刻，终点推导退出并持久化。
+    private func recordCommandStart(toolCallId: String, data: JSONValue?) {
+        guard data?["toolName"]?.stringValue == "bash",
+              let args = data?["args"]?.objectValue,
+              let command = args["command"]?.stringValue else { return }
+        inFlightCommands[toolCallId] = (command, Date())
+    }
+
+    private func recordCommandEnd(data: JSONValue?) {
+        guard data?["toolName"]?.stringValue == "bash",
+              let toolCallId = data?["toolCallId"]?.stringValue,
+              let inFlight = inFlightCommands.removeValue(forKey: toolCallId) else { return }
+        let resultText = data?["result"]?.prettyPrinted ?? data?["result"]?.stringValue
+        let parsed = VerificationExitParser.parse(isError: data?["isError"]?.boolValue == true, resultText: resultText)
+        let sessionId = data?["sessionId"]?.stringValue ?? selectedSessionID ?? "unknown"
+        let runId = data?["runId"]?.stringValue ?? currentSessionRunID ?? "unknown"
+        let record = VerificationEvidenceRecord(
+            recordId: "\(sessionId):\(runId):\(toolCallId)",
+            sessionId: sessionId,
+            runId: runId,
+            toolCallId: toolCallId,
+            command: inFlight.command,
+            exitKind: parsed.kind,
+            exitCode: parsed.code,
+            startedAt: inFlight.startedAt,
+            endedAt: Date(),
+            cwd: inspection?.summary.cwd ?? "",
+            modelProvider: hostState?.model?.provider,
+            modelId: hostState?.model?.id,
+            gitRevision: nil
+        )
+        Task { [weak self] in
+            guard let self else { return }
+            await self.verificationStore.append(record)
+            if let revision = await self.cachedRevision(cwd: record.cwd) {
+                await self.verificationStore.updateRevision(recordId: record.recordId, revision: revision)
+            }
+            self.verificationEvidence = await self.verificationStore.records(sessionId: sessionId)
+        }
+    }
+
+    /// revision 按目录缓存 5 分钟；读取失败静默缺席（证据不阻塞）。
+    private func cachedRevision(cwd: String) async -> String? {
+        guard !cwd.isEmpty else { return nil }
+        if let cached = revisionCache[cwd], Date().timeIntervalSince(cached.at) < 300 {
+            return cached.revision
+        }
+        let revision = await GitChangesReader.readRevision(at: cwd)
+        if let revision {
+            revisionCache[cwd] = (revision, Date())
+        }
+        return revision
+    }
+
+    /// 打开 / 切换会话时载入该会话的证据。
+    func reloadVerificationEvidence() async {
+        guard let sessionId = selectedSessionID else {
+            verificationEvidence = []
+            return
+        }
+        verificationEvidence = await verificationStore.records(sessionId: sessionId)
     }
 
     private static func decodeGrants(_ value: JSONValue) -> [PermissionGrantRecord] {
@@ -4144,6 +4218,7 @@ final class AppModel {
         case "tool_execution_start":
             streamingText = ""
             let id = data?["toolCallId"]?.stringValue ?? UUID().uuidString
+            recordCommandStart(toolCallId: id, data: data)
             streamingTools.append(StreamingTool(
                 id: id,
                 name: data?["toolName"]?.stringValue ?? "Tool",
@@ -4155,6 +4230,7 @@ final class AppModel {
             updateStreamingTool(data, finished: false)
         case "tool_execution_end":
             updateStreamingTool(data, finished: true)
+            recordCommandEnd(data: data)
         case "agent_end":
             let runID = data?["runId"]?.stringValue ?? currentSessionRunID
             let sessionID = data?["sessionId"]?.stringValue ?? selectedSessionID

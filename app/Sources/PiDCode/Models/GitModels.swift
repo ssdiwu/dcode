@@ -386,3 +386,19 @@ enum GitDiffReader {
         }.value
     }
 }
+
+extension GitChangesReader {
+    /// 只读读取目录所在仓库的 HEAD revision；非仓库或失败返回 nil。
+    static func readRevision(at directoryPath: String) async -> String? {
+        await Task.detached(priority: .utility) {
+            switch runGitPublic(["-C", directoryPath, "rev-parse", "HEAD"]) {
+            case let .success(data):
+                let value = String(decoding: data, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return value.isEmpty ? nil : value
+            case .failure:
+                return nil
+            }
+        }.value
+    }
+}
