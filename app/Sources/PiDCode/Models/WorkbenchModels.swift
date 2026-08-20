@@ -12,6 +12,7 @@ enum SettingsPage: String, CaseIterable, Equatable, Sendable {
     case workbench
     case archivedSessions
     case permissions
+    case selfBuild
     case about
 }
 

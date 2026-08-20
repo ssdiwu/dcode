@@ -139,6 +139,7 @@ final class AppModel {
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
     let permission = PermissionModel()
+    let selfBuild = SelfBuildModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
@@ -562,10 +563,14 @@ final class AppModel {
         return SearchResultOwnership(projectName: nil, sourceFolderName: nil)
     }
 
+    /// 自构建重启后的待恢复会话（ADR 0022 会话恢复钩子）。
+    private(set) var pendingSelfBuildReopenSessionID: String?
+
     func start() async {
         guard connectionState == .idle, client == nil else { return }
         let startupState = Self.signposter.beginInterval("AppStart")
         defer { Self.signposter.endInterval("AppStart", startupState) }
+        pendingSelfBuildReopenSessionID = SelfBuildModel.consumeRestartMarker()
         connectionState = .connecting
         await loadProjects()
         guard await loadSessionMetadata() else {
@@ -589,6 +594,10 @@ final class AppModel {
             hostHello = hello
             connectionState = .ready
             await reloadAllSessionLists()
+            if let reopenID = pendingSelfBuildReopenSessionID {
+                pendingSelfBuildReopenSessionID = nil
+                _ = await openSession(reopenID, writable: true)
+            }
         } catch {
             connectionState = .failed
             present(error, title: "无法启动 D Code")
@@ -4073,6 +4082,29 @@ final class AppModel {
             permission.grants = result.grants
         } catch {
             showNotice("撤销授权失败：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "error")
+        }
+    }
+
+    func startSelfBuild() async {
+        await selfBuild.build()
+        if selfBuild.phase == .failed {
+            showNotice("自构建失败；在用 App 未受影响，详情见设置 › 自构建。", level: "error")
+        }
+    }
+
+    func restartIntoSelfBuildCandidate() async {
+        let outcome = await selfBuild.restartIntoCandidate(pendingSessionID: selectedSessionID)
+        if case let .validationFailed(message) = outcome {
+            showNotice("候选校验未通过：\(message)", level: "error")
+        } else if case let .swapFailed(message) = outcome {
+            showNotice("受控替换失败：\(message)", level: "error")
+        }
+    }
+
+    func rollbackSelfBuild() async {
+        let outcome = await selfBuild.rollbackAndRestart(pendingSessionID: selectedSessionID)
+        if case let .swapFailed(message) = outcome {
+            showNotice("回滚失败：\(message)", level: "error")
         }
     }
 

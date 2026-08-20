@@ -142,6 +142,14 @@ struct SettingsView: View {
                 model.presentSettings(.permissions)
             }
 
+            SettingsNavigationRow(
+                title: "自构建",
+                systemImage: "arrow.triangle.2.circlepath",
+                selected: page == .selfBuild
+            ) {
+                model.presentSettings(.selfBuild)
+            }
+
             Text("应用")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
@@ -243,6 +251,9 @@ struct SettingsView: View {
 
         case .permissions:
             PermissionsSettingsView()
+
+        case .selfBuild:
+            SelfBuildSettingsView()
 
         case .about:
             AboutView()
@@ -487,6 +498,107 @@ struct PermissionsSettingsView: View {
         }
         .task {
             await model.loadPermissions()
+        }
+    }
+}
+
+/// 自构建闭环（ADR 0022）：构建候选（隔离目录）→ 校验 → 受控重启 / 回滚。
+struct SelfBuildSettingsView: View {
+    @Environment(AppModel.self) private var model
+    @State private var confirmRestart = false
+    @State private var confirmRollback = false
+
+    var body: some View {
+        let selfBuild = model.selfBuild
+        Form {
+            Section {
+                HStack {
+                    Button {
+                        Task { await model.startSelfBuild() }
+                    } label: {
+                        if selfBuild.phase == .building {
+                            HStack { ProgressView().controlSize(.small); Text("构建中…") }
+                        } else {
+                            Text("构建候选 App")
+                        }
+                    }
+                    .disabled(selfBuild.phase == .building)
+                    if let output = selfBuild.lastOutput {
+                        Text(output.succeeded ? "上次构建成功 · \(output.durationMs / 1000) 秒" : "上次构建失败")
+                            .font(.caption)
+                            .foregroundStyle(output.succeeded ? .secondary : Color.orange)
+                    }
+                }
+                if let output = selfBuild.lastOutput, !output.outputTail.isEmpty {
+                    DisclosureGroup("构建输出（最近 \(output.outputTail.count) 行）") {
+                        ScrollView {
+                            Text(output.outputTail.joined(separator: "\n"))
+                                .font(.caption.monospaced())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                    .font(.caption)
+                }
+            } header: {
+                Text("候选构建")
+            } footer: {
+                Text("产物写入 dist-candidate，不会触碰当前运行的 App；构建失败只保留输出，不做任何替换。")
+            }
+
+            if let candidate = selfBuild.candidate {
+                Section("候选") {
+                    LabeledContent("App 版本") { Text(candidate.appVersion).font(.caption.monospaced()) }
+                    LabeledContent("内嵌 Host") { Text(candidate.hostVersion).font(.caption.monospaced()) }
+                    LabeledContent("签名") {
+                        if candidate.codesignValid {
+                            Label("已通过", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                        } else {
+                            Label("未通过", systemImage: "xmark.seal").foregroundStyle(.red)
+                        }
+                    }
+                    if let issue = candidate.issue {
+                        Text(issue).font(.caption).foregroundStyle(.orange)
+                    }
+                    Button("重启到候选") { confirmRestart = true }
+                        .disabled(!candidate.isReady || selfBuild.phase == .building)
+                    Text("当前会话将在新构建中自动恢复。")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Section {
+                Button("回滚到备份构建") { confirmRollback = true }
+                    .disabled(!selfBuild.backupAvailable)
+                if !selfBuild.backupAvailable {
+                    Text("尚无备份（替换过一次后可用）。").font(.caption2).foregroundStyle(.tertiary)
+                }
+            } header: {
+                Text("回滚")
+            } footer: {
+                Text("备份只保留最近一份；无崩溃自动回滚——若新构建无法启动，请通过 Finder 手动交换 dist/D Code.app.backup。")
+            }
+        }
+        .confirmationDialog(
+            "重启到候选构建？当前 App 将被原子替换并重启，会话会自动恢复。",
+            isPresented: $confirmRestart,
+            titleVisibility: .visible
+        ) {
+            Button("重启到候选", role: .destructive) {
+                Task { await model.restartIntoSelfBuildCandidate() }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "回滚到备份构建并重启？",
+            isPresented: $confirmRollback,
+            titleVisibility: .visible
+        ) {
+            Button("回滚并重启", role: .destructive) {
+                Task { await model.rollbackSelfBuild() }
+            }
+            Button("取消", role: .cancel) {}
         }
     }
 }
