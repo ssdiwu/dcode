@@ -2,10 +2,11 @@
 
 本目录保存已经确认、用于指导当前版本交付与验收的 PRD 和专项规格，也是发布、实现候选、本地回归基线、人工验收与持续回归状态的唯一文档索引。具体测试与人工证据保留在对应 PRD 的 Verification Record（验证记录）中，其他 README 只链接本页，不复制动态状态。文档完成后只要仍是有效验收基准，就继续保留在本目录；仅在被取代、放弃或只供追溯时归档。
 
-`0.0.6` 已形成公开源码标签 `v0.0.6`：Activity View（活动视图）、Host Run State（运行状态）、完成关注态与 Interaction Dock（交互坞）的 App / Host 实现、自动测试与本机 App bundle 构建已经成立；新会话草稿也已补齐创建前 Pi `enabledModels` 范围与默认模型读取、统一模型 / 推理强度 / 速度菜单、标准速度默认值、支持资格门禁、模型左侧上下文剩余量圆环与首条 Prompt 前运行设置应用。默认导航 ↔ Activity 切换与分隔线获得定向实机证据，真实 Run、完成蓝点、停止 / 重试时序、运行设置首条真实 Prompt 与完整无障碍人工验收仍须独立成立。`0.0.7` 已形成 Model Settings（模型设置）、Provider 关联、运行中 steer / queue 选择与回复运行信息实现候选：只编辑全局 Pi 选择设置，项目覆盖保持只读，同时让最终助手回复常显完成时间、耗时与真实 token，并收敛 Context、Thinking、轮次导航与完成 Dock；自动回归已通过，最终重建 bundle 与 UI 手测仍待本轮收口。`0.0.10 → 0.0.20+ → 0.1.0` 的已确认顺序、逐版差异和“连续自构建后才晋升”的门禁见[版本界面演进](../20-产品与交互/原型/版本演进/README.md)。该路线允许按真实 dogfood 缺口继续增加 `0.0.x`。
+`0.0.6` 已形成公开源码标签 `v0.0.6`：Activity View（活动视图）、Host Run State（运行状态）、完成关注态与 Interaction Dock（交互坞）的 App / Host 实现、自动测试与本机 App bundle 构建已经成立；新会话草稿也已补齐创建前 Pi `enabledModels` 范围与默认模型读取、统一模型 / 推理强度 / 速度菜单、标准速度默认值、支持资格门禁、模型左侧上下文剩余量圆环与首条 Prompt 前运行设置应用。默认导航 ↔ Activity 切换与分隔线获得定向实机证据，真实 Run、完成蓝点、停止 / 重试时序、运行设置首条真实 Prompt 与完整无障碍人工验收仍须独立成立。`0.0.7` 已形成 Model Settings（模型设置）、Provider 关联、运行中 steer / queue 选择与回复运行信息实现候选：只编辑全局 Pi 选择设置，项目覆盖保持只读，同时让最终助手回复常显完成时间、耗时与真实 token，并收敛 Context、Thinking、轮次导航与完成 Dock；自动回归已通过，最终重建 bundle 与 UI 手测仍待本轮收口。`0.0.11 → 0.0.20+ → 0.1.0` 的已确认顺序、逐版差异和“连续自构建后才晋升”的门禁见[版本界面演进](../20-产品与交互/原型/版本演进/README.md)。该路线允许按真实 dogfood 缺口继续增加 `0.0.x`。
 
 | 文档 | 状态 | 职责 |
 |---|---|---|
+| [0012-0.0.11 只读 Exact Git Diff 产品需求](0012-0.0.11-只读-Exact-Git-Diff-产品需求.md) | Active Implementation | `0.0.11` 的逐文件 / 逐 hunk 行级 Git 差异、staged / unstaged 分流、诚实截断与只读边界权威。 |
 | [0011-0.0.10 Project Trust 与动作级权限产品需求](0011-0.0.10-Project-Trust-与动作级权限产品需求.md) | Active Implementation | `0.0.10` 的工具调用权限闸门、授权前缀 / 授权根语义、权限卡三键、授权管理与审计权威。 |
 | [0010-0.0.9 打开即接管产品需求](0010-0.0.9-打开即接管产品需求.md) | Active Implementation | `0.0.9` 的打开即接管、租约抢占（LEASE_STOLEN）、冲突卡重接、只读观察删除与性能收口（ModelRuntime 复用 + signpost）权威。 |
 | [0009-0.0.8 AppModel 域拆分与测试基线产品需求](0009-0.0.8-AppModel-域拆分与测试基线产品需求.md) | Implementation Candidate | `0.0.8` 的 AppModel 领域子模型、`HostProviding` 注入、Fake-host 集成测试与渲染冒烟权威；行为零变化，转录 / 流式 / 结算时序拆分与新用户能力不进入本版。 |

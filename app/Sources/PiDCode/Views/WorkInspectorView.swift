@@ -379,23 +379,11 @@ private struct GitRepositoryCard: View {
                         .foregroundStyle(.green)
                 } else {
                     ForEach(changes) { change in
-                        HStack(alignment: .firstTextBaseline, spacing: 7) {
-                            Text(change.status)
-                                .font(.caption.monospaced().weight(.semibold))
-                                .foregroundStyle(statusColor(change.status))
-                                .frame(width: 24, alignment: .leading)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(change.path)
-                                    .font(.caption.monospaced())
-                                    .textSelection(.enabled)
-                                if let originalPath = change.originalPath {
-                                    Text("来自 \(originalPath)")
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
+                        GitChangeDiffRow(rootPath: snapshot.rootPath, change: change)
                     }
+                    Text("真实 Git 差异 · 只读 · 不提供 stage / discard / commit")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             case .notRepository:
                 Label("不是 Git 仓库", systemImage: "minus.circle")
@@ -479,5 +467,243 @@ private struct SessionInspectorView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: PiDCodeMetrics.controlRadius))
+    }
+}
+
+/// 单个 Git 变更文件：展开后按需读取 staged / unstaged 精确差异。
+private struct GitChangeDiffRow: View {
+    let rootPath: String
+    let change: GitChange
+    @State private var expanded = false
+    @State private var result: GitFileDiffResult?
+    @State private var loading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                    Text(change.status)
+                        .font(.caption.monospaced().weight(.semibold))
+                        .foregroundStyle(statusColor(change.status))
+                        .frame(width: 22, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(change.path)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        if let originalPath = change.originalPath {
+                            Text("来自 \(originalPath)")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        if let summary = countSummary {
+                            Text(summary)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                diffBody
+                    .task {
+                        guard result == nil, !loading else { return }
+                        loading = true
+                        result = await loadDiff()
+                        loading = false
+                    }
+            }
+        }
+    }
+
+    private var countSummary: String? {
+        guard let result else { return nil }
+        var parts: [String] = []
+        if let staged = result.staged, staged.additions + staged.deletions > 0 || staged.isBinary {
+            parts.append("已暂存 \(signature(staged))")
+        }
+        if let unstaged = result.unstaged, unstaged.additions + unstaged.deletions > 0 || unstaged.isBinary {
+            parts.append("未暂存 \(signature(unstaged))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func signature(_ diff: GitFileDiff) -> String {
+        diff.isBinary ? "二进制" : "+\(diff.additions) −\(diff.deletions)"
+    }
+
+    private var diffBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if loading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取差异…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let failure = result?.failure {
+                Text("读取失败：\(failure)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let staged = result?.staged {
+                GitDiffSection(title: "已暂存", diff: staged)
+            }
+            if let unstaged = result?.unstaged {
+                GitDiffSection(title: "未暂存", diff: unstaged)
+            }
+            if change.status == "??" {
+                Text("未跟踪文件 · 完整内容即为新增")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let result, !result.isEmpty, result.staged == nil, result.unstaged == nil {
+                Text("暂无可显示的差异。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, 30)
+    }
+
+    private func loadDiff() async -> GitFileDiffResult {
+        if change.status == "??" {
+            // 未跟踪文件：diff 无输出；把整份内容当作“新文件”预览
+            let absolute = change.path.hasPrefix("/")
+                ? change.path
+                : rootPath + "/" + change.path
+            let snapshot: WorkspaceFileSnapshot
+            do {
+                snapshot = try await WorkspaceFileReader.read(path: absolute, sourceFolderPath: rootPath)
+            } catch {
+                return GitFileDiffResult(staged: nil, unstaged: nil, failure: error.localizedDescription)
+            }
+            do {
+                let lines = snapshot.text.split(separator: "\n", omittingEmptySubsequences: false)
+                let diffLines = lines.enumerated().map { index, line in
+                    GitDiffLine(kind: .added, oldLineNumber: nil, newLineNumber: index + 1, text: String(line))
+                }
+                let hunks = lines.isEmpty ? [] : [GitDiffHunk(
+                    oldStart: 0, oldCount: 0, newStart: 1, newCount: lines.count,
+                    sectionHeading: "新文件", lines: Array(diffLines.prefix(UnifiedDiffParser.maxDiffLines))
+                )]
+                return GitFileDiffResult(
+                    staged: nil,
+                    unstaged: GitFileDiff(
+                        path: change.path,
+                        hunks: hunks,
+                        isBinary: false,
+                        isTruncated: lines.count > UnifiedDiffParser.maxDiffLines,
+                        totalHunks: hunks.count
+                    ),
+                    failure: nil
+                )
+            }
+        }
+        return await GitDiffReader.fileDiff(repoRoot: rootPath, path: change.path)
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        if status == "??" { return .blue }
+        if status.hasPrefix("A") || status.hasPrefix("M") { return .orange }
+        if status.hasPrefix("D") { return .red }
+        if status.hasPrefix("R") || status.hasPrefix("C") { return .purple }
+        return .secondary
+    }
+}
+
+/// staged / unstaged 一段差异：hunk 头 + 逐行着色。
+struct GitDiffSection: View {
+    let title: String
+    let diff: GitFileDiff
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if diff.isBinary {
+                    Text("二进制文件").font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("+\(diff.additions)").font(.caption2.monospacedDigit()).foregroundStyle(.green)
+                    Text("−\(diff.deletions)").font(.caption2.monospacedDigit()).foregroundStyle(.red)
+                }
+                if diff.isTruncated {
+                    Text("差异过大，仅显示前 \(diff.hunks.count)/\(diff.totalHunks) 个 hunk")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            if !diff.isBinary {
+                ForEach(diff.hunks) { hunk in
+                    GitDiffHunkView(hunk: hunk)
+                }
+            }
+        }
+    }
+}
+
+struct GitDiffHunkView: View {
+    let hunk: GitDiffHunk
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("@@ -\(hunk.oldStart),\(hunk.oldCount) +\(hunk.newStart),\(hunk.newCount) @@ \(hunk.sectionHeading)")
+                .font(.caption2.monospaced().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
+            ForEach(hunk.lines) { line in
+                GitDiffLineView(line: line)
+            }
+        }
+        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+private struct GitDiffLineView: View {
+    let line: GitDiffLine
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(line.oldLineNumber.map(String.init) ?? "")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .trailing)
+            Text(line.newLineNumber.map(String.init) ?? "")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .trailing)
+            Text(prefix + line.text)
+                .font(.caption2.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 0.5)
+        .padding(.horizontal, 4)
+        .background(background.opacity(0.08))
+    }
+
+    private var prefix: String {
+        switch line.kind {
+        case .added: "+"
+        case .removed: "-"
+        case .context: " "
+        }
+    }
+
+    private var background: Color {
+        switch line.kind {
+        case .added: .green
+        case .removed: .red
+        case .context: .clear
+        }
     }
 }

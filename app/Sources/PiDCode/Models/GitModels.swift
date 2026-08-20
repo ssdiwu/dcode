@@ -31,7 +31,7 @@ struct GitRepositorySnapshot: Hashable, Identifiable, Sendable {
 }
 
 enum GitChangesReader {
-    private enum CommandResult {
+    enum CommandResult {
         case success(Data)
         case failure(String)
     }
@@ -134,6 +134,10 @@ enum GitChangesReader {
         return value
     }
 
+    static func runGitPublic(_ arguments: [String]) -> CommandResult {
+        runGit(arguments)
+    }
+
     private static func runGit(_ arguments: [String]) -> CommandResult {
         let process = Process()
         let captureDirectory = FileManager.default.temporaryDirectory
@@ -201,5 +205,184 @@ actor GitBranchCache {
         inFlight.removeValue(forKey: canonicalPath)
         entries[canonicalPath] = Entry(state: state, loadedAt: Date())
         return state
+    }
+}
+
+// MARK: - Exact Git Diff（0.0.11，只读）
+
+enum GitDiffLineKind: Hashable, Sendable {
+    case context
+    case added
+    case removed
+}
+
+struct GitDiffLine: Hashable, Identifiable, Sendable {
+    let kind: GitDiffLineKind
+    let oldLineNumber: Int?
+    let newLineNumber: Int?
+    let text: String
+
+    var id: String { "\(oldLineNumber.map(String.init) ?? "n")-\(newLineNumber.map(String.init) ?? "n")-\(text)" }
+}
+
+struct GitDiffHunk: Hashable, Identifiable, Sendable {
+    let oldStart: Int
+    let oldCount: Int
+    let newStart: Int
+    let newCount: Int
+    let sectionHeading: String
+    let lines: [GitDiffLine]
+
+    var id: String { "\(oldStart).\(newStart).\(lines.count)" }
+}
+
+struct GitFileDiff: Hashable, Sendable {
+    let path: String
+    let hunks: [GitDiffHunk]
+    let isBinary: Bool
+    let isTruncated: Bool
+    let totalHunks: Int
+
+    var additions: Int { hunks.flatMap(\.lines).filter { $0.kind == .added }.count }
+    var deletions: Int { hunks.flatMap(\.lines).filter { $0.kind == .removed }.count }
+}
+
+struct GitFileDiffResult: Sendable {
+    let staged: GitFileDiff?
+    let unstaged: GitFileDiff?
+    let failure: String?
+
+    var isEmpty: Bool { staged == nil && unstaged == nil && failure == nil }
+}
+
+enum UnifiedDiffParser {
+    static let maxDiffBytes = 512 * 1_024
+    static let maxDiffLines = 3_000
+
+    static func parseFileDiff(_ output: String, path: String) -> GitFileDiff {
+        if output.contains("Binary files") && output.contains("differ") {
+            return GitFileDiff(path: path, hunks: [], isBinary: true, isTruncated: false, totalHunks: 0)
+        }
+        var hunks: [GitDiffHunk] = []
+        var currentLines: [GitDiffLine] = []
+        var currentHeader: (Int, Int, Int, Int, String)?
+        var totalHunks = 0
+        var truncated = false
+        var oldLine = 0
+        var newLine = 0
+        var parsedLines = 0
+
+        func flushHunk() {
+            guard let header = currentHeader else { return }
+            hunks.append(GitDiffHunk(
+                oldStart: header.0,
+                oldCount: header.1,
+                newStart: header.2,
+                newCount: header.3,
+                sectionHeading: header.4,
+                lines: currentLines
+            ))
+            currentLines = []
+            currentHeader = nil
+        }
+
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.hasPrefix("@@") {
+                flushHunk()
+                totalHunks += 1
+                if parsedLines > maxDiffLines {
+                    truncated = true
+                    continue
+                }
+                currentHeader = parseHunkHeader(line) ?? (0, 0, 0, 0, "")
+                oldLine = currentHeader!.0
+                newLine = currentHeader!.2
+                continue
+            }
+            guard currentHeader != nil else { continue }
+            if truncated { continue }
+            parsedLines += 1
+            if parsedLines > maxDiffLines {
+                truncated = true
+                continue
+            }
+            if line.hasPrefix("+") {
+                currentLines.append(GitDiffLine(kind: .added, oldLineNumber: nil, newLineNumber: newLine, text: String(line.dropFirst())))
+                newLine += 1
+            } else if line.hasPrefix("-") {
+                currentLines.append(GitDiffLine(kind: .removed, oldLineNumber: oldLine, newLineNumber: nil, text: String(line.dropFirst())))
+                oldLine += 1
+            } else if line.hasPrefix(" ") || line.isEmpty {
+                currentLines.append(GitDiffLine(kind: .context, oldLineNumber: oldLine, newLineNumber: newLine, text: String(line.dropFirst())))
+                oldLine += 1
+                newLine += 1
+            } else if line.hasPrefix("\\") {
+                // "\ No newline at end of file" —— 附属标记，不作为差异行
+            }
+        }
+        flushHunk()
+        if truncated {
+            // 截断时丢弃未完整解析的尾部 hunk，只保留已完整收集的部分
+            hunks = Array(hunks.prefix(while: { _ in true }).prefix(hunks.count))
+        }
+        return GitFileDiff(path: path, hunks: hunks, isBinary: false, isTruncated: truncated, totalHunks: totalHunks)
+    }
+
+    static func parseHunkHeader(_ line: String) -> (Int, Int, Int, Int, String)? {
+        // @@ -oldStart,oldCount +newStart,newCount @@ section
+        guard let oldRange = line.range(of: #"-(\d+)(?:,(\d+))?"#, options: .regularExpression),
+              let newRange = line.range(of: #"\+(\d+)(?:,(\d+))?"#, options: .regularExpression)
+        else { return nil }
+        let oldPart = line[oldRange].dropFirst()
+        let newPart = line[newRange].dropFirst()
+        let oldNumbers = oldPart.split(separator: ",").compactMap { Int($0) }
+        let newNumbers = newPart.split(separator: ",").compactMap { Int($0) }
+        guard oldNumbers.first != nil, newNumbers.first != nil else { return nil }
+        let components = line.split(separator: "@@", omittingEmptySubsequences: false)
+        let heading = components.count > 2
+            ? components.dropFirst(2).joined(separator: "@@").trimmingCharacters(in: .whitespaces)
+            : ""
+        return (
+            oldNumbers[0],
+            oldNumbers.count > 1 ? oldNumbers[1] : 1,
+            newNumbers[0],
+            newNumbers.count > 1 ? newNumbers[1] : 1,
+            heading
+        )
+    }
+}
+
+enum GitDiffReader {
+    /// 只读读取单个文件相对 HEAD 的 staged / unstaged 差异。
+    static func fileDiff(repoRoot: String, path: String) async -> GitFileDiffResult {
+        await Task.detached(priority: .utility) {
+            let unstagedResult = GitChangesReader.runGitPublic(["-C", repoRoot, "diff", "--", path])
+            let stagedResult = GitChangesReader.runGitPublic(["-C", repoRoot, "diff", "--cached", "--", path])
+            var failure: String?
+            var unstaged: GitFileDiff?
+            var staged: GitFileDiff?
+            switch unstagedResult {
+            case let .success(data):
+                let text = String(decoding: data.prefix(UnifiedDiffParser.maxDiffBytes), as: UTF8.self)
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let diff = UnifiedDiffParser.parseFileDiff(text, path: path)
+                    if !diff.hunks.isEmpty || diff.isBinary { unstaged = diff }
+                }
+            case let .failure(message):
+                failure = message
+            }
+            switch stagedResult {
+            case let .success(data):
+                let text = String(decoding: data.prefix(UnifiedDiffParser.maxDiffBytes), as: UTF8.self)
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let diff = UnifiedDiffParser.parseFileDiff(text, path: path)
+                    if !diff.hunks.isEmpty || diff.isBinary { staged = diff }
+                }
+            case let .failure(message):
+                failure = failure ?? message
+            }
+            return GitFileDiffResult(staged: staged, unstaged: unstaged, failure: failure)
+        }.value
     }
 }
