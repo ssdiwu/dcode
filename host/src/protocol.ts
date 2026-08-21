@@ -19,6 +19,9 @@ export const HOST_METHODS = [
   "session.getCommands",
   "resources.list",
   "resources.setPackageEnabled",
+  "modelProviders.list",
+  "modelProviders.save",
+  "modelProviders.remove",
   "session.getModels",
   "modelSettings.get",
   "modelSettings.refresh",
@@ -283,10 +286,25 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.contextBreakdown":
     case "session.getCommands":
     case "resources.list":
+    case "modelProviders.list":
     case "session.getThinkingLevels":
     case "session.refresh":
     case "host.shutdown":
       return;
+    case "modelProviders.save": {
+      const provider = params.provider;
+      if (typeof provider !== "object" || provider === null || Array.isArray(provider)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.provider to be an object");
+      }
+      return;
+    }
+    case "modelProviders.remove": {
+      const id = optionalString(params, "id");
+      if (id === undefined || id.length === 0) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.id to be a non-empty string");
+      }
+      return;
+    }
     case "resources.setPackageEnabled": {
       const source = optionalString(params, "source");
       if (source === undefined || source.length === 0) {

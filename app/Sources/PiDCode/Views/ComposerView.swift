@@ -101,6 +101,11 @@ struct ComposerView: View {
         .dCodeFloatingSurface(cornerRadius: 16)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .task {
+            if model.resources.snapshot == nil, !model.resources.isLoading {
+                await model.loadResources()
+            }
+        }
         .onAppear { focusComposer() }
         .onChange(of: model.inspection?.summary.id) { _, _ in focusComposer() }
         .onChange(of: model.isNewSessionDraftActive) { _, isActive in
@@ -116,6 +121,8 @@ struct ComposerView: View {
 
     private var runtimeControls: some View {
         HStack(spacing: 4) {
+            oneShotResourceMenu
+
             Spacer(minLength: 0)
 
             if model.hasActiveRun {
@@ -192,6 +199,75 @@ struct ComposerView: View {
             }
         }
         .font(.caption)
+    }
+
+    /// 一次性资源调用（0.0.16）：`+` 入口把 `/…` 调用写入当前草稿——只预填不发送，
+    /// 实际采用的资源以草稿中可见的调用文本与菜单里的来源描述为准；
+    /// 清单与 设置 > 本机资源 同源（Pi 真实加载合同）。
+    private var oneShotResourceMenu: some View {
+        Menu {
+            if let snapshot = model.resources.snapshot {
+                let commands = snapshot.commands.filter { entry in
+                    !entry.name.hasPrefix("skill:") && entry.source != "prompt"
+                }
+                let skills = snapshot.commands.filter { $0.name.hasPrefix("skill:") }
+                let prompts = snapshot.commands.filter { $0.source == "prompt" }
+                if commands.isEmpty && skills.isEmpty && prompts.isEmpty {
+                    Text("Pi 当前没有加载可调用资源")
+                }
+                if !commands.isEmpty {
+                    Menu("命令") {
+                        ForEach(commands) { resourceInvocationButton($0) }
+                    }
+                }
+                if !skills.isEmpty {
+                    Menu("Skill") {
+                        ForEach(skills) { resourceInvocationButton($0) }
+                    }
+                }
+                if !prompts.isEmpty {
+                    Menu("Prompt 模板") {
+                        ForEach(prompts) { resourceInvocationButton($0) }
+                    }
+                }
+                Divider()
+                Button("刷新资源列表") {
+                    Task { await model.loadResources() }
+                }
+            } else if model.resources.isLoading {
+                Text("正在读取 Pi 资源…")
+            } else {
+                Text("资源清单不可用")
+                Button("重试") {
+                    Task { await model.loadResources() }
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("为这条消息选择本机 Skill / Prompt / Command（写入输入框，仍由你发送）")
+        .accessibilityLabel("资源调用")
+    }
+
+    private func resourceInvocationButton(_ command: ResourceCommandEntry) -> some View {
+        Button {
+            model.insertComposerReference("/\(command.name) ")
+            focused = true
+        } label: {
+            HStack {
+                Text(command.name)
+                    .lineLimit(1)
+                if let description = command.description, !description.isEmpty {
+                    Text(description)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 
     private var submitIconName: String {

@@ -308,3 +308,64 @@ final class ResourcesSettingsRenderTests: XCTestCase {
         XCTAssertFalse(host.fittingSize == .zero, "加载态必须完成布局")
     }
 }
+
+@MainActor
+final class CustomProvidersRenderTests: XCTestCase {
+    func testProviderResultDecodesOkAndFieldErrors() throws {
+        let ok = try JSONDecoder().decode(ModelProviderSaveResult.self, from: Data("""
+        {"ok":true,"providers":[],"parseError":null}
+        """.utf8))
+        XCTAssertEqual(ok.ok, true)
+        XCTAssertEqual(ok.providers?.count, 0)
+
+        let rejected = try JSONDecoder().decode(ModelProviderSaveResult.self, from: Data("""
+        {"ok":false,"providers":null,"parseError":null,
+         "errors":[{"field":"baseUrl","message":"baseUrl 必须是 http(s) URL"},
+                   {"field":"models[0].id","message":"模型 id 不能为空或包含空白"}]}
+        """.utf8))
+        XCTAssertEqual(rejected.ok, false)
+        XCTAssertEqual(rejected.errors?.count, 2)
+        XCTAssertEqual(rejected.errors?.first?.field, "baseUrl")
+    }
+
+    func testCustomProvidersPageRendersSnapshotAndParseError() {
+        let model = AppModel()
+        model.modelProviders.snapshot = ModelProviderListResult(
+            path: "/tmp/agent/models.json",
+            parseError: nil,
+            providers: [
+                ModelProviderView(
+                    id: "my-relay",
+                    name: "Relay",
+                    baseUrl: "https://relay.example/v1",
+                    api: nil,
+                    authMode: "apiKey",
+                    authConfigured: true,
+                    headerKeys: ["X-Org"],
+                    models: [
+                        ModelProviderModelView(
+                            id: "m1", name: "M1", api: nil, baseUrl: nil,
+                            reasoning: true, contextWindow: 128_000, maxTokens: 16_384
+                        ),
+                    ],
+                    compatJson: nil,
+                    modelOverridesJson: nil
+                ),
+            ]
+        )
+
+        let host = NSHostingView(
+            rootView: CustomProvidersSettingsView().environment(model).frame(width: 640, height: 560)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero)
+
+        model.modelProviders.snapshot = ModelProviderListResult(
+            path: "/tmp/agent/models.json",
+            parseError: "Invalid models.json schema",
+            providers: []
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero, "解析错误态必须完成布局")
+    }
+}

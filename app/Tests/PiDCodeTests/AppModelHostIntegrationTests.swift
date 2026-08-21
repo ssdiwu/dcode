@@ -448,3 +448,105 @@ final class ComposerPrefillTests: XCTestCase {
         XCTAssertEqual(model.workspaceTabSelection, .conversation)
     }
 }
+
+// MARK: - 自定义模型供应商
+
+@MainActor
+final class ModelProvidersIntegrationTests: XCTestCase {
+    func testSaveModelProviderReturnsFieldErrorsWithoutNotice() async throws {
+        let harness = HostTestHarness()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello":
+                HostTestHarness.helloValue()
+            case "session.list":
+                .object(["sessions": .array([])])
+            case "modelProviders.save":
+                .object([
+                    "ok": .bool(false),
+                    "providers": .null,
+                    "parseError": .null,
+                    "errors": .array([
+                        .object([
+                            "field": .string("baseUrl"),
+                            "message": .string("baseUrl 必须是 http(s) URL"),
+                        ]),
+                    ]),
+                ])
+            default:
+                .object([:])
+            }
+        }
+        await harness.model.start()
+
+        let input = ModelProviderSaveInput(
+            id: "my-relay",
+            name: nil,
+            baseUrl: "not a url",
+            api: nil,
+            newApiKey: nil,
+            oauthRadius: nil,
+            removeAuth: nil,
+            models: [],
+            compatJson: nil,
+            modelOverridesJson: nil
+        )
+        let errors = await harness.model.saveModelProvider(input)
+
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(errors.first?.field, "baseUrl")
+        XCTAssertNil(harness.model.notice, "字段级错误走表单行内呈现，不弹全局横幅")
+    }
+
+    func testLoadModelProvidersStoresSanitizedSnapshot() async throws {
+        let harness = HostTestHarness()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello":
+                HostTestHarness.helloValue()
+            case "session.list":
+                .object(["sessions": .array([])])
+            case "modelProviders.list":
+                .object([
+                    "path": .string("/tmp/agent/models.json"),
+                    "parseError": .null,
+                    "providers": .array([
+                        .object([
+                            "id": .string("my-relay"),
+                            "name": .string("Relay"),
+                            "baseUrl": .string("https://relay.example/v1"),
+                            "api": .null,
+                            "authMode": .string("apiKey"),
+                            "authConfigured": .bool(true),
+                            "headerKeys": .array([.string("X-Org")]),
+                            "models": .array([
+                                .object([
+                                    "id": .string("m1"),
+                                    "name": .null,
+                                    "api": .null,
+                                    "baseUrl": .null,
+                                    "reasoning": .null,
+                                    "contextWindow": .null,
+                                    "maxTokens": .null,
+                                ]),
+                            ]),
+                            "compatJson": .null,
+                            "modelOverridesJson": .null,
+                        ]),
+                    ]),
+                ])
+            default:
+                .object([:])
+            }
+        }
+        await harness.model.start()
+
+        await harness.model.loadModelProviders()
+
+        let snapshot = try XCTUnwrap(harness.model.modelProviders.snapshot)
+        XCTAssertEqual(snapshot.providers.count, 1)
+        XCTAssertEqual(snapshot.providers.first?.authLabel, "API Key 已配置")
+        let encoded = try JSONEncoder().encode(snapshot)
+        XCTAssertFalse(encoded.contains(Data("sk-".utf8)), "脱敏视图不得包含凭据字段")
+    }
+}

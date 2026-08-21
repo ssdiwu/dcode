@@ -16,17 +16,17 @@ enum HostCompatibilityError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedProtocol(version):
-            "D Code 0.0.15 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+            "D Code 0.0.16 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
         case let .incompatibleHostVersion(version):
-            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.15。请重新构建 App，避免混用旧 Host。"
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.16。请重新构建 App，避免混用旧 Host。"
         case let .missingCapabilities(capabilities):
-            "当前 Host 缺少 0.0.15 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+            "当前 Host 缺少 0.0.16 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
         }
     }
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.15"
+    static let appVersion = "0.0.16"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -138,6 +138,81 @@ struct ResourceDiagnosticEntry: Codable, Equatable, Sendable, Identifiable {
     let message: String
 
     var id: String { message }
+}
+
+// MARK: - 自定义模型供应商（0.0.16，Pi models.json 合同）
+
+struct ModelProviderModelView: Codable, Equatable, Sendable, Identifiable {
+    let id: String
+    let name: String?
+    let api: String?
+    let baseUrl: String?
+    let reasoning: Bool?
+    let contextWindow: Int?
+    let maxTokens: Int?
+}
+
+struct ModelProviderView: Codable, Equatable, Sendable, Identifiable {
+    let id: String
+    let name: String?
+    let baseUrl: String?
+    let api: String?
+    let authMode: String
+    let authConfigured: Bool
+    let headerKeys: [String]
+    let models: [ModelProviderModelView]
+    let compatJson: String?
+    let modelOverridesJson: String?
+
+    var authLabel: String {
+        if authConfigured {
+            return authMode == "oauth" ? "OAuth 已配置" : "API Key 已配置"
+        }
+        return "未配置认证"
+    }
+}
+
+struct ModelProviderListResult: Codable, Equatable, Sendable {
+    let path: String
+    let parseError: String?
+    let providers: [ModelProviderView]
+}
+
+struct ModelProviderModelInput: Codable, Equatable, Sendable {
+    var id: String
+    var name: String?
+    var api: String?
+    var baseUrl: String?
+    var reasoning: Bool?
+    var contextWindow: Int?
+    var maxTokens: Int?
+}
+
+struct ModelProviderSaveInput: Codable, Equatable, Sendable {
+    var id: String
+    var name: String?
+    var baseUrl: String?
+    var api: String?
+    /// 只写：正文不回显。
+    var newApiKey: String?
+    var oauthRadius: Bool?
+    var removeAuth: Bool?
+    var models: [ModelProviderModelInput]
+    /// nil = 不修改；空串 = 删除。
+    var compatJson: String?
+    var modelOverridesJson: String?
+}
+
+struct ProviderFieldError: Codable, Equatable, Sendable {
+    let field: String
+    let message: String
+}
+
+struct ModelProviderSaveResult: Codable, Equatable, Sendable {
+    let ok: Bool
+    let providers: [ModelProviderView]?
+    let parseError: String?
+    let errors: [ProviderFieldError]?
 }
 
 struct ResourcePackageUpdateResult: Codable, Equatable, Sendable {

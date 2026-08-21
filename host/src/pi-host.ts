@@ -31,6 +31,7 @@ import {
   restoreFastMode,
 } from "./dcode-fast.js";
 import { createDCodeFactsExtension } from "./dcode-facts.js";
+import { ModelProvidersStore, type ProviderSaveInput } from "./model-providers.js";
 import {
   DisabledPackageStore,
   collectResourcesSnapshot,
@@ -61,7 +62,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.15";
+const HOST_VERSION = "0.0.16";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -521,6 +522,14 @@ export class PiHost {
         return this.getCommands();
       case "resources.list":
         return await this.listResources();
+      case "modelProviders.list":
+        return await this.modelProviders().list();
+      case "modelProviders.save":
+        return await this.modelProviders().save(
+          params.provider as unknown as ProviderSaveInput,
+        );
+      case "modelProviders.remove":
+        return await this.modelProviders().remove(params.id as string);
       case "resources.setPackageEnabled":
         return await this.setPackageEnabled(
           params.source as string,
@@ -1648,6 +1657,13 @@ export class PiHost {
       writable: !active.conflict,
       conflict: active.conflict ?? null,
     };
+  }
+
+  private modelProvidersStore: ModelProvidersStore | undefined;
+
+  private modelProviders(): ModelProvidersStore {
+    this.modelProvidersStore ??= ModelProvidersStore.forAgentDir(this.agentDir);
+    return this.modelProvidersStore;
   }
 
   /**

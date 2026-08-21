@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [0.0.16] - 2026-08-22
+
+### Added
+
+- 设置新增"自定义供应商"页（Pi `models.json` 合同）：新增 / 编辑 / 删除自定义供应商与模型定义；认证只写不回显（API Key 输入、OAuth radius、清除认证），既有凭据由 Host 合并原样保留，正文永不进入 D Code；保存前经 Host 结构检查 + Pi `ModelConfig` 真实校验双层把关，非法输入返回字段级错误且原文件零改动，合法变更原子写入并联动刷新模型目录；models.json 解析失败时如实呈现并拒绝编辑。
+- Composer 控制行新增 `+` 一次性资源调用：按 命令 / Skill / Prompt 模板 列出 Pi 真实加载的资源（与 设置 > 本机资源 同源，主页草稿与会话内一致可用），选择即把 `/…` 调用写入当前草稿并聚焦——只预填不发送，实际采用的资源以草稿中可见的调用文本为准。
+- 协议新增 `modelProviders.list` / `modelProviders.save` / `modelProviders.remove`。
+
+### Changed
+
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.16`。
+
 ## [0.0.15] - 2026-08-22
 
 ### Added

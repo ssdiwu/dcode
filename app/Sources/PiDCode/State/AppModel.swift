@@ -143,6 +143,7 @@ final class AppModel {
     let search = SearchModel()
     let selfBuild = SelfBuildModel()
     let resources = ResourcesModel()
+    let modelProviders = ModelProvidersModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
@@ -4099,6 +4100,86 @@ final class AppModel {
             return
         }
         verificationEvidence = await verificationStore.records(sessionId: sessionId)
+    }
+
+    /// 自定义模型供应商（0.0.16）：脱敏快照；parseError 如实呈现。
+    func loadModelProviders() async {
+        guard let client = readyClient, !modelProviders.isLoading else { return }
+        modelProviders.isLoading = true
+        defer { modelProviders.isLoading = false }
+        do {
+            modelProviders.snapshot = try await client.request("modelProviders.list")
+            modelProviders.issue = nil
+        } catch {
+            modelProviders.issue = "无法读取自定义供应商：\(DiagnosticSanitizer.redact(error.localizedDescription))"
+        }
+    }
+
+    /// 保存供应商：字段级错误返回给表单行内呈现，不弹全局横幅；
+    /// 成功时刷新快照并联动模型目录（Pi 重新加载后新目录生效）。
+    @discardableResult
+    func saveModelProvider(_ input: ModelProviderSaveInput) async -> [ProviderFieldError] {
+        guard let client = readyClient else {
+            return [ProviderFieldError(field: "models.json", message: "Pi Host 未连接")]
+        }
+        modelProviders.isSaving = true
+        defer { modelProviders.isSaving = false }
+        do {
+            let encoded = try JSONDecoder().decode(
+                JSONValue.self,
+                from: JSONEncoder().encode(input)
+            )
+            let params: [String: JSONValue] = encoded.objectValue ?? [:]
+            let result: ModelProviderSaveResult = try await client.request(
+                "modelProviders.save",
+                params: ["provider": .object(params)]
+            )
+            if result.ok {
+                modelProviders.snapshot = ModelProviderListResult(
+                    path: modelProviders.snapshot?.path ?? "",
+                    parseError: result.parseError,
+                    providers: result.providers ?? []
+                )
+                if modelSettings.snapshot != nil {
+                    Task { await refreshModelSettingsAfterProviderChange() }
+                }
+                return []
+            }
+            return result.errors ?? [ProviderFieldError(field: "models.json", message: "Pi 拒绝该配置")]
+        } catch {
+            return [ProviderFieldError(field: "models.json", message: DiagnosticSanitizer.redact(error.localizedDescription))]
+        }
+    }
+
+    /// 删除供应商：同样返回字段级错误（models.json 解析失败等）。
+    @discardableResult
+    func removeModelProvider(id: String) async -> [ProviderFieldError] {
+        guard let client = readyClient else {
+            return [ProviderFieldError(field: "models.json", message: "Pi Host 未连接")]
+        }
+        modelProviders.isSaving = true
+        defer { modelProviders.isSaving = false }
+        do {
+            let result: ModelProviderSaveResult = try await client.request(
+                "modelProviders.remove",
+                params: ["id": .string(id)]
+            )
+            if result.ok {
+                modelProviders.snapshot = ModelProviderListResult(
+                    path: modelProviders.snapshot?.path ?? "",
+                    parseError: result.parseError,
+                    providers: result.providers ?? []
+                )
+                return []
+            }
+            return result.errors ?? [ProviderFieldError(field: "models.json", message: "删除失败")]
+        } catch {
+            return [ProviderFieldError(field: "models.json", message: DiagnosticSanitizer.redact(error.localizedDescription))]
+        }
+    }
+
+    private func refreshModelSettingsAfterProviderChange() async {
+        await reloadModelSettings(refreshCatalog: true)
     }
 
     /// 本机资源快照（ADR 0024 / 0.0.15）：Pi 真实加载的扩展 / Skill / Prompt / 命令。

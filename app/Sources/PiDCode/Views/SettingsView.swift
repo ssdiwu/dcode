@@ -98,6 +98,14 @@ struct SettingsView: View {
             }
 
             SettingsNavigationRow(
+                title: "自定义供应商",
+                systemImage: "server.rack",
+                selected: page == .customProviders
+            ) {
+                model.presentSettings(.customProviders)
+            }
+
+            SettingsNavigationRow(
                 title: "本机资源",
                 systemImage: "shippingbox",
                 selected: page == .resources
@@ -187,6 +195,9 @@ struct SettingsView: View {
 
         case .resources:
             ResourcesSettingsView()
+
+        case .customProviders:
+            CustomProvidersSettingsView()
 
         case .appearance:
             SettingsPageContainer(
@@ -384,7 +395,7 @@ private struct SettingsNavigationRow: View {
     }
 }
 
-private struct SettingsPageContainer<Content: View>: View {
+struct SettingsPageContainer<Content: View>: View {
     let title: String
     let subtitle: String
     @ViewBuilder let content: () -> Content
@@ -411,7 +422,7 @@ private struct SettingsPageContainer<Content: View>: View {
     }
 }
 
-private struct SettingsGroup<Content: View>: View {
+struct SettingsGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
