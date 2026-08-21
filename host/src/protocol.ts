@@ -17,6 +17,8 @@ export const HOST_METHODS = [
   "session.getState",
   "session.contextBreakdown",
   "session.getCommands",
+  "resources.list",
+  "resources.setPackageEnabled",
   "session.getModels",
   "modelSettings.get",
   "modelSettings.refresh",
@@ -280,10 +282,21 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.getState":
     case "session.contextBreakdown":
     case "session.getCommands":
+    case "resources.list":
     case "session.getThinkingLevels":
     case "session.refresh":
     case "host.shutdown":
       return;
+    case "resources.setPackageEnabled": {
+      const source = optionalString(params, "source");
+      if (source === undefined || source.length === 0) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.source to be a non-empty string");
+      }
+      if (typeof params.enabled !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
+      }
+      return;
+    }
     case "session.getModels": {
       const cwd = optionalString(params, "cwd");
       if (cwd !== undefined && (cwd.length === 0 || cwd.length > 4_096)) {

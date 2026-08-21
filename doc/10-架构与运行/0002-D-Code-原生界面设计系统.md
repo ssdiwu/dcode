@@ -156,12 +156,12 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - Hover 使用低强度中性圆角面；Selected 使用更强的持久中性面；Keyboard focus 使用 accent outline。三者切换不得改变 row 高度、标题位置或 action rail。
 - Hover / focus 显示 pin 与 archive；全局置顶区中的 `pin.fill` 常显。Context menu 与 Session header menu 提供等价操作。
 - Archive 是可恢复的 D Code 可见性操作，不修改 Pi JSONL；Trash 只适用于符合安全条件的空 D Code Session。
-- 设置与归档管理都不占用日常会话导航。齿轮和 `Command-,` 进入当前窗口内的 Settings 工具页面；该页面临时使用完整工作台画布，以继承会话栏实际宽度的页内设置导航组织“外观 / 工作台 / 已归档会话 / 关于 D Code”，右侧正文限制为约 `780pt`，使用少量语义分组与整行控件，而不是一张铺满窗口的表或卡片瀑布。设置页内拖动左侧边缘会更新全局共享宽度，返回 Workspace 后会话栏立即采用同一宽度。进入设置期间隐藏日常会话栏和信息检查器，但只暂时让出空间，不改写它们的显示偏好；返回 Workspace 后恢复。已归档会话复用同一设置外壳与页内导航，不得叠加 Sheet、卡片式弹窗或第二窗口。“关于 D Code”也复用该外壳，集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub，不为静态身份资料新开窗口。
+- 设置与归档管理都不占用日常会话导航。齿轮和 `Command-,` 进入当前窗口内的 Settings 工具页面；该页面临时使用完整工作台画布，以继承会话栏实际宽度的页内设置导航组织“模型 / 本机资源 / 外观 / 工作台 / 已归档会话 / 自构建 / Host 诊断 / 关于 D Code”，右侧正文限制为约 `780pt`，使用少量语义分组与整行控件，而不是一张铺满窗口的表或卡片瀑布。设置页内拖动左侧边缘会更新全局共享宽度，返回 Workspace 后会话栏立即采用同一宽度。进入设置期间隐藏日常会话栏和信息检查器，但只暂时让出空间，不改写它们的显示偏好；返回 Workspace 后恢复。已归档会话复用同一设置外壳与页内导航，不得叠加 Sheet、卡片式弹窗或第二窗口。“关于 D Code”也复用该外壳，集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub，不为静态身份资料新开窗口。
 
 ### 7.2 Information Inspector 与 Project Files
 
 - Project 只有一个 Source Folder 时，Files 直接把该根的 children 作为首层；存在多个 Source Folder 时才显示各根行，来源身份不得因平铺而丢失。
-- 文件树行 Hover 使用低强度中性圆角面，不改变行高或缩进；右键 Context menu 提供“在 Finder 中显示”与“拷贝路径”等只读系统动作，与行级 help 等价可达。
+- 文件树行 Hover 使用低强度中性圆角面，不改变行高或缩进；右键 Context menu 提供“引用到输入框”“在 Finder 中显示”与“拷贝路径”等动作，与行级 help 等价可达。行可获键盘焦点（accent 焦点环），目录行 → 展开、← 收起、回车触发行默认动作，与 Hover / 右键等价可达。
 - Project 所属 Session 的信息检查器同时提供 Files、Changes 与 Session 概览。Session 只叠加运行上下文，不得让用户失去 Project 文件和 Git 事实。
 - Inspector raised surface 的首行直接列出当前可用的“会话 / 文件 / 变更”视图，不先重复会话或 Project 标题。未归入 Project 的 Session 只显示“会话”；Project 本身只显示“文件 / 变更”。
 - 信息检查器在 `≥880pt` 保持非模态，并以内缩 raised surface 悬浮于右侧 rail；右侧 rail 与主工作区 canvas 之间不用整高硬分隔线。
@@ -182,6 +182,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - 完成轮的耗时与持久化完成日期只在 final answer 外部的 Hover / keyboard focus 元信息中显示，并始终可由 VoiceOver 获取。
 - 运行中只展示当前 thinking excerpt 或当前 tool；完成步骤收起为逐步摘要，不堆积永久日志卡。
 - Conversation rail 使用中性刻度；点击只滚动，不改变 Session Path 或模型上下文。
+- 上下文压缩必须可见（ADR 0024）：`isCompacting` 进行中在会话上下文行显示状态 pill（“正在压缩上下文…”），结束即消失；压缩是影响成本与结果的 harness 行为，不得静默发生。
 
 ### 7.5 Native content blocks（原生内容块）
 
@@ -199,6 +200,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - 占位符只教已经实现的快捷输入。尚未实现的能力（如 `@` 插入上下文）不在占位符里预告——占位符是输入框的当前契约，不是路线图。
 - 发送按钮遵循 4.1 图标动作几何（`28pt` 视觉 / `32pt` 命中区），容器常在、权重分档：可发送时 accent 圆形填充；暂不可发送时保留同尺寸的中性极低填充圆盘（约 `0.07`）与次级色 glyph。禁用态不得退化成没有容器的裸 glyph——那会让主动作在控制行里比旁边的状态指示更弱，用户根本找不到按钮在哪；也不得回到 `36pt` 实心灰盘那种读起来像"可以按"的重量。禁用观感由按钮自己的 style 表达，不依赖系统对 disabled label 的二次变暗：次级色再被压一层会掉到 3.4 的提示档，和占位符同权重。模型 chip 使用 caption 字号与次级视觉，不与正文抢层级。
 - `/` 命令面板支持 ↑↓ 选择、高亮、Esc 关闭与回车选中，交互模式与 ⌘K 搜索浮层一致。
+- 界面即上下文（ADR 0024）：信息检查器的文件行 / Git diff 文件行与 hunk、验证证据行、会话谱系节点与计划工作项提供“引用到输入框”，把精确引用（路径、行区间、增删摘要、命令与 revision）写入当前 Composer 草稿并带回对话页；只预填、不发送，已有内容以空行追加不覆盖，用户仍可编辑并显式发送。设置新增“本机资源”页：按 Pi 真实加载结果展示扩展包（可停用 / 启用，经 Pi 配置写与热重载）、已加载扩展（含注册的工具 / 命令计数）、Skill、Prompt 模板、命令与加载诊断；隐藏的 D Code 内联扩展不出现在用户面。
 - Active Plan 位于 transcript 与 Composer 之间；折叠态只显示 objective、current step 与进度，完成或放弃后退出常驻界面。
 
 ## 8. Motion 与 Accessibility（无障碍）

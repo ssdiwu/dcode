@@ -55,6 +55,13 @@ struct SessionPathSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("引用到输入框", systemImage: "text.insert") {
+                            model.insertComposerReference(
+                                "会话路径「\(path.title)」（\(path.entryCount) 条记录\(path.isCurrent ? "，当前路径" : "")）"
+                            )
+                        }
+                    }
                     .disabled(
                         model.isOpeningSession
                             || model.isStreaming

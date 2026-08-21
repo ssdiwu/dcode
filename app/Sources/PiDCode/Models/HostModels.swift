@@ -16,17 +16,17 @@ enum HostCompatibilityError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedProtocol(version):
-            "D Code 0.0.14 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+            "D Code 0.0.15 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
         case let .incompatibleHostVersion(version):
-            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.14。请重新构建 App，避免混用旧 Host。"
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.15。请重新构建 App，避免混用旧 Host。"
         case let .missingCapabilities(capabilities):
-            "当前 Host 缺少 0.0.14 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+            "当前 Host 缺少 0.0.15 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
         }
     }
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.14"
+    static let appVersion = "0.0.15"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -67,6 +67,83 @@ enum HostCompatibility {
 
 struct SessionListResult: Codable, Sendable {
     let sessions: [SessionSummary]
+}
+
+// MARK: - 本机资源（ADR 0024 / 0.0.15）
+
+struct ResourcesListResult: Codable, Equatable, Sendable {
+    let packages: [ResourcePackageEntry]
+    let extensions: [ResourceExtensionEntry]
+    let skills: [ResourceSkillEntry]
+    let prompts: [ResourcePromptEntry]
+    let commands: [ResourceCommandEntry]
+    let diagnostics: [ResourceDiagnosticEntry]
+}
+
+struct ResourcePackageEntry: Codable, Equatable, Sendable, Identifiable {
+    let source: String
+    let kind: String
+    let enabled: Bool
+
+    var id: String { source }
+
+    var kindLabel: String {
+        switch kind {
+        case "npm": "npm 包"
+        case "path": "本地路径"
+        default: kind
+        }
+    }
+}
+
+struct ResourceExtensionEntry: Codable, Equatable, Sendable, Identifiable {
+    let name: String
+    let path: String
+    let source: String
+    let toolCount: Int
+    let commandCount: Int
+
+    var id: String { path }
+}
+
+struct ResourceSkillEntry: Codable, Equatable, Sendable, Identifiable {
+    let name: String
+    let description: String
+    let source: String
+    let filePath: String
+    let disableModelInvocation: Bool
+
+    var id: String { filePath }
+}
+
+struct ResourcePromptEntry: Codable, Equatable, Sendable, Identifiable {
+    let name: String
+    let description: String
+    let argumentHint: String?
+    let source: String
+    let filePath: String
+
+    var id: String { "\(source)/\(name)" }
+}
+
+struct ResourceCommandEntry: Codable, Equatable, Sendable, Identifiable {
+    let name: String
+    let description: String?
+    let source: String
+
+    var id: String { "\(source)/\(name)" }
+}
+
+struct ResourceDiagnosticEntry: Codable, Equatable, Sendable, Identifiable {
+    let message: String
+
+    var id: String { message }
+}
+
+struct ResourcePackageUpdateResult: Codable, Equatable, Sendable {
+    let ok: Bool
+    let source: String
+    let enabled: Bool
 }
 
 struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
@@ -273,6 +350,8 @@ struct HostState: Codable, Sendable {
     let fastMode: FastModeState?
     let writable: Bool
     let conflict: HostErrorPayload?
+    /// 上下文压缩进行中（ADR 0024 决定 4）：影响成本与结果的 harness 行为必须可见。
+    let isCompacting: Bool?
 }
 
 struct SessionOpenResult: Codable, Sendable {

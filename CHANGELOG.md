@@ -1,20 +1,20 @@
-# Changelog
-
-本项目的用户可感知变化遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 记录，并以 Git tag 作为版本边界。
-
 ## [Unreleased]
+
+## [0.0.15] - 2026-08-22
+
+### Added
+
+- 界面即上下文（ADR 0024）：信息检查器的文件行、Git diff 文件行 / hunk、验证证据行、会话谱系节点与计划工作项新增"引用到输入框"，把精确引用（路径、行区间、增删摘要、命令与 revision）写入当前 Composer 草稿并带回对话页——只预填不发送，已有内容以空行追加不覆盖。
+- 上下文压缩可见（ADR 0024）：`HostState.isCompacting` 解码，压缩进行中在会话上下文行显示"正在压缩上下文…"状态 pill，结束即消失。
+- 设置新增"本机资源"页：按 Pi 真实加载结果展示扩展包（可停用 / 启用）、已加载扩展（含注册的工具 / 命令计数）、Skill、Prompt 模板、命令与加载诊断；停用扩展包经 Pi `SettingsManager.setPackages` 真实配置写 + 资源热重载生效，原始条目影子保存于 `pi-dcode/disabled-packages.json` 以便原样恢复；Skill / Prompt / Command 无 Pi 配置合同，只读展示。
+- 首个只读工具 facade `dcode_facts`（ADR 0024 决定 3）：注册进同一个 Pi Agent Loop，按需暴露 D Code 宿主独有的事实——当前会话的变更账本归因、验证证据、会话谱系与所属项目 Source Folder 集合；账本缺失或损坏时如实报不可用。
+- 协议新增 `resources.list` / `resources.setPackageEnabled`。
 
 ### Changed
 
-- Composer 占位符改用设计系统 3.4 新增的 hint 档（`tertiaryLabelColor`，约 `0.26`）并压回文案预算：`交给 D Code 一项工作，/ 使用命令`。此前占位符用 `secondary`（`0.5`，与次级元信息同档）承载分号并列的两条教学，实测墨色 127，对照同类产品的 168 / 197 明显偏重——空输入框第一眼读成"已经有内容"。改后实测 188，落在提示档。同时不再预告尚未实现的 `@ 添加上下文`：占位符只教已经实现的快捷输入。
-- 设计系统补上此前缺失的规则：3.4 新增 hint（提示档）层级并写明 `placeholderTextColor` 在 macOS 上与 `secondaryLabelColor` 同为 `0.5`、不是提示档；7.6 给占位符加上视觉预算（一行、上限 18 个全宽字符当量、最多一条教学子句、不预告未实现能力）；9 验收矩阵新增提示档墨色采样。原先文档只规定占位符文案要"承担教学"，没有给它任何排版档位与长度预算，这是本次视觉问题的直接来源。
-
-- 发送按钮改为"容器常在、权重分档"：暂不可发送时保留同尺寸的中性极低填充圆盘（`0.07`）与次级色 glyph，可发送时仍是 accent 圆形填充，并补上按压反馈（0.82 accent + `0.97` 缩放，Reduce Motion 下跳过）。此前禁用态容器是 `Color.clear`，只剩一个裸箭头飘在模型 chip 旁边——实测该行墨迹分布为余量环 791 像素 / 模型 chip 357 / 发送按钮 131，主动作是整行最弱的元素，用户找不到按钮在哪。新增共享 `SendActionStyle`（`DesignSystem.swift`），设计系统 7.6 同步改写为容器常在规则。
-
-### Fixed
-
-- 修复禁用态发送按钮 glyph 被二次变暗的问题：代码写的是 `Color.secondary`（`0.5`），但 `.buttonStyle(.plain)` 叠加系统对 disabled label 的变暗后实测墨色 190，恰好与提示档占位符（188）同权重，等于文档规定的"次级色 glyph"从未真正生效。改由自定义 `ButtonStyle` 自己表达禁用观感后实测 121，回到次级档（新增离屏渲染回归用例，同时锁住容器不得消失）。
-- 修复 Composer 占位符与输入正文靠手工偏移常数（`.padding(.top, 1)`）对齐的问题：占位符不再是叠在 AppKit 文本视图上的 SwiftUI 覆盖层，改由 `ComposerNSTextView` 自己绘制在 text container 原点，与真实首行共用同一套布局几何，界面字号切到紧凑 / 大档不再错位（新增离屏渲染回归用例，逐档比较占位符与真实输入的墨迹包围盒）。占位符同时通过 `accessibilityPlaceholderValue` 暴露，不再是装饰性覆盖层。
+- 文件树行支持键盘：焦点行 accent 焦点环，目录行 → 展开、← 收起、回车触发行默认动作。
+- 性能收口：只读文件预览的行切分由每次访问重算改为构造时缓存（消除大文件 O(n²)）；文件树子层、Git 变更列表与 diff 展开体改 LazyVStack 惰性构建；会话滚动的双 `Task.yield()` 硬等布局改为单一 runloop 跳转的下一帧滚动；行级可见性回写去重，滚动不再逐行触发顶层失效。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.15`。
 
 ## [0.0.14] - 2026-08-21
 
@@ -28,6 +28,11 @@
 - `/` 命令面板新增键盘导航：↑↓ 选择高亮、Esc 关闭、回车选中。
 
 ### Changed
+（发布后补记，随 v0.0.14 tag 交付）
+- Composer 占位符改用设计系统 3.4 新增的 hint 档（`tertiaryLabelColor`，约 `0.26`）并压回文案预算：`交给 D Code 一项工作，/ 使用命令`。此前占位符用 `secondary`（`0.5`，与次级元信息同档）承载分号并列的两条教学，实测墨色 127，对照同类产品的 168 / 197 明显偏重——空输入框第一眼读成"已经有内容"。改后实测 188，落在提示档。同时不再预告尚未实现的 `@ 添加上下文`：占位符只教已经实现的快捷输入。
+- 设计系统补上此前缺失的规则：3.4 新增 hint（提示档）层级并写明 `placeholderTextColor` 在 macOS 上与 `secondaryLabelColor` 同为 `0.5`、不是提示档；7.6 给占位符加上视觉预算（一行、上限 18 个全宽字符当量、最多一条教学子句、不预告未实现能力）；9 验收矩阵新增提示档墨色采样。原先文档只规定占位符文案要"承担教学"，没有给它任何排版档位与长度预算，这是本次视觉问题的直接来源。
+- 发送按钮改为"容器常在、权重分档"：暂不可发送时保留同尺寸的中性极低填充圆盘（`0.07`）与次级色 glyph，可发送时仍是 accent 圆形填充，并补上按压反馈（0.82 accent + `0.97` 缩放，Reduce Motion 下跳过）。此前禁用态容器是 `Color.clear`，只剩一个裸箭头飘在模型 chip 旁边——实测该行墨迹分布为余量环 791 像素 / 模型 chip 357 / 发送按钮 131，主动作是整行最弱的元素，用户找不到按钮在哪。新增共享 `SendActionStyle`（`DesignSystem.swift`），设计系统 7.6 同步改写为容器常在规则。
+
 
 - 会话打开加载反馈：点击会话行立即进入选中态，主画布即时显示加载占位，消除数秒无反馈空白期。
 - 发送按钮收进统一图标动作几何（28pt 视觉 / 32pt 命中区）：可用时 accent 圆形填充，禁用态只保留次级色 glyph、不再使用 36pt 实心灰盘；模型 chip 降为 caption 字号与次级视觉。
@@ -41,6 +46,10 @@
 - 移除动作级权限闸门（ADR 0023 最终形态：固定完全访问）：删除 Host 侧 `dcode-permission` 隐藏扩展、授权表与审计持久化（磁盘上既有 `permissions-v1.json` 不迁移不删除，仅不再读写）、协议 `permission.request/respond/list/revoke/setMode` 方法与 `permissionGate` 能力位，以及 Swift 侧权限卡、Composer 权限 chip 与 设置 > 动作权限 页。D Code 内的 bash、文件写入与自定义工具全部静默执行，与 Pi CLI 行为一致；不存在模式切换。
 
 ### Fixed
+（发布后补记，随 v0.0.14 tag 交付）
+- 修复禁用态发送按钮 glyph 被二次变暗的问题：代码写的是 `Color.secondary`（`0.5`），但 `.buttonStyle(.plain)` 叠加系统对 disabled label 的变暗后实测墨色 190，恰好与提示档占位符（188）同权重，等于文档规定的"次级色 glyph"从未真正生效。改由自定义 `ButtonStyle` 自己表达禁用观感后实测 121，回到次级档（新增离屏渲染回归用例，同时锁住容器不得消失）。
+- 修复 Composer 占位符与输入正文靠手工偏移常数（`.padding(.top, 1)`）对齐的问题：占位符不再是叠在 AppKit 文本视图上的 SwiftUI 覆盖层，改由 `ComposerNSTextView` 自己绘制在 text container 原点，与真实首行共用同一套布局几何，界面字号切到紧凑 / 大档不再错位（新增离屏渲染回归用例，逐档比较占位符与真实输入的墨迹包围盒）。占位符同时通过 `accessibilityPlaceholderValue` 暴露，不再是装饰性覆盖层。
+
 
 - 修复主页"无法读取 Pi 模型：(Swift.CancellationError 错误 1)"且模型停留在"未选择"的自取消回归：主页 `.task(id:)` 的 key 曾包含 `isNewSessionDraftActive`，草稿一激活 key 即变，SwiftUI 取消正在运行的任务，恰好掐断进行中的 `session.getModels` 并把取消误报为读取失败；重启的任务又因守卫直接返回，不再重试。修复：key 移除草稿状态；`CancellationError` 不再当作模型读取失败呈现（`loadRuntimeControls` 同类误报一并处理）；`ensureHomeDraft` 在草稿已在但模型从未载入时补一次加载（回归用例锁定该路径）。
 - 修复主页落地即可打字机制引入的会话打开竞态：`ensureHomeDraft` 触发的 `createSession` 在自身挂起（本机草稿落盘）期间不重新检查状态，若此时并发的 `selectSession`/`openSession` 正在打开真实会话，`createSession` 恢复执行后会无条件清空当前会话呈现（含 `snapshotCommitGeneration`），导致刚打开的会话被静默清空、界面弹回主页且不提示任何错误；同一竞态也会让主页新草稿的模型选择被并发的 `clearActiveSessionPresentation` 重置且不再重试，长期停留在"未选择"。修复为 `createSession` 在挂起点前后各拍一次快照（是否已有会话打开、是否已有草稿在用），恢复执行时若快照发生了不该由本次调用引发的变化则直接放弃，不再覆盖已经成立的会话状态。已用真实 App 重复执行"全新启动后立即打开最近会话"验证 4/4 次成功（此前 3/3 次复现失败），并确认等待后正常打开、`swift test`（188/188）不受影响。

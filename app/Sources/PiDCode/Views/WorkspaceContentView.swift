@@ -195,9 +195,14 @@ private struct WorkspaceFilePreviewView: View {
 private struct WorkspaceFileLinesView: View {
     let snapshot: WorkspaceFileSnapshot
     let requestedLine: Int?
+    /// 构造时切分一次并缓存：旧实现的计算属性在每次访问（滚动、高亮、
+    /// 行渲染）都对全文重新 split，大文件上是 O(n²)。
+    private let lines: [Substring]
 
-    private var lines: [Substring] {
-        snapshot.text.split(separator: "\n", omittingEmptySubsequences: false)
+    init(snapshot: WorkspaceFileSnapshot, requestedLine: Int?) {
+        self.snapshot = snapshot
+        self.requestedLine = requestedLine
+        self.lines = snapshot.text.split(separator: "\n", omittingEmptySubsequences: false)
     }
 
     var body: some View {

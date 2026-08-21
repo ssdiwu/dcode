@@ -108,7 +108,9 @@ final class GitDiffTests: XCTestCase {
         """, path: "a.swift")
 
         let host = NSHostingView(
-            rootView: GitDiffSection(title: "未暂存", diff: diff).frame(width: 460, height: 320)
+            rootView: GitDiffSection(title: "未暂存", diff: diff)
+                .environment(AppModel())
+                .frame(width: 460, height: 320)
         )
         host.layoutSubtreeIfNeeded()
         XCTAssertFalse(host.fittingSize == .zero)

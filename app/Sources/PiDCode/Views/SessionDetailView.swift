@@ -49,6 +49,9 @@ struct SessionDetailView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            if model.hostState?.isCompacting == true {
+                StatusPill(label: "正在压缩上下文…", systemImage: "compress", color: .orange)
+            }
             if let runState = model.activity.currentRunState,
                runState.phase.isActive || runState.phase == .unknown {
                 StatusPill(

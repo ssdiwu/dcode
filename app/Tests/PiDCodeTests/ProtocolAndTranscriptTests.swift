@@ -1451,7 +1451,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.14",
+            hostVersion: "0.0.15",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1472,7 +1472,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.14",
+            hostVersion: "0.0.15",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1757,7 +1757,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.14",
+                    "hostVersion": "0.0.15",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1927,7 +1927,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.14",
+                    "hostVersion": "0.0.15",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2247,7 +2247,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.14", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.15", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":
@@ -2718,6 +2718,25 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         XCTAssertEqual(DCodeInterfaceFontScale.resolve("compact"), .compact)
         XCTAssertEqual(DCodeInterfaceFontScale.resolve("unexpected"), .standard)
+    }
+
+    func testHostStateDecodesCompactionFlag() throws {
+        let decoding = try JSONDecoder().decode(HostState.self, from: Data("""
+        {"mode":"writable","sessionId":"s1","sessionFile":"/tmp/s1.jsonl","sessionName":null,
+         "cwd":"/tmp","model":null,"thinkingLevel":"medium","activePlan":null,
+         "isStreaming":false,"runState":null,"pendingMessageCount":0,
+         "contextUsage":null,"fastMode":null,"writable":true,"conflict":null,
+         "isCompacting":true}
+        """.utf8))
+        XCTAssertEqual(decoding.isCompacting, true, "压缩进行中必须可解码呈现（ADR 0024 决定 4）")
+
+        let legacy = try JSONDecoder().decode(HostState.self, from: Data("""
+        {"mode":"writable","sessionId":"s1","sessionFile":"/tmp/s1.jsonl","sessionName":null,
+         "cwd":"/tmp","model":null,"thinkingLevel":"medium","activePlan":null,
+         "isStreaming":false,"runState":null,"pendingMessageCount":0,
+         "contextUsage":null,"fastMode":null,"writable":true,"conflict":null}
+        """.utf8))
+        XCTAssertNil(legacy.isCompacting, "旧 Host 不发送该字段时按未知处理，不误报压缩中")
     }
 
     private func temporaryURL(_ name: String) -> URL {

@@ -58,10 +58,14 @@ struct ConversationView: View {
                                     pathActionDisabled: pathActionDisabled,
                                     pathAction: model.beginPathDraft,
                                     entryVisibilityChanged: { entryID, isVisible in
+                                        // 去重：滚动时 List 大量重发 onAppear/onDisappear，
+                                        // 只有状态真正翻转才写回，避免逐行触发顶层失效。
                                         if isVisible {
+                                            guard !visibleEntryIDs.contains(entryID) else { return }
                                             visibleEntryIDs.insert(entryID)
                                             model.markCompletionPresented(entryID: entryID)
                                         } else {
+                                            guard visibleEntryIDs.contains(entryID) else { return }
                                             visibleEntryIDs.remove(entryID)
                                         }
                                     }
@@ -99,10 +103,10 @@ struct ConversationView: View {
                         .environment(\.defaultMinListRowHeight, 0)
                         .id(presentationIdentity)
                         .task(id: "\(presentationIdentity):\(rounds.count)") {
-                            await Task.yield()
-                            await Task.yield()
-                            guard followsLatest, model.conversationTarget == nil else { return }
-                            scrollToBottom(proxy, animated: false)
+                            scrollAfterLayout {
+                                guard followsLatest, model.conversationTarget == nil else { return }
+                                scrollToBottom(proxy, animated: false)
+                            }
                         }
                         .accessibilityScrollAction { edge in
                             accessibilityScroll(
@@ -146,9 +150,7 @@ struct ConversationView: View {
                         highlightedEntryID = nil
                         expandedRoundIDs.removeAll()
                         visibleEntryIDs.removeAll()
-                        Task { @MainActor in
-                            await Task.yield()
-                            await Task.yield()
+                        scrollAfterLayout {
                             scrollToBottom(proxy, animated: false)
                         }
                     }
@@ -201,13 +203,13 @@ struct ConversationView: View {
                             )
                         }
                         highlightedEntryID = target.entryID
-                        await Task.yield()
-                        await Task.yield()
-                        if reduceMotion {
-                            proxy.scrollTo(target.entryID, anchor: .center)
-                        } else {
-                            withAnimation(.smooth(duration: 0.28)) {
+                        scrollAfterLayout {
+                            if reduceMotion {
                                 proxy.scrollTo(target.entryID, anchor: .center)
+                            } else {
+                                withAnimation(.smooth(duration: 0.28)) {
+                                    proxy.scrollTo(target.entryID, anchor: .center)
+                                }
                             }
                         }
                         try? await Task.sleep(for: .seconds(1.6))
@@ -232,9 +234,14 @@ struct ConversationView: View {
         }
     }
 
+    /// 下一帧滚动：单一 runloop 跳转（在当前布局提交之后执行），
+    /// 替代旧实现里双 `Task.yield()` 硬等布局的脆弱时序。
+    private func scrollAfterLayout(_ action: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: action)
+    }
+
     private func scrollToBottomAfterLayout(_ proxy: ScrollViewProxy) {
-        Task { @MainActor in
-            await Task.yield()
+        scrollAfterLayout {
             guard followsLatest, model.conversationTarget == nil else { return }
             scrollToBottom(proxy)
         }

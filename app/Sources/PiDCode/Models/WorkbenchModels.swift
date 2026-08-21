@@ -8,6 +8,7 @@ enum InspectorScope: Equatable, Sendable {
 
 enum SettingsPage: String, CaseIterable, Equatable, Sendable {
     case models
+    case resources
     case appearance
     case workbench
     case archivedSessions

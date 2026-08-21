@@ -421,3 +421,30 @@ final class HomeDraftModelRecoveryTests: XCTestCase {
         XCTAssertNil(harness.model.modelSettings.modelIssue)
     }
 }
+
+// MARK: - 界面即上下文预填
+
+@MainActor
+final class ComposerPrefillTests: XCTestCase {
+    func testInsertComposerReferenceAppendsWithoutOverwriting() {
+        let model = AppModel()
+
+        model.insertComposerReference("  /abs/path/文件.swift 第 12–30 行（未暂存）  ")
+        XCTAssertEqual(model.composerText, "/abs/path/文件.swift 第 12–30 行（未暂存）", "空草稿直接写入并去掉首尾空白")
+
+        model.insertComposerReference("/abs/other.md（已暂存 +1 −1）")
+        XCTAssertTrue(
+            model.composerText.hasSuffix("/abs/other.md（已暂存 +1 −1）"),
+            "已有内容以分隔追加，不覆盖"
+        )
+        XCTAssertTrue(model.composerText.contains("\n\n"))
+
+        let before = model.composerText
+        model.insertComposerReference("   ")
+        XCTAssertEqual(model.composerText, before, "空白引用被忽略")
+
+        model.insertComposerReference("验证证据：npm test（成功，revision 待补）")
+        XCTAssertEqual(model.workbenchDestination, .workspace, "预填把工作台带回对话页")
+        XCTAssertEqual(model.workspaceTabSelection, .conversation)
+    }
+}

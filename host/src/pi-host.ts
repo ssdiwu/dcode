@@ -30,6 +30,13 @@ import {
   createFastSnapshot,
   restoreFastMode,
 } from "./dcode-fast.js";
+import { createDCodeFactsExtension } from "./dcode-facts.js";
+import {
+  DisabledPackageStore,
+  collectResourcesSnapshot,
+  disabledPackageStorePath,
+  packageSourceKey,
+} from "./resources.js";
 import { ExtensionUIBridge } from "./extension-ui.js";
 import type { HostMethod } from "./protocol.js";
 import { SessionLease, SessionLeaseError, sessionSnapshotDigest } from "./session-lease.js";
@@ -54,7 +61,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.14";
+const HOST_VERSION = "0.0.15";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -512,6 +519,13 @@ export class PiHost {
         return this.getContextBreakdown();
       case "session.getCommands":
         return this.getCommands();
+      case "resources.list":
+        return await this.listResources();
+      case "resources.setPackageEnabled":
+        return await this.setPackageEnabled(
+          params.source as string,
+          params.enabled === true,
+        );
       case "session.getModels":
         return await this.getModels(typeof params.cwd === "string" ? params.cwd : undefined);
       case "modelSettings.get":
@@ -1012,6 +1026,16 @@ export class PiHost {
       }
       await lease.assertUnchanged();
       const fastMode = new DCodeFastController();
+      const factsContext = {
+        sessionId: () => this.active?.inspection.summary.id,
+        cwd: () => this.active?.inspection.summary.cwd,
+        paths: () => (this.active?.inspection.paths ?? []).map((path) => ({
+          id: path.id,
+          title: path.title,
+          isCurrent: path.isCurrent,
+          entryCount: path.entryCount,
+        })),
+      };
       const sourceSettingsManager = SettingsManager.create(manager.getCwd(), this.agentDir);
       const resourceLoader = new DCodeResourceLoader({
         cwd: manager.getCwd(),
@@ -1019,6 +1043,7 @@ export class PiHost {
         sourceSettingsManager,
         extensionFactories: [
           { name: "dcode-fast", hidden: true, factory: createDCodeFastExtension(fastMode) },
+          { name: "dcode-facts", hidden: true, factory: createDCodeFactsExtension(factsContext) },
         ],
       });
       await resourceLoader.reload();
@@ -1625,10 +1650,75 @@ export class PiHost {
     };
   }
 
+  /**
+   * 本机资源快照（ADR 0024 / 0.0.15）：不依赖打开的会话——用当前会话 cwd
+   * （无会话时用户目录）构造独立 loader 真实加载一次，返回包 / 扩展 / Skill /
+   * Prompt / 命令与诊断。隐藏的 D Code 内联扩展不出现在用户面。
+   */
+  private async listResources(): Promise<unknown> {
+    const cwd = this.active?.inspection.summary.cwd ?? homedir();
+    const settingsManager = SettingsManager.create(cwd, this.agentDir);
+    const loader = new DCodeResourceLoader({
+      cwd,
+      agentDir: this.agentDir,
+      sourceSettingsManager: settingsManager,
+      extensionFactories: [],
+    });
+    await loader.reload();
+    const disabledStore = new DisabledPackageStore(disabledPackageStorePath(this.agentDir));
+    return collectResourcesSnapshot({
+      loader,
+      settingsManager,
+      disabled: await disabledStore.load(),
+    });
+  }
+
+  /**
+   * 扩展包停用 / 启用：停用即从 Pi 全局 `packages` 移除原始条目并完整保存到
+   * 影子清单；启用从影子原样恢复。写入经 Pi SettingsManager 真实配置合同并
+   * flush；有活跃会话时热重载其资源。Skill / Prompt 无对应配置合同，不提供开关。
+   */
+  private async setPackageEnabled(source: string, enabled: boolean): Promise<unknown> {
+    if (typeof source !== "string" || source.length === 0) {
+      throw new PiHostError("INVALID_PARAMS", "Expected params.source to be a non-empty string");
+    }
+    const cwd = this.active?.inspection.summary.cwd ?? homedir();
+    const settingsManager = SettingsManager.create(cwd, this.agentDir);
+    const disabledStore = new DisabledPackageStore(disabledPackageStorePath(this.agentDir));
+    const disabled = await disabledStore.load();
+    const current = settingsManager.getGlobalSettings().packages ?? [];
+    const matches = (entry: unknown) => packageSourceKey(entry) === source;
+
+    if (!enabled) {
+      const removed = current.find(matches);
+      if (removed !== undefined || !disabled.some(matches)) {
+        if (removed !== undefined) {
+          settingsManager.setPackages(current.filter((entry) => !matches(entry)));
+          await settingsManager.flush();
+        }
+        if (removed !== undefined && !disabled.some(matches)) disabled.push(removed);
+        await disabledStore.save(disabled);
+      }
+    } else {
+      const restored = disabled.find(matches) as import("@earendil-works/pi-coding-agent").PackageSource | undefined;
+      if (!current.some(matches)) {
+        settingsManager.setPackages([...current, restored ?? source]);
+        await settingsManager.flush();
+      }
+      if (restored !== undefined || disabled.length > 0) {
+        await disabledStore.save(disabled.filter((entry) => !matches(entry)));
+      }
+    }
+
+    if (this.active) {
+      await this.active.session.resourceLoader.reload();
+    }
+    return { ok: true, source, enabled };
+  }
+
   private getCommands(): unknown {
     const active = this.requireWritable();
-    const commands = [];
-    for (const command of active.session.extensionRunner.getRegisteredCommands()) {
+    const commands = [];    for (const command of active.session.extensionRunner.getRegisteredCommands()) {
       commands.push({
         name: command.invocationName,
         description: command.description,

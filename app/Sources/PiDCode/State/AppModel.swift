@@ -142,6 +142,7 @@ final class AppModel {
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
     let selfBuild = SelfBuildModel()
+    let resources = ResourcesModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
@@ -1475,6 +1476,20 @@ final class AppModel {
         guard let target = currentDraftTarget else { return }
         setDraftText(text, for: target)
         scheduleDraftSave()
+    }
+
+    /// 界面即上下文（ADR 0024 决定 2）：把界面对象的精确引用写入当前 Composer 草稿。
+    /// 只预填、不发送——用户仍可编辑、仍须显式发送；已有内容以换行追加，不覆盖。
+    func insertComposerReference(_ reference: String) {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        workbenchDestination = .workspace
+        workspaceTabSelection = .conversation
+        if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updateComposerText(trimmed)
+        } else {
+            updateComposerText(composerText + "\n\n" + trimmed)
+        }
     }
 
     func beginPathDraft(from item: TranscriptItem) {
@@ -4084,6 +4099,45 @@ final class AppModel {
             return
         }
         verificationEvidence = await verificationStore.records(sessionId: sessionId)
+    }
+
+    /// 本机资源快照（ADR 0024 / 0.0.15）：Pi 真实加载的扩展 / Skill / Prompt / 命令。
+    func loadResources() async {
+        guard let client = readyClient, !resources.isLoading else { return }
+        resources.isLoading = true
+        defer { resources.isLoading = false }
+        do {
+            resources.snapshot = try await client.request("resources.list")
+            resources.issue = nil
+        } catch {
+            resources.issue = "无法读取本机资源：\(DiagnosticSanitizer.redact(error.localizedDescription))"
+        }
+    }
+
+    /// 扩展包停用 / 启用：经 Pi 真实配置写与热重载，完成后刷新快照。
+    func setResourcePackageEnabled(_ source: String, enabled: Bool) async {
+        guard let client = readyClient, !resources.isMutating else { return }
+        resources.isMutating = true
+        resources.mutatingSource = source
+        defer {
+            resources.isMutating = false
+            resources.mutatingSource = nil
+        }
+        do {
+            let result: ResourcePackageUpdateResult = try await client.request(
+                "resources.setPackageEnabled",
+                params: [
+                    "source": .string(source),
+                    "enabled": .bool(enabled),
+                ]
+            )
+            guard result.ok, result.source == source else {
+                throw PiHostClientError.invalidEnvelope("resources.setPackageEnabled 未确认")
+            }
+            await loadResources()
+        } catch {
+            showNotice("未能更新扩展包状态：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "warning")
+        }
     }
 
     func startSelfBuild() async {

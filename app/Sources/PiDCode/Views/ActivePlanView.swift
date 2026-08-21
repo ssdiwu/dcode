@@ -293,6 +293,7 @@ private struct PlanItemGroup: View {
 }
 
 private struct PlanItemRow: View {
+    @Environment(AppModel.self) private var model
     let item: PlanItemPresentation
     let isCurrent: Bool
 
@@ -330,6 +331,12 @@ private struct PlanItemRow: View {
             isCurrent ? Color.accentColor.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius)
         )
+        .contentShape(RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius))
+        .contextMenu {
+            Button("引用到输入框", systemImage: "text.insert") {
+                model.insertComposerReference("计划工作项：\(item.subject)（\(item.status.label)\(isCurrent ? "，当前步骤" : "")）")
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.subject)，\(item.status.label)\(isCurrent ? "，当前步骤" : "")")
     }

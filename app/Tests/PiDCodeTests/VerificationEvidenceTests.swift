@@ -87,7 +87,9 @@ final class VerificationEvidenceTests: XCTestCase {
         )
         for record in [ok, failed] {
             let host = NSHostingView(
-                rootView: VerificationEvidenceRow(record: record).frame(width: 380, height: 120)
+                rootView: VerificationEvidenceRow(record: record)
+                    .environment(AppModel())
+                    .frame(width: 380, height: 120)
             )
             host.layoutSubtreeIfNeeded()
             XCTAssertFalse(host.fittingSize == .zero)

@@ -97,6 +97,14 @@ struct SettingsView: View {
                 model.presentSettings(.models)
             }
 
+            SettingsNavigationRow(
+                title: "本机资源",
+                systemImage: "shippingbox",
+                selected: page == .resources
+            ) {
+                model.presentSettings(.resources)
+            }
+
             Text("偏好")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
@@ -176,6 +184,9 @@ struct SettingsView: View {
         switch page {
         case .models:
             ModelSettingsView()
+
+        case .resources:
+            ResourcesSettingsView()
 
         case .appearance:
             SettingsPageContainer(
@@ -660,5 +671,292 @@ struct HostDiagnosticsSettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// 本机资源（ADR 0024 / 0.0.15）：Pi 真实加载并注册成功的资源合同。
+/// 扩展包停用 / 启用经 Pi 真实配置写与热重载；Skill / Prompt / Command 无
+/// Pi 配置合同，只读展示，不提供开关（诚实降级）。
+struct ResourcesSettingsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsPageContainer(
+            title: "本机资源",
+            subtitle: "Pi 实际加载并注册成功的扩展、Skill、Prompt 模板与命令；停用扩展包会写入 Pi 配置并热重载。"
+        ) {
+            VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingSection) {
+                if model.resources.isLoading && model.resources.snapshot == nil {
+                    SettingsGroup {
+                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                            ProgressView().controlSize(.small)
+                            Text("正在读取 Pi 资源…")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 60, alignment: .leading)
+                    }
+                } else if let issue = model.resources.issue, model.resources.snapshot == nil {
+                    SettingsGroup {
+                        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingGroup) {
+                            Text(issue)
+                                .foregroundStyle(.secondary)
+                            Button("重试") {
+                                Task { await model.loadResources() }
+                            }
+                        }
+                        .padding(20)
+                    }
+                } else if let snapshot = model.resources.snapshot {
+                    packagesSection(snapshot.packages)
+                    extensionsSection(snapshot.extensions)
+                    skillsSection(snapshot.skills)
+                    promptsSection(snapshot.prompts)
+                    commandsSection(snapshot.commands)
+                    diagnosticsSection(snapshot.diagnostics)
+                    Text("资源列表来自 Pi 的真实加载结果；隐藏的 D Code 内联扩展不出现在此页。Skill / Prompt 模板没有对应的 Pi 启停配置，只读展示。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, PiDCodeMetrics.spacingTight)
+                }
+            }
+        }
+        .task {
+            await model.loadResources()
+        }
+    }
+
+    private func packagesSection(_ packages: [ResourcePackageEntry]) -> some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+            sectionHeader("扩展包", count: packages.count)
+            SettingsGroup {
+                if packages.isEmpty {
+                    emptyRow("Pi 配置中没有扩展包。")
+                } else {
+                    ForEach(packages, id: \.id) { package in
+                        if packages.first?.id != package.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(package.source)
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(package.enabled ? package.kindLabel : "\(package.kindLabel) · 已停用")
+                                    .font(.caption)
+                                    .foregroundStyle(package.enabled ? Color.secondary : Color.orange)
+                            }
+                            Spacer(minLength: PiDCodeMetrics.spacingGroup)
+                            if package.enabled {
+                                Button("停用") {
+                                    Task {
+                                        await model.setResourcePackageEnabled(package.source, enabled: false)
+                                    }
+                                }
+                                .controlSize(.small)
+                                .disabled(model.resources.isMutating)
+                                .dCodeAccessibleButton("停用扩展包 \(package.source)")
+                            } else {
+                                Button("启用") {
+                                    Task {
+                                        await model.setResourcePackageEnabled(package.source, enabled: true)
+                                    }
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.resources.isMutating)
+                                .dCodeAccessibleButton("启用扩展包 \(package.source)")
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 52, alignment: .leading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func extensionsSection(_ extensions: [ResourceExtensionEntry]) -> some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+            sectionHeader("已加载扩展", count: extensions.count)
+            SettingsGroup {
+                if extensions.isEmpty {
+                    emptyRow("没有已加载的扩展。")
+                } else {
+                    ForEach(extensions, id: \.id) { entry in
+                        if extensions.first?.id != entry.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.name)
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(entry.path)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: PiDCodeMetrics.spacingGroup)
+                            Text("\(entry.toolCount) 工具 · \(entry.commandCount) 命令")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 52, alignment: .leading)
+                        .help(entry.path)
+                    }
+                }
+            }
+        }
+    }
+
+    private func skillsSection(_ skills: [ResourceSkillEntry]) -> some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+            sectionHeader("Skill", count: skills.count)
+            SettingsGroup {
+                if skills.isEmpty {
+                    emptyRow("没有已加载的 Skill。")
+                } else {
+                    ForEach(skills, id: \.id) { skill in
+                        if skills.first?.id != skill.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                                Text(skill.name)
+                                    .font(.body.weight(.medium))
+                                if skill.disableModelInvocation {
+                                    Text("仅手动")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            Text(skill.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                        .frame(minHeight: 52, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+    }
+
+    private func promptsSection(_ prompts: [ResourcePromptEntry]) -> some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+            sectionHeader("Prompt 模板", count: prompts.count)
+            SettingsGroup {
+                if prompts.isEmpty {
+                    emptyRow("没有已加载的 Prompt 模板。")
+                } else {
+                    ForEach(prompts, id: \.id) { prompt in
+                        if prompts.first?.id != prompt.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                                Text("/\(prompt.name)")
+                                    .font(.body.weight(.medium))
+                                if let hint = prompt.argumentHint, !hint.isEmpty {
+                                    Text("参数：\(hint)")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            Text(prompt.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                        .frame(minHeight: 52, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+    }
+
+    private func commandsSection(_ commands: [ResourceCommandEntry]) -> some View {
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+            sectionHeader("命令", count: commands.count)
+            SettingsGroup {
+                if commands.isEmpty {
+                    emptyRow("没有可调用的命令。")
+                } else {
+                    ForEach(commands, id: \.id) { command in
+                        if commands.first?.id != command.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                            Text(command.name)
+                                .font(.callout.monospaced().weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(command.description ?? "")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: PiDCodeMetrics.spacingGroup)
+                            Text(command.source)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 44, alignment: .leading)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diagnosticsSection(_ diagnostics: [ResourceDiagnosticEntry]) -> some View {
+        if !diagnostics.isEmpty {
+            VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingTight) {
+                sectionHeader("加载诊断", count: diagnostics.count)
+                SettingsGroup {
+                    ForEach(diagnostics, id: \.id) { entry in
+                        if diagnostics.first?.id != entry.id {
+                            Divider().padding(.leading, 20)
+                        }
+                        Text(entry.message)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.orange)
+                            .lineLimit(2)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String, count: Int) -> some View {
+        Text("\(title)（\(count)）")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 20)
+            .accessibilityElement(children: .combine)
+    }
+
+    private func emptyRow(_ text: String) -> some View {
+        Text(text)
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 20)
+            .frame(minHeight: 60, alignment: .leading)
     }
 }

@@ -257,3 +257,54 @@ final class ConversationRenderTests: XCTestCase {
         XCTAssertEqual(summaries.last?.systemImage, "ellipsis")
     }
 }
+
+@MainActor
+final class ResourcesSettingsRenderTests: XCTestCase {
+    func testResourcesSettingsPageRendersSnapshotStates() {
+        let model = AppModel()
+        model.resources.snapshot = ResourcesListResult(
+            packages: [
+                ResourcePackageEntry(source: "npm:pi-mcp-adapter", kind: "npm", enabled: true),
+                ResourcePackageEntry(source: "../../pi-dgoal", kind: "path", enabled: false),
+            ],
+            extensions: [
+                ResourceExtensionEntry(
+                    name: "pi-dgoal",
+                    path: "/tmp/pi-dgoal/index.ts",
+                    source: "package",
+                    toolCount: 1,
+                    commandCount: 2
+                ),
+            ],
+            skills: [
+                ResourceSkillEntry(
+                    name: "llm-wiki",
+                    description: "知识库",
+                    source: "package",
+                    filePath: "/tmp/skills/llm-wiki/SKILL.md",
+                    disableModelInvocation: false
+                ),
+            ],
+            prompts: [],
+            commands: [],
+            diagnostics: [ResourceDiagnosticEntry(message: "/tmp/broken.ts: syntax error")]
+        )
+
+        let host = NSHostingView(
+            rootView: ResourcesSettingsView().environment(model).frame(width: 640, height: 720)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero, "快照态必须完成布局")
+    }
+
+    func testResourcesSettingsPageRendersLoadingState() {
+        let model = AppModel()
+        model.resources.isLoading = true
+
+        let host = NSHostingView(
+            rootView: ResourcesSettingsView().environment(model).frame(width: 640, height: 480)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero, "加载态必须完成布局")
+    }
+}

@@ -192,6 +192,7 @@ private struct FileTreeBranch: View {
     @State private var children: [ProjectFileNode]?
     @State private var errorMessage: String?
     @State private var hovering = false
+    @FocusState private var rowFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -200,6 +201,18 @@ private struct FileTreeBranch: View {
                     rowLabel
                 }
                 .buttonStyle(.plain)
+                .focused($rowFocused)
+                .focusEffectDisabled()
+                .rowFocusRing(rowFocused)
+                .onKeyPress(.rightArrow) {
+                    if !expanded { expanded = true }
+                    return .handled
+                }
+                .onKeyPress(.leftArrow) {
+                    guard expanded else { return .ignored }
+                    expanded = false
+                    return .handled
+                }
                 .accessibilityLabel("\(expanded ? "收起" : "展开") \(node.name)")
             } else if node.kind == .file || node.kind == .symbolicLink {
                 Button {
@@ -213,6 +226,9 @@ private struct FileTreeBranch: View {
                     rowLabel
                 }
                 .buttonStyle(.plain)
+                .focused($rowFocused)
+                .focusEffectDisabled()
+                .rowFocusRing(rowFocused)
                 .accessibilityLabel("打开只读文件 \(node.name)")
             } else {
                 rowLabel
@@ -242,8 +258,10 @@ private struct FileTreeBranch: View {
                         .padding(.leading, CGFloat(depth + 1) * 16 + 30)
                         .padding(.vertical, 5)
                 } else {
-                    ForEach(children ?? []) { child in
-                        FileTreeBranch(rootPath: rootPath, node: child, depth: depth + 1, isRoot: false)
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(children ?? []) { child in
+                            FileTreeBranch(rootPath: rootPath, node: child, depth: depth + 1, isRoot: false)
+                        }
                     }
                 }
             }
@@ -291,6 +309,9 @@ private struct FileTreeBranch: View {
         .onHover { hovering = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         .contextMenu {
+            Button("引用到输入框", systemImage: "text.insert") {
+                model.insertComposerReference(node.path)
+            }
             Button("在 Finder 中显示", systemImage: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
             }
@@ -397,8 +418,10 @@ private struct GitRepositoryCard: View {
                         .font(.caption)
                         .foregroundStyle(.green)
                 } else {
-                    ForEach(changes) { change in
-                        GitChangeDiffRow(rootPath: snapshot.rootPath, change: change)
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        ForEach(changes) { change in
+                            GitChangeDiffRow(rootPath: snapshot.rootPath, change: change)
+                        }
                     }
                     Text("真实 Git 差异 · 只读 · 不提供 stage / discard / commit")
                         .font(.caption2)
@@ -494,6 +517,7 @@ private struct SessionInspectorView: View {
 
 /// 单个 Git 变更文件：展开后按需读取 staged / unstaged 精确差异。
 private struct GitChangeDiffRow: View {
+    @Environment(AppModel.self) private var model
     let rootPath: String
     let change: GitChange
     @State private var expanded = false
@@ -533,6 +557,11 @@ private struct GitChangeDiffRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("引用到输入框", systemImage: "text.insert") {
+                    model.insertComposerReference(diffReference)
+                }
+            }
 
             if expanded {
                 diffBody
@@ -544,6 +573,25 @@ private struct GitChangeDiffRow: View {
                     }
             }
         }
+    }
+
+    /// 界面即上下文：文件级引用带当前已知的暂存 / 未暂存增删摘要。
+    private var diffReference: String {
+        guard let result else { return absoluteChangePath }
+        var parts: [String] = []
+        if let staged = result.staged, staged.additions + staged.deletions > 0 {
+            parts.append("已暂存 \(signature(staged))")
+        }
+        if let unstaged = result.unstaged, unstaged.additions + unstaged.deletions > 0 {
+            parts.append("未暂存 \(signature(unstaged))")
+        }
+        return parts.isEmpty ? absoluteChangePath : "\(absoluteChangePath)（\(parts.joined(separator: "、"))）"
+    }
+
+    private var absoluteChangePath: String {
+        change.path.hasPrefix("/")
+            ? change.path
+            : "\(rootPath)/\(change.path)"
     }
 
     private var countSummary: String? {
@@ -563,7 +611,7 @@ private struct GitChangeDiffRow: View {
     }
 
     private var diffBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        LazyVStack(alignment: .leading, spacing: 6) {
             if loading {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
@@ -576,10 +624,18 @@ private struct GitChangeDiffRow: View {
                     .foregroundStyle(.orange)
             }
             if let staged = result?.staged {
-                GitDiffSection(title: "已暂存", diff: staged)
+                GitDiffSection(
+                    title: "已暂存",
+                    diff: staged,
+                    filePath: absoluteChangePath
+                )
             }
             if let unstaged = result?.unstaged {
-                GitDiffSection(title: "未暂存", diff: unstaged)
+                GitDiffSection(
+                    title: "未暂存",
+                    diff: unstaged,
+                    filePath: absoluteChangePath
+                )
             }
             if change.status == "??" {
                 Text("未跟踪文件 · 完整内容即为新增")
@@ -645,9 +701,11 @@ private struct GitChangeDiffRow: View {
 struct GitDiffSection: View {
     let title: String
     let diff: GitFileDiff
+    /// 界面即上下文：hunk 引用需要的绝对路径；缺省时 hunk 不提供引用动作。
+    var filePath: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        LazyVStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(title)
                     .font(.caption2.weight(.semibold))
@@ -666,7 +724,7 @@ struct GitDiffSection: View {
             }
             if !diff.isBinary {
                 ForEach(diff.hunks) { hunk in
-                    GitDiffHunkView(hunk: hunk)
+                    GitDiffHunkView(filePath: filePath, zone: title, hunk: hunk)
                 }
             }
         }
@@ -674,6 +732,9 @@ struct GitDiffSection: View {
 }
 
 struct GitDiffHunkView: View {
+    @Environment(AppModel.self) private var model
+    let filePath: String
+    let zone: String
     let hunk: GitDiffHunk
 
     var body: some View {
@@ -682,6 +743,14 @@ struct GitDiffHunkView: View {
                 .font(.caption2.monospaced().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 2)
+                .contextMenu {
+                    if !filePath.isEmpty {
+                        Button("引用到输入框", systemImage: "text.insert") {
+                            let lastLine = hunk.newStart + max(0, hunk.newCount - 1)
+                            model.insertComposerReference("\(filePath) 第 \(hunk.newStart)–\(lastLine) 行（\(zone)）")
+                        }
+                    }
+                }
             ForEach(hunk.lines) { line in
                 GitDiffLineView(line: line)
             }
@@ -754,6 +823,7 @@ struct VerificationEvidenceSection: View {
 }
 
 struct VerificationEvidenceRow: View {
+    @Environment(AppModel.self) private var model
     let record: VerificationEvidenceRecord
     @State private var expanded = false
 
@@ -795,6 +865,13 @@ struct VerificationEvidenceRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("引用到输入框", systemImage: "text.insert") {
+                    model.insertComposerReference(
+                        "验证证据：\(record.command)（\(exitLabel)，revision \(record.gitRevision ?? "待补")）"
+                    )
+                }
+            }
 
             if expanded {
                 VStack(alignment: .leading, spacing: 2) {
@@ -853,5 +930,15 @@ struct VerificationEvidenceRow: View {
         case "failure": record.exitCode.map { "退出 \($0)" } ?? "失败"
         default: "退出未知"
         }
+    }
+}
+
+/// 文件树行的键盘焦点环（设计系统 §5：Keyboard focus 使用独立 accent outline）。
+private extension View {
+    func rowFocusRing(_ focused: Bool) -> some View {
+        overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(focused ? Color.accentColor.opacity(0.7) : .clear, lineWidth: 1.5)
+        )
     }
 }
