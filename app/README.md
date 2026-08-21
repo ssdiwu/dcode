@@ -5,10 +5,10 @@
 ## 目录
 
 - `Sources/PiDCode/Host/`：Host 子进程定位、Finder 环境补全、JSONL 与请求关联。
-- `Sources/PiDCode/Models/`：协议快照、Host Run State、Activity Attention Store、Project 元数据与 Session 精确归属、会话前 / 逐路径草稿、D Code 归档 / 置顶 / 会话变更账本、本机后续消息队列、运行中 steer 草稿、Pi Provider 认证交互、单根平铺 / 多根分组文件树、Git 只读查询、搜索结果、工作轮与对话导航投影、Markdown 与 Pi 图片内容呈现、工具安全 presenter 与原生消息模型。
-- `Sources/PiDCode/State/`：主线程应用状态、Navigation / Activity 会话栏投影、Recent / Project 会话分页、全局置顶、可见会话搜索、稳定完成关注态、首次发送时延迟创建 Pi Session、Prompt transaction、路径草稿、后续消息入队 / 派发 / 未知结果恢复、完整复制、直接归档/恢复、会话级已确认变更聚合、共享观察、按需写入与冲突恢复生命周期。
-- `Sources/PiDCode/Views/`：共享 surface / elevation / geometry token 与 primitive、可调会话栏 / 信息检查器的 SwiftUI 原生响应式工作台、顶部会话身份与持久重命名入口、顶部直达“会话 / 文件 / 变更”的非模态信息检查器、User Home、Navigation / Activity 双投影与完成蓝点、带置顶/归档 Hover 的 Session 导航、顶部累积的轮次导航尺、工具卡、可持续查看的 Thinking、Markdown / 代码 / Mermaid / Pi 图片内容块、Plan / 会话变更摘要、会话前草稿与统一 Run / Steer / Queue 控制的 Interaction Dock、Provider 认证 Sheet、路径谱系、复制目标、`Command-K` 搜索浮层，以及当前窗口内带页内导航、受限内容宽度、归档管理与“关于 D Code”子页的 Settings 工作台页面。
-- `Tests/PiDCodeTests/`：协议解码、Run State、Activity 关注态与排序、搜索与过期结果保护、路径/草稿/归档/置顶/会话变更账本、Markdown 段落和列表、Pi 图片有界解析、About 元数据、Project 持久化、文件树、Git 只读性、工作轮/对话导航密度与宽度/工具/布局策略、Bundle 定位和状态边界测试。
+- `Sources/PiDCode/Models/`：协议与 Host 快照、Project / Session / Path、草稿、归档 / 置顶、Follow-up Queue、Run State、模型 / 认证、本机资源与自定义供应商、Exact Git Diff、会话变更与验证证据账本、自构建、搜索、Markdown / Mermaid / Pi 图片及原生工具 presenter 的数据合同。
+- `Sources/PiDCode/State/`：`AppModel` 作为 UI 事务协调点，并由 `SearchModel`、`ActivityModel`、`FollowUpModel`、`ModelSettingsState`、`SelfBuildModel`、`ResourcesModel`、`ModelProvidersModel` 等领域状态承载各自生命周期；既有会话打开即接管，没有共享观察 / 按需写入模式，冲突后关闭失效所有权并保留草稿供重新接管。
+- `Sources/PiDCode/Views/`：原生响应式工作台、会话 / Activity 导航、信息检查器、Conversation、文件与 Exact Git Diff、Composer / Plan / Run 控制、搜索、路径 / 复制 / 归档，以及同一工作台内的模型、本机资源、自定义供应商、自构建、Host 诊断和 About 设置页面。
+- `Tests/PiDCodeTests/`：纯模型、Fake-host 集成与 ViewInspector 渲染回归。自动测试覆盖协议、状态、文件 / Git、搜索、资源、自构建与供应商等路径，但不替代跨 Swift / Host 真实存储合同、完整 JSONL Protocol 组合或人工视觉 / 无障碍验收；当前缺口见[版本实施方案](../doc/40-版本实施方案/README.md)。
 - `Resources/`：App 图标的 `1024 × 1024` PNG 母版与构建使用的 `.icns` 资源。
 - `Info.plist`：本机 App bundle metadata。
 - `build.sh`：release 构建、生产 Node 依赖装配与本地签名。
@@ -39,8 +39,8 @@ cd host && npm ci && cd ..
 open "dist/D Code.app"
 ```
 
-脚本默认内嵌 `~/.hermes/node/bin/node`；可用 `PI_DCODE_NODE_BIN=/absolute/path/to/node` 覆盖。构建时还必须提供该 Node 发行物的完整 `LICENSE`：默认读取 Node 安装根目录的 `LICENSE`，非标准布局可用 `PI_DCODE_NODE_LICENSE=/absolute/path/to/LICENSE` 指定。`0.0.8` 源码构建精确固定 arm64 Node `22.22.3`，使运行时、SQLite FTS5 搜索能力与随包许可证保持一致；输出 `dist/D Code.app`，资源布局包含 `Contents/Resources/AppIcon.icns`、`Contents/Resources/runtime/node`、`Contents/Resources/host/` 与 `Contents/Resources/Legal/`。Legal 目录保留 D Code 声明、Node/Pi/Apache 许可证、缺少许可证文件的 npm 包归属以及当前生产依赖清单；发现未审计许可证或新的缺失正文包时构建失败。App 优先使用包内资源，保留 `--node-bin`、`--host-entry` 和环境变量供开发诊断。`PiDCode` 继续作为内部 Swift 构建目标名，应用包内的可执行文件使用用户可见名称 `D Code`。
+脚本默认内嵌 `~/.hermes/node/bin/node`；可用 `PI_DCODE_NODE_BIN=/absolute/path/to/node` 覆盖。构建时还必须提供该 Node 发行物的完整 `LICENSE`：默认读取 Node 安装根目录的 `LICENSE`，非标准布局可用 `PI_DCODE_NODE_LICENSE=/absolute/path/to/LICENSE` 指定。当前构建脚本精确固定 arm64 Node `22.22.3`，使运行时、SQLite FTS5 搜索能力与随包许可证保持一致；输出 `dist/D Code.app`，资源布局包含 `Contents/Resources/AppIcon.icns`、`Contents/Resources/runtime/node`、`Contents/Resources/host/` 与 `Contents/Resources/Legal/`。Legal 目录保留 D Code 声明、Node/Pi/Apache 许可证、缺少许可证文件的 npm 包归属以及当前生产依赖清单；发现未审计许可证或新的缺失正文包时构建失败。App 优先使用包内资源，保留 `--node-bin`、`--host-entry` 和环境变量供开发诊断。`PiDCode` 继续作为内部 Swift 构建目标名，应用包内的可执行文件使用用户可见名称 `D Code`。
 
-隔离验收可在直接启动可执行文件时传入 `--agent-dir /temporary/pi-agent`，并用 `D_CODE_PROJECT_STORE_PATH=/temporary/projects.json`、`D_CODE_SESSION_DRAFT_STORE_PATH=/temporary/drafts.json`、`D_CODE_SESSION_ARCHIVE_STORE_PATH=/temporary/archives.json`、`D_CODE_SESSION_PIN_STORE_PATH=/temporary/pins.json`、`D_CODE_SESSION_CHANGE_STORE_PATH=/temporary/session-changes.json`、`D_CODE_FOLLOW_UP_QUEUE_STORE_PATH=/temporary/follow-up-queues.json`、`D_CODE_ACTIVITY_ATTENTION_STORE_PATH=/temporary/activity-attention.json` 隔离 Project、逐路径草稿、归档、置顶、会话变更、后续消息与完成关注元数据；这些入口只用于开发与验证，不改变产品默认路径。
+隔离验收可在直接启动可执行文件时传入 `--agent-dir /temporary/pi-agent`，并用 `D_CODE_PROJECT_STORE_PATH=/temporary/projects.json`、`D_CODE_SESSION_DRAFT_STORE_PATH=/temporary/drafts.json`、`D_CODE_SESSION_ARCHIVE_STORE_PATH=/temporary/archives.json`、`D_CODE_SESSION_PIN_STORE_PATH=/temporary/pins.json`、`D_CODE_SESSION_CHANGE_STORE_PATH=/temporary/session-changes.json`、`D_CODE_FOLLOW_UP_QUEUE_STORE_PATH=/temporary/follow-up-queues.json`、`D_CODE_ACTIVITY_ATTENTION_STORE_PATH=/temporary/activity-attention.json` 隔离对应本机资料；这些入口只用于开发与验证。当前验证证据账本与 `dcode_facts` 尚未贯通同一套隔离覆盖，不能据此宣称全部 D Code 本机资料都已隔离。
 
 该产物使用 ad-hoc signature，仅用于本机运行；未启用 App Sandbox、Hardened Runtime、Developer ID 或 notarization，也不代表已获得对外分发授权。App 仍只通过 Host 访问 `~/.pi/agent`，关闭窗口或终止应用时会停止内嵌 Host。
