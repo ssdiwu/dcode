@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- `app/build.sh` 新增发布打包硬性检查：工作区不干净（`git status --porcelain` 非空）时拒绝构建，可用 `PI_DCODE_ALLOW_DIRTY_BUILD=1` 显式做本地调试构建（产物不得当作发布物分发）；`app/Info.plist`、`host/package.json`、`host/package-lock.json` 三处版本号不一致时拒绝构建，无绕过项。构建产物新增 Git revision / describe 与工作区干净状态记录；HEAD 不在对应 `v<version>` tag 上时打印警告。`AGENTS.md` 补充对应交付前提。
+
 ### Docs
 
 - 校准 `v0.0.16` 前后的文档与实现现状：版本索引拆分 Source（源码标签）与 Acceptance（验收），补齐 `v0.0.7–v0.0.16` 的远端标签状态并记录已知缺口；架构与分层 README 补入 `0.0.14–0.0.16` 的主页 Composer、本机资源、自定义供应商、Self-build、验证证据等现实能力；已被 ADR 0018／0023 取代的"共享观察 / 按需写入""权限卡"等过期现状改写为历史基线记录，`0.0.15`／`0.0.16` PRD 中不成立的验收项重新取消勾选。

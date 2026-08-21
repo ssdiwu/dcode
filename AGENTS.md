@@ -25,4 +25,5 @@
 - Pi Host 改动在 `host/` 运行 `npm test`；需要单独检查构建时运行 `npm run build`。结论绑定实际目录、revision、工作区状态、命令、环境和覆盖范围。
 - 原生客户端尚无可运行入口时不得把 Host 测试或规划文档冒充 App 构建、启动或人工验收；入口建立后以根 README 和 manifest 记录的命令为准。
 - 涉及真实 Pi 配置、会话或凭据的验证使用隔离数据或明确授权的测试账户，不读取或改写无关用户状态。
+- 打包发布产物（`app/build.sh`）前必须工作区干净（`git status --porcelain` 为空）且 `app/Info.plist`、`host/package.json`、`host/package-lock.json` 的内部版本号一致；脚本本身会做这两项硬性检查并在不满足时拒绝构建。脏树可用 `PI_DCODE_ALLOW_DIRTY_BUILD=1` 显式绕过用于本地调试，但这样产出的 `.app` 不得当作正式发布物分发；版本号不一致没有绕过项，必须先修源头。
 - 未经用户明确授权，不创建 commit，不执行 `git push`、推送 tag、创建远程仓库、签名发布、部署或对外分发。

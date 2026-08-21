@@ -62,6 +62,48 @@ if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
     exit 1
 fi
 
+printf '==> Checking release provenance\n'
+GIT_REVISION="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "${GIT_REVISION}" ]]; then
+    echo "error: not inside a git checkout; cannot verify build provenance" >&2
+    exit 1
+fi
+GIT_DESCRIBE="$(git -C "${ROOT_DIR}" describe --tags --always 2>/dev/null || echo "${GIT_REVISION:0:12}")"
+
+DIRTY_FILES="$(git -C "${ROOT_DIR}" status --porcelain)"
+if [[ -n "${DIRTY_FILES}" ]]; then
+    if [[ "${PI_DCODE_ALLOW_DIRTY_BUILD:-0}" == "1" ]]; then
+        echo "warning: working tree is dirty; packaging uncommitted changes (PI_DCODE_ALLOW_DIRTY_BUILD=1):" >&2
+        echo "${DIRTY_FILES}" | sed 's/^/  /' >&2
+    else
+        echo "error: working tree is not clean; refusing to package a release build:" >&2
+        echo "${DIRTY_FILES}" | sed 's/^/  /' >&2
+        echo "Commit or stash these changes, or re-run with PI_DCODE_ALLOW_DIRTY_BUILD=1 for an explicit local/dev build (do not distribute that output as a release)." >&2
+        exit 1
+    fi
+fi
+
+APP_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${ROOT_DIR}/app/Info.plist")"
+HOST_PKG_VERSION="$(grep -m1 '"version"' "${HOST_DIR}/package.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/')"
+HOST_LOCK_VERSION="$(grep -m1 '"version"' "${HOST_DIR}/package-lock.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/')"
+if [[ -z "${APP_VERSION}" || -z "${HOST_PKG_VERSION}" || -z "${HOST_LOCK_VERSION}" ]]; then
+    echo "error: could not determine version from Info.plist/package.json/package-lock.json" >&2
+    exit 1
+fi
+if [[ "${APP_VERSION}" != "${HOST_PKG_VERSION}" || "${APP_VERSION}" != "${HOST_LOCK_VERSION}" ]]; then
+    echo "error: version mismatch — app/Info.plist=${APP_VERSION} host/package.json=${HOST_PKG_VERSION} host/package-lock.json=${HOST_LOCK_VERSION}" >&2
+    echo "Fix the source of truth before packaging; do not paper over this by editing the bundle after the fact." >&2
+    exit 1
+fi
+if git -C "${ROOT_DIR}" rev-parse -q --verify "refs/tags/v${APP_VERSION}" >/dev/null; then
+    TAG_REVISION="$(git -C "${ROOT_DIR}" rev-parse "v${APP_VERSION}")"
+    if [[ "${TAG_REVISION}" != "${GIT_REVISION}" ]]; then
+        echo "warning: HEAD (${GIT_REVISION:0:12}) is not the v${APP_VERSION} tag commit (${TAG_REVISION:0:12}); this build includes commits beyond that release." >&2
+    fi
+else
+    echo "warning: no v${APP_VERSION} tag found in this checkout; this is not a tagged release build." >&2
+fi
+
 printf '==> Building Node/Pi Host\n'
 (
     cd "${HOST_DIR}"
@@ -119,7 +161,10 @@ cat > "${RESOURCES_DIR}/build-info.txt" <<EOF
 D Code local build
 Node: ${NODE_VERSION}
 Architecture: arm64
-Host package: @pi-dcode/host 0.0.16
+Host package: @pi-dcode/host ${HOST_PKG_VERSION}
+Git revision: ${GIT_REVISION}
+Git describe: ${GIT_DESCRIBE}
+Working tree: $([[ -n "${DIRTY_FILES}" ]] && echo "dirty (PI_DCODE_ALLOW_DIRTY_BUILD=1)" || echo "clean")
 EOF
 
 printf '==> Validating bundle metadata and embedded Host\n'
