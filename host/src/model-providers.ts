@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,7 +86,6 @@ export interface ProviderSaveInput {
   models: ProviderModelInput[];
   /** null = 不修改；提供则以 JSON 文本整体替换（必须可解析为对象）。 */
   compatJson?: string | null;
-  modelOverridesJson?: string | null;
 }
 
 export interface FieldError {
@@ -141,8 +140,10 @@ export class ModelProvidersStore {
   }
 
   private async readRawProviders(): Promise<
-    { ok: true; providers: Map<string, RawProvider> } | { ok: false; error: string }
+    | { ok: true; providers: Map<string, RawProvider>; fingerprint: string | null }
+    | { ok: false; error: string }
   > {
+    const fingerprint = await this.sourceFingerprint();
     const config = await this.loadConfig();
     const parseError = config.getError();
     if (parseError) return { ok: false, error: parseError };
@@ -151,7 +152,17 @@ export class ModelProvidersStore {
       const provider = config.getProvider(id);
       if (provider !== undefined) providers.set(id, provider as unknown as RawProvider);
     }
-    return { ok: true, providers };
+    return { ok: true, providers, fingerprint };
+  }
+
+  /** 源指纹（mtimeMs+size）：编辑期间被外部修改则拒绝写入，避免盲覆盖。 */
+  private async sourceFingerprint(): Promise<string | null> {
+    try {
+      const info = await stat(this.path);
+      return `${info.mtimeMs}:${info.size}`;
+    } catch {
+      return null;
+    }
   }
 
   async list(): Promise<ProviderListResult> {
@@ -192,9 +203,9 @@ export class ModelProvidersStore {
         maxTokens: optionalNumber(model.maxTokens),
       })),
       compatJson: raw.compat === undefined ? null : stableJson(raw.compat),
-      modelOverridesJson: raw.modelOverrides === undefined
-        ? null
-        : stableJson(raw.modelOverrides),
+      // modelOverrides 允许嵌套 headers（可能含 token 原文），永不回传 Swift；
+      // 保存时也整体保留，不接受替换（0.0.16 审计 P1）。
+      modelOverridesJson: null,
     };
   }
 
@@ -232,7 +243,6 @@ export class ModelProvidersStore {
       }
     }
     const compat = this.parseAdvancedJson(input.compatJson, "compatJson", errors);
-    const modelOverrides = this.parseAdvancedJson(input.modelOverridesJson, "modelOverridesJson", errors);
     if (errors.length > 0) return { ok: false, errors };
 
     const loaded = await this.readRawProviders();
@@ -243,7 +253,14 @@ export class ModelProvidersStore {
       };
     }
 
-    const merged = this.mergeProvider(loaded.providers.get(id), input, compat, modelOverrides);
+    const drifted = await this.sourceFingerprint();
+    if (drifted !== loaded.fingerprint) {
+      return {
+        ok: false,
+        errors: [{ field: "models.json", message: "models.json 在编辑期间被外部修改，本次未写入；请重新加载后再试" }],
+      };
+    }
+    const merged = this.mergeProvider(loaded.providers.get(id), input, compat);
     const nextProviders = new Map(loaded.providers);
     nextProviders.set(id, merged);
 
@@ -259,6 +276,13 @@ export class ModelProvidersStore {
       return {
         ok: false,
         errors: [{ field: "models.json", message: `当前 models.json 无法解析，拒绝写入：${loaded.error}` }],
+      };
+    }
+    const drifted = await this.sourceFingerprint();
+    if (drifted !== loaded.fingerprint) {
+      return {
+        ok: false,
+        errors: [{ field: "models.json", message: "models.json 在编辑期间被外部修改，本次未写入；请重新加载后再试" }],
       };
     }
     const nextProviders = new Map(loaded.providers);
@@ -290,7 +314,6 @@ export class ModelProvidersStore {
     existing: RawProvider | undefined,
     input: ProviderSaveInput,
     compat: Record<string, unknown> | null | undefined,
-    modelOverrides: Record<string, unknown> | null | undefined,
   ): RawProvider {
     const next: RawProvider = { ...(existing ?? {}) };
 
@@ -317,10 +340,6 @@ export class ModelProvidersStore {
     if (compat !== undefined) {
       if (compat === null) delete next.compat;
       else next.compat = compat;
-    }
-    if (modelOverrides !== undefined) {
-      if (modelOverrides === null) delete next.modelOverrides;
-      else next.modelOverrides = modelOverrides;
     }
 
     const previousModels = new Map<string, RawModel>();

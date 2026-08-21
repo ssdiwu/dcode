@@ -4,6 +4,14 @@
 
 - 校准 `v0.0.16` 前后的文档与实现现状：版本索引拆分 Source（源码标签）与 Acceptance（验收），补齐 `v0.0.7–v0.0.16` 的远端标签状态并记录已知缺口；架构与分层 README 补入 `0.0.14–0.0.16` 的主页 Composer、本机资源、自定义供应商、Self-build、验证证据等现实能力；已被 ADR 0018／0023 取代的"共享观察 / 按需写入""权限卡"等过期现状改写为历史基线记录，`0.0.15`／`0.0.16` PRD 中不成立的验收项重新取消勾选。
 
+### Fixed
+
+- 自定义供应商设置不再回传或接受整体替换 `modelOverrides.<model>.headers`：此前该字段随 Provider 快照整体序列化进入 Swift 高级 JSON 编辑器，其中若含 token 正文即违反凭据脱敏合同；Host 现在始终原样保留既有 `modelOverrides`，界面移除对应编辑框。
+- `models.json` 写入前核对源文件指纹（mtime + size），编辑期间被外部修改时拒绝写入并提示重新加载，避免并发覆盖外部编辑。
+- 搜索正文命中消息现在可以正常打开：此前以可写身份打开会话时仍附带 `expectedEntryDigest`，被 Protocol v1 明确拒绝该参数组合（可写打开的新鲜度已由租约与静默窗口保证），导致命中消息实际无法打开。
+- `dcode_facts` 的 `evidence` / `project` facts 改读 Swift 侧真实存储合同：验证证据账本按 `{version, records}` 与 `ok`/`failure`/`unknown` 三态退出码读取，项目登记改读 `projects-v1.json` 的 `{version, projects}`；此前读取的文件名、文档形状与生产不一致，导致这两类事实在真实环境下始终不可用，此前测试因夹具自造格式而误判通过。
+- `host/package-lock.json` 根包版本回补到 `0.0.16`，与 `host/package.json` 一致。
+
 ## [0.0.16] - 2026-08-22
 
 ### Added

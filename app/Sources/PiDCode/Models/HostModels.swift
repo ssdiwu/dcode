@@ -162,7 +162,6 @@ struct ModelProviderView: Codable, Equatable, Sendable, Identifiable {
     let headerKeys: [String]
     let models: [ModelProviderModelView]
     let compatJson: String?
-    let modelOverridesJson: String?
 
     var authLabel: String {
         if authConfigured {
@@ -198,9 +197,8 @@ struct ModelProviderSaveInput: Codable, Equatable, Sendable {
     var oauthRadius: Bool?
     var removeAuth: Bool?
     var models: [ModelProviderModelInput]
-    /// nil = 不修改；空串 = 删除。
+    /// nil = 不修改；空串 = 删除。modelOverrides 由 Host 始终保留（可嵌套凭据，不回传不可替换）。
     var compatJson: String?
-    var modelOverridesJson: String?
 }
 
 struct ProviderFieldError: Codable, Equatable, Sendable {

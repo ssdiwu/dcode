@@ -1143,11 +1143,13 @@ final class AppModel {
             return
         }
         search.openError = nil
+        // 打开即接管（ADR 0018）后一切会话以可写打开，协议只允许只读导航携带
+        // expectedEntryDigest；可写接管的新鲜度由租约与静默窗口保证（审计 P1：
+        // 此前 writable+digest 组合被协议拒绝，搜索命中消息实际无法打开）。
         let opened = await openSession(
             result.sessionId,
             writable: true,
             expectedEntryID: result.entryId,
-            expectedEntryDigest: result.entryDigest,
             preserveActive: true,
             presentFailure: false,
             useOpenedPathDraftTarget: true

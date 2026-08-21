@@ -488,8 +488,7 @@ final class ModelProvidersIntegrationTests: XCTestCase {
             oauthRadius: nil,
             removeAuth: nil,
             models: [],
-            compatJson: nil,
-            modelOverridesJson: nil
+            compatJson: nil
         )
         let errors = await harness.model.saveModelProvider(input)
 

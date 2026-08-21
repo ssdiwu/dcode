@@ -157,7 +157,6 @@ private struct ProviderEditorSheet: View {
     @State private var useOAuth = false
     @State private var models: [ModelProviderModelInput] = []
     @State private var compatJson = ""
-    @State private var modelOverridesJson = ""
     @State private var fieldErrors: [ProviderFieldError] = []
     @State private var saving = false
 
@@ -338,16 +337,7 @@ private struct ProviderEditorSheet: View {
                             .strokeBorder(error(for: "compatJson") != nil ? Color.red.opacity(0.6) : Color.primary.opacity(0.12))
                     )
             }
-            fieldRow("modelOverrides", field: "modelOverridesJson") {
-                TextEditor(text: $modelOverridesJson)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(minHeight: 72)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(error(for: "modelOverridesJson") != nil ? Color.red.opacity(0.6) : Color.primary.opacity(0.12))
-                    )
-            }
-            Text("留空且未修改时保持既有高级字段；模型的高级字段（thinkingLevelMap、cost 等）在保存时自动保留。")
+            Text("留空且未修改时保持既有高级字段；模型的高级字段（thinkingLevelMap、cost 等）与 modelOverrides 在保存时自动保留。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -389,7 +379,6 @@ private struct ProviderEditorSheet: View {
             )
         }
         compatJson = provider.compatJson ?? ""
-        modelOverridesJson = provider.modelOverridesJson ?? ""
     }
 
     private func save() {
@@ -413,8 +402,7 @@ private struct ProviderEditorSheet: View {
                 next.id = entry.id.trimmingCharacters(in: .whitespaces)
                 return next
             },
-            compatJson: nil,
-            modelOverridesJson: nil
+            compatJson: nil
         )
         if clearAuth {
             input.removeAuth = true
@@ -425,9 +413,6 @@ private struct ProviderEditorSheet: View {
         }
         if provider?.compatJson != nil || !compatJson.isEmpty {
             input.compatJson = compatJson.trimmingCharacters(in: .whitespaces)
-        }
-        if provider?.modelOverridesJson != nil || !modelOverridesJson.isEmpty {
-            input.modelOverridesJson = modelOverridesJson.trimmingCharacters(in: .whitespaces)
         }
 
         fieldErrors = []

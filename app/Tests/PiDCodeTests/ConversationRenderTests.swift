@@ -348,8 +348,7 @@ final class CustomProvidersRenderTests: XCTestCase {
                             reasoning: true, contextWindow: 128_000, maxTokens: 16_384
                         ),
                     ],
-                    compatJson: nil,
-                    modelOverridesJson: nil
+                    compatJson: nil
                 ),
             ]
         )

@@ -136,11 +136,12 @@ interface EvidenceRecordLike {
   gitRevision?: unknown;
 }
 
+/** Swift VerificationEvidenceRecord 的真实三值（VerificationModels.swift）。 */
 function evidenceOutcome(record: EvidenceRecordLike): string {
   switch (record.exitKind) {
-    case "success":
+    case "ok":
       return "成功";
-    case "failed":
+    case "failure":
       return typeof record.exitCode === "number" ? `失败（退出码 ${record.exitCode}）` : "失败";
     default:
       return "结果未知";
@@ -149,7 +150,10 @@ function evidenceOutcome(record: EvidenceRecordLike): string {
 
 async function evidenceFactsSummary(sessionId: string, factsDir: string): Promise<string> {
   const parsed = await readJsonFile(join(factsDir, "verification-evidence-v1.json"));
-  const records = Array.isArray(parsed) ? parsed.filter(isRecord) : null;
+  // Swift 侧存储合同：VerificationEvidenceDocument { version, records }。
+  const records = isRecord(parsed) && Array.isArray(parsed.records)
+    ? (parsed.records as unknown[]).filter(isRecord)
+    : null;
   if (records === null) {
     return "验证证据账本不可用（文件缺失或损坏）。本会话没有可读取的命令执行证据。";
   }
@@ -183,8 +187,11 @@ interface ProjectLike {
 async function projectFactsSummary(context: DCodeFactsContext, factsDir: string): Promise<string> {
   const cwd = context.cwd();
   if (cwd === undefined) return "当前没有打开的会话，无法确定工作目录。";
-  const projects = await readJsonFile(join(factsDir, "projects.json"));
-  const list = Array.isArray(projects) ? projects.filter(isRecord) : null;
+  // Swift 侧存储合同：ProjectStore 写 projects-v1.json 的 { version, projects }。
+  const parsed = await readJsonFile(join(factsDir, "projects-v1.json"));
+  const list = isRecord(parsed) && Array.isArray(parsed.projects)
+    ? (parsed.projects as unknown[]).filter(isRecord)
+    : null;
   if (list === null) {
     return "D Code 项目登记不可用（文件缺失或损坏）。";
   }

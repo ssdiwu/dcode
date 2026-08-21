@@ -159,17 +159,26 @@ test("dcode_facts reads ledgers and reports missing files honestly", async () =>
       }),
       "utf8",
     );
+    // 夹具使用 Swift 侧真实编码形状（0.0.16 审计 P1：此前夹具自造数组/枚举导致假绿）：
+    // VerificationEvidenceDocument { version, records } + exitKind ∈ ok/failure/unknown；
+    // ProjectStore 写 projects-v1.json 的 { version, projects }。
     await writeFile(
       join(factsDir, "verification-evidence-v1.json"),
-      JSON.stringify([
-        { recordId: "e1", sessionId: "session-a", command: "npm test", exitKind: "success", gitRevision: "abc1234def" },
-        { recordId: "e2", sessionId: "session-a", command: "swift test", exitKind: "failed", exitCode: 65 },
-      ]),
+      JSON.stringify({
+        version: 1,
+        records: [
+          { recordId: "e1", sessionId: "session-a", command: "npm test", exitKind: "ok", gitRevision: "abc1234def" },
+          { recordId: "e2", sessionId: "session-a", command: "swift test", exitKind: "failure", exitCode: 65 },
+        ],
+      }),
       "utf8",
     );
     await writeFile(
-      join(factsDir, "projects.json"),
-      JSON.stringify([{ id: "p1", name: "D Code", sourceFolders: [{ path: "/repo" }] }]),
+      join(factsDir, "projects-v1.json"),
+      JSON.stringify({
+        version: 1,
+        projects: [{ id: "11111111-2222-3333-4444-555555555555", name: "D Code", sourceFolders: [{ path: "/repo" }] }],
+      }),
       "utf8",
     );
 
