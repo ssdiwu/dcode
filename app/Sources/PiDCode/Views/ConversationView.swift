@@ -363,14 +363,46 @@ private struct ConversationRoundView: View {
                 .padding(.top, 10)
                 .padding(.leading, 6)
             } label: {
-                Label(summaryText, systemImage: round.hasError ? "exclamationmark.triangle.fill" : "ellipsis.circle")
-                    .font(.callout)
-                    .foregroundStyle(round.hasError ? Color.red : Color.secondary)
+                // 折叠态 = 逐步安静摘要（相邻同类合并），点击展开完整思考与工具过程行。
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(stepSummaries) { step in
+                        stepRow(step)
+                    }
+                }
             }
+            .buttonStyle(.plain)
             .padding(.leading, 36)
             .accessibilityLabel(summaryAccessibilityLabel)
             .accessibilityHint(expanded ? "收起中间过程" : "展开查看中间思考与工具过程")
         }
+    }
+
+    private var stepSummaries: [ConversationStepSummary] {
+        ConversationStepSummarizer.summaries(for: round.processItems)
+    }
+
+    private func stepRow(_ step: ConversationStepSummary) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: step.systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 14)
+                .foregroundStyle(step.isError ? Color.red : Color.secondary)
+                .accessibilityHidden(true)
+            Text(step.text)
+                .foregroundStyle(step.isError ? Color.red : Color.secondary)
+            if let detail = step.detail {
+                Text(detail)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     private var summaryText: String {

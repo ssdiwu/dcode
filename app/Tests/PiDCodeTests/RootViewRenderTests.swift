@@ -11,18 +11,21 @@ import ViewInspector
 /// - 依赖 AppModel 的主界面用 `NSHostingView` 真实渲染，验证关键状态不崩、可布局。
 @MainActor
 final class RootViewRenderTests: XCTestCase {
-    func testUserHomeViewRendersPrimaryActions() throws {
-        let sut = UserHomeView(
-            newSession: {},
-            newProject: {},
-            canCreateSession: true,
-            canCreateProject: true
-        )
+    func testHomeWorkspaceViewRendersUnderRealHosting() {
+        let model = AppModel()
+        model.connectionState = .ready
 
-        XCTAssertEqual(try sut.inspect().find(text: "D Code").string(), "D Code")
-        XCTAssertEqual(try sut.inspect().find(text: "从最近会话继续，或为一组源文件夹建立项目。").string(), "从最近会话继续，或为一组源文件夹建立项目。")
-        XCTAssertNotNil(try? sut.inspect().find(button: "新建会话"))
-        XCTAssertNotNil(try? sut.inspect().find(button: "新建项目…"))
+        let host = NSHostingView(
+            rootView: HomeWorkspaceView(
+                selectSession: { _ in },
+                newProject: {}
+            )
+            .environment(model)
+            .frame(width: 1_280, height: 800)
+        )
+        host.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(host.fittingSize == .zero, "真实宿主必须完成布局")
     }
 
     func testRootViewRendersIdleStateUnderRealHosting() {

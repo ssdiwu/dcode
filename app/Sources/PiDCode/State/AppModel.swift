@@ -132,13 +132,15 @@ final class AppModel {
     var isSendingRequest = false
     var issue: AppIssue?
     var notice: ExtensionNotice?
+    /// Host 子进程 stderr 的只读留存（最近 200 行）；供“设置 > Host 诊断”查看，
+    /// 不作为用户可见通知弹出——stderr 可能来自任意扩展的自身输出，不代表真实错误。
+    var hostDiagnosticLog: [HostDiagnosticEntry] = []
     var extensionDialogs: [ExtensionDialog] = []
     var extensionStatuses: [String: String] = [:]
     var workingMessage: String?
     let modelSettings = ModelSettingsState()
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
-    let permission = PermissionModel()
     let selfBuild = SelfBuildModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
     var conversationTarget: ConversationTarget?
@@ -1764,7 +1766,13 @@ final class AppModel {
         }
         parkNewSessionDraft()
         await flushCurrentDraft()
-        await openSession(sessionID, writable: true)
+        // 会话行立即进入选中态：打开期间主画布由加载态占位，不再长时间无反馈。
+        let previousSelection = selectedSessionID
+        selectedSessionID = sessionID
+        let opened = await openSession(sessionID, writable: true)
+        if !opened, selectedSessionID == sessionID {
+            selectedSessionID = previousSelection
+        }
     }
 
     func createSession(at directory: URL) async {
@@ -1782,7 +1790,16 @@ final class AppModel {
             return
         }
 
+        let hadNoOpenSessionBeforeFlush = inspection == nil
+        let hadNoActiveDraftBeforeFlush = !isNewSessionDraftActive
         await flushCurrentDraft()
+        // 挂起期间可能有并发的 selectSession/openSession 完成并打开了真实会话，
+        // 或另一次 createSession（如启动阶段连接状态变化重触发 ensureHomeDraft）已经
+        // 建好草稿；不能用本次调用覆盖它们（曾导致刚打开的会话被清空、静默弹回主页，
+        // 以及新草稿的模型加载被重置为“未选择”且不再重试）。
+        if isOpeningSession { return }
+        if hadNoOpenSessionBeforeFlush, inspection != nil { return }
+        if hadNoActiveDraftBeforeFlush, isNewSessionDraftActive { return }
 
         if isNewSessionDraftActive {
             newSessionDraft?.text = composerText
@@ -1818,6 +1835,52 @@ final class AppModel {
         clearActiveSessionPresentation()
         workbenchDestination = .workspace
         workspaceTabSelection = .conversation
+    }
+
+    /// 全局新建会话入口（⌘N、会话栏动词行、顶栏按钮共用）：以用户目录为工作目录。
+    func startGlobalSession() async {
+        await createSession(at: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// 主页落地即可打字：工作台无会话且无草稿时，自动恢复或创建新会话草稿。
+    /// 已停靠的非空草稿按其原目录恢复（不弹“目录不同”提示）；无草稿时以用户目录开始。
+    /// 草稿已在但模型从未载入（如视图任务曾被取消）时补一次加载。
+    func ensureHomeDraft() async {
+        guard readyClient != nil,
+              inspection == nil,
+              workbenchDestination == .workspace,
+              !isStreaming,
+              !isCreatingSession,
+              !isOpeningSession,
+              !isPromptTransactionActive else { return }
+        if isNewSessionDraftActive {
+            if modelSettings.models.isEmpty,
+               modelSettings.modelIssue == nil,
+               !modelSettings.isLoadingModels {
+                await reloadNewSessionModels()
+            }
+            return
+        }
+        let directory = newSessionDraft.map {
+            URL(fileURLWithPath: $0.directoryPath, isDirectory: true)
+        } ?? FileManager.default.homeDirectoryForCurrentUser
+        await createSession(at: directory)
+    }
+
+    /// 主页作用域托盘切换 Source Folder：草稿正文保留，仅迁移目录并重载该目录模型。
+    func changeNewSessionDraftDirectory(to directory: URL) async {
+        guard isNewSessionDraftActive else { return }
+        let canonicalDirectoryPath: String
+        do {
+            canonicalDirectoryPath = try ProjectStore.canonicalDirectoryPath(directory)
+        } catch {
+            present(error, title: "新会话工作目录不可用")
+            return
+        }
+        guard canonicalDirectoryPath != newSessionDraft?.directoryPath else { return }
+        newSessionDraft?.directoryPath = canonicalDirectoryPath
+        persistNewSessionDraftIfMeaningful()
+        await reloadNewSessionModels()
     }
 
     private func parkNewSessionDraft() {
@@ -1891,6 +1954,12 @@ final class AppModel {
             guard modelSettings.modelLoadGeneration == generation,
                   isNewSessionDraftActive,
                   newSessionDraft?.directoryPath == directoryPath else { return }
+            // 任务取消（视图任务被 SwiftUI 重启 / 离开主页）不是模型读取失败：
+            // 不设错误，留给 ensureHomeDraft 或“重新载入模型”补载。
+            if error is CancellationError {
+                modelSettings.models = []
+                return
+            }
             modelSettings.models = []
             modelSettings.clearSessionDefaults()
             modelSettings.modelIssue = "无法读取 Pi 模型：\(DiagnosticSanitizer.redact(error.localizedDescription))"
@@ -3795,6 +3864,9 @@ final class AppModel {
         activateDraftTarget(target, defaultText: "")
         if let errors = result.extensions?.errors, !errors.isEmpty {
             showNotice("有 \(errors.count) 个扩展未能加载；详情可在 Host 诊断中查看。", level: "warning")
+            for error in errors {
+                appendHostDiagnostic("扩展加载失败：\(error.description)")
+            }
         }
         if result.state == nil { Task { await refreshState() } }
         return true
@@ -3809,6 +3881,8 @@ final class AppModel {
             guard selectedSessionID == sessionID else { return }
             modelSettings.models = models.models
             modelSettings.thinkingLevels = levels.levels
+        } catch is CancellationError {
+            // 视图任务被取消（切换会话 / 离开页面）不是加载失败，不弹横幅。
         } catch {
             showNotice("当前会话的模型或思考强度选项未能加载。", level: "warning")
         }
@@ -3817,6 +3891,7 @@ final class AppModel {
             let commands: CommandsResult = try await client.request("session.getCommands")
             guard selectedSessionID == sessionID else { return }
             availableCommands = commands.commands
+        } catch is CancellationError {
         } catch {
             showNotice("当前会话的命令选项未能加载。", level: "warning")
         }
@@ -4011,80 +4086,6 @@ final class AppModel {
         verificationEvidence = await verificationStore.records(sessionId: sessionId)
     }
 
-    private static func decodeGrants(_ value: JSONValue) -> [PermissionGrantRecord] {
-        guard let data = try? JSONEncoder().encode(value) else { return [] }
-        let decoded = try? JSONDecoder().decode(PermissionGrantList.self, from: data)
-        return decoded?.grants ?? []
-    }
-
-    private func handlePermissionHostEvent(_ event: HostEvent) {
-        switch event.name {
-        case "permission.request":
-            guard let request = PermissionRequestParser.parse(event.data),
-                  request.sessionID == selectedSessionID || selectedSessionID == nil else { return }
-            permission.pendingRequest = request
-        case "permission.updated":
-            if let grants = event.data?["grants"] {
-                permission.grants = Self.decodeGrants(grants)
-            }
-        default:
-            break
-        }
-    }
-
-    /// 权限卡回传：把本次决策交给 Host 闸门，未决请求被结算后清除。
-    func respondToPermissionRequest(_ request: PermissionRequestPresentation, decision: String) async {
-        guard permission.pendingRequest?.requestID == request.requestID, !permission.isResponding else { return }
-        permission.isResponding = true
-        defer { permission.isResponding = false }
-        guard let client = readyClient else {
-            permission.pendingRequest = nil
-            return
-        }
-        let params: [String: JSONValue] = [
-            "requestId": .string(request.requestID),
-            "decision": .string(decision),
-        ]
-        do {
-            let response: JSONValue = try await client.request("permission.respond", params: params)
-            _ = response
-        } catch {
-            showNotice("权限决策未能送达：工具调用按拒绝处理。", level: "warning")
-        }
-        permission.clearRequest(request.requestID)
-    }
-
-    func revokePendingPermission(_ request: PermissionRequestPresentation) async {
-        await respondToPermissionRequest(request, decision: "deny")
-    }
-
-    /// 设置页进入或授权变化后刷新授权表与审计。
-    func loadPermissions() async {
-        guard let client = readyClient, !permission.isLoading else { return }
-        permission.isLoading = true
-        defer { permission.isLoading = false }
-        do {
-            let result: PermissionListResult = try await client.request("permission.list")
-            permission.grants = result.grants
-            permission.audit = result.audit
-            permission.issue = nil
-        } catch {
-            permission.issue = "无法读取权限授权表：\(DiagnosticSanitizer.redact(error.localizedDescription))"
-        }
-    }
-
-    func revokePermissionGrant(_ grant: PermissionGrantRecord) async {
-        guard let client = readyClient else { return }
-        do {
-            let result: PermissionListResult = try await client.request("permission.revoke", params: [
-                "grantId": .string(grant.id),
-            ])
-            permission.grants = result.grants
-        } catch {
-            showNotice("撤销授权失败：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "error")
-        }
-    }
-
     func startSelfBuild() async {
         await selfBuild.build()
         if selfBuild.phase == .failed {
@@ -4204,8 +4205,6 @@ final class AppModel {
             handleExtensionHostEvent(event)
         case let name where name.hasPrefix("modelAuth."):
             handleModelAuthHostEvent(event)
-        case let name where name.hasPrefix("permission."):
-            handlePermissionHostEvent(event)
         case "host.stderr", "host.outputError", "protocol.decodeError",
              "host.processEnded", "host.restartRequired":
             handleHostLifecycleEvent(event)
@@ -4525,6 +4524,17 @@ final class AppModel {
         guard let deferredComposerText else { return }
         self.deferredComposerText = nil
         updateComposerText(combineDraft(composerText, with: deferredComposerText))
+    }
+
+    /// 记录一行 Host stderr 原始输出（如扩展自身的 TUI 状态行、npm 依赖的告警）。
+    /// 只读留存，不触发通知弹出；超过留存上限时丢弃最旧记录。
+    func appendHostDiagnostic(_ message: String) {
+        hostDiagnosticLog.append(
+            HostDiagnosticEntry(timestamp: Date(), message: DiagnosticSanitizer.redact(message))
+        )
+        if hostDiagnosticLog.count > 200 {
+            hostDiagnosticLog.removeFirst(hostDiagnosticLog.count - 200)
+        }
     }
 
     func showNotice(_ message: String, level: String) {

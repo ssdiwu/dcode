@@ -212,7 +212,7 @@ enum ToolPresentationFormatter {
         return text(object["diff"])
     }
 
-    private static func anchorHeader(_ line: String) -> (path: String, tag: String)? {
+    static func anchorHeader(_ line: String) -> (path: String, tag: String)? {
         guard line.first == "[", line.last == "]" else { return nil }
         let body = line.dropFirst().dropLast()
         guard let separator = body.lastIndex(of: "#") else { return nil }
@@ -222,17 +222,17 @@ enum ToolPresentationFormatter {
         return (path, tag.uppercased())
     }
 
-    private static func editPath(_ input: String) -> String? {
+    static func editPath(_ input: String) -> String? {
         input.components(separatedBy: "\n").first.flatMap { anchorHeader($0)?.path }
     }
 
-    private static func editActionSummary(_ input: String) -> String? {
+    static func editActionSummary(_ input: String) -> String? {
         let actions = editActionLabels(input)
         guard !actions.isEmpty else { return nil }
         return "\(actions.count) 个修改动作"
     }
 
-    private static func editActionLabels(_ input: String) -> [String] {
+    static func editActionLabels(_ input: String) -> [String] {
         input.components(separatedBy: "\n").compactMap { line in
             if let match = line.wholeMatch(of: /^SWAP (\d+)(?:\.=(\d+))?:$/) {
                 return rangeLabel("替换", start: String(match.1), end: match.2.map(String.init))
@@ -250,40 +250,339 @@ enum ToolPresentationFormatter {
         }
     }
 
-    private static func rangeLabel(_ action: String, start: String, end: String?) -> String {
+    static func rangeLabel(_ action: String, start: String, end: String?) -> String {
         guard let end, end != start else { return "\(action)第 \(start) 行" }
         return "\(action)第 \(start)–\(end) 行"
     }
 
-    private static func diffSummary(_ diff: String) -> String {
+    static func diffSummary(_ diff: String) -> String {
         let additions = diff.components(separatedBy: "\n").filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
         let deletions = diff.components(separatedBy: "\n").filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
         return "+\(additions) −\(deletions)"
     }
 
-    private static func lineCount(_ content: String) -> Int {
+    static func lineCount(_ content: String) -> Int {
         guard !content.isEmpty else { return 0 }
         return content.components(separatedBy: "\n").count - (content.hasSuffix("\n") ? 1 : 0)
     }
 
-    private static func compact(_ value: String, limit: Int) -> String {
+    static func compact(_ value: String, limit: Int) -> String {
         let collapsed = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard collapsed.count > limit else { return collapsed }
         return "\(collapsed.prefix(limit - 1))…"
     }
 
-    private static func jsonObject(_ value: String) -> [String: Any]? {
+    static func jsonObject(_ value: String) -> [String: Any]? {
         guard let data = value.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
-    private static func text(_ value: Any?) -> String? {
+    static func text(_ value: Any?) -> String? {
         value as? String
     }
 
-    private static func integer(_ value: Any?) -> Int? {
+    static func integer(_ value: Any?) -> Int? {
         if let value = value as? Int { return value }
         if let value = value as? NSNumber { return value.intValue }
         return nil
+    }
+}
+
+/// 轮次折叠态的逐步状态摘要（0.0.14）：相邻同类步骤合并为安静的一行，
+/// 如「探索 · 3 文件」「已编辑 文件名 目录 +1 −1」「思考过程 持续了 4 秒」。
+/// 展开后的完整过程行不受影响。
+struct ConversationStepSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let text: String
+    let detail: String?
+    let systemImage: String
+    let isError: Bool
+}
+
+enum ConversationStepSummarizer {
+    static let maximumVisibleLines = 8
+
+    private enum Token {
+        case thinking(duration: TimeInterval?, id: String)
+        case tool(call: ToolCallPresentation, result: ToolResultPresentation?)
+    }
+
+    static func summaries(for items: [TranscriptItem]) -> [ConversationStepSummary] {
+        var resultsById: [String: ToolResultPresentation] = [:]
+        for item in items {
+            for block in item.blocks {
+                if case let .toolResult(_, result) = block {
+                    resultsById[result.id] = result
+                }
+            }
+        }
+
+        var tokens: [Token] = []
+        for item in items {
+            let hasThinking = item.blocks.contains { block in
+                if case .thinking = block { return true }
+                return false
+            }
+            if hasThinking {
+                let duration: TimeInterval?
+                if let started = item.timestamp, let persisted = item.persistedAt {
+                    duration = max(0, persisted.timeIntervalSince(started))
+                } else {
+                    duration = nil
+                }
+                tokens.append(.thinking(duration: duration, id: item.id))
+            }
+            for block in item.blocks {
+                if case let .toolCall(_, call) = block {
+                    tokens.append(.tool(call: call, result: resultsById[call.id]))
+                }
+            }
+        }
+
+        var lines: [ConversationStepSummary] = []
+        var index = 0
+        while index < tokens.count {
+            switch tokens[index] {
+            case let .thinking(duration, id):
+                var total: TimeInterval = 0
+                var hasDuration = false
+                var segments = 0
+                while index < tokens.count,
+                      case let .thinking(nextDuration, _) = tokens[index] {
+                    segments += 1
+                    if let nextDuration {
+                        total += nextDuration
+                        hasDuration = true
+                    }
+                    index += 1
+                }
+                lines.append(ConversationStepSummary(
+                    id: id,
+                    text: segments > 1 ? "思考过程 · \(segments) 段" : "思考过程",
+                    detail: thinkingDetail(total: total, hasDuration: hasDuration),
+                    systemImage: "brain",
+                    isError: false
+                ))
+
+            case let .tool(call, result):
+                var additions = 0
+                var deletions = 0
+                var failed = false
+                var members = 0
+                var distinctPaths: Set<String> = []
+                var matches = 0
+                var lineCount: Int?
+                while index < tokens.count,
+                      case let .tool(nextCall, nextResult) = tokens[index],
+                      mergesWith(call: call, into: tokens, at: index) {
+                    members += 1
+                    collect(
+                        call: nextCall,
+                        result: nextResult,
+                        additions: &additions,
+                        deletions: &deletions,
+                        failed: &failed,
+                        distinctPaths: &distinctPaths,
+                        matches: &matches,
+                        lineCount: &lineCount
+                    )
+                    index += 1
+                }
+                lines.append(toolLine(
+                    call: call,
+                    members: members,
+                    distinctPaths: distinctPaths,
+                    additions: additions,
+                    deletions: deletions,
+                    matches: matches,
+                    lineCount: lineCount,
+                    failed: failed
+                ))
+            }
+        }
+
+        if lines.count > maximumVisibleLines {
+            let hidden = lines.count - (maximumVisibleLines - 1)
+            lines = Array(lines.prefix(maximumVisibleLines - 1))
+            lines.append(ConversationStepSummary(
+                id: "truncated",
+                text: "另有 \(hidden) 步",
+                detail: nil,
+                systemImage: "ellipsis",
+                isError: false
+            ))
+        }
+        return lines
+    }
+
+    /// 只有相邻且同类的工具步骤才合并；编辑 / 创建按目标文件聚合，其余按工具名聚合。
+    private static func mergesWith(call: ToolCallPresentation, into tokens: [Token], at index: Int) -> Bool {
+        guard case let .tool(nextCall, _) = tokens[index] else { return false }
+        return kind(of: call) == kind(of: nextCall)
+    }
+
+    private enum ToolKind: Equatable {
+        case explore
+        case search
+        case edit(String)
+        case write(String)
+        case command
+        case other(String)
+    }
+
+    private static func kind(of call: ToolCallPresentation) -> ToolKind {
+        switch call.name.lowercased() {
+        case "read", "ls", "find":
+            return .explore
+        case "search", "grep":
+            return .search
+        case "edit":
+            return .edit(editTarget(call))
+        case "write":
+            return .write(ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["path"]) ?? ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["file_path"]) ?? "")
+        case "bash", "shell":
+            return .command
+        default:
+            return .other(call.name)
+        }
+    }
+
+    private static func editTarget(_ call: ToolCallPresentation) -> String {
+        let input = ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["input"]) ?? ""
+        return ToolPresentationFormatter.editPath(input)
+            ?? ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["path"])
+            ?? ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["file_path"])
+            ?? ""
+    }
+
+    private static func thinkingDetail(total: TimeInterval, hasDuration: Bool) -> String? {
+        guard hasDuration, let text = ConversationTimingFormatter.durationText(total) else { return nil }
+        return "持续了 \(text)"
+    }
+
+    private static func collect(
+        call: ToolCallPresentation,
+        result: ToolResultPresentation?,
+        additions: inout Int,
+        deletions: inout Int,
+        failed: inout Bool,
+        distinctPaths: inout Set<String>,
+        matches: inout Int,
+        lineCount: inout Int?
+    ) {
+        if let path = callPath(call) { distinctPaths.insert(path) }
+        if result?.isError == true { failed = true }
+        if case .edit = kind(of: call) {
+            if let diff = ToolPresentationFormatter.diff(from: result?.details) {
+                additions += diff.components(separatedBy: "\n").filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
+                deletions += diff.components(separatedBy: "\n").filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
+            }
+        }
+        if case .search = kind(of: call), let result {
+            matches += ToolPresentationFormatter.anchorSections(from: result.content).flatMap(\.lines).filter(\.isMatch).count
+        }
+        if case .write = kind(of: call), let result {
+            let details = result.details.flatMap { ToolPresentationFormatter.jsonObject($0) }
+            if let lines = details.flatMap({ ToolPresentationFormatter.integer($0["lines"]) }) { lineCount = lines }
+        }
+    }
+
+    private static func toolLine(
+        call: ToolCallPresentation,
+        members: Int,
+        distinctPaths: Set<String>,
+        additions: Int,
+        deletions: Int,
+        matches: Int,
+        lineCount: Int?,
+        failed: Bool
+    ) -> ConversationStepSummary {
+        let failureSuffix = failed ? "（失败）" : ""
+        switch kind(of: call) {
+        case .explore:
+            let scope = distinctPaths.isEmpty
+                ? "\(members) 次"
+                : "\(distinctPaths.count) 文件"
+            return ConversationStepSummary(
+                id: call.id,
+                text: "探索 · \(scope)\(failureSuffix)",
+                detail: nil,
+                systemImage: "folder",
+                isError: failed
+            )
+        case .search:
+            let matchSuffix = matches > 0 ? " · \(matches) 处匹配" : ""
+            return ConversationStepSummary(
+                id: call.id,
+                text: "搜索 · \(members) 次\(matchSuffix)\(failureSuffix)",
+                detail: nil,
+                systemImage: "magnifyingglass",
+                isError: failed
+            )
+        case let .edit(path):
+            var parts: [String] = []
+            if let directory = parentDirectoryLabel(path) { parts.append(directory) }
+            if additions > 0 || deletions > 0 { parts.append("+\(additions) −\(deletions)") }
+            return ConversationStepSummary(
+                id: call.id,
+                text: "已编辑 \(fileNameLabel(path))\(failureSuffix)",
+                detail: parts.isEmpty ? nil : parts.joined(separator: " "),
+                systemImage: "pencil.and.outline",
+                isError: failed
+            )
+        case let .write(path):
+            let linesPart = lineCount.map { " · \($0) 行" } ?? ""
+            return ConversationStepSummary(
+                id: call.id,
+                text: "已创建 \(fileNameLabel(path))\(linesPart)\(failureSuffix)",
+                detail: parentDirectoryLabel(path),
+                systemImage: "doc.badge.plus",
+                isError: failed
+            )
+        case .command:
+            if members == 1 {
+                let command = ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["command"]) ?? ToolPresentationFormatter.text(ToolPresentationFormatter.jsonObject(call.arguments)?["cmd"])
+                return ConversationStepSummary(
+                    id: call.id,
+                    text: "运行命令\(failureSuffix)",
+                    detail: command.map { ToolPresentationFormatter.compact($0, limit: 72) },
+                    systemImage: "terminal",
+                    isError: failed
+                )
+            }
+            return ConversationStepSummary(
+                id: call.id,
+                text: "运行命令 · \(members) 次\(failureSuffix)",
+                detail: nil,
+                systemImage: "terminal",
+                isError: failed
+            )
+        case let .other(name):
+            return ConversationStepSummary(
+                id: call.id,
+                text: "运行 \(name) · \(members) 次\(failureSuffix)",
+                detail: nil,
+                systemImage: "wrench.and.screwdriver",
+                isError: failed
+            )
+        }
+    }
+
+    private static func callPath(_ call: ToolCallPresentation) -> String? {
+        let arguments = ToolPresentationFormatter.jsonObject(call.arguments)
+        return ToolPresentationFormatter.text(arguments?["path"]) ?? ToolPresentationFormatter.text(arguments?["file_path"])
+    }
+
+    private static func fileNameLabel(_ path: String) -> String {
+        guard !path.isEmpty else { return "文件" }
+        return URL(fileURLWithPath: path, isDirectory: false).lastPathComponent
+    }
+
+    private static func parentDirectoryLabel(_ path: String) -> String? {
+        guard !path.isEmpty else { return nil }
+        let parent = URL(fileURLWithPath: path, isDirectory: false)
+            .deletingLastPathComponent()
+            .lastPathComponent
+        return parent.isEmpty ? nil : parent
     }
 }

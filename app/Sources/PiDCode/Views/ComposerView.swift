@@ -6,7 +6,10 @@ struct ComposerView: View {
     @FocusState private var focused: Bool
     @State private var showingContext = false
     @State private var showingFollowUpQueue = true
+    @State private var branchState: GitBranchLookupState = .idle
+    @State private var selectedCommandIndex = 0
     @AppStorage("dcode.runningMessageDeliveryMode") private var runningDeliveryRawValue = RunningMessageDeliveryMode.steer.rawValue
+    @AppStorage(DCodeInterfaceFontScale.storageKey) private var interfaceFontScaleRawValue = DCodeInterfaceFontScale.standard.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,41 +72,51 @@ struct ComposerView: View {
                     || model.currentFollowUpQueue != nil
                     || model.followUp.pendingSteer != nil
                     || model.pendingPlanProposal != nil
-                    || model.sessionConflict != nil
-                    || model.permission.pendingRequest != nil {
+                    || model.sessionConflict != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
                 }
-                ZStack(alignment: .topLeading) {
-                    ComposerTextEditor(
-                        text: text,
-                        isEnabled: composerIsEnabled,
-                        onSubmit: submitComposer
-                    )
-                    if text.wrappedValue.isEmpty {
-                        Text(composerPlaceholder)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 1)
-                            .allowsHitTesting(false)
-                    }
-                }
+                ComposerTextEditor(
+                    text: text,
+                    isEnabled: composerIsEnabled,
+                    font: composerBodyFont,
+                    placeholder: composerPlaceholder,
+                    onSubmit: submitComposer,
+                    navigate: handlePaletteKey
+                )
                 .frame(minHeight: 66, maxHeight: 126, alignment: .topLeading)
                 .focused($focused)
                 .accessibilityLabel("消息输入")
+                .onChange(of: model.composerText) { _, _ in
+                    selectedCommandIndex = 0
+                }
 
                 runtimeControls
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .dCodeFloatingSurface(cornerRadius: 16)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            if model.isNewSessionDraftActive {
+                scopeTray
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .dCodeFloatingSurface(cornerRadius: 16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .onAppear { focusComposer() }
+        .onChange(of: model.inspection?.summary.id) { _, _ in focusComposer() }
+        .onChange(of: model.isNewSessionDraftActive) { _, isActive in
+            if isActive { focusComposer() }
+        }
+    }
+
+    /// 打开即输入：主页、新建会话、打开会话与返回工作台时，Composer 直接持有键盘焦点。
+    private func focusComposer() {
+        guard !model.search.presented else { return }
+        focused = true
     }
 
     private var runtimeControls: some View {
         HStack(spacing: 4) {
-            Spacer(minLength: 4)
+            Spacer(minLength: 0)
 
             if model.hasActiveRun {
                 Menu {
@@ -166,49 +179,113 @@ struct ComposerView: View {
                         || model.isPromptTransactionActive
                 )
 
-            if model.shouldQueueComposerText {
+            if !model.isStreaming || model.shouldQueueComposerText {
                 Button {
                     submitComposer()
                 } label: {
-                    Image(systemName: model.hasActiveRun && runningDeliveryMode == .steer ? "arrow.up" : "text.badge.plus")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(
-                            width: PiDCodeMetrics.prominentIconActionTarget,
-                            height: PiDCodeMetrics.prominentIconActionTarget
-                        )
-                        .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
+                    Image(systemName: submitIconName)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SendActionStyle())
                 .disabled(!sendEnabled)
                 .help(submitHelp)
                 .accessibilityLabel(submitAccessibilityLabel)
             }
-
-            if !model.isStreaming && !model.shouldQueueComposerText {
-                Button {
-                    submitComposer()
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(
-                            width: PiDCodeMetrics.prominentIconActionTarget,
-                            height: PiDCodeMetrics.prominentIconActionTarget
-                        )
-                        .background(sendEnabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!sendEnabled)
-                .help("发送（↩）")
-                .accessibilityLabel(
-                    model.isNewSessionDraftActive
-                        ? "发送并创建会话"
-                        : (model.pendingPathDraft == nil ? "发送消息" : "发送并创建新路径")
-                )
-            }
         }
         .font(.caption)
+    }
+
+    private var submitIconName: String {
+        if model.shouldQueueComposerText,
+           !(model.hasActiveRun && runningDeliveryMode == .steer) {
+            return "text.badge.plus"
+        }
+        return "arrow.up"
+    }
+
+    /// 作用域托盘：与输入框连体的下挂条。承载新会话草稿的 Source Folder
+    /// 选择（默认用户目录）；选中 Git 仓库目录后追加只读分支 chip。
+    private var scopeTray: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                Button {
+                    presentSourceFolderPicker()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                        Text(folderDisplayTitle)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Color.primary.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .dCodeAccessibleButton("选择新会话工作目录，当前 \(folderDisplayTitle)")
+                .help(folderPathHelp)
+                .disabled(folderPickerDisabled)
+
+                if case let .ready(branch) = branchState {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.branch")
+                        Text(branch)
+                            .lineLimit(1)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("当前目录的 Git 分支（只读）")
+                    .accessibilityLabel("当前 Git 分支 \(branch)")
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.top, PiDCodeMetrics.spacingStandard)
+        }
+        .task(id: model.newSessionDraftDirectoryPath) {
+            guard let path = model.newSessionDraftDirectoryPath else { return }
+            branchState = await GitBranchCache.shared.read(at: path)
+        }
+    }
+
+    private func presentSourceFolderPicker() {
+        let panel = NSOpenPanel()
+        panel.title = "选择新会话的工作目录"
+        panel.prompt = "选择"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { await model.changeNewSessionDraftDirectory(to: url) }
+        }
+    }
+
+    private var folderPickerDisabled: Bool {
+        model.isCreatingSession || model.isSendingRequest || model.pendingPrompt != nil
+    }
+
+    private var folderDisplayTitle: String {
+        guard let path = model.newSessionDraftDirectoryPath else { return "~" }
+        if path == FileManager.default.homeDirectoryForCurrentUser.path {
+            return "~"
+        }
+        let name = URL(fileURLWithPath: path, isDirectory: true).lastPathComponent
+        return name.isEmpty ? path : name
+    }
+
+    private var folderPathHelp: String {
+        "新会话将在该目录中运行，正文与模型选择随目录保留；当前：\(model.newSessionDraftDirectoryPath ?? "~")"
     }
 
     private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
@@ -267,11 +344,6 @@ struct ComposerView: View {
                     Image(systemName: "arrow.turn.up.right")
                         .foregroundStyle(Color.accentColor)
                 }
-            }
-
-            if let request = model.permission.pendingRequest {
-                Divider()
-                permissionRequestCard(request)
             }
 
             if let conflict = model.sessionConflict {
@@ -462,6 +534,8 @@ struct ComposerView: View {
                         .foregroundStyle(.purple)
                 }
             }
+            .font(.caption)
+            .controlSize(.small)
             .frame(minHeight: PiDCodeMetrics.compactControlHeight)
         }
         .menuStyle(.borderlessButton)
@@ -680,63 +754,6 @@ struct ComposerView: View {
         }
     }
 
-    /// 动作级权限卡：工具调用挂起等待决策；支持范围授权时给出三键。
-    private func permissionRequestCard(_ request: PermissionRequestPresentation) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(request.isHighRisk ? Color.orange : Color.accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(request.tool)
-                        .font(.caption.monospaced().weight(.semibold))
-                    Text(request.riskLabelText)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(
-                            request.isHighRisk ? Color.orange.opacity(0.15) : Color.accentColor.opacity(0.12),
-                            in: Capsule()
-                        )
-                }
-                Text(request.summary)
-                    .font(.caption.monospaced())
-                    .lineLimit(2)
-                if !request.scopeHint.isEmpty {
-                    Text(request.scopeHint)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Button {
-                    Task { await model.revokePendingPermission(request) }
-                } label: {
-                    Text("拒绝")
-                }
-                .controlSize(.small)
-                Button {
-                    Task { await model.respondToPermissionRequest(request, decision: "allowOnce") }
-                } label: {
-                    Text("本次允许")
-                }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-                if request.supportsScopeGrant {
-                    Button {
-                        Task { await model.respondToPermissionRequest(request, decision: "allowScope") }
-                    } label: {
-                        Text("范围允许")
-                    }
-                    .controlSize(.small)
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .disabled(model.permission.isResponding)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
     /// 冲突卡：外部写入或写入权被接管后，停止写入、保留草稿，一键重新接管。
     private func conflictCard(_ conflict: SessionConflictPresentation) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -853,10 +870,9 @@ struct ComposerView: View {
 
     private var commandPalette: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(commandSuggestions.prefix(6)) { command in
+            ForEach(Array(commandSuggestions.prefix(6).enumerated()), id: \.element.id) { index, command in
                 Button {
-                    model.updateComposerText("/\(command.name) ")
-                    focused = true
+                    applyCommandSelection(at: index)
                 } label: {
                     HStack(spacing: 10) {
                         Text("/\(command.name)")
@@ -876,10 +892,43 @@ struct ComposerView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .background(
+                    index == selectedCommandIndex
+                        ? Color.accentColor.opacity(0.12)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius, style: .continuous)
+                )
+                .accessibilityAddTraits(index == selectedCommandIndex ? .isSelected : [])
             }
         }
         .padding(.vertical, 5)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func applyCommandSelection(at index: Int) {
+        let suggestions = Array(commandSuggestions.prefix(6))
+        guard suggestions.indices.contains(index) else { return }
+        model.updateComposerText("/\(suggestions[index].name) ")
+        selectedCommandIndex = 0
+        focused = true
+    }
+
+    /// 命令面板键盘导航（↑↓ 选择、Esc 关闭）；返回false表示事件交回输入框默认处理。
+    private func handlePaletteKey(_ key: ComposerPaletteKey) -> Bool {
+        let visibleCount = min(commandSuggestions.count, 6)
+        guard visibleCount > 0 else { return false }
+        switch key {
+        case .up:
+            selectedCommandIndex = max(0, selectedCommandIndex - 1)
+            return true
+        case .down:
+            selectedCommandIndex = min(visibleCount - 1, selectedCommandIndex + 1)
+            return true
+        case .escape:
+            model.updateComposerText("")
+            selectedCommandIndex = 0
+            return true
+        }
     }
 
     private var sendEnabled: Bool {
@@ -927,13 +976,13 @@ struct ComposerView: View {
 
     private var composerPlaceholder: String {
         if model.isNewSessionDraftActive {
-            return "输入第一条消息；发送后才会创建 Pi 会话"
+            return ComposerPlaceholderCopy.idle
         }
         return model.shouldQueueComposerText
             ? (model.hasActiveRun && runningDeliveryMode == .steer
-                ? "输入要立即介入当前运行的信息"
-                : "写下下一步，加入后续消息队列")
-            : "交给 D Code 一项工作，或输入 / 使用命令"
+                ? ComposerPlaceholderCopy.steerRunning
+                : ComposerPlaceholderCopy.queueNext)
+            : ComposerPlaceholderCopy.idle
     }
 
     private var runningDeliveryMode: RunningMessageDeliveryMode {
@@ -944,16 +993,37 @@ struct ComposerView: View {
         if model.hasActiveRun, runningDeliveryMode == .steer {
             return "立即介入当前运行（↩）"
         }
-        return "加入后续消息队列（↩）"
+        if model.shouldQueueComposerText {
+            return "加入后续消息队列（↩）"
+        }
+        return "发送（↩）"
     }
 
     private var submitAccessibilityLabel: String {
-        model.hasActiveRun && runningDeliveryMode == .steer
-            ? "立即介入当前运行"
-            : "加入后续消息队列"
+        if model.isNewSessionDraftActive { return "发送并创建会话" }
+        if model.hasActiveRun, runningDeliveryMode == .steer { return "立即介入当前运行" }
+        if model.shouldQueueComposerText { return "加入后续消息队列" }
+        if model.pendingPathDraft != nil { return "发送并创建新路径" }
+        return "发送消息"
+    }
+
+    private var interfaceFontScale: DCodeInterfaceFontScale {
+        DCodeInterfaceFontScale.resolve(interfaceFontScaleRawValue)
+    }
+
+    private var composerBodyFontSize: CGFloat {
+        interfaceFontScale.composerBodyFontSize
+    }
+
+    private var composerBodyFont: NSFont {
+        NSFont.systemFont(ofSize: composerBodyFontSize, weight: .regular)
     }
 
     private func submitComposer() {
+        if !commandSuggestions.isEmpty {
+            applyCommandSelection(at: selectedCommandIndex)
+            return
+        }
         guard sendEnabled else { return }
         Task { await model.sendPrompt(deliveryMode: runningDeliveryMode) }
     }
@@ -978,6 +1048,35 @@ struct ComposerView: View {
     }
 }
 
+/// 占位符文案。视觉预算见设计系统 3.4（hint 档）与 7.6：一行、上限 `copyBudget`
+/// 个字符、最多一条教学子句，且只教已经实现的快捷输入——`@ 添加上下文` 的插入能力
+/// 尚未实现，不在占位符里预告。
+enum ComposerPlaceholderCopy {
+    /// 预算按全宽字符当量计（CJK 与全宽标点记 1，ASCII 记 0.5），
+    /// 因为 `交给 D Code 一项工作` 这类中英混排里 ASCII 只占半格。
+    static let copyBudget: Double = 18
+
+    static let idle = "交给 D Code 一项工作，/ 使用命令"
+    static let steerRunning = "输入要立即介入当前运行的信息"
+    static let queueNext = "写下下一步，加入后续消息队列"
+
+    static let all = [idle, steerRunning, queueNext]
+
+    static func displayWidth(_ text: String) -> Double {
+        text.unicodeScalars.reduce(0) { $0 + (isFullWidth($1) ? 1 : 0.5) }
+    }
+
+    private static func isFullWidth(_ scalar: Unicode.Scalar) -> Bool {
+        let ranges: [ClosedRange<UInt32>] = [
+            0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF,
+            0x3400...0x4DBF, 0x4E00...0x9FFF, 0xA000...0xA4CF,
+            0xAC00...0xD7A3, 0xF900...0xFAFF, 0xFE30...0xFE4F,
+            0xFF00...0xFF60, 0xFFE0...0xFFE6,
+        ]
+        return ranges.contains { $0.contains(scalar.value) }
+    }
+}
+
 enum ComposerKeyPolicy {
     static func shouldSubmit(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
         guard keyCode == 36 || keyCode == 76 else { return false }
@@ -985,10 +1084,60 @@ enum ComposerKeyPolicy {
     }
 }
 
+/// 命令面板键盘导航事件：由输入框在文本编辑默认处理之前转发。
+enum ComposerPaletteKey {
+    case up
+    case down
+    case escape
+}
+
 final class ComposerNSTextView: NSTextView {
     var submit: (() -> Void)?
+    var navigate: ((ComposerPaletteKey) -> Bool)?
+
+    /// 占位符由文本视图自己绘制在 text container 原点，与真实首行共用同一套
+    /// 布局几何：界面字号档位切换时不会再和输入正文错位，也不需要手工偏移常数。
+    /// 颜色固定在 `tertiaryLabelColor`（提示档，约 `0.26`）。注意不能用
+    /// `placeholderTextColor`——它在 macOS 上与 `secondaryLabelColor` 同为
+    /// `0.5`，属于次级元信息档，空输入框会读成"已经有内容"。
+    var placeholder: String = "" {
+        didSet {
+            guard placeholder != oldValue else { return }
+            setAccessibilityPlaceholderValue(placeholder)
+            needsDisplay = true
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        let placeholderFont = font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        (placeholder as NSString).draw(
+            at: textContainerOrigin,
+            withAttributes: [
+                .font: placeholderFont,
+                .foregroundColor: NSColor.tertiaryLabelColor,
+            ]
+        )
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 
     override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 126 where navigate?(.up) == true: return
+        case 125 where navigate?(.down) == true: return
+        case 53 where navigate?(.escape) == true: return
+        default: break
+        }
         if ComposerKeyPolicy.shouldSubmit(keyCode: event.keyCode, modifiers: event.modifierFlags) {
             submit?()
             return
@@ -1000,7 +1149,10 @@ final class ComposerNSTextView: NSTextView {
 private struct ComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let isEnabled: Bool
+    let font: NSFont
+    let placeholder: String
     let onSubmit: () -> Void
+    let navigate: (ComposerPaletteKey) -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1016,7 +1168,7 @@ private struct ComposerTextEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = font
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
@@ -1025,6 +1177,8 @@ private struct ComposerTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
         textView.submit = onSubmit
+        textView.navigate = navigate
+        textView.placeholder = placeholder
         textView.setAccessibilityLabel("消息输入")
         scrollView.documentView = textView
         return scrollView
@@ -1034,7 +1188,13 @@ private struct ComposerTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
         context.coordinator.parent = self
         textView.submit = onSubmit
+        textView.navigate = navigate
+        textView.placeholder = placeholder
         textView.isEditable = isEnabled
+        if textView.font?.pointSize != font.pointSize {
+            textView.font = font
+            textView.needsDisplay = true
+        }
         textView.isSelectable = true
         if textView.string != text {
             context.coordinator.isUpdating = true

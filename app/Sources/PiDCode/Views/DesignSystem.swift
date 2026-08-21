@@ -18,7 +18,6 @@ enum PiDCodeMetrics {
     static let actionGlyphPointSize: CGFloat = 13
     static let actionGlyphBox: CGFloat = 18
     static let toolbarIconTarget: CGFloat = 28
-    static let prominentIconActionTarget: CGFloat = 36
     static let floatingSurfaceRadius: CGFloat = 18
     static let workspaceCanvasRadius: CGFloat = 14
     static let workbenchInset: CGFloat = 12
@@ -181,6 +180,51 @@ struct IconActionStyle: ButtonStyle {
     }
 }
 
+/// 发送动作：容器常在，权重分档。
+///
+/// accent 填充圆盘 = 现在可发送；中性极低填充圆盘 = 按钮在这里、但暂不可发送。
+/// 禁用态不能退化成"没有容器的裸 glyph"——那样主动作在控制行里比状态指示更弱，
+/// 用户找不到按钮在哪。禁用观感由本 style 自己表达，不依赖系统对 disabled label
+/// 的二次变暗：`Color.secondary` 再被系统压一层会掉到提示档，和占位符一样淡。
+struct SendActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 暂不可发送时的容器填充：足以看出"这里有个按钮"，不足以读成"可以按了"。
+    static let idleSurfaceOpacity: Double = 0.07
+
+    static func glyphColor(isEnabled: Bool) -> Color {
+        isEnabled ? .white : .secondary
+    }
+
+    static func surfaceColor(isEnabled: Bool, isPressed: Bool) -> Color {
+        guard isEnabled else { return Color.primary.opacity(idleSurfaceOpacity) }
+        return isPressed ? Color.accentColor.opacity(0.82) : Color.accentColor
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(Self.glyphColor(isEnabled: isEnabled))
+            .frame(
+                width: PiDCodeMetrics.iconActionSurface,
+                height: PiDCodeMetrics.iconActionSurface
+            )
+            .background(
+                Self.surfaceColor(isEnabled: isEnabled, isPressed: configuration.isPressed),
+                in: Circle()
+            )
+            .frame(
+                width: PiDCodeMetrics.iconActionTarget,
+                height: PiDCodeMetrics.iconActionTarget
+            )
+            .contentShape(Rectangle())
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .animation(reduceMotion ? nil : .smooth(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 extension View {
     func dCodeAccessibleButton(_ label: String) -> some View {
         help(label)
@@ -201,5 +245,67 @@ extension View {
 extension Date {
     var piDCodeRelativeLabel: String {
         formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+}
+
+/// 界面字号档位（设置 > 外观）。
+/// 缩放经系统 Dynamic Type 语义层级实现：标准档跟随系统设置，
+/// 紧凑 / 大档在系统值基础上整体下移 / 上移一级并封顶在常规层级内，
+/// 因此全部语义字号（body / caption / headline …）同时缩放，不逐处改字号。
+enum DCodeInterfaceFontScale: String, CaseIterable, Identifiable {
+    static let storageKey = "dcode.appearance.fontScale"
+
+    case compact
+    case standard
+    case large
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .compact: "紧凑"
+        case .standard: "标准"
+        case .large: "大"
+        }
+    }
+
+    static func resolve(_ rawValue: String) -> DCodeInterfaceFontScale {
+        DCodeInterfaceFontScale(rawValue: rawValue) ?? .standard
+    }
+
+    /// 返回nil表示不覆盖环境（完全跟随系统 Dynamic Type）。
+    func dynamicTypeSizeOverride(basedOn systemSize: DynamicTypeSize) -> DynamicTypeSize? {
+        let steps: [DynamicTypeSize] = [
+            .xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge,
+        ]
+        guard let index = steps.firstIndex(of: systemSize.clampedToRegularRange) else { return nil }
+        switch self {
+        case .standard:
+            return nil
+        case .compact:
+            return steps[max(0, index - 1)]
+        case .large:
+            return steps[min(steps.count - 1, index + 1)]
+        }
+    }
+}
+
+extension DynamicTypeSize {
+    /// 无障碍特大档不参与界面字号设置，避免破坏三栏与行高几何。
+    var clampedToRegularRange: DynamicTypeSize {
+        if !isAccessibilitySize { return self }
+        return .xxxLarge
+    }
+}
+
+extension DCodeInterfaceFontScale {
+    /// Composer 正文是 AppKit 文本视图，不随 SwiftUI Dynamic Type 环境缩放；
+    /// 占位符与输入正文共用这里推导的显式字号，保证非标准档下两者视觉一致。
+    var composerBodyFontSize: CGFloat {
+        switch self {
+        case .compact: 12
+        case .standard: 13
+        case .large: 14.5
+        }
     }
 }

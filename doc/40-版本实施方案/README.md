@@ -6,10 +6,11 @@
 
 | 文档 | 状态 | 职责 |
 |---|---|---|
+| [0015-0.0.14 主页落地 Composer 与界面收口产品需求](0015-0.0.14-主页落地-Composer-与界面收口产品需求.md) | Implementation Candidate | `0.0.14` 的主页会话前草稿（聚焦 Composer / 作用域托盘 / 最近会话行）、会话打开加载态、⌘N、发送按钮与字号收口、Host 诊断页与权限闸门移除（ADR 0023 固定完全访问）验收权威。 |
 | [0014-0.0.13 第一次 Self-build Loop 产品需求](0014-0.0.13-第一次-Self-build-Loop-产品需求.md) | Active Implementation | `0.0.13` 的候选构建隔离、受控替换 / 回滚 / 重启恢复与第一次真实闭环验收权威。 |
 | [0013-0.0.12 结构化验证证据产品需求](0013-0.0.12-结构化验证证据产品需求.md) | Active Implementation | `0.0.12` 的 bash 执行证据账本、退出推导、revision 补全、会话检查器呈现与非门禁边界权威。 |
 | [0012-0.0.11 只读 Exact Git Diff 产品需求](0012-0.0.11-只读-Exact-Git-Diff-产品需求.md) | Active Implementation | `0.0.11` 的逐文件 / 逐 hunk 行级 Git 差异、staged / unstaged 分流、诚实截断与只读边界权威。 |
-| [0011-0.0.10 Project Trust 与动作级权限产品需求](0011-0.0.10-Project-Trust-与动作级权限产品需求.md) | Active Implementation | `0.0.10` 的工具调用权限闸门、授权前缀 / 授权根语义、权限卡三键、授权管理与审计权威。 |
+| [0011-0.0.10 Project Trust 与动作级权限产品需求](0011-0.0.10-Project-Trust-与动作级权限产品需求.md) | Superseded（ADR 0023） | 保留 `0.0.10` 权限闸门、授权语义、权限卡与审计的范围与验收记录；机制已整体移除，仅作历史追溯。 |
 | [0010-0.0.9 打开即接管产品需求](0010-0.0.9-打开即接管产品需求.md) | Active Implementation | `0.0.9` 的打开即接管、租约抢占（LEASE_STOLEN）、冲突卡重接、只读观察删除与性能收口（ModelRuntime 复用 + signpost）权威。 |
 | [0009-0.0.8 AppModel 域拆分与测试基线产品需求](0009-0.0.8-AppModel-域拆分与测试基线产品需求.md) | Implementation Candidate | `0.0.8` 的 AppModel 领域子模型、`HostProviding` 注入、Fake-host 集成测试与渲染冒烟权威；行为零变化，转录 / 流式 / 结算时序拆分与新用户能力不进入本版。 |
 | [0008-0.0.7 模型设置与回复运行信息产品需求](0008-0.0.7-模型设置与回复运行信息产品需求.md) | Implementation Candidate | `0.0.7` 的已认证 Pi 模型目录、Provider 关联、缓存刷新、模型行全局启用、默认模型、只读项目覆盖、steer / queue 发送方式、Context / Thinking / 轮次导航与最终助手回复时间 / 耗时 / token 状态行权威；自定义 Provider 编辑、项目设置写入、登出与费用统计不进入本版。真实 Pi steer、Provider 登录、浅色外观与 VoiceOver 人工验收继续如实保留。 |

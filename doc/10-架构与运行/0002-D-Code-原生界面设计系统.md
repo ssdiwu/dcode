@@ -69,8 +69,10 @@ D Code 的界面性格是 **Calm, precise, capable（克制、准确、可靠）
 - 消息正文和导航主标题使用系统 body（正文）层级。
 - Primary label（主标签）使用 semibold body / headline，不使用营销式大标题。
 - Secondary metadata（次级元信息）使用 caption；时间和计数使用 monospaced digits（等宽数字）。
+- Hint（提示档）是独立于次级元信息的更低一档：输入框占位符与空态提示使用 `tertiaryLabelColor` / SwiftUI `.tertiary`（约 `0.26` 不透明度），字号与所在输入正文一致。不得使用 `secondary`（约 `0.5`）——那是元信息档，空输入框会因此读成"已经有内容"。同样不能用 AppKit 的 `placeholderTextColor`：它在 macOS 上与 `secondaryLabelColor` 同为 `0.5`，名字像提示档但权重不是。提示与真实正文必须共用同一套布局几何（同一 text container 原点或同一行高推导），不用手工偏移常数对齐。
 - 路径、Session ID、JSON、命令与代码使用 monospaced（等宽）字体。
 - 长路径中间截断，并通过 help、选择或详情暴露完整值。
+- 设置 > 外观提供“界面字号”档位（紧凑 / 标准 / 大，`DCodeInterfaceFontScale`）：标准档完全跟随系统 Dynamic Type；紧凑 / 大档在系统当前值上整体下移 / 上移一级，并封顶在常规层级（无障碍特大档不参与，避免破坏三栏与行高几何）。全部语义字号经同一机制缩放，不逐处改字号、不引入逐视图自定义字号。
 
 ### 3.5 Surface 与 elevation
 
@@ -135,6 +137,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - 三栏并排时始终为主工作区保留至少 `480pt`；拖动达到当前窗口可用上限后停止，不把另一栏挤走。当窗口本身不足以容纳当前保存宽度时，会话栏按中宽规则改为临时覆盖。
 - `≥880pt` 信息检查器保持 inline / non-modal（内联、非模态）；当会话栏、主工作区最小宽度与信息检查器的当前宽度可同时容纳时三栏并排，否则会话栏临时覆盖；`<880pt` 会话栏与信息检查器互斥覆盖。
 - Conversation（会话）阅读区最大 `820pt`，横向 `28pt`、纵向 `24pt` breathing room。
+- 主页（无会话打开的主工作区）是落地即可打字的会话前草稿：居中 Composer（最大约 `640pt`）+ 作用域托盘，输入框保持画布几何中心——最近会话行挂在下方、不参与居中计算（按其实测高度做顶部补偿），有无可最近会话输入框位置不漂移；下方保留 2–3 条最近会话安静行（标题 + 右对齐相对时间，点击即继续），无最近会话时不占位。点击会话到内容呈现之间主画布立即显示加载态（spinner + “正在打开会话…”），会话行同步进入选中态，不出现无反馈空白期。
 - Conversation rail（会话导航尺）只有中央会话宽度至少 `640pt` 且存在至少两个工作轮时才出现；视觉轨道约 `44pt`，不遮挡正文或添加蒙版。
 - Window control band（窗口控制带）是唯一的顶部 identity / action plane（身份 / 动作平面），与会话栏导航统一使用 `36pt` 行高：红黄绿窗口按钮、会话栏开关、主工作区对象名称与菜单、信息检查器开关共享同一条水平中心线。会话栏不可见时，“新建会话”紧跟会话栏开关出现在左上控制带；会话栏恢复后该入口退出，避免与栏内动作重复。顶栏图标动作仍只占用 `28 × 28pt` 视觉表面和 `32 × 32pt` 目标，默认只显示 glyph，Hover / pressed 才出现圆角方形 surface。不得再在其下新建独立的区域按钮栏或跨三列的第四个 surface，也不得使用会强制施加玻璃胶囊的 macOS Toolbar。会话打开时主工作区显示真实会话名称和操作菜单，Project 作用域显示 Project 名称；没有工作对象时不重复 `D Code` 产品名。会话栏开关归属左侧区域，会话身份归属主工作区，信息检查器开关归属右侧区域；三者不得堆叠成多排。空白控制带单击拖动窗口；双击读取 macOS 的“连按窗口标题栏”偏好，并执行放大 / 还原、最小化或无动作，不得硬编码成单一行为，也不得被拖拽手势吞掉。
 - Session context row（会话上下文行）与 Composer 位于 transcript（对话记录）滚动区之外；会话标题和持久操作不在内容区重复。Composer 以 raised surface 与阅读画布分层，不依赖贯穿中央区的硬分隔线。
@@ -145,9 +148,10 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 
 - Recent 只显示 D Code 来源会话并按需分页；Project 只投影已登记 Source Folder 精确匹配的会话。
 - 已置顶会话集中在会话栏所有普通会话列表之前的全局“置顶”区域，并从 Recent 与 Project 普通列表去重；同一稳定 Session ID 始终使用同一置顶与归档状态。
-- Recent、Project 与全局置顶区域复用同一个 `SessionNavigationItem`。普通行只常驻显示单行标题，不显示永久副标题；完整标题、更新时间、Project、Source Folder、完整 `cwd` 与当前 Git 分支通过行级 Hover / keyboard focus 的非模态详情呈现。分支只描述当前工作目录，不表示 Session 历史分支。
+- Recent、Project 与全局置顶区域复用同一个 `SessionNavigationItem`。普通行尾部常显右对齐的相对更新时间（caption、tertiary、monospaced digits）；时间是扫视排序的核心线索，不藏进 Hover。完整标题、Project、Source Folder、完整 `cwd` 与当前 Git 分支仍通过行级 Hover / keyboard focus 的非模态详情呈现。分支只描述当前工作目录，不表示 Session 历史分支。
+- 会话栏动词行（“新建会话”“新建项目”）与正文行共用 `36pt` 行高；动词行行尾常显快捷键提示（如 `⌘N`，caption2 等宽、tertiary 色），不藏进菜单。
 - Window control band、会话栏身份行、“新建项目”、Project 和 Session 导航行统一使用 `36pt` 行高；紧凑图标动作仍是 `32pt` 目标，不得为了填满行高放大 glyph 或 surface。
-- row 的文字区与尾部 action rail 分离。当前 action rail 固定为 `64 × 32pt`，容纳两个 `32 × 32pt` sibling buttons；rail 与文字区不得以透明 frame 重叠。
+- row 的文字区与尾部槽位分离。尾部为 `64pt` 双用途槽位：静止时右对齐显示相对更新时间；Hover / keyboard focus 时时间淡出（保留占位），置顶与归档两个 `32 × 32pt` sibling 按钮在同一槽位翻出覆盖。标题截断边界保持在槽位之前，任何状态不与按钮或时间重叠。
 - 外层保留 `8pt` 水平 padding；文字与圆角边缘不得贴边。标题和 metadata 始终保留自己的稳定起点。
 - Hover 使用低强度中性圆角面；Selected 使用更强的持久中性面；Keyboard focus 使用 accent outline。三者切换不得改变 row 高度、标题位置或 action rail。
 - Hover / focus 显示 pin 与 archive；全局置顶区中的 `pin.fill` 常显。Context menu 与 Session header menu 提供等价操作。
@@ -157,6 +161,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 ### 7.2 Information Inspector 与 Project Files
 
 - Project 只有一个 Source Folder 时，Files 直接把该根的 children 作为首层；存在多个 Source Folder 时才显示各根行，来源身份不得因平铺而丢失。
+- 文件树行 Hover 使用低强度中性圆角面，不改变行高或缩进；右键 Context menu 提供“在 Finder 中显示”与“拷贝路径”等只读系统动作，与行级 help 等价可达。
 - Project 所属 Session 的信息检查器同时提供 Files、Changes 与 Session 概览。Session 只叠加运行上下文，不得让用户失去 Project 文件和 Git 事实。
 - Inspector raised surface 的首行直接列出当前可用的“会话 / 文件 / 变更”视图，不先重复会话或 Project 标题。未归入 Project 的 Session 只显示“会话”；Project 本身只显示“文件 / 变更”。
 - 信息检查器在 `≥880pt` 保持非模态，并以内缩 raised surface 悬浮于右侧 rail；右侧 rail 与主工作区 canvas 之间不用整高硬分隔线。
@@ -173,8 +178,9 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - 用户消息使用 content-sized、trailing-aligned 的 accent-tinted bubble；助手正文保持无卡片阅读面。
 - Markdown 使用原生 block layout 呈现标题、段落、列表、引用、分隔线、表格、强调、链接和代码；复制始终返回原始 source。
 - 一个产品工作轮从一条用户消息延续到下一条用户消息。完成后保留最终回答；thinking、工具和中间叙述进入 round disclosure。
+- Round disclosure 折叠态是逐步安静摘要：相邻同类步骤合并成一行次级色状态（如「探索 · 3 文件」「已编辑 文件名 目录 +1 −1」「思考过程 持续了 4 秒」「运行命令 · 2 次」），编辑 / 创建按目标文件聚合、不同目标不合并；失败步骤在行内如实标注。摘要行数封顶（8 行），超出以「另有 N 步」收口；点击展开完整思考与工具过程行。
 - 完成轮的耗时与持久化完成日期只在 final answer 外部的 Hover / keyboard focus 元信息中显示，并始终可由 VoiceOver 获取。
-- 运行中只展示当前 thinking excerpt 或当前 tool；完成步骤原位收起，不堆积永久日志卡。
+- 运行中只展示当前 thinking excerpt 或当前 tool；完成步骤收起为逐步摘要，不堆积永久日志卡。
 - Conversation rail 使用中性刻度；点击只滚动，不改变 Session Path 或模型上下文。
 
 ### 7.5 Native content blocks（原生内容块）
@@ -184,9 +190,15 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - Pi 结构化 `image` 内容块使用固定方形缩略图；点击后进入原生原图预览并提供有界缩放。图片原始数据仍只属于 Pi Session JSONL，App 仅在内存中严格 Base64（编码）解码、检查 MIME / 尺寸 / 像素上限，不写缓存或附件副本；失败时显示安全占位。远程 Markdown 图片不进入这条内部路由。
 - 识别出的 read / edit / write / search 工具结果使用 D Code 自有安全 presenter；未知工具保留 generic fallback，不显示扩展 TUI。
 
-### 7.6 Composer 与 Active Plan
+### 7.6 Composer、作用域托盘与 Active Plan
 
 - Composer 固定在 transcript 下方，以共享 raised surface 悬浮于阅读画布，保留模型、thinking、Fast 和 context usage；运行冲突不得吞掉草稿。
+- 主工作区没有会话打开时，主页即会话前草稿：同一 Composer 组件居中（最大约 `640pt`）落地，启动、新建会话、打开会话与返回工作台时输入框自动获得键盘焦点；首次发送非空正文才创建真实 Pi Session（延迟创建是产品内部机制，不在界面上解说）。主页不显示问候语、建议 prompt 或模板卡片。
+- 会话前草稿的 Composer 带作用域托盘：与输入框同一 raised surface 的下挂条，hairline 分隔，承载 Source Folder 选择 chip（默认用户目录 `~`，正文与模型选择随目录迁移保留）与只读 Git 分支 chip（仅当选中 Git 仓库目录时出现）。
+- 占位符可以承担教学，但必须先守住视觉预算：走 3.4 的 hint 档（`placeholderTextColor`），一行、上限约 18 个全宽字符、最多一条教学子句，不用分号并列两条教学。空输入框的第一眼必须仍然读成"空"。当前文案 `交给 D Code 一项工作，/ 使用命令`；运行中仍按语境显示介入 / 排队占位符。
+- 占位符只教已经实现的快捷输入。尚未实现的能力（如 `@` 插入上下文）不在占位符里预告——占位符是输入框的当前契约，不是路线图。
+- 发送按钮遵循 4.1 图标动作几何（`28pt` 视觉 / `32pt` 命中区），容器常在、权重分档：可发送时 accent 圆形填充；暂不可发送时保留同尺寸的中性极低填充圆盘（约 `0.07`）与次级色 glyph。禁用态不得退化成没有容器的裸 glyph——那会让主动作在控制行里比旁边的状态指示更弱，用户根本找不到按钮在哪；也不得回到 `36pt` 实心灰盘那种读起来像"可以按"的重量。禁用观感由按钮自己的 style 表达，不依赖系统对 disabled label 的二次变暗：次级色再被压一层会掉到 3.4 的提示档，和占位符同权重。模型 chip 使用 caption 字号与次级视觉，不与正文抢层级。
+- `/` 命令面板支持 ↑↓ 选择、高亮、Esc 关闭与回车选中，交互模式与 ⌘K 搜索浮层一致。
 - Active Plan 位于 transcript 与 Composer 之间；折叠态只显示 objective、current step 与进度，完成或放弃后退出常驻界面。
 
 ## 8. Motion 与 Accessibility（无障碍）
@@ -211,6 +223,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 6. 同组按钮 hit frame 等高同宽、中心 `y` 误差不超过 `0.5pt`，命中区不重叠；
 7. 替换同类 SF Symbol 后无需添加业务页面 offset；
 8. 实际 App 截图确认可读密度、边距和 optical alignment（视觉对齐），不能只看 SwiftUI frame。
+9. 提示档文本（占位符、空态）在截图上取墨色采样，确认落在 hint 档而非次级档；语义色名不能替代实测——`placeholderTextColor` 就是名字像提示档、实际是 `0.5` 的反例。
 
 当前没有 screenshot test（截图测试）基础设施。涉及视觉结果时，应在最新 source 对应的重新构建 App 中保留截图与人工操作路径，并把自动测试、构建、人工验收、提交和发布分别报告。
 

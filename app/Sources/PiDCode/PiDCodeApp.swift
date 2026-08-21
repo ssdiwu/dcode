@@ -54,6 +54,17 @@ struct PiDCodeApp: App {
                     .keyboardShortcut(",", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
+                Button("新建会话") {
+                    Task { await model.startGlobalSession() }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(
+                    !model.canUseHostSessions
+                        || model.isCreatingSession
+                        || model.isOpeningSession
+                        || model.isStreaming
+                        || model.isPromptTransactionActive
+                )
                 Button("搜索会话…") { model.presentSearch() }
                     .keyboardShortcut("k", modifiers: .command)
                     .disabled(

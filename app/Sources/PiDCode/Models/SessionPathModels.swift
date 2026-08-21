@@ -107,7 +107,8 @@ struct NewSessionModelSelection: Codable, Hashable, Sendable {
 }
 
 struct NewSessionDraft: Codable, Hashable, Sendable {
-    let directoryPath: String
+    /// 会话前草稿的工作目录：作用域托盘可整体迁移，正文与模型选择保留。
+    var directoryPath: String
     var text: String
     var selectedModel: NewSessionModelSelection? = nil
     var selectedThinkingLevel: String? = nil

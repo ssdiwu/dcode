@@ -125,16 +125,42 @@ struct SidebarView: View {
                 )
             }
             .frame(height: PiDCodeMetrics.navigationRowHeight)
-            Button {
-                editProject(nil)
-            } label: {
-                Label("新建项目", systemImage: "folder.badge.plus")
+            VStack(spacing: 2) {
+                Button {
+                    newGlobalSession()
+                } label: {
+                    HStack(spacing: 8) {
+                        Label("新建会话", systemImage: "plus.bubble")
+                        Spacer(minLength: 8)
+                        Text("⌘N")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: PiDCodeMetrics.navigationRowHeight)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .dCodeAccessibleButton("新建会话")
+                .disabled(
+                    model.connectionState != .ready
+                        || model.isCreatingSession
+                        || model.isOpeningSession
+                        || model.isStreaming
+                        || model.isPromptTransactionActive
+                )
+                Button {
+                    editProject(nil)
+                } label: {
+                    Label("新建项目", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: PiDCodeMetrics.navigationRowHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .dCodeAccessibleButton("新建项目")
+                .disabled(!model.canEditProjects)
             }
-            .buttonStyle(.borderless)
-            .dCodeAccessibleButton("新建项目")
-            .disabled(!model.canEditProjects)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, PiDCodeMetrics.spacingStandard)
@@ -580,9 +606,9 @@ private struct SessionNavigationItem: View {
     @FocusState private var focusedControl: FocusedControl?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 0) {
+        ZStack(alignment: .trailing) {
             Button(action: select) {
-                SessionNavigationRow(session: session)
+                SessionNavigationRow(session: session, showsTimestamp: !showsActions)
                     .padding(.leading, leadingInset)
             }
             .buttonStyle(.plain)
@@ -626,11 +652,6 @@ private struct SessionNavigationItem: View {
                 .accessibilityHint("只从 D Code 普通导航隐藏；Pi 会话与草稿均保留")
                 .help("归档会话")
             }
-            .frame(
-                width: PiDCodeMetrics.iconActionTarget * 2,
-                height: PiDCodeMetrics.iconActionTarget,
-                alignment: .center
-            )
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: PiDCodeMetrics.navigationRowHeight)
@@ -756,19 +777,45 @@ private struct SessionNavigationItem: View {
 
 struct SessionNavigationRow: View {
     let session: SessionSummary
+    /// Hover / 键盘焦点时由置顶 / 归档按钮覆盖尾部时间槽位，时间淡出但保留占位。
+    var showsTimestamp: Bool = true
 
     var body: some View {
-        Text(session.displayTitle)
-            .font(.body)
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .frame(
-                maxWidth: .infinity,
-                minHeight: PiDCodeMetrics.navigationRowHeight,
-                alignment: .leading
-            )
+        HStack(spacing: PiDCodeMetrics.spacingStandard) {
+            Text(session.displayTitle)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: PiDCodeMetrics.spacingTight)
+            if let modified = session.modifiedDate {
+                // 尾部 64pt 双用途槽位：静止时右对齐显示相对时间，Hover / 焦点时
+                // 置顶与归档按钮在同一位置翻出；标题截断边界保持在槽位之前，
+                // 任何状态都不与按钮或时间重叠。
+                Text(modified.piDCodeRelativeLabel)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                    .fixedSize()
+                    .opacity(showsTimestamp ? 1 : 0)
+                    .frame(
+                        minWidth: PiDCodeMetrics.iconActionTarget * 2,
+                        alignment: .trailing
+                    )
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PiDCodeMetrics.navigationRowHeight,
+            alignment: .leading
+        )
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            session.modifiedDate.map {
+                "\(session.displayTitle)，\($0.piDCodeRelativeLabel)"
+            } ?? session.displayTitle
+        )
     }
 }
 

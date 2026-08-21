@@ -216,6 +216,85 @@ final class AppModelHostIntegrationTests: XCTestCase {
         XCTAssertNotNil(harness.model.notice)
     }
 
+    func testHostStderrIsLoggedNotNoticedWhileOutputErrorStillNotifies() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+
+        await harness.client.emit(HostEvent(
+            name: "host.stderr",
+            data: .object(["message": .string("lang:简体（think:开启，跟随 /lang）")])
+        ))
+
+        XCTAssertNil(harness.model.notice, "扩展自身的 stderr 输出不应弹出通知")
+        XCTAssertEqual(harness.model.hostDiagnosticLog.count, 1)
+        XCTAssertEqual(harness.model.hostDiagnosticLog.first?.message, "lang:简体（think:开启，跟随 /lang）")
+
+        await harness.client.emit(HostEvent(
+            name: "host.outputError",
+            data: .object(["message": .string("无法解析 Host 输出")])
+        ))
+        XCTAssertEqual(harness.model.notice?.message, "无法解析 Host 输出")
+        XCTAssertEqual(harness.model.notice?.level, "error")
+    }
+
+    func testExtensionLanguageFooterHintIsLoggedNotNoticedWhileRealNotificationsStillBanner() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
+                "message": .string("lang:简体中文（think:开启，跟随 /lang）"),
+                "level": .string("info"),
+            ])
+        ))
+
+        XCTAssertNil(harness.model.notice, "pi-di18n 的 TUI 状态栏提示不应弹横幅")
+        XCTAssertEqual(harness.model.hostDiagnosticLog.last?.message, "扩展状态提示：lang:简体中文（think:开启，跟随 /lang）")
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
+                "message": .string("i18n: slash command localization is running in fallback mode (pi-core alignment needed)"),
+                "level": .string("warning"),
+            ])
+        ))
+
+        XCTAssertNil(harness.model.notice, "pi-di18n 的 i18n 状态提示即使 warning 级别也不弹横幅")
+        XCTAssertEqual(
+            harness.model.hostDiagnosticLog.last?.message,
+            "扩展状态提示：i18n: slash command localization is running in fallback mode (pi-core alignment needed)"
+        )
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
+                "message": .string("提醒：站会 10 分钟后开始"),
+                "level": .string("info"),
+            ])
+        ))
+        XCTAssertEqual(harness.model.notice?.message, "提醒：站会 10 分钟后开始", "普通扩展通知仍然弹横幅")
+    }
+
+    func testHostDiagnosticLogCapsAtTwoHundredEntries() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+
+        for index in 0..<205 {
+            await harness.client.emit(HostEvent(
+                name: "host.stderr",
+                data: .object(["message": .string("line-\(index)")])
+            ))
+        }
+
+        XCTAssertEqual(harness.model.hostDiagnosticLog.count, 200)
+        XCTAssertEqual(harness.model.hostDiagnosticLog.first?.message, "line-5")
+        XCTAssertEqual(harness.model.hostDiagnosticLog.last?.message, "line-204")
+    }
+
     // MARK: - 辅助
 
     private func runState(sessionID: String, runID: String, phase: String) -> SessionRunState {
@@ -286,125 +365,59 @@ final class SessionTakeoverIntegrationTests: XCTestCase {
     }
 }
 
-// MARK: - 动作级权限
+// MARK: - 主页草稿模型补载
 
 @MainActor
-final class PermissionIntegrationTests: XCTestCase {
-    func testPermissionRequestDrivesCardAndRespondClearsIt() async throws {
-        let harness = HostTestHarness()
-        await harness.installDefaultScript()
-        await harness.model.start()
-        harness.model.selectedSessionID = "session-a"
-
-        await harness.client.emit(HostEvent(name: "permission.request", data: .object([
-            "requestId": .string("t1"),
-            "sessionId": .string("session-a"),
-            "tool": .string("bash"),
-            "summary": .string("npm test"),
-            "targets": .array([.string("/tmp/project")]),
-            "risk": .string("command"),
-            "riskLabel": .string("命令执行"),
-            "scopeHint": .string("授权后不再询问"),
-        ])))
-        let request = try XCTUnwrap(harness.model.permission.pendingRequest)
-        XCTAssertTrue(request.supportsScopeGrant)
-        XCTAssertEqual(request.tool, "bash")
-
-        await harness.model.respondToPermissionRequest(request, decision: "allowScope")
-
-        XCTAssertNil(harness.model.permission.pendingRequest, "回传后清除权限卡")
-        let requests = await harness.client.requests
-        let respond = try XCTUnwrap(requests.last { $0.method == "permission.respond" })
-        XCTAssertEqual(respond.params["decision"]?.stringValue, "allowScope")
-        XCTAssertEqual(respond.params["requestId"]?.stringValue, "t1")
-    }
-
-    func testHighRiskRequestHidesScopeGrantOption() async throws {
-        let harness = HostTestHarness()
-        await harness.installDefaultScript()
-        await harness.model.start()
-        harness.model.selectedSessionID = "session-a"
-
-        await harness.client.emit(HostEvent(name: "permission.request", data: .object([
-            "requestId": .string("w1"),
-            "sessionId": .string("session-a"),
-            "tool": .string("write"),
-            "summary": .string("/tmp/outside/a.txt"),
-            "targets": .array([.string("/tmp/outside/a.txt")]),
-            "risk": .string("fileWriteOutside"),
-            "riskLabel": .string("项目外写入（高）"),
-            "scopeHint": .string("只能本次允许或拒绝"),
-        ])))
-
-        let request = try XCTUnwrap(harness.model.permission.pendingRequest)
-        XCTAssertTrue(request.isHighRisk)
-        XCTAssertFalse(request.supportsScopeGrant, "项目外写入不给范围授权")
-    }
-
-    func testPermissionUpdatedRefreshesGrantsAndSettingsPageListsThem() async throws {
+final class HomeDraftModelRecoveryTests: XCTestCase {
+    /// 0.0.14 实机回归：主页 .task(id:) 曾把 isNewSessionDraftActive 计入 key，
+    /// 草稿激活会取消自身任务，把 session.getModels 掐成 CancellationError。
+    /// key 修复之外，本用例锁定恢复路径：草稿在、模型从未载入、无错误时，
+    /// ensureHomeDraft 必须补载而不是静默返回。
+    func testEnsureHomeDraftReloadsModelsWhenDraftActiveButModelsMissing() async throws {
         let harness = HostTestHarness()
         await harness.client.script { method, _ in
             switch method {
-            case "host.hello": HostTestHarness.helloValue()
-            case "session.list": .object(["sessions": .array([])])
-            case "permission.list": .object([
-                "grants": .array([
-                    .object([
-                        "id": .string("g1"),
-                        "kind": .string("bashPrefix"),
-                        "root": .string("/tmp/project"),
-                        "pattern": .string("npm test"),
-                        "createdAt": .string("2026-08-20T08:00:00.000Z"),
-                        "createdBySession": .string("session-a"),
+            case "host.hello":
+                HostTestHarness.helloValue()
+            case "session.list":
+                .object(["sessions": .array([])])
+            case "session.getModels":
+                .object([
+                    "models": .array([
+                        .object([
+                            "provider": .string("openai-codex"),
+                            "id": .string("gpt-5.3-codex-spark"),
+                            "name": .string("GPT-5.3 Codex Spark"),
+                            "reasoning": .bool(true),
+                            "contextWindow": .number(400_000),
+                            "maxTokens": .number(64_000),
+                            "thinkingLevels": .array([
+                                .string("off"), .string("low"), .string("medium"), .string("high"),
+                            ]),
+                            "fastModeSupported": .bool(true),
+                        ]),
                     ]),
-                ]),
-                "audit": .array([
-                    .object([
-                        "at": .string("2026-08-20T08:00:01.000Z"),
-                        "sessionId": .string("session-a"),
-                        "tool": .string("bash"),
-                        "summary": .string("npm test"),
-                        "risk": .string("命令执行"),
-                        "decision": .string("allowScope"),
-                    ]),
-                ]),
-            ])
-            default: .object([:])
+                    "defaultThinkingLevel": .string("medium"),
+                ])
+            default:
+                .object([:])
             }
         }
         await harness.model.start()
-        harness.model.selectedSessionID = "session-a"
 
-        await harness.model.loadPermissions()
+        await harness.model.ensureHomeDraft()
+        XCTAssertTrue(harness.model.isNewSessionDraftActive, "主页自动激活草稿")
+        XCTAssertFalse(harness.model.modelSettings.models.isEmpty, "首次激活即载入模型")
+        XCTAssertEqual(harness.model.modelSettings.models.first?.displayName, "GPT-5.3 Codex Spark")
 
-        XCTAssertEqual(harness.model.permission.grants.first?.pattern, "npm test")
-        XCTAssertEqual(harness.model.permission.audit.first?.decisionLabel, "范围允许")
-
-        let host = NSHostingView(
-            rootView: PermissionsSettingsView().environment(harness.model).frame(width: 520, height: 480)
+        // 模拟取消后的残留状态：草稿在、模型被清空、无错误、不在加载中。
+        harness.model.modelSettings.models = []
+        await harness.model.ensureHomeDraft()
+        XCTAssertEqual(
+            harness.model.modelSettings.models.first?.displayName,
+            "GPT-5.3 Codex Spark",
+            "草稿已在但模型缺失时必须补载"
         )
-        host.layoutSubtreeIfNeeded()
-        XCTAssertFalse(host.fittingSize == .zero)
-    }
-
-    func testComposerRendersPermissionCard() {
-        let model = AppModel()
-        model.selectedSessionID = "session-render"
-        model.permission.pendingRequest = PermissionRequestPresentation(
-            requestID: "t1",
-            sessionID: "session-render",
-            tool: "bash",
-            summary: "git push origin main",
-            targets: [],
-            risk: "commandHighRisk",
-            riskLabelText: "高风险命令（高）",
-            scopeHint: "授权后，该目录下以「git push」开头的命令不再询问"
-        )
-
-        let host = NSHostingView(
-            rootView: ComposerView().environment(model).frame(width: 900, height: 260)
-        )
-        host.layoutSubtreeIfNeeded()
-        XCTAssertFalse(host.fittingSize == .zero)
+        XCTAssertNil(harness.model.modelSettings.modelIssue)
     }
 }

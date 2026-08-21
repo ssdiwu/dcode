@@ -51,6 +51,7 @@ struct SettingsView: View {
     @AppStorage(WorkbenchPreferenceKey.sidebarWidth) private var sidebarWidth = Double(WorkbenchLayoutPolicy.defaultSidebarWidth)
     @AppStorage(WorkbenchPreferenceKey.inspectorWidth) private var inspectorWidth = Double(WorkbenchLayoutPolicy.defaultInspectorWidth)
 
+    @AppStorage(DCodeInterfaceFontScale.storageKey) private var interfaceFontScaleRawValue = DCodeInterfaceFontScale.standard.rawValue
     let page: SettingsPage
     let navigationWidth: CGFloat
 
@@ -134,15 +135,6 @@ struct SettingsView: View {
             }
 
             SettingsNavigationRow(
-                title: "动作权限",
-                systemImage: "lock.shield",
-                badge: model.permission.grants.count,
-                selected: page == .permissions
-            ) {
-                model.presentSettings(.permissions)
-            }
-
-            SettingsNavigationRow(
                 title: "自构建",
                 systemImage: "arrow.triangle.2.circlepath",
                 selected: page == .selfBuild
@@ -155,6 +147,15 @@ struct SettingsView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, PiDCodeMetrics.spacingStandard)
                 .padding(.top, PiDCodeMetrics.spacingSection)
+
+            SettingsNavigationRow(
+                title: "Host 诊断",
+                systemImage: "stethoscope",
+                badge: model.hostDiagnosticLog.isEmpty ? nil : model.hostDiagnosticLog.count,
+                selected: page == .hostDiagnostics
+            ) {
+                model.presentSettings(.hostDiagnostics)
+            }
 
             SettingsNavigationRow(
                 title: "关于 D Code",
@@ -196,6 +197,24 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(width: 220)
                         .accessibilityHint("选择跟随系统、浅色或深色外观")
+                    }
+
+                    Divider().padding(.leading, 20)
+
+                    SettingsValueRow(
+                        title: "界面字号",
+                        detail: "在系统文字大小基础上整体缩放界面文本，仅作用于常规层级。"
+                    ) {
+                        Picker("界面字号", selection: interfaceFontScale) {
+                            ForEach(DCodeInterfaceFontScale.allCases) { option in
+                                Text(option.label)
+                                    .tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 220)
+                        .accessibilityHint("选择紧凑、标准或大的界面字号")
                     }
                 }
             }
@@ -249,11 +268,11 @@ struct SettingsView: View {
         case .archivedSessions:
             ArchivedSessionsView()
 
-        case .permissions:
-            PermissionsSettingsView()
-
         case .selfBuild:
             SelfBuildSettingsView()
+
+        case .hostDiagnostics:
+            HostDiagnosticsSettingsView()
 
         case .about:
             AboutView()
@@ -266,6 +285,15 @@ struct SettingsView: View {
             set: { newValue in
                 appearanceRawValue = newValue.rawValue
                 newValue.apply()
+            }
+        )
+    }
+
+    private var interfaceFontScale: Binding<DCodeInterfaceFontScale> {
+        Binding(
+            get: { DCodeInterfaceFontScale.resolve(interfaceFontScaleRawValue) },
+            set: { newValue in
+                interfaceFontScaleRawValue = newValue.rawValue
             }
         )
     }
@@ -424,84 +452,6 @@ private struct SettingsValueRow<Trailing: View>: View {
     }
 }
 
-/// 动作级权限管理：授权列表（可撤销）与最近审计记录。
-struct PermissionsSettingsView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        Form {
-            Section {
-                if model.permission.isLoading {
-                    HStack { ProgressView().controlSize(.small); Text("读取授权表…").foregroundStyle(.secondary) }
-                } else if let issue = model.permission.issue {
-                    Text(issue).foregroundStyle(.secondary)
-                } else if model.permission.grants.isEmpty {
-                    Text("还没有任何范围授权。工具调用会逐次询问。")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.permission.grants) { grant in
-                        HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(grant.kindLabel).font(.callout.weight(.medium))
-                                Text(grant.displayTarget)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Text("授予于 \(grant.createdAt)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Spacer(minLength: 8)
-                            Button("撤销") {
-                                Task { await model.revokePermissionGrant(grant) }
-                            }
-                            .controlSize(.small)
-                        }
-                    }
-                }
-            } header: {
-                Text("范围授权（\(model.permission.grants.count)）")
-            } footer: {
-                Text("范围授权按会话工作目录生效：命令按前缀、写入按授权根。撤销后下一次同类动作会再次询问。")
-            }
-
-            Section("最近决策记录") {
-                if model.permission.audit.isEmpty {
-                    Text("暂无记录。").foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.permission.audit.suffix(30).reversed()) { entry in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(entry.decisionLabel)
-                                    .font(.caption.weight(.semibold))
-                                Text(entry.tool)
-                                    .font(.caption.monospaced())
-                                Text(entry.risk)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(String(entry.at.prefix(19)).replacingOccurrences(of: "T", with: " "))
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Text(entry.summary)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
-            }
-        }
-        .task {
-            await model.loadPermissions()
-        }
-    }
-}
-
 /// 自构建闭环（ADR 0022）：构建候选（隔离目录）→ 校验 → 受控重启 / 回滚。
 struct SelfBuildSettingsView: View {
     @Environment(AppModel.self) private var model
@@ -510,74 +460,113 @@ struct SelfBuildSettingsView: View {
 
     var body: some View {
         let selfBuild = model.selfBuild
-        Form {
-            Section {
-                HStack {
-                    Button {
-                        Task { await model.startSelfBuild() }
-                    } label: {
-                        if selfBuild.phase == .building {
-                            HStack { ProgressView().controlSize(.small); Text("构建中…") }
-                        } else {
-                            Text("构建候选 App")
+        SettingsPageContainer(
+            title: "自构建",
+            subtitle: "在隔离目录构建候选 App，校验后受控替换并重启；失败不影响当前运行。"
+        ) {
+            VStack(spacing: PiDCodeMetrics.spacingSection) {
+                SettingsGroup {
+                    HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                        Button {
+                            Task { await model.startSelfBuild() }
+                        } label: {
+                            if selfBuild.phase == .building {
+                                HStack { ProgressView().controlSize(.small); Text("构建中…") }
+                            } else {
+                                Text("构建候选 App")
+                            }
+                        }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selfBuild.phase == .building)
+                        if let output = selfBuild.lastOutput {
+                            Text(output.succeeded ? "上次构建成功 · \(output.durationMs / 1000) 秒" : "上次构建失败")
+                                .font(.caption)
+                                .foregroundStyle(output.succeeded ? .secondary : Color.orange)
                         }
                     }
-                    .disabled(selfBuild.phase == .building)
-                    if let output = selfBuild.lastOutput {
-                        Text(output.succeeded ? "上次构建成功 · \(output.durationMs / 1000) 秒" : "上次构建失败")
+                    if let output = selfBuild.lastOutput, !output.outputTail.isEmpty {
+                        Divider().padding(.leading, 20)
+                        DisclosureGroup("构建输出（最近 \(output.outputTail.count) 行）") {
+                            ScrollView {
+                                Text(output.outputTail.joined(separator: "\n"))
+                                    .font(.caption.monospaced())
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 180)
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                    } else {
+                        Text("产物写入 dist-candidate，不会触碰当前运行的 App；构建失败只保留输出，不做任何替换。")
                             .font(.caption)
-                            .foregroundStyle(output.succeeded ? .secondary : Color.orange)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, PiDCodeMetrics.spacingGroup)
                     }
                 }
-                if let output = selfBuild.lastOutput, !output.outputTail.isEmpty {
-                    DisclosureGroup("构建输出（最近 \(output.outputTail.count) 行）") {
-                        ScrollView {
-                            Text(output.outputTail.joined(separator: "\n"))
-                                .font(.caption.monospaced())
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(maxHeight: 180)
-                    }
-                    .font(.caption)
-                }
-            } header: {
-                Text("候选构建")
-            } footer: {
-                Text("产物写入 dist-candidate，不会触碰当前运行的 App；构建失败只保留输出，不做任何替换。")
-            }
 
-            if let candidate = selfBuild.candidate {
-                Section("候选") {
-                    LabeledContent("App 版本") { Text(candidate.appVersion).font(.caption.monospaced()) }
-                    LabeledContent("内嵌 Host") { Text(candidate.hostVersion).font(.caption.monospaced()) }
-                    LabeledContent("签名") {
-                        if candidate.codesignValid {
-                            Label("已通过", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-                        } else {
-                            Label("未通过", systemImage: "xmark.seal").foregroundStyle(.red)
+                if let candidate = selfBuild.candidate {
+                    SettingsGroup {
+                        candidateRow("App 版本", value: candidate.appVersion)
+                        Divider().padding(.leading, 20)
+                        candidateRow("内嵌 Host", value: candidate.hostVersion)
+                        Divider().padding(.leading, 20)
+                        HStack {
+                            Text("签名")
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            if candidate.codesignValid {
+                                Label("已通过", systemImage: "checkmark.seal.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.callout)
+                            } else {
+                                Label("未通过", systemImage: "xmark.seal")
+                                    .foregroundStyle(.red)
+                                    .font(.callout)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 44)
+                        if let issue = candidate.issue {
+                            Text(issue).font(.caption).foregroundStyle(.orange)
+                                .padding(.horizontal, 20)
+                                .padding(.bottom, PiDCodeMetrics.spacingGroup)
+                        }
+                        Divider().padding(.leading, 20)
+                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                            Button("重启到候选") { confirmRestart = true }
+                                .controlSize(.large)
+                                .disabled(!candidate.isReady || selfBuild.phase == .building)
+                            Text("当前会话将在新构建中自动恢复。")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                    }
+                }
+
+                SettingsGroup {
+                    HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                        Button("回滚到备份构建") { confirmRollback = true }
+                            .controlSize(.large)
+                            .disabled(!selfBuild.backupAvailable)
+                        if !selfBuild.backupAvailable {
+                            Text("尚无备份（替换过一次后可用）。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    if let issue = candidate.issue {
-                        Text(issue).font(.caption).foregroundStyle(.orange)
-                    }
-                    Button("重启到候选") { confirmRestart = true }
-                        .disabled(!candidate.isReady || selfBuild.phase == .building)
-                    Text("当前会话将在新构建中自动恢复。")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                    Text("备份只保留最近一份；无崩溃自动回滚——若新构建无法启动，请通过 Finder 手动交换 dist/D Code.app.backup。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, PiDCodeMetrics.spacingGroup)
                 }
-            }
-
-            Section {
-                Button("回滚到备份构建") { confirmRollback = true }
-                    .disabled(!selfBuild.backupAvailable)
-                if !selfBuild.backupAvailable {
-                    Text("尚无备份（替换过一次后可用）。").font(.caption2).foregroundStyle(.tertiary)
-                }
-            } header: {
-                Text("回滚")
-            } footer: {
-                Text("备份只保留最近一份；无崩溃自动回滚——若新构建无法启动，请通过 Finder 手动交换 dist/D Code.app.backup。")
             }
         }
         .confirmationDialog(
@@ -599,6 +588,77 @@ struct SelfBuildSettingsView: View {
                 Task { await model.rollbackSelfBuild() }
             }
             Button("取消", role: .cancel) {}
+        }
+    }
+
+    private func candidateRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.body.weight(.medium))
+            Spacer()
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 20)
+        .frame(minHeight: 44)
+    }
+}
+
+/// Host 子进程 stderr 的只读留存：可能来自任意扩展自身的输出（例如 TUI 专用状态行），
+/// 不代表 D Code 或 Host 的真实错误，因此不弹出通知，只在这里如实留存供排查。
+struct HostDiagnosticsSettingsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsPageContainer(
+            title: "Host 诊断",
+            subtitle: "Host 子进程 stderr 与扩展旁路输出的原始留存，可能来自任意已加载扩展自身；不代表 D Code 或 Host 的真实错误，仅供排查参考。"
+        ) {
+            if model.hostDiagnosticLog.isEmpty {
+                SettingsGroup {
+                    Text("暂无诊断记录。")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 60, alignment: .leading)
+                }
+            } else {
+                HStack {
+                    Text("最近 \(model.hostDiagnosticLog.count) 条")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("清空") {
+                        model.hostDiagnosticLog.removeAll()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                }
+
+                SettingsGroup {
+                    VStack(spacing: 0) {
+                        ForEach(Array(model.hostDiagnosticLog.reversed().enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 {
+                                Divider().padding(.leading, 20)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.timestamp, format: .dateTime.hour().minute().second())
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                                Text(entry.message)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                        }
+                    }
+                }
+            }
         }
     }
 }

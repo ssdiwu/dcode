@@ -4,6 +4,8 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
+    @AppStorage(DCodeInterfaceFontScale.storageKey) private var interfaceFontScaleRawValue = DCodeInterfaceFontScale.standard.rawValue
     @AppStorage(WorkbenchPreferenceKey.sidebarUserHidden) private var sidebarUserHidden = false
     @AppStorage(WorkbenchPreferenceKey.inspectorUserHidden) private var inspectorUserHidden = false
     @AppStorage(WorkbenchPreferenceKey.sidebarWidth) private var preferredSidebarWidth = Double(WorkbenchLayoutPolicy.defaultSidebarWidth)
@@ -62,6 +64,7 @@ struct RootView: View {
                     }
                 }
         }
+        .dynamicTypeSize(effectiveDynamicTypeScale)
         .overlay(alignment: .top) {
             if let notice = model.notice {
                 NoticeBanner(notice: notice)
@@ -290,23 +293,36 @@ struct RootView: View {
                 SettingsView(page: page, navigationWidth: navigationWidth)
             } else {
                 WorkspaceContentView {
-                    if model.inspection != nil || model.isNewSessionDraftActive {
+                    if model.inspection != nil {
                         SessionDetailView()
+                    } else if model.isOpeningSession {
+                        sessionOpeningPlaceholder
                     } else {
-                        UserHomeView(
-                            newSession: createGlobalSession,
-                            newProject: { presentProjectEditor(nil) },
-                            canCreateSession: model.canUseHostSessions
-                                && !model.isCreatingSession
-                                && !model.isOpeningSession
-                                && !model.isStreaming
-                                && !model.isPromptTransactionActive,
-                            canCreateProject: model.canEditProjects
+                        HomeWorkspaceView(
+                            selectSession: { sessionID in
+                                closeOverlays()
+                                Task { await model.selectSession(sessionID) }
+                            },
+                            newProject: { presentProjectEditor(nil) }
                         )
                     }
                 }
             }
         }
+    }
+
+    /// 点击会话到内容呈现之间的即时反馈：主画布不再长时间空白。
+    private var sessionOpeningPlaceholder: some View {
+        VStack(spacing: PiDCodeMetrics.spacingGroup) {
+            ProgressView()
+                .controlSize(.large)
+            Text("正在打开会话…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("正在打开会话")
     }
 
     private func sidebar(width: CGFloat) -> some View {
@@ -435,10 +451,6 @@ struct RootView: View {
             Label("设置", systemImage: "gearshape")
                 .font(.headline)
                 .lineLimit(1)
-        } else if model.workbenchDestination == .workspace, model.isNewSessionDraftActive {
-            Label("新会话", systemImage: "plus.bubble")
-                .font(.headline)
-                .lineLimit(1)
         } else if model.workbenchDestination == .workspace, let inspection = model.inspection {
             HStack(spacing: 4) {
                 Image(
@@ -560,14 +572,19 @@ struct RootView: View {
     }
 
     private func createGlobalSession() {
-        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
-        Task { await model.createSession(at: homeDirectory) }
+        Task { await model.startGlobalSession() }
+    }
+
+    /// 界面字号（设置 > 外观）：标准档跟随系统，紧凑/大档在系统值基础上整体移动一级。
+    private var effectiveDynamicTypeScale: DynamicTypeSize {
+        let scale = DCodeInterfaceFontScale.resolve(interfaceFontScaleRawValue)
+        return scale.dynamicTypeSizeOverride(basedOn: systemDynamicTypeSize)
+            ?? systemDynamicTypeSize
     }
 
     private func layoutPolicy(width: CGFloat) -> WorkbenchLayoutPolicy {
         let workspaceVisible = model.workbenchDestination == .workspace
-        return WorkbenchLayoutPolicy(
-            width: width,
+        return WorkbenchLayoutPolicy(            width: width,
             preferredSidebarWidth: CGFloat(preferredSidebarWidth),
             preferredInspectorWidth: CGFloat(preferredInspectorWidth),
             sidebarUserHidden: sidebarUserHidden || !workspaceVisible,

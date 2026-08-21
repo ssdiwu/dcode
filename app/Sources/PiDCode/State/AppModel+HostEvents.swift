@@ -5,7 +5,11 @@ import Observation
 extension AppModel {
     func handleHostLifecycleEvent(_ event: HostEvent) {
         switch event.name {
-        case "host.stderr", "host.outputError", "protocol.decodeError":
+        case "host.stderr":
+            // stderr 来自 Node 子进程本身，可能是任意扩展的自身输出（例如 pi-tui 专用的
+            // 状态行），不代表 D Code 或 Host 的真实错误；只留存只读诊断，不弹出通知。
+            appendHostDiagnostic(event.data?["message"]?.stringValue ?? "")
+        case "host.outputError", "protocol.decodeError":
             showNotice(event.data?["message"]?.stringValue ?? "Host 诊断事件", level: "error")
         case "host.processEnded":
             resetExtensionUIState()

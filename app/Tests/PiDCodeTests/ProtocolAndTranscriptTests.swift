@@ -1451,7 +1451,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.13",
+            hostVersion: "0.0.14",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1472,7 +1472,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.13",
+            hostVersion: "0.0.14",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1757,7 +1757,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.13",
+                    "hostVersion": "0.0.14",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1927,7 +1927,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.13",
+                    "hostVersion": "0.0.14",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2247,7 +2247,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.13", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.14", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":
@@ -2682,12 +2682,42 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(PiDCodeMetrics.toolbarIconTarget, 28)
         XCTAssertEqual(PiDCodeMetrics.windowTopBarHeight, PiDCodeMetrics.navigationRowHeight)
         XCTAssertEqual(PiDCodeMetrics.windowControlsReservedWidth, 88)
-        XCTAssertEqual(PiDCodeMetrics.prominentIconActionTarget, 36)
         XCTAssertLessThan(PiDCodeMetrics.actionGlyphBox, PiDCodeMetrics.iconActionSurface)
         XCTAssertLessThan(PiDCodeMetrics.iconActionSurface, PiDCodeMetrics.iconActionTarget)
         XCTAssertLessThan(PiDCodeMetrics.iconActionTarget, PiDCodeMetrics.navigationRowHeight)
         XCTAssertLessThan(PiDCodeMetrics.iconActionTarget, PiDCodeMetrics.minimumTarget)
-        XCTAssertLessThanOrEqual(PiDCodeMetrics.prominentIconActionTarget, PiDCodeMetrics.minimumTarget)
+    }
+
+    func testInterfaceFontScaleOffsetsSystemDynamicTypeSize() {
+        XCTAssertNil(
+            DCodeInterfaceFontScale.standard.dynamicTypeSizeOverride(basedOn: .large),
+            "标准档不覆盖系统设置"
+        )
+        XCTAssertEqual(
+            DCodeInterfaceFontScale.compact.dynamicTypeSizeOverride(basedOn: .large),
+            .medium
+        )
+        XCTAssertEqual(
+            DCodeInterfaceFontScale.large.dynamicTypeSizeOverride(basedOn: .large),
+            .xLarge
+        )
+        XCTAssertEqual(
+            DCodeInterfaceFontScale.compact.dynamicTypeSizeOverride(basedOn: .xSmall),
+            .xSmall,
+            "紧凑档不越过常规下限"
+        )
+        XCTAssertEqual(
+            DCodeInterfaceFontScale.large.dynamicTypeSizeOverride(basedOn: .xxxLarge),
+            .xxxLarge,
+            "大档不越过常规上限"
+        )
+        XCTAssertEqual(
+            DCodeInterfaceFontScale.large.dynamicTypeSizeOverride(basedOn: .accessibility2),
+            .xxxLarge,
+            "无障碍特大档回退常规上限参与换算"
+        )
+        XCTAssertEqual(DCodeInterfaceFontScale.resolve("compact"), .compact)
+        XCTAssertEqual(DCodeInterfaceFontScale.resolve("unexpected"), .standard)
     }
 
     private func temporaryURL(_ name: String) -> URL {

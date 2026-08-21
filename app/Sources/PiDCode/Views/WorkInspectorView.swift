@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct WorkInspectorView: View {
@@ -180,6 +181,7 @@ private struct FlattenedFileTreeRoot: View {
 
 private struct FileTreeBranch: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let rootPath: String
     let node: ProjectFileNode
     let depth: Int
@@ -189,6 +191,7 @@ private struct FileTreeBranch: View {
     @State private var loading = false
     @State private var children: [ProjectFileNode]?
     @State private var errorMessage: String?
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -283,8 +286,24 @@ private struct FileTreeBranch: View {
         .padding(.horizontal, 6)
         .frame(minHeight: PiDCodeMetrics.minimumTarget)
         .contentShape(Rectangle())
-        .background(isRoot ? Color.primary.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: 7))
         .help(node.path)
+        .onHover { hovering = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+        .contextMenu {
+            Button("在 Finder 中显示", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
+            }
+            Button("拷贝路径", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(node.path, forType: .string)
+            }
+        }
+    }
+
+    private var rowBackground: Color {
+        if isRoot { return Color.primary.opacity(0.045) }
+        return hovering ? Color.primary.opacity(0.05) : .clear
     }
 
     private var icon: String {

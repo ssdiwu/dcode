@@ -112,7 +112,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.13");
+    assert.equal(hello.hostVersion, "0.0.14");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);

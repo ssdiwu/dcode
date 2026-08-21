@@ -16,17 +16,17 @@ enum HostCompatibilityError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unsupportedProtocol(version):
-            "D Code 0.0.13 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
+            "D Code 0.0.14 不支持 Host Protocol \(version)。请重新构建并使用同一版本的 App 与 Host。"
         case let .incompatibleHostVersion(version):
-            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.13。请重新构建 App，避免混用旧 Host。"
+            "当前 Host 版本为 \(version ?? "未知")，D Code App 需要 0.0.14。请重新构建 App，避免混用旧 Host。"
         case let .missingCapabilities(capabilities):
-            "当前 Host 缺少 0.0.13 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
+            "当前 Host 缺少 0.0.14 必需能力：\(capabilities.joined(separator: "、"))。D Code 已停止连接，以免错误读取或写入会话。"
         }
     }
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.13"
+    static let appVersion = "0.0.14"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -35,7 +35,6 @@ enum HostCompatibility {
         "projectCwdScope",
         "contextUsage",
         "contextBreakdown",
-        "permissionGate",
         "fastMode",
         "sessionExternalSync",
         "dcodeSessionOrigin",
@@ -347,4 +346,12 @@ struct SessionSteerResult: Codable, Equatable, Sendable {
         case steerID = "steerId"
         case runID = "runId"
     }
+}
+
+/// Host 子进程 stderr 的一行原始输出（含扩展自身写入的任意文本，如 TUI 专用状态行）；
+/// 只作只读诊断留存，不代表 D Code 或 Host 自身的错误。
+struct HostDiagnosticEntry: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let timestamp: Date
+    let message: String
 }
