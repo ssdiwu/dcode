@@ -153,32 +153,35 @@ struct ComposerView: View {
                 .accessibilityLabel("运行中发送方式：\(runningDeliveryMode.label)")
             }
 
-            Button {
-                showingContext.toggle()
-            } label: {
-                HStack(spacing: 4) {
-                    contextRemainingRing
-                        .frame(width: 18, height: 18)
-                    if let delta = contextDeltaCaption {
-                        Text(delta)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .help("本轮运行累计的上下文 token 增减：+ 为新增，− 为压缩或修剪释放")
+            // 会话前草稿没有任何运行上下文，圆环不该以空环形态常驻；
+            // 会话创建（存在运行上下文）后才显示。
+            if !model.isNewSessionDraftActive {
+                Button {
+                    showingContext.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        contextRemainingRing
+                            .frame(width: 18, height: 18)
+                        if let delta = contextDeltaCaption {
+                            Text(delta)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .help("本轮运行累计的上下文 token 增减：+ 为新增，− 为压缩或修剪释放")
+                        }
                     }
+                    .frame(
+                        width: PiDCodeMetrics.compactControlHeight,
+                        height: PiDCodeMetrics.compactControlHeight
+                    )
+                    .contentShape(Rectangle())
                 }
-                .frame(
-                    width: PiDCodeMetrics.compactControlHeight,
-                    height: PiDCodeMetrics.compactControlHeight
-                )
-                .contentShape(Rectangle())
+                .buttonStyle(.borderless)
+                .popover(isPresented: $showingContext, arrowEdge: .bottom) {
+                    contextPopover
+                }
+                .help(contextHelpLabel)
+                .accessibilityLabel("上下文：\(contextAccessibilityLabel)")
             }
-            .buttonStyle(.borderless)
-            .popover(isPresented: $showingContext, arrowEdge: .bottom) {
-                contextPopover
-            }
-            .help(contextHelpLabel)
-            .accessibilityLabel("上下文：\(contextAccessibilityLabel)")
-            .disabled(model.isNewSessionDraftActive)
 
             modelAndThinkingMenu
                 .disabled(
@@ -716,24 +719,22 @@ struct ComposerView: View {
     }
 
     private var contextPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("上下文")
                 .font(.headline)
             if let usage = model.hostState?.contextUsage {
-                if let remainingPercent = usage.remainingPercent {
-                    ProgressView(value: remainingPercent, total: 100)
-                    Text("\(remainingPercent.formatted(.number.precision(.fractionLength(0))))% 剩余")
+                VStack(alignment: .leading, spacing: 4) {
+                    // 主数字回答“用了多少”：已用 / 窗口；剩余百分比是次级信息。
+                    Text("\(ConversationTimingFormatter.tokenText(usedTokens(for: usage))) / \(ConversationTimingFormatter.tokenText(usage.contextWindow))")
                         .font(.title3.monospacedDigit().weight(.semibold))
-                } else {
-                    Text("暂不可用")
-                        .font(.title3.weight(.semibold))
+                    if let remainingPercent = usage.remainingPercent {
+                        Text("剩余 \(remainingPercent.formatted(.number.precision(.fractionLength(0))))%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if let tokens = usage.tokens {
-                    LabeledContent("已使用", value: tokens.formatted())
-                } else {
-                    LabeledContent("已使用", value: "待估算")
-                }
-                LabeledContent("窗口", value: usage.contextWindow.formatted())
+                contextSegmentedBar(usage: usage)
+                contextLegend
             } else {
                 Text("暂不可用")
                     .foregroundStyle(.secondary)
@@ -741,12 +742,160 @@ struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            contextCompositionSection
+            compactionSection
         }
         .padding(16)
-        .frame(width: 268)
+        .frame(width: 300)
         .task {
             await model.loadContextBreakdown()
+            await model.loadCompactionInfo()
+        }
+    }
+
+    private func usedTokens(for usage: ContextUsage) -> Int {
+        usage.tokens ?? model.contextBreakdown?.totalTokens ?? 0
+    }
+
+    /// 分段彩色条：构成分项从左到右各占一段，颜色与图例一一对应；
+    /// 无锚定时退化为单色用量条。
+    private func contextSegmentedBar(usage: ContextUsage) -> some View {
+        let usedFraction = min(1, max(0, usage.usedFraction ?? 0))
+        return GeometryReader { proxy in
+            let width = proxy.size.width
+            HStack(spacing: 0) {
+                if let breakdown = model.contextBreakdown, breakdown.available {
+                    ForEach(Array(contextSegments(breakdown).enumerated()), id: \.offset) { _, segment in
+                        Capsule()
+                            .fill(contextPartColor(segment.row.kind))
+                            .frame(width: width * segment.fraction)
+                    }
+                } else {
+                    Capsule()
+                        .fill(Color.accentColor.opacity(0.55))
+                        .frame(width: width * usedFraction)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(height: 8)
+        .background(Capsule().fill(Color.primary.opacity(0.08)))
+        .accessibilityHidden(true)
+    }
+
+    /// 从左到右累计的分段；总占比封顶 1，“系统与工具 + 剩余”留在底色。
+    private func contextSegments(_ breakdown: ContextBreakdownResult) -> [(row: ContextCompositionRow, fraction: Double)] {
+        var segments: [(ContextCompositionRow, Double)] = []
+        var cursor = 0.0
+        for row in visibleCompositionRows(breakdown) {
+            guard let fraction = row.fraction, fraction > 0 else { continue }
+            let clamped = min(fraction, max(0, 1 - cursor))
+            if clamped <= 0 { break }
+            segments.append((row, clamped))
+            cursor += clamped
+        }
+        return segments
+    }
+
+    private func visibleCompositionRows(_ breakdown: ContextBreakdownResult) -> [ContextCompositionRow] {
+        breakdown.compositionRows.filter { row in
+            row.kind != .systemTools && (row.fraction ?? 0) > 0
+        }
+    }
+
+    /// 图例：色点 + 分项 + token 与百分比；与分段条同色。
+    private var contextLegend: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let breakdown = model.contextBreakdown, breakdown.available {
+                ForEach(breakdown.compositionRows) { row in
+                    contextLegendRow(row, total: breakdown.totalTokens)
+                }
+                if breakdown.estimated == true {
+                    Text("尚未取得真实用量锚定；系统与工具部分暂不可推算。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            } else if !model.isLoadingContextBreakdown {
+                Text("构成占比暂不可用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("构成估算载入中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func contextLegendRow(_ row: ContextCompositionRow, total: Int?) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(row.kind == .systemTools ? Color.primary.opacity(0.18) : contextPartColor(row.kind))
+                .frame(width: 8, height: 8)
+            Text(row.kind.label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            if let tokens = row.tokens {
+                Text(legendValue(row: row, tokens: tokens, total: total))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("推算中")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func legendValue(row: ContextCompositionRow, tokens: Int, total: Int?) -> String {
+        let tokenPart = ConversationTimingFormatter.tokenText(tokens)
+        guard let total, total > 0, let fraction = row.fraction else {
+            return tokenPart
+        }
+        let percent = Int((fraction * 100).rounded())
+        return "\(tokenPart)（\(percent)%）"
+    }
+
+    /// 压缩区：自动阈值（Pi 语义：用量超过 窗口 − reserveTokens 即触发）+ 手动压缩。
+    @ViewBuilder
+    private var compactionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            if model.hostState?.isCompacting == true {
+                Label("正在压缩上下文…", systemImage: "compress")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            } else if let info = model.compactionInfo {
+                if info.enabled, let window = model.hostState?.contextUsage?.contextWindow, window > 0 {
+                    let thresholdPercent = Int((Double(window - info.reserveTokens) / Double(window) * 100).rounded())
+                    Text("自动压缩：用量超过约 \(thresholdPercent)% 时自动进行")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if !info.enabled {
+                    Text("自动压缩已在 Pi 设置中关闭")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("自动压缩阈值未知")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("自动压缩阈值载入中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Button("手动压缩…") {
+                Task { await model.compactSession() }
+            }
+            .controlSize(.small)
+            .disabled(
+                model.isStreaming
+                    || model.hostState?.isCompacting == true
+                    || !model.canWrite
+            )
+            .help("立即压缩当前会话上下文（Pi 会先中止当前操作；进行中会显示压缩状态）")
         }
     }
 

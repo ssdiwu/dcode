@@ -368,3 +368,45 @@ final class CustomProvidersRenderTests: XCTestCase {
         XCTAssertFalse(host.fittingSize == .zero, "解析错误态必须完成布局")
     }
 }
+
+@MainActor
+final class ContextPopoverRenderTests: XCTestCase {
+    func testCompactionInfoDecodesAndPopoverStatesRender() throws {
+        let info = try JSONDecoder().decode(CompactionInfoResult.self, from: Data("""
+        {"enabled":true,"reserveTokens":16384,"keepRecentTokens":20000}
+        """.utf8))
+        XCTAssertEqual(info.reserveTokens, 16384)
+
+        let model = AppModel()
+        model.selectedSessionID = "session-render"
+        model.hostState = HostState(
+            mode: "writable",
+            sessionId: "session-render",
+            sessionFile: "/tmp/s.jsonl",
+            sessionName: nil,
+            cwd: "/tmp",
+            model: nil,
+            thinkingLevel: "medium",
+            activePlan: nil,
+            isStreaming: false,
+            runState: nil,
+            pendingMessageCount: 0,
+            contextUsage: ContextUsage(
+                tokens: 307_200,
+                contextWindow: 400_000,
+                percent: 77
+            ),
+            fastMode: nil,
+            writable: true,
+            conflict: nil,
+            isCompacting: nil
+        )
+        model.compactionInfo = info
+
+        let host = NSHostingView(
+            rootView: ComposerView().environment(model).frame(width: 760, height: 300)
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.fittingSize == .zero, "上下文弹层改版后 Composer 必须完成布局")
+    }
+}

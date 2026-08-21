@@ -522,6 +522,10 @@ export class PiHost {
         return this.getCommands();
       case "resources.list":
         return await this.listResources();
+      case "session.compactionInfo":
+        return await this.getCompactionInfo();
+      case "session.compact":
+        return await this.compactSession();
       case "modelProviders.list":
         return await this.modelProviders().list();
       case "modelProviders.save":
@@ -1730,6 +1734,27 @@ export class PiHost {
       await this.active.session.resourceLoader.reload();
     }
     return { ok: true, source, enabled };
+  }
+
+  /** 压缩设置（0.0.16 弹层）：项目覆盖全局、缺省回落 Pi 默认（预留 16384）。 */
+  private async getCompactionInfo(): Promise<unknown> {
+    const cwd = this.active?.inspection.summary.cwd ?? homedir();
+    const settings = SettingsManager.create(cwd, this.agentDir);
+    const global = settings.getGlobalSettings().compaction ?? {};
+    const project = settings.getProjectSettings().compaction ?? {};
+    const merged = {
+      enabled: project.enabled ?? global.enabled ?? true,
+      reserveTokens: project.reserveTokens ?? global.reserveTokens ?? 16384,
+      keepRecentTokens: project.keepRecentTokens ?? global.keepRecentTokens ?? 20000,
+    };
+    return merged;
+  }
+
+  /** 手动压缩：Pi 合同 `session.compact()`——会先中止当前操作；事件流照常驱动 isCompacting。 */
+  private async compactSession(): Promise<unknown> {
+    const active = this.requireWritable();
+    await active.session.compact();
+    return { ok: true };
   }
 
   private getCommands(): unknown {

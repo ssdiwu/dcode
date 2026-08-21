@@ -185,3 +185,30 @@ test("model providers refuses to write over an unparsable models.json", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("compaction info merges project over global and falls back to defaults", async () => {
+  const { PiHost } = await import("../src/pi-host.js");
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-compaction-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  try {
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+      compaction: { enabled: true, reserveTokens: 32768 },
+    }));
+    const host = new PiHost({ agentDir, emit: () => undefined });
+    await host.handle("host.hello", {});
+    const first = await host.handle("session.compactionInfo", {}) as {
+      enabled: boolean; reserveTokens: number; keepRecentTokens: number;
+    };
+    assert.equal(first.enabled, true);
+    assert.equal(first.reserveTokens, 32768, "全局 reserveTokens 生效");
+    assert.equal(first.keepRecentTokens, 20000, "缺省回落 Pi 默认");
+
+    await host.handle("session.compact", {}).then(
+      () => assert.fail("无打开会话时必须报错"),
+      (error: { code?: string }) => assert.notEqual(error.code, undefined),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

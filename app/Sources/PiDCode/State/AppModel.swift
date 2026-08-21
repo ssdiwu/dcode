@@ -117,6 +117,7 @@ final class AppModel {
     private(set) var contextDelta = ContextDeltaPresentation(added: 0, released: 0)
     private(set) var contextBreakdown: ContextBreakdownResult?
     private(set) var isLoadingContextBreakdown = false
+    var compactionInfo: CompactionInfoResult?
     var composerText = ""
     private(set) var newSessionDraft: NewSessionDraft?
     private(set) var isNewSessionDraftActive = false
@@ -4102,6 +4103,26 @@ final class AppModel {
             return
         }
         verificationEvidence = await verificationStore.records(sessionId: sessionId)
+    }
+
+    /// 压缩设置（0.0.16 弹层）：项目覆盖全局、缺省回落 Pi 默认。
+    func loadCompactionInfo() async {
+        guard let client = readyClient else { return }
+        if let info = compactionInfo { _ = info; return }
+        compactionInfo = try? await client.request("session.compactionInfo")
+    }
+
+    /// 手动压缩当前会话（Pi 合同：会先中止当前操作；进行中状态经 isCompacting 呈现）。
+    func compactSession() async {
+        guard let client = readyClient, canWrite else {
+            showNotice("当前会话不可写，无法压缩。", level: "warning")
+            return
+        }
+        do {
+            let _: JSONValue = try await client.request("session.compact")
+        } catch {
+            showNotice("无法发起手动压缩：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "warning")
+        }
     }
 
     /// 自定义模型供应商（0.0.16）：脱敏快照；parseError 如实呈现。

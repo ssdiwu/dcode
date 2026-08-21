@@ -140,6 +140,14 @@ struct ResourceDiagnosticEntry: Codable, Equatable, Sendable, Identifiable {
     var id: String { message }
 }
 
+// MARK: - 上下文压缩（0.0.16 弹层，Pi compaction 合同）
+
+struct CompactionInfoResult: Codable, Equatable, Sendable {
+    let enabled: Bool
+    let reserveTokens: Int
+    let keepRecentTokens: Int
+}
+
 // MARK: - 自定义模型供应商（0.0.16，Pi models.json 合同）
 
 struct ModelProviderModelView: Codable, Equatable, Sendable, Identifiable {

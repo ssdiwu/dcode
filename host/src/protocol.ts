@@ -19,6 +19,8 @@ export const HOST_METHODS = [
   "session.getCommands",
   "resources.list",
   "resources.setPackageEnabled",
+  "session.compactionInfo",
+  "session.compact",
   "modelProviders.list",
   "modelProviders.save",
   "modelProviders.remove",
@@ -286,6 +288,8 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.contextBreakdown":
     case "session.getCommands":
     case "resources.list":
+    case "session.compactionInfo":
+    case "session.compact":
     case "modelProviders.list":
     case "session.getThinkingLevels":
     case "session.refresh":

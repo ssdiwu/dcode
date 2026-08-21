@@ -4,6 +4,10 @@
 
 - `app/build.sh` 新增发布打包硬性检查：工作区不干净（`git status --porcelain` 非空）时拒绝构建，可用 `PI_DCODE_ALLOW_DIRTY_BUILD=1` 显式做本地调试构建（产物不得当作发布物分发）；`app/Info.plist`、`host/package.json`、`host/package-lock.json` 三处版本号不一致时拒绝构建，无绕过项。构建产物新增 Git revision / describe 与工作区干净状态记录；HEAD 不在对应 `v<version>` tag 上时打印警告。`AGENTS.md` 补充对应交付前提。
 
+### Changed
+
+- 上下文圆环弹层对齐同类产品：主数字改为「已用 / 窗口」（如 `307k / 400k`）并保留剩余百分比；构成改为分段彩色条 + 图例一一对应（分项带 token 数与百分比）；新增压缩区——自动压缩阈值（按 Pi 语义：用量超过 窗口 − reserveTokens 时自动进行，缺省预留 16384，项目覆盖全局）与「手动压缩」动作（Pi 合同 `session.compact()`，会先中止当前操作；进行中沿用 0.0.15 的压缩状态呈现）。协议新增 `session.compactionInfo` / `session.compact`。
+
 ### Docs
 
 - 校准 `v0.0.16` 前后的文档与实现现状：版本索引拆分 Source（源码标签）与 Acceptance（验收），补齐 `v0.0.7–v0.0.16` 的远端标签状态并记录已知缺口；架构与分层 README 补入 `0.0.14–0.0.16` 的主页 Composer、本机资源、自定义供应商、Self-build、验证证据等现实能力；已被 ADR 0018／0023 取代的"共享观察 / 按需写入""权限卡"等过期现状改写为历史基线记录，`0.0.15`／`0.0.16` PRD 中不成立的验收项重新取消勾选。
@@ -15,6 +19,7 @@
 - 搜索正文命中消息现在可以正常打开：此前以可写身份打开会话时仍附带 `expectedEntryDigest`，被 Protocol v1 明确拒绝该参数组合（可写打开的新鲜度已由租约与静默窗口保证），导致命中消息实际无法打开。
 - `dcode_facts` 的 `evidence` / `project` facts 改读 Swift 侧真实存储合同：验证证据账本按 `{version, records}` 与 `ok`/`failure`/`unknown` 三态退出码读取，项目登记改读 `projects-v1.json` 的 `{version, projects}`；此前读取的文件名、文档形状与生产不一致，导致这两类事实在真实环境下始终不可用，此前测试因夹具自造格式而误判通过。
 - `host/package-lock.json` 根包版本回补到 `0.0.16`，与 `host/package.json` 一致。
+- 会话前草稿（主页输入框）不再显示上下文余量圆环：此前圆环以禁用的空环形态常驻，但草稿尚无任何运行上下文；会话创建、存在真实上下文后才显示。
 
 ## [0.0.16] - 2026-08-22
 
