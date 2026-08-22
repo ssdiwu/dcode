@@ -16,7 +16,10 @@ let package = Package(
         .executableTarget(
             name: "PiDCode",
             path: "app/Sources/PiDCode",
-            exclude: ["README.md"]
+            exclude: ["README.md"],
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "PiDCodeTests",

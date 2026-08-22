@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 主页（0.0.14）：落地即可打字的会话前草稿。
@@ -25,6 +26,10 @@ struct HomeWorkspaceView: View {
                 if model.canUseHostSessions {
                     ComposerView()
                         .frame(maxWidth: 640)
+                        .overlay(alignment: .top) {
+                            HomeBrandingView()
+                                .offset(y: HomeBrandingMetrics.overlayOffset)
+                        }
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
                 } else {
                     connectionNotice
@@ -102,6 +107,41 @@ struct HomeWorkspaceView: View {
                 }
             )
         }
+    }
+}
+
+private enum HomeBrandingMetrics {
+    static let logoSize: CGFloat = 112
+    static let composerGap: CGFloat = 20
+    static let overlayOffset: CGFloat = -(logoSize + composerGap)
+}
+
+private struct HomeBrandingView: View {
+    private static let logo: Image? = {
+        guard let url = Bundle.module.url(forResource: "DCodeLogo", withExtension: "png"),
+              let image = NSImage(contentsOf: url)
+        else {
+            return nil
+        }
+        return Image(nsImage: image)
+    }()
+
+    var body: some View {
+        Group {
+            if let logo = Self.logo {
+                logo
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: HomeBrandingMetrics.logoSize, height: HomeBrandingMetrics.logoSize)
+                    .foregroundStyle(.primary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(width: HomeBrandingMetrics.logoSize, height: HomeBrandingMetrics.logoSize)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("D Code")
     }
 }
 
