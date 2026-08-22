@@ -12,7 +12,8 @@
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
-| [0021-0.0.20 Composer 命令面板与附件产品需求](0021-0.0.20-Composer-命令面板与附件产品需求.md) | Committed `main`（tag 待人工验收后打） | Automated Passed；Manual Pending | 统一 `/` 面板（扩展命令 / 命令 / Skill / 模板混排 + 类型标注 + 悬停描述）、`+` 附件入口（图片经协议 `images` 进入模型输入、文件插入路径引用）与扩展就绪横幅降噪（ADR 0028）的验收权威。 |
+| [0021-0.0.20 Composer 命令面板与附件产品需求](0021-0.0.20-Composer-命令面板与附件产品需求.md) | Committed `main`（tag 待人工验收后打） | Automated Passed；Manual Pending |
+| [人工验收 0.0.17–0.0.20 用户路径清单](人工验收-0.0.17-0.0.20-用户路径清单.md) | —（验收辅助，非 PRD） | 面向用户路径的走查清单：输入与附件 / Markdown / HTML / 恢复 / 版本一致性；结论回填各 PRD 的人工验收项。 | 统一 `/` 面板（扩展命令 / 命令 / Skill / 模板混排 + 类型标注 + 悬停描述）、`+` 附件入口（图片经协议 `images` 进入模型输入、文件插入路径引用）与扩展就绪横幅降噪（ADR 0028）的验收权威。 |
 | [0020-0.0.19 失败与恢复加固产品需求](0020-0.0.19-失败与恢复加固产品需求.md) | Committed `main@8f0c319`（tag 待人工验收后打） | Automated Passed；Manual Pending | 中断三态辨认与恢复入口（ADR 0027）：Host 重连、半条 JSONL 受控修复、promptId/steerId 幂等、store 熔断可见化与显式重试、恢复链路去静默的验收权威。 |
 | [0019-0.0.18 HTML 编辑缓冲区与隔离即时预览产品需求](0019-0.0.18-HTML-编辑缓冲区与隔离即时预览产品需求.md) | Committed `main@617249e`（tag 待人工验收后打） | Automated Passed；Manual Pending | HTML 编辑（复用 ADR 0025 缓冲区）、隔离 WKWebView 即时预览与网络询问边界（ADR 0026）验收权威。 |
 | [0018-0.0.17 Markdown 编辑缓冲区与安全保存产品需求](0018-0.0.17-Markdown-编辑缓冲区与安全保存产品需求.md) | Committed `main@837af03`（tag 待人工验收后打） | Automated Passed；Manual Pending | Markdown 编辑缓冲区、Source / Preview 切换与安全保存（ADR 0025）验收权威；同时收口 0.0.16 三项审计缺口、`dcode_facts` 残留与 `models.json` 并发写入收紧。 |

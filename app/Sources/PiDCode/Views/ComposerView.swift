@@ -119,8 +119,10 @@ struct ComposerView: View {
         .dCodeFloatingSurface(cornerRadius: 16)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .task {
-            if model.resources.snapshot == nil, !model.resources.isLoading {
+        .task(id: model.canUseHostSessions) {
+            // 新窗口的 Composer 在 Host 握手完成前就会出现，一次性 task 会错过
+            // readyClient；以连接就绪为 key 重跑，保证会话前草稿也能拿到资源清单。
+            if model.canUseHostSessions, model.resources.snapshot == nil, !model.resources.isLoading {
                 await model.loadResources()
             }
         }
@@ -1232,9 +1234,12 @@ struct ComposerView: View {
     }
 
     private var commandSuggestions: [ComposerCommandSuggestion] {
+        // 会话前草稿（主页 / 新窗口）同样打开面板：数据源 resources.list 不需要
+        // 会话；扩展命令依赖 getCommands（可写会话），在草稿态自然缺席（0.0.20
+        // 验收修复：canWrite 以打开的会话为前提，新窗口下恒为 false 曾挡住整个面板）。
         guard !model.shouldQueueComposerText,
-              model.canWrite,
-              model.composerText.hasPrefix("/") else { return [] }
+              model.composerText.hasPrefix("/"),
+              model.canWrite || model.isNewSessionDraftActive else { return [] }
         let fragment = model.composerText.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
         guard !model.composerText.contains(" ") else { return [] }
         // 统一面板（0.0.20）：扩展命令 + 命令 / Skill / 模板 一次混排，
