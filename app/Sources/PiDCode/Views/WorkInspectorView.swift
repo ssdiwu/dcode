@@ -805,12 +805,20 @@ struct VerificationEvidenceSection: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if model.verificationEvidence.isEmpty {
-            Text("本会话还没有可复核的命令执行记录。")
+        VStack(alignment: .leading, spacing: 6) {
+            if model.verificationEvidencePaused {
+                Label(
+                    "验证证据账本暂无法写入（熔断中）；新证据不会丢失来源但不会入账，重试入口见 设置 › Host 诊断 › 本机存储状态。",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
                 .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
+                .foregroundStyle(.orange)
+            }
+            if model.verificationEvidence.isEmpty {
+                Text("本会话还没有可复核的命令执行记录。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
                 ForEach(model.verificationEvidence.prefix(20)) { record in
                     VerificationEvidenceRow(record: record)
                 }
@@ -818,6 +826,12 @@ struct VerificationEvidenceSection: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            Button("重新载入证据") {
+                Task { await model.reloadVerificationEvidence() }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .disabled(model.selectedSessionID == nil)
         }
     }
 }
@@ -850,9 +864,13 @@ struct VerificationEvidenceRow: View {
                                 Text(String(revision.prefix(7)))
                                     .font(.caption2.monospaced())
                                 } else {
-                                Text("revision 待补")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                Text(
+                                    model.verificationEvidencePaused
+                                        ? "revision 待补（账本暂停）"
+                                        : "revision 待补"
+                                )
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
                             }
                         }
                         .foregroundStyle(.secondary)

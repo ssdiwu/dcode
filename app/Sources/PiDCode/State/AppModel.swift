@@ -133,6 +133,11 @@ final class AppModel {
     var isSendingRequest = false
     var issue: AppIssue?
     var notice: ExtensionNotice?
+    /// ADR 0027 决定 3：Host 需要重启（观察能力保留、写入被拒）的事实标记，
+    /// 驱动“重新连接 Pi Host”入口；重连成功后清除。
+    var hostRestartRequired = false
+    /// ADR 0027 决定 4：打开失败且判定可受控修复的会话（修复卡呈现）。
+    private(set) var sessionRepairPrompt: SessionRepairPrompt?
     /// Host 子进程 stderr 的只读留存（最近 200 行）；供“设置 > Host 诊断”查看，
     /// 不作为用户可见通知弹出——stderr 可能来自任意扩展的自身输出，不代表真实错误。
     var hostDiagnosticLog: [HostDiagnosticEntry] = []
@@ -148,6 +153,8 @@ final class AppModel {
     let resources = ResourcesModel()
     let modelProviders = ModelProvidersModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
+    /// ADR 0027 决定 6：验证证据账本熔断时如实呈现（“revision 待补”区分补全中 / 账本暂停）。
+    private(set) var verificationEvidencePaused = false
     var conversationTarget: ConversationTarget?
     var archivedSessions: [ArchivedSessionRecord] = []
     var pinnedSessions: [PinnedSessionRecord] = []
@@ -603,7 +610,11 @@ final class AppModel {
             await reloadAllSessionLists()
             if let reopenID = pendingSelfBuildReopenSessionID {
                 pendingSelfBuildReopenSessionID = nil
-                _ = await openSession(reopenID, writable: true)
+                // ADR 0027 决定 7：自动恢复链路的失败步骤不静默。
+                let reopened = await openSession(reopenID, writable: true, presentFailure: false)
+                if !reopened {
+                    showNotice("自构建后恢复会话失败；请从侧栏手动打开原会话。", level: "warning")
+                }
             }
         } catch {
             connectionState = .failed
@@ -1172,6 +1183,139 @@ final class AppModel {
     func selectWorkspaceFileTab(path: String) {
         guard workspaceFileTabs.contains(where: { $0.path == path }) else { return }
         workspaceTabSelection = .file(path)
+    }
+
+    // MARK: - 失败与恢复加固（ADR 0027）
+
+    struct SessionRepairPrompt: Equatable, Sendable {
+        let sessionID: String
+        let reason: String
+    }
+
+    /// 本机存储状态条目（设置 › Host 诊断呈现）。
+    struct StoreHealthEntry: Identifiable, Equatable, Sendable {
+        let id: String
+        let displayName: String
+        let path: String
+        let blocked: Bool
+    }
+
+    /// 用户显式重连（ADR 0027 决定 3）：复位传输层、保留会话 / 草稿 / 队列 / 账本
+    /// 内存状态；ready 后刷新列表并尝试以可写重开当前会话；run `.unknown` 保留。
+    func restartHost() async {
+        guard connectionState == .failed
+            || (connectionState == .idle && client == nil)
+            || hostRestartRequired else { return }
+        refreshTask?.cancel()
+        search.task?.cancel()
+        search.probeTask?.cancel()
+        search.probeTask = nil
+        noticeTask?.cancel()
+        draftSaveTask?.cancel()
+        sessionChangeSaveTask?.cancel()
+        activity.attentionSaveTask?.cancel()
+        await flushCurrentDraft()
+        await flushSessionChanges()
+        await flushActivityAttention()
+        resetExtensionUIState()
+        await client?.shutdown()
+        await flushCurrentDraft()
+        await flushSessionChanges()
+        await flushActivityAttention()
+        client = nil
+        hostHello = nil
+        hostRestartRequired = false
+        connectionState = .idle
+        await start()
+        guard connectionState == .ready else { return }
+        if let id = selectedSessionID {
+            let reopened = await openSession(id, writable: true, presentFailure: false)
+            if !reopened {
+                showNotice("Host 已重新连接，但重新打开当前会话失败；请从侧栏手动打开。", level: "warning")
+            }
+        }
+    }
+
+    /// 打开失败后呈现修复卡（备份 → 修剪尾部不完整记录 → 重开）。
+    func presentSessionRepairPrompt(sessionID: String, reason: String) {
+        sessionRepairPrompt = SessionRepairPrompt(sessionID: sessionID, reason: reason)
+    }
+
+    func dismissSessionRepairPrompt() {
+        sessionRepairPrompt = nil
+    }
+
+    /// ADR 0027 决定 4 的修复动作：`session.repair` 成功后以可写重开该会话。
+    func repairSessionAndReopen() async {
+        guard let prompt = sessionRepairPrompt, let client = readyClient else { return }
+        sessionRepairPrompt = nil
+        struct RepairResult: Codable {
+            let ok: Bool
+            let backupPath: String?
+            let reason: String?
+        }
+        do {
+            let result: RepairResult = try await client.request(
+                "session.repair",
+                params: ["sessionId": .string(prompt.sessionID)]
+            )
+            guard result.ok else {
+                showNotice("会话修复被拒绝：\(result.reason ?? "未知原因")", level: "warning")
+                return
+            }
+            let opened = await openSession(prompt.sessionID, writable: true)
+            if opened {
+                showNotice("已修剪尾部不完整记录并重新打开；原文件完整备份在同目录。", level: "info")
+            } else {
+                showNotice("修复完成，但重新打开会话失败；请从侧栏手动打开。", level: "warning")
+            }
+        } catch {
+            showNotice(
+                "无法修复会话文件：\(DiagnosticSanitizer.redact(error.localizedDescription))",
+                level: "warning"
+            )
+        }
+    }
+
+    func storeHealthSnapshot() async -> [StoreHealthEntry] {
+        async let draftBlocked = sessionDraftStore.writeBlockedProbe()
+        async let changeBlocked = sessionChangeStore.writeBlockedProbe()
+        async let followUpBlocked = followUpQueueStore.writeBlockedProbe()
+        async let attentionBlocked = activityAttentionStore.writeBlockedProbe()
+        async let evidenceBlocked = verificationStore.writeBlockedProbe()
+        return [
+            StoreHealthEntry(id: "draft", displayName: "会话草稿", path: sessionDraftStore.fileURL.path, blocked: await draftBlocked),
+            StoreHealthEntry(id: "changes", displayName: "会话变更账本", path: sessionChangeStore.fileURL.path, blocked: await changeBlocked),
+            StoreHealthEntry(id: "followups", displayName: "后续消息队列", path: followUpQueueStore.fileURL.path, blocked: await followUpBlocked),
+            StoreHealthEntry(id: "attention", displayName: "活动关注", path: activityAttentionStore.fileURL.path, blocked: await attentionBlocked),
+            StoreHealthEntry(id: "evidence", displayName: "验证证据账本", path: verificationStore.fileURL.path, blocked: await evidenceBlocked),
+        ]
+    }
+
+    /// ADR 0027 决定 6：对熔断的 store 显式重试（重新 load 校验 / 立即 flush），
+    /// 结果如实回到熔断或恢复；重试成功后对有内存态的 store 触发一次补写。
+    func retryStoreUnblock(id: String) async {
+        var recovered = false
+        switch id {
+        case "draft":
+            recovered = await sessionDraftStore.retryLoadUnblock()
+            if recovered { await flushCurrentDraft() }
+        case "changes":
+            recovered = await sessionChangeStore.retryLoadUnblock()
+            if recovered { await flushSessionChanges() }
+        case "followups":
+            recovered = await followUpQueueStore.retryLoadUnblock()
+        case "attention":
+            recovered = await activityAttentionStore.retryLoadUnblock()
+            if recovered { await flushActivityAttention() }
+        case "evidence":
+            recovered = await verificationStore.retryFlushUnblock()
+        default:
+            return
+        }
+        if !recovered {
+            showNotice("重试保存失败：该存储仍不可写入，已保持阻断。", level: "warning")
+        }
     }
 
     // MARK: - Markdown 编辑缓冲区（ADR 0025）
@@ -3763,10 +3907,32 @@ final class AppModel {
             to: projects,
             moveConflicts: moveConflicts
         )
+        // ADR 0027 权限中断可见化：被移除的 Source Folder 影响范围如实提示。
+        let previousFolders = Set(projects.flatMap { $0.sourceFolders }.map(\.path))
+        let updatedFolders = Set(result.projects.flatMap { $0.sourceFolders }.map(\.path))
+        let removedFolders = Set(
+            previousFolders.subtracting(updatedFolders)
+                .map(WorkspaceFileReader.standardizedAbsolutePath)
+        )
         try await projectStore.save(result.projects)
         projects = result.projects
         reconcileSearchScope()
         reconcileWorkspaceFileAuthorizations()
+        if !removedFolders.isEmpty {
+            let revokedTabs = workspaceFileTabs
+                .filter { !$0.authorizationAvailable && removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.sourceFolderPath)) }
+                .count
+            let affectedSessions = recentSessions
+                .filter { removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.cwd)) }
+                .count
+                + projectSessions.values.flatMap(\.self)
+                    .filter { removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.cwd)) }
+                    .count
+            showNotice(
+                "已移除 \(removedFolders.count) 个来源文件夹：\(revokedTabs) 个文件标签失去授权（缓冲区保留在内存），\(affectedSessions) 个已加载会话不再归属原项目。",
+                level: "warning"
+            )
+        }
         selectedProjectID = result.savedProjectID
         expandedProjectIDs.insert(result.savedProjectID)
         inspectorScope = .project(result.savedProjectID)
@@ -3989,6 +4155,15 @@ final class AppModel {
             )
             return true
         } catch {
+            // ADR 0027 决定 4：尾部不完整的 INVALID_SESSION 附带可修性 → 修复卡。
+            if case let PiHostClientError.hostFailure(payload) = error,
+               payload.code == "INVALID_SESSION",
+               payload.details?["repairable"]?.boolValue == true {
+                presentSessionRepairPrompt(
+                    sessionID: id,
+                    reason: payload.details?["repairReason"]?.stringValue ?? "尾部记录不完整"
+                )
+            }
             if presentFailure {
                 present(error, title: writable ? "暂时无法写入当前会话" : "无法打开会话")
             } else {
@@ -4273,9 +4448,11 @@ final class AppModel {
     func reloadVerificationEvidence() async {
         guard let sessionId = selectedSessionID else {
             verificationEvidence = []
+            verificationEvidencePaused = false
             return
         }
         verificationEvidence = await verificationStore.records(sessionId: sessionId)
+        verificationEvidencePaused = await verificationStore.writeBlockedProbe()
     }
 
     /// 压缩设置（0.0.16 弹层）：项目覆盖全局、缺省回落 Pi 默认。

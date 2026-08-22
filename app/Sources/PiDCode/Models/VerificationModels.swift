@@ -56,9 +56,21 @@ struct VerificationEvidenceDocument: Codable, Equatable, Sendable {
 actor VerificationEvidenceStore {
     static let maximumRecords = 5_000
 
-    private let fileURL: URL
+    nonisolated let fileURL: URL
     private var document: VerificationEvidenceDocument
     private var writeFailed = false
+
+    /// ADR 0027 决定 6：熔断状态供“本机存储状态”与证据区呈现。
+    func writeBlockedProbe() -> Bool { writeFailed }
+
+    /// 用户显式重试：解除熔断并立即尝试 flush 内存中的账本。
+    @discardableResult
+    func retryFlushUnblock() async -> Bool {
+        guard writeFailed else { return true }
+        writeFailed = false
+        if dirty { await save() }
+        return !writeFailed
+    }
     private var dirty = false
 
     init(fileURL: URL) {

@@ -27,6 +27,19 @@ struct ComposerView: View {
     private func composer(text: Binding<String>) -> some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
+                if let draftIssue = model.draftStoreIssue {
+                    // ADR 0027 决定 6：草稿熔断常驻呈现，重试入口在 设置 › Host 诊断。
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Label(
+                            "会话草稿暂无法保存：\(draftIssue)。重试入口见 设置 › Host 诊断 › 本机存储状态。",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("会话草稿存储熔断：\(draftIssue)")
+                    }
+                }
                 if let queueIssue = model.followUp.queueIssue {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Label(queueIssue, systemImage: "exclamationmark.triangle.fill")

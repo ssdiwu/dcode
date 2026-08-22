@@ -66,11 +66,17 @@ struct RootView: View {
         }
         .dynamicTypeSize(effectiveDynamicTypeScale)
         .overlay(alignment: .top) {
-            if let notice = model.notice {
-                NoticeBanner(notice: notice)
-                    .padding(.top, PiDCodeMetrics.windowTopBarHeight + 8)
-                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 8) {
+                if let repair = model.sessionRepairPrompt {
+                    SessionRepairBanner(prompt: repair)
+                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
+                if let notice = model.notice {
+                    NoticeBanner(notice: notice)
+                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.top, PiDCodeMetrics.windowTopBarHeight + 8)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: model.notice?.id)
         .alert(
@@ -918,6 +924,42 @@ private struct SessionRenameSheet: View {
         guard isValid else { return }
         onSave(normalizedName)
         dismiss()
+    }
+}
+
+/// ADR 0027 决定 4：尾部不完整会话的受控修复入口（备份 → 修剪 → 重开）。
+private struct SessionRepairBanner: View {
+    @Environment(AppModel.self) private var model
+    let prompt: AppModel.SessionRepairPrompt
+
+    var body: some View {
+        HStack(spacing: PiDCodeMetrics.spacingStandard) {
+            Label(
+                "会话文件尾部不完整（可能上次 Host 中断）：\(prompt.reason)",
+                systemImage: "wrench.and.screwdriver"
+            )
+            .font(.callout)
+            .lineLimit(2)
+            Spacer(minLength: PiDCodeMetrics.spacingGroup)
+            Button("备份并修复后打开") {
+                Task { await model.repairSessionAndReopen() }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            Button("取消", role: .cancel) {
+                model.dismissSessionRepairPrompt()
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.orange.opacity(0.6))
+        )
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("会话文件修复提示")
     }
 }
 

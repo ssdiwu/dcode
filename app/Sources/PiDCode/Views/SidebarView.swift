@@ -294,6 +294,15 @@ struct SidebarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if model.connectionState == .failed || model.hostRestartRequired {
+                // ADR 0027 决定 3：失败态 / 需重启态的应用内重连入口。
+                Button("重新连接 Pi Host") {
+                    Task { await model.restartHost() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+                .help("重启 Pi Host 子进程并恢复当前会话（不重启应用）")
+            }
             Spacer()
             Button {
                 model.presentSettings()

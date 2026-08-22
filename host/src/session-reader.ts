@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
-import { open as openFile, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, join, relative, resolve } from "node:path";
+import { open as openFile, copyFile, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   buildSessionContext,
@@ -135,6 +136,78 @@ function parseStrictSessionDocument(content: string, path: string): FileEntry[] 
   }
   return records;
 }
+
+/** 尾部不完整记录检查（ADR 0027 决定 4）：仅当“尾部恰好一条记录不完整且
+ * 其余记录以严格读取器验证完好”时可修；其余形态一律拒绝并给出原因。 */
+export interface TrailingRecordInspection {
+  repairable: boolean;
+  reason: string;
+  /** 可修时：修复后应保留的完整内容（以换行结尾）。 */
+  keepContent: string | null;
+  /** 被修剪记录的短预览（诊断呈现用）。 */
+  trimmedPreview: string;
+}
+
+export function inspectTrailingRecord(content: string, path: string): TrailingRecordInspection {
+  try {
+    parseStrictSessionDocument(content, path);
+    return { repairable: false, reason: "会话文件可以正常读取，无需修复。", keepContent: null, trimmedPreview: "" };
+  } catch {
+    // 继续判断损坏位置。
+  }
+  const lines = content.split("\n");
+  let lastNonEmpty = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]?.trim()) {
+      lastNonEmpty = index;
+      break;
+    }
+  }
+  if (lastNonEmpty <= 0) {
+    return {
+      repairable: false,
+      reason: "会话头部缺失或损坏，修复后也没有可保留的内容。",
+      keepContent: null,
+      trimmedPreview: "",
+    };
+  }
+  const keepContent = `${lines.slice(0, lastNonEmpty).join("\n")}\n`;
+  const trimmedPreview = (lines[lastNonEmpty] ?? "").slice(0, 200);
+  try {
+    const kept = parseStrictSessionDocument(keepContent, path);
+    if (kept.length === 0) {
+      return {
+        repairable: false,
+        reason: "修剪后没有任何完整记录，拒绝修复。",
+        keepContent: null,
+        trimmedPreview,
+      };
+    }
+    return {
+      repairable: true,
+      reason: `尾部一条记录不完整（${content.endsWith("\n") ? "JSON 解析失败" : "缺少终止换行"}），其余 ${kept.length} 条记录完好。`,
+      keepContent,
+      trimmedPreview,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      repairable: false,
+      reason: `不只尾部损坏（保留部分校验失败：${message}），拒绝修复。`,
+      keepContent: null,
+      trimmedPreview,
+    };
+  }
+}
+
+export type SessionRepairOutcome =
+  | {
+      ok: true;
+      backupPath: string;
+      trimmedPreview: string;
+      entryCount: number;
+    }
+  | { ok: false; repairable: boolean; reason: string };
 
 function extractMessageText(message: unknown): string {
   if (typeof message !== "object" || message === null) return "";
@@ -637,6 +710,45 @@ export class SessionReader {
   async inspectPath(path: string, sessionId: string, leafId?: string | null): Promise<SessionInspection> {
     const summary = await readSummary(path);
     return await this.inspectSummary(summary, sessionId, leafId);
+  }
+
+  /** 受控修复（ADR 0027 决定 4）：备份 → 临时文件写入保留内容 → 严格复验 →
+   * 原子替换；任一步失败中止且原文件不动。仅处理尾部不完整形态。 */
+  async repair(sessionId: string): Promise<SessionRepairOutcome> {
+    const summary = await this.resolve(sessionId);
+    const content = await readFile(summary.path, "utf8");
+    const inspection = inspectTrailingRecord(content, summary.path);
+    if (!inspection.repairable || inspection.keepContent === null) {
+      return { ok: false, repairable: inspection.repairable, reason: inspection.reason };
+    }
+    const backupPath = `${summary.path}.bak-${randomUUID()}`;
+    await copyFile(summary.path, backupPath);
+    const temporary = `${summary.path}.repair-${randomUUID()}`;
+    try {
+      await writeFile(temporary, inspection.keepContent, "utf8");
+      const verified = parseStrictSessionDocument(
+        await readFile(temporary, "utf8"),
+        temporary,
+      );
+      await rename(temporary, summary.path);
+      return {
+        ok: true,
+        backupPath,
+        trimmedPreview: inspection.trimmedPreview,
+        entryCount: verified.length,
+      };
+    } catch (error) {
+      await rm(temporary, { force: true });
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, repairable: false, reason: `修复过程中止（${message}），原文件未改动。` };
+    }
+  }
+
+  /** 打开失败时判定该会话是否可受控修复（不修改文件）。 */
+  async inspectRepairability(sessionId: string): Promise<TrailingRecordInspection> {
+    const summary = await this.resolve(sessionId);
+    const content = await readFile(summary.path, "utf8");
+    return inspectTrailingRecord(content, summary.path);
   }
 
   private async inspectSummary(

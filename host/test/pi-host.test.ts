@@ -112,7 +112,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.18");
+    assert.equal(hello.hostVersion, "0.0.19");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -2128,6 +2128,164 @@ test("owned message persistence does not race the conflict poller", async () => 
     await Promise.all([internals.beforeMutation(active), secondAppend]);
     await internals.beforeMutation(active);
     assert.equal(active.conflict, undefined);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("session.repair trims an incomplete trailing record with a full backup (ADR 0027)", async () => {
+  const f = await fixture();
+  const path = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  const original = await readFile(path, "utf8");
+  await appendFile(
+    path,
+    `{"type":"message","id":"broken","parentId":"assistant","timestamp":"${new Date().toISOString()}","message":{"role":"user"`,
+  );
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => undefined });
+  try {
+    await host.handle("host.hello", {});
+    await assert.rejects(
+      () => host.handle("session.open", { sessionId: f.sessionId }),
+      (error: unknown) => {
+        assert.ok(error instanceof PiHostError);
+        assert.equal(error.code, "INVALID_SESSION");
+        const details = error.details as { repairable?: boolean; repairReason?: string };
+        assert.equal(details.repairable, true, "尾部不完整必须标记可修");
+        assert.ok(details.repairReason?.includes("尾部"));
+        return true;
+      },
+    );
+
+    const repaired = await host.handle("session.repair", { sessionId: f.sessionId }) as {
+      ok: boolean;
+      backupPath: string;
+      entryCount: number;
+    };
+    assert.equal(repaired.ok, true);
+    assert.equal(repaired.entryCount, 5);
+    await access(repaired.backupPath);
+    assert.equal(await readFile(path, "utf8"), original, "修复后内容回到完好前缀");
+
+    const opened = await host.handle("session.open", { sessionId: f.sessionId });
+    assert.ok(opened, "修复后可以打开");
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("session.repair refuses damage beyond the trailing record and leaves the file untouched", async () => {
+  const f = await fixture();
+  const path = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
+  const lines = (await readFile(path, "utf8")).split("\n");
+  lines[2] = "{broken-middle";
+  const damaged = lines.join("\n");
+  await writeFile(path, damaged);
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => undefined });
+  try {
+    await host.handle("host.hello", {});
+    await assert.rejects(
+      () => host.handle("session.open", { sessionId: f.sessionId }),
+      (error: unknown) => {
+        assert.ok(error instanceof PiHostError);
+        assert.equal(
+          (error.details as { repairable?: boolean }).repairable,
+          false,
+          "不只尾部损坏必须拒绝修复",
+        );
+        return true;
+      },
+    );
+    const outcome = await host.handle("session.repair", { sessionId: f.sessionId }) as {
+      ok: boolean;
+      reason: string;
+    };
+    assert.equal(outcome.ok, false);
+    assert.ok(outcome.reason.includes("拒绝"));
+    assert.equal(await readFile(path, "utf8"), damaged, "拒绝修复时原文件零改动");
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("duplicate promptId and steerId are rejected honestly (ADR 0027)", async () => {
+  const f = await fixture();
+  const host = new PiHost({ agentDir: f.agentDir, emit: () => undefined });
+  type PromptOptions = { preflightResult?: (success: boolean) => void };
+  type TestSession = {
+    sessionId: string;
+    isStreaming?: boolean;
+    steer: (message: string) => Promise<void>;
+    prompt: (message: string, options?: PromptOptions) => Promise<void>;
+  };
+  const internals = host as unknown as {
+    active?: { session: TestSession; currentRun?: unknown };
+  };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const originalSteer = active.session.steer;
+    const originalPrompt = active.session.prompt;
+    Object.defineProperty(active.session, "isStreaming", { value: true, configurable: true });
+    const now = new Date().toISOString();
+    internals.active!.currentRun = {
+      id: "run-x",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-x",
+        phase: "running",
+        startedAt: now,
+        updatedAt: now,
+        inputPersisted: true,
+        retryable: false,
+      },
+    } as unknown;
+    active.session.steer = async () => {};
+
+    const first = await host.handle("session.steer", {
+      message: "one",
+      steerId: "steer-dup",
+      expectedRunId: "run-x",
+    }) as { accepted: boolean };
+    assert.equal(first.accepted, true);
+    await assert.rejects(
+      host.handle("session.steer", {
+        message: "two",
+        steerId: "steer-dup",
+        expectedRunId: "run-x",
+      }),
+      (error: unknown) => error instanceof PiHostError
+        && error.code === "SESSION_DUPLICATE_STEER"
+        && (error.details as { runId?: string }).runId === "run-x",
+    );
+    const otherId = await host.handle("session.steer", {
+      message: "three",
+      steerId: "steer-next",
+      expectedRunId: "run-x",
+    }) as { accepted: boolean };
+    assert.equal(otherId.accepted, true, "不同 steerId 不受影响");
+
+    internals.active!.currentRun = undefined;
+    delete (active.session as { isStreaming?: boolean }).isStreaming;
+    active.session.prompt = async (_message, options) => { options?.preflightResult?.(true); };
+    const done = await host.handle("session.prompt", {
+      message: "hello",
+      promptId: "prompt-dup",
+    }) as { accepted: boolean };
+    assert.equal(done.accepted, true);
+    await assert.rejects(
+      host.handle("session.prompt", { message: "hello", promptId: "prompt-dup" }),
+      (error: unknown) => error instanceof PiHostError
+        && error.code === "SESSION_DUPLICATE_PROMPT",
+    );
+
+    active.session.prompt = originalPrompt;
+    active.session.steer = originalSteer;
+    delete (active.session as { isStreaming?: boolean }).isStreaming;
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });

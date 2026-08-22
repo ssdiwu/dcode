@@ -2,7 +2,7 @@
 
 本目录保存已经确认、用于指导当前版本交付与验收的 PRD 和专项规格，也是发布、实现候选、本地回归基线、人工验收与持续回归状态的唯一文档索引。具体测试与人工证据保留在对应 PRD 的 Verification Record（验证记录）中，其他 README 只链接本页，不复制动态状态。文档完成后只要仍是有效验收基准，就继续保留在本目录；仅在被取代、放弃或只供追溯时归档。
 
-当前公开源码基线是 `main@837af03`（`0.0.17` 已提交，源码标签仍至 `v0.0.16`，`v0.0.17` 待人工验收后打标推送）。`0.0.18` 已按 0019 PRD 完成实现与自动门禁（Swift 231/231、Host 139/139，2026-08-22 本机），候选改动在 `main` 工作树中尚未提交。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；2026-08-22 本轮核验未发现 GitHub Release。各 PRD 未勾选的人工场景仍是当前验收边界。
+当前公开源码基线是 `main@617249e`（`0.0.17`、`0.0.18` 已提交，源码标签仍至 `v0.0.16`，`v0.0.17`–`v0.0.18` 待人工验收后打标推送）。`0.0.19` 已按 0020 PRD 完成实现与自动门禁（Swift 238/238、Host 142/142，2026-08-22 本机），候选改动在 `main` 工作树中尚未提交。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；2026-08-22 本轮核验未发现 GitHub Release。各 PRD 未勾选的人工场景仍是当前验收边界。
 
 ### 当前已知缺口
 
@@ -12,7 +12,8 @@
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
-| [0019-0.0.18 HTML 编辑缓冲区与隔离即时预览产品需求](0019-0.0.18-HTML-编辑缓冲区与隔离即时预览产品需求.md) | Candidate（`main` 工作树，未提交未打标） | Automated Passed；Manual Pending | HTML 编辑（复用 ADR 0025 缓冲区）、隔离 WKWebView 即时预览与网络询问边界（ADR 0026）验收权威。 |
+| [0020-0.0.19 失败与恢复加固产品需求](0020-0.0.19-失败与恢复加固产品需求.md) | Candidate（`main` 工作树，未提交未打标） | Automated Passed；Manual Pending | 中断三态辨认与恢复入口（ADR 0027）：Host 重连、半条 JSONL 受控修复、promptId/steerId 幂等、store 熔断可见化与显式重试、恢复链路去静默的验收权威。 |
+| [0019-0.0.18 HTML 编辑缓冲区与隔离即时预览产品需求](0019-0.0.18-HTML-编辑缓冲区与隔离即时预览产品需求.md) | Committed `main@617249e`（tag 待人工验收后打） | Automated Passed；Manual Pending | HTML 编辑（复用 ADR 0025 缓冲区）、隔离 WKWebView 即时预览与网络询问边界（ADR 0026）验收权威。 |
 | [0018-0.0.17 Markdown 编辑缓冲区与安全保存产品需求](0018-0.0.17-Markdown-编辑缓冲区与安全保存产品需求.md) | Committed `main@837af03`（tag 待人工验收后打） | Automated Passed；Manual Pending | Markdown 编辑缓冲区、Source / Preview 切换与安全保存（ADR 0025）验收权威；同时收口 0.0.16 三项审计缺口、`dcode_facts` 残留与 `models.json` 并发写入收紧。 |
 | [0017-0.0.16 自定义模型供应商与一次性资源调用产品需求](0017-0.0.16-自定义模型供应商与一次性资源调用产品需求.md) | Published Source Tag `v0.0.16` | Automated Passed；Manual Pending；0.0.17 收口审计缺口 | Pi `models.json` 自定义供应商管理与 Composer `+` 一次性资源调用验收权威；审计发现的 argumentHint / 删除刷新 / 嵌套 headers 缺口与并发写入已在 0.0.17 收口。 |
 | [0016-0.0.15 界面即上下文与本机资源产品需求](0016-0.0.15-界面即上下文与本机资源产品需求.md) | Published Source Tag `v0.0.15` | Automated Passed；Manual Pending；facade 合同 0.0.17 收口 | Composer 预填、压缩可见性、本机资源页、扩展包启停、`dcode_facts`、文件树键盘与性能收口验收权威；facade 两类生产合同的不一致已在 0.0.17 修复并落地 golden fixture。 |

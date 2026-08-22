@@ -43,6 +43,7 @@ import type { HostMethod } from "./protocol.js";
 import { SessionLease, SessionLeaseError, sessionSnapshotDigest } from "./session-lease.js";
 import {
   SessionReader,
+  SessionReadError,
   D_CODE_SESSION_ORIGIN_TYPE,
   type SessionCwdScope,
   type SessionOrigin,
@@ -62,7 +63,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.18";
+const HOST_VERSION = "0.0.19";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -334,6 +335,21 @@ export class PiHost {
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
   private readonly modelAuth: ModelAuthBridge;
+  /** ADR 0027 决定 5：已见 promptId / steerId 的幂等登记（有界 LRU），
+   * 重复提交返回诚实错误而不是重复执行。 */
+  private static readonly seenIdLimit = 256;
+  private readonly seenPromptIds = new Map<string, string>();
+  private readonly seenSteerIds = new Map<string, string>();
+
+  private rememberSeenId(map: Map<string, string>, id: string, runId: string): void {
+    if (map.has(id)) return;
+    map.set(id, runId);
+    while (map.size > PiHost.seenIdLimit) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
 
   constructor(private readonly options: PiHostOptions) {
     this.agentDir = options.agentDir ?? getAgentDir();
@@ -464,8 +480,10 @@ export class PiHost {
         return await this.copySession(params.sessionId as string, params.targetCwd as string);
       case "session.trash":
         return await this.trashSession(params.sessionId as string);
+      case "session.repair":
+        return await this.reader.repair(params.sessionId as string);
       case "session.open":
-        return await this.openSession(
+        return await this.openSessionWithRepairHint(
           params.sessionId as string,
           typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
           typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
@@ -1006,6 +1024,32 @@ export class PiHost {
     );
   }
 
+  /** session.open 的 ADR 0027 包装：INVALID_SESSION 时在错误 details 附带
+   * 可修性与原因，供 Swift 呈现“备份并修复后打开”入口。 */
+  private async openSessionWithRepairHint(
+    sessionId: string,
+    expectedEntryId?: string,
+    expectedEntryDigest?: string,
+    selectedLeafId?: string | null,
+  ): Promise<unknown> {
+    try {
+      return await this.openSession(sessionId, expectedEntryId, expectedEntryDigest, selectedLeafId);
+    } catch (error) {
+      if (error instanceof SessionReadError && error.code === "INVALID_SESSION") {
+        const inspection = await this.reader.inspectRepairability(sessionId).catch(() => null);
+        const baseDetails = typeof error.details === "object" && error.details !== null
+          ? error.details as Record<string, unknown>
+          : {};
+        throw new PiHostError("INVALID_SESSION", error.message, {
+          ...baseDetails,
+          repairable: inspection?.repairable ?? false,
+          ...(inspection ? { repairReason: inspection.reason } : {}),
+        });
+      }
+      throw error;
+    }
+  }
+
   private async openSession(
     sessionId: string,
     expectedEntryId?: string,
@@ -1394,6 +1438,14 @@ export class PiHost {
     if (pathAction && message.trim().length === 0) {
       throw new PiHostError("EMPTY_PATH_PROMPT", "路径草稿不能为空");
     }
+    const seenRunId = this.seenPromptIds.get(promptId);
+    if (seenRunId !== undefined) {
+      throw new PiHostError(
+        "SESSION_DUPLICATE_PROMPT",
+        `该 promptId 已提交过（关联 runId：${seenRunId}）。请核对上一条消息的结果，不要重发同一 ID。`,
+        { runId: seenRunId },
+      );
+    }
     const active = this.requireWritable();
     await this.beforeMutation(active);
     this.assertPathActionIdle(active);
@@ -1425,6 +1477,7 @@ export class PiHost {
         retryable: false,
       },
     };
+    this.rememberSeenId(this.seenPromptIds, promptId, promptId);
     active.currentRun = run;
     this.options.emit("session.runStateChanged", run.state);
     return await new Promise((resolve, reject) => {
@@ -1471,6 +1524,14 @@ export class PiHost {
   }
 
   private async steer(message: string, steerId: string, expectedRunId: string): Promise<unknown> {
+    const seenSteerRunId = this.seenSteerIds.get(steerId);
+    if (seenSteerRunId !== undefined) {
+      throw new PiHostError(
+        "SESSION_DUPLICATE_STEER",
+        `该 steerId 已提交过（关联 runId：${seenSteerRunId}）。请核对上一条转向消息，不要重发同一 ID。`,
+        { runId: seenSteerRunId },
+      );
+    }
     const active = this.requireWritable();
     await this.beforeMutation(active);
     const run = active.currentRun;
@@ -1498,6 +1559,7 @@ export class PiHost {
     } catch {
       throw new PiHostError("STEER_REJECTED", "Pi did not accept the steering message");
     }
+    this.rememberSeenId(this.seenSteerIds, steerId, run.id);
     return { accepted: true, steerId, runId: run.id };
   }
 

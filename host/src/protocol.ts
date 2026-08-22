@@ -9,6 +9,7 @@ export const HOST_METHODS = [
   "session.create",
   "session.copy",
   "session.trash",
+  "session.repair",
   "session.open",
   "session.close",
   "session.prompt",
@@ -407,6 +408,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireString(params, "targetCwd");
       return;
     case "session.trash":
+      requireString(params, "sessionId");
+      return;
+    case "session.repair":
       requireString(params, "sessionId");
       return;
     case "session.open": {

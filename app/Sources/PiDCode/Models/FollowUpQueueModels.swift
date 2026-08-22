@@ -207,6 +207,17 @@ actor FollowUpQueueStore {
     private var latestRevision = -1
     private var writeBlocked = false
 
+    /// ADR 0027 决定 6：熔断状态供“本机存储状态”呈现。
+    func writeBlockedProbe() -> Bool { writeBlocked }
+
+    /// 用户显式重试：重新 load 校验，成功即解除熔断。
+    @discardableResult
+    func retryLoadUnblock() -> Bool {
+        guard writeBlocked else { return true }
+        _ = try? load()
+        return !writeBlocked
+    }
+
     init(fileURL: URL? = nil) {
         if let fileURL {
             self.fileURL = fileURL

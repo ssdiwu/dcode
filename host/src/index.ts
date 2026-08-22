@@ -191,8 +191,11 @@ process.stdin.on("end", () => {
   void drainRequests().then(() => shutdown(0));
 });
 
-for (const signal of ["SIGTERM", "SIGHUP"] as const) {
-  process.on(signal, () => { void shutdown(signal === "SIGHUP" ? 129 : 143); });
+// SIGINT 与 SIGTERM 同走 graceful shutdown（ADR 0027：中断善后不留半状态）。
+for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) {
+  process.on(signal, () => {
+    void shutdown(signal === "SIGHUP" ? 129 : 143);
+  });
 }
 
 process.on("uncaughtException", (error) => {

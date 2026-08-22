@@ -1,3 +1,14 @@
+## [0.0.19] - 2026-08-22
+
+### Added
+
+- 失败与恢复加固（ADR 0027 / PRD 0020）：中断影响按 已完成 / 未完成 / 未知 三态呈现，恢复一律用户显式触发。Host 重连——意外退出或 `host.restartRequired` 后，侧栏与主页空态提供"重新连接 Pi Host"（复位传输层、保留会话 / 草稿 / 队列 / 账本内存状态，ready 后刷新列表并尝试以可写重开当前会话，run `.unknown` 如实保留），不再需要重启应用。半条 JSONL 受控修复——`session.open` 对尾部不完整会话的 `INVALID_SESSION` 附带 `repairable`，界面呈现修复卡，[备份并修复后打开] 经新增协议命令 `session.repair` 执行（同目录完整备份 `.bak-<uuid>` → 临时文件修剪尾部不完整记录 → 严格读取器复验 → 原子替换）；仅当其余记录完好时可修，其余形态拒绝且原文件零改动。协议新增 `session.repair`。
+- promptId / steerId 幂等（ADR 0027 决定 5）：Host 维护会话级已见 ID（LRU 256），重复提交返回诚实错误 `SESSION_DUPLICATE_PROMPT` / `SESSION_DUPLICATE_STEER`（details 附已关联 runId），不再可能重复执行；Swift 的"安全重试"条件不变（仍要求 Host 判定未持久化，且重试使用全新 ID）。
+- 本机存储熔断可见化 + 显式重试：五个本机 store（会话草稿 / 会话变更账本 / 后续消息队列 / 活动关注 / 验证证据账本）暴露熔断探测与用户显式重试（重新 load 校验或立即补写）；设置 › Host 诊断 新增"本机存储状态"区（正常 / 熔断 + 路径 + [重试保存]）；会话草稿熔断在 Composer 常驻提示；验证证据区新增熔断提示条与[重新载入]，"revision 待补"区分补全中 / 账本暂停，证据账本熔断期间的内存记录在恢复后补写。
+- 恢复链路去静默：自构建重启后恢复会话失败出现 notice 并提示手动打开；移除 Source Folder 时提示受影响范围（失去授权的文件标签数与不再归属原项目的已加载会话数）。
+- Host SIGINT 与 SIGTERM 同走 graceful shutdown；新增 [ADR 0027](doc/决策档案/0027-中断状态可辨认与恢复边界.md) 与 [PRD 0020](doc/40-版本实施方案/0020-0.0.19-失败与恢复加固产品需求.md)。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.19`（本轮起 Host `HOST_VERSION` 常量纳入提版清单）。
+
 ## [0.0.18] - 2026-08-22
 
 ### Added

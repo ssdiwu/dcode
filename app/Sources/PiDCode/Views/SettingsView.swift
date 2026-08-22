@@ -629,14 +629,84 @@ struct SelfBuildSettingsView: View {
 
 /// Host 子进程 stderr 的只读留存：可能来自任意扩展自身的输出（例如 TUI 专用状态行），
 /// 不代表 D Code 或 Host 的真实错误，因此不弹出通知，只在这里如实留存供排查。
+/// 本机存储状态（ADR 0027 决定 6）：各 store 正常 / 熔断 + 用户显式重试保存。
+private struct StoreHealthSection: View {
+    @Environment(AppModel.self) private var model
+    @Binding var entries: [AppModel.StoreHealthEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Label("本机存储状态", systemImage: "externaldrive")
+                    .font(.headline)
+                Spacer()
+                Button("重新检查") {
+                    Task { entries = await model.storeHealthSnapshot() }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            ForEach(entries) { entry in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(entry.blocked ? Color.orange : Color.green)
+                        .frame(width: 7, height: 7)
+                    Text(entry.displayName)
+                        .font(.callout)
+                    Text(entry.blocked ? "写入已暂停（熔断）" : "正常")
+                        .font(.caption)
+                        .foregroundStyle(entry.blocked ? Color.orange : Color.secondary)
+                    Spacer()
+                    if entry.blocked {
+                        Button("重试保存") {
+                            Task {
+                                await model.retryStoreUnblock(id: entry.id)
+                                entries = await model.storeHealthSnapshot()
+                            }
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .help(entry.path)
+            }
+            if entries.isEmpty {
+                Text("检查中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+            }
+            Text("熔断表示该资料的写盘此前失败：原文件保留、本次运行停止继续写入；修复磁盘问题后可在此显式重试。")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+        }
+        .task { entries = await model.storeHealthSnapshot() }
+    }
+}
+
 struct HostDiagnosticsSettingsView: View {
     @Environment(AppModel.self) private var model
+    @State private var storeHealth: [AppModel.StoreHealthEntry] = []
 
     var body: some View {
         SettingsPageContainer(
             title: "Host 诊断",
             subtitle: "Host 子进程 stderr 与扩展旁路输出的原始留存，可能来自任意已加载扩展自身；不代表 D Code 或 Host 的真实错误，仅供排查参考。"
         ) {
+            // ADR 0027 决定 6：本机存储熔断状态可见 + 用户显式重试保存。
+            SettingsGroup {
+                StoreHealthSection(entries: $storeHealth)
+            }
             if model.hostDiagnosticLog.isEmpty {
                 SettingsGroup {
                     Text("暂无诊断记录。")

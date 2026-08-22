@@ -30,12 +30,16 @@ extension AppModel {
             let expected = event.data?["expected"]?.boolValue ?? false
             connectionState = expected ? .idle : .failed
             if !expected {
-                issue = AppIssue(title: "Pi Host 已停止", message: "会话连接已中断。重新打开应用即可尝试恢复。")
+                issue = AppIssue(
+                    title: "Pi Host 已停止",
+                    message: "会话连接已中断。当前运行已标记为结果未知；点击侧栏“重新连接 Pi Host”可在不重启应用的情况下恢复。"
+                )
             }
         case "host.restartRequired":
             cancelFollowUpSettlementGate()
             markCurrentRunUnknown()
-            showNotice("会话运行时未能安全停止。D Code 已保留观察能力，但再次发送前需要重新打开应用。", level: "error")
+            hostRestartRequired = true
+            showNotice("会话运行时未能安全停止。写入已被暂停；点击侧栏“重新连接 Pi Host”可恢复。", level: "error")
             Task { [weak self] in
                 await self?.pauseFollowUpQueues(
                     sessionID: self?.selectedSessionID,

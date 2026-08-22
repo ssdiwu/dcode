@@ -60,8 +60,12 @@ struct HomeWorkspaceView: View {
                 ContentUnavailableView(
                     "Pi 运行服务未能启动",
                     systemImage: "exclamationmark.triangle",
-                    description: Text("检查错误提示后重试；连接恢复后即可直接输入。")
+                    description: Text("当前运行已标记为结果未知；重新连接后可继续，无需重启应用。")
                 )
+                Button("重新连接 Pi Host") {
+                    Task { await model.restartHost() }
+                }
+                .buttonStyle(.borderedProminent)
             } else {
                 ProgressView("正在连接 Pi 运行服务…")
                     .controlSize(.large)
