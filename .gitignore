@@ -4,3 +4,7 @@ build/
 dist/
 DerivedData/
 *.xcuserstate
+
+# ZCode 会话产物（计划、图片缓存等工具文件）：不属于源码，
+# 且会以未跟踪文件身份触发 build.sh 的脏树拒绝，挡住自构建。
+.zcode/
