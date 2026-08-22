@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.19"
+    static let appVersion = "0.0.20"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -142,6 +142,24 @@ struct ResourceCommandEntry: Codable, Equatable, Sendable, Identifiable {
             return "/\(name) <\(argumentHint)>"
         }
         return "/\(name) "
+    }
+}
+
+/// Composer 图片附件（0.0.20）：用户经 `+` 显式选择的图片，随下一条 prompt / steer
+/// 经协议 `images` 参数进入模型输入；只在内存中持有，不持久化、不进入后续消息队列。
+struct ComposerImageAttachment: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let fileName: String
+    let mimeType: String
+    let base64Data: String
+    let byteCount: Int
+
+    var requestPayload: JSONValue {
+        .object([
+            "type": .string("image"),
+            "data": .string(base64Data),
+            "mimeType": .string(mimeType),
+        ])
     }
 }
 

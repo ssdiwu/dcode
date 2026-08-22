@@ -144,14 +144,25 @@ export interface TrailingRecordInspection {
   reason: string;
   /** 可修时：修复后应保留的完整内容（以换行结尾）。 */
   keepContent: string | null;
-  /** 被修剪记录的短预览（诊断呈现用）。 */
-  trimmedPreview: string;
+  /** 被修剪记录的完整内容（修复卡在执行前展示、供用户先行保存；
+   *  上限 `TRIMMED_CONTENT_LIMIT` 字符，超限如实标注并指向备份）。 */
+  trimmedContent: string;
+}
+
+/** 单条被修剪记录进入协议响应的字符上限：覆盖常规消息记录，同时避免异常
+ * 巨行撑爆响应体；超限部分只能去备份里看，不静默丢弃标注。 */
+export const TRIMMED_CONTENT_LIMIT = 20_000;
+
+function trimmedRecordContent(line: string | undefined): string {
+  const content = line ?? "";
+  if (content.length <= TRIMMED_CONTENT_LIMIT) return content;
+  return `${content.slice(0, TRIMMED_CONTENT_LIMIT)}\n…（超出 ${TRIMMED_CONTENT_LIMIT} 字符上限已截断，完整内容见同目录备份文件）`;
 }
 
 export function inspectTrailingRecord(content: string, path: string): TrailingRecordInspection {
   try {
     parseStrictSessionDocument(content, path);
-    return { repairable: false, reason: "会话文件可以正常读取，无需修复。", keepContent: null, trimmedPreview: "" };
+    return { repairable: false, reason: "会话文件可以正常读取，无需修复。", keepContent: null, trimmedContent: "" };
   } catch {
     // 继续判断损坏位置。
   }
@@ -168,11 +179,11 @@ export function inspectTrailingRecord(content: string, path: string): TrailingRe
       repairable: false,
       reason: "会话头部缺失或损坏，修复后也没有可保留的内容。",
       keepContent: null,
-      trimmedPreview: "",
+      trimmedContent: "",
     };
   }
   const keepContent = `${lines.slice(0, lastNonEmpty).join("\n")}\n`;
-  const trimmedPreview = (lines[lastNonEmpty] ?? "").slice(0, 200);
+  const trimmedContent = trimmedRecordContent(lines[lastNonEmpty]);
   try {
     const kept = parseStrictSessionDocument(keepContent, path);
     if (kept.length === 0) {
@@ -180,14 +191,14 @@ export function inspectTrailingRecord(content: string, path: string): TrailingRe
         repairable: false,
         reason: "修剪后没有任何完整记录，拒绝修复。",
         keepContent: null,
-        trimmedPreview,
+        trimmedContent,
       };
     }
     return {
       repairable: true,
       reason: `尾部一条记录不完整（${content.endsWith("\n") ? "JSON 解析失败" : "缺少终止换行"}），其余 ${kept.length} 条记录完好。`,
       keepContent,
-      trimmedPreview,
+      trimmedContent,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -195,7 +206,7 @@ export function inspectTrailingRecord(content: string, path: string): TrailingRe
       repairable: false,
       reason: `不只尾部损坏（保留部分校验失败：${message}），拒绝修复。`,
       keepContent: null,
-      trimmedPreview,
+      trimmedContent,
     };
   }
 }
@@ -204,7 +215,7 @@ export type SessionRepairOutcome =
   | {
       ok: true;
       backupPath: string;
-      trimmedPreview: string;
+      trimmedContent: string;
       entryCount: number;
     }
   | { ok: false; repairable: boolean; reason: string };
@@ -734,7 +745,7 @@ export class SessionReader {
       return {
         ok: true,
         backupPath,
-        trimmedPreview: inspection.trimmedPreview,
+        trimmedContent: inspection.trimmedContent,
         entryCount: verified.length,
       };
     } catch (error) {

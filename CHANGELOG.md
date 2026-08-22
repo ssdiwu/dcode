@@ -1,9 +1,20 @@
+## [0.0.20] - 2026-08-22
+
+### Added
+
+- Composer 统一命令面板与附件（ADR 0028 / PRD 0021，首个 dogfood 反馈驱动）：输入 `/` 打开单一面板，混排 扩展命令（`session.getCommands`）、命令、Skill 与 Prompt 模板（`resources.list`，同名以 getCommands 去重），行尾类型胶囊（扩展 / 命令 / Skill / 模板）、描述单行常显、悬停显示完整描述；面板可滚动（12 行上限），↑↓ / Esc 语义不变；插入文本复用 0.0.16 `composerInvocationText` 合同。
+- 图片附件：协议 `session.prompt` / `session.steer` 新增可选 `images`（≤8 张、单张 data ≤ 7,000,000 base64 字符、`image/*` MIME，非法形态协议校验拒绝；可选参数向后兼容，PROTOCOL_VERSION 保持 1），Host 透传 Pi SDK `PromptOptions.images` / `steer(text, images)`；`+` 改为纯附件按钮（不再附带下拉指示符）——图片经系统文件选择器成为附件 chip（文件名 + 体积 + 移除，单张原始字节 ≤ 5 MB 预检），随下一条 prompt / steer 真实进入模型输入；非图片文件插入精确路径引用（ADR 0024）。附件仅内存持有：不持久化、不进任何本机 store、不进入后续消息队列（带附件入队被拒绝并 notice，正文与附件保留）；请求失败或 steer 未正常完成时附件随正文一起恢复到输入区；受理后与会话切换时清空。原 `+` 一次性资源菜单退役，资源触达由统一面板承接，资源管理仍归 设置 › 本机资源。
+- 扩展就绪横幅降噪：`pi-marketplace loaded` 类扩展自报状态与 pi-di18n `lang:` / `i18n:` 同等对待——只进只读诊断日志，不弹横幅；普通扩展通知仍弹横幅。
+- 新增 [ADR 0028](doc/决策档案/0028-Prompt-图片附件与统一命令面板边界.md) 与 [PRD 0021](doc/40-版本实施方案/0021-0.0.20-Composer-命令面板与附件产品需求.md)；设计系统补统一面板与附件条款。
+- 0.0.19 eval 反馈落地：修复卡执行前展示被修剪尾部记录全文（`INVALID_SESSION.details.trimmedContent` 与 `session.repair` 结果携带，20,000 字符上限、超限标注指向备份）；`host.hello.capabilities` 补 `sessionRepair` / `promptImages`；ADR 0027 与 0.0.19 幂等表述降级为「同一 Host 进程内、LRU 256 窗口内」条件句（跨进程不成立，判定需正文比对 + parentId 链）；0.1.0 门禁「权限拒绝后恢复」口径改为「会话文件损坏」（ADR 0023 已移除权限闸门）；PRD 0020 四项无对应用例的打勾改回未勾并补未知态核对入口验收条目；协议权威文档 0001 与 `host/README.md` 补 `session.repair`、恢复错误码、`images` 与能力位；40-README 版本索引对齐已提交事实；新增面向用户的[会话恢复支持指引](doc/20-产品与交互/支持-会话打不开时的恢复指引.md)。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.20`。
+
 ## [0.0.19] - 2026-08-22
 
 ### Added
 
 - 失败与恢复加固（ADR 0027 / PRD 0020）：中断影响按 已完成 / 未完成 / 未知 三态呈现，恢复一律用户显式触发。Host 重连——意外退出或 `host.restartRequired` 后，侧栏与主页空态提供"重新连接 Pi Host"（复位传输层、保留会话 / 草稿 / 队列 / 账本内存状态，ready 后刷新列表并尝试以可写重开当前会话，run `.unknown` 如实保留），不再需要重启应用。半条 JSONL 受控修复——`session.open` 对尾部不完整会话的 `INVALID_SESSION` 附带 `repairable`，界面呈现修复卡，[备份并修复后打开] 经新增协议命令 `session.repair` 执行（同目录完整备份 `.bak-<uuid>` → 临时文件修剪尾部不完整记录 → 严格读取器复验 → 原子替换）；仅当其余记录完好时可修，其余形态拒绝且原文件零改动。协议新增 `session.repair`。
-- promptId / steerId 幂等（ADR 0027 决定 5）：Host 维护会话级已见 ID（LRU 256），重复提交返回诚实错误 `SESSION_DUPLICATE_PROMPT` / `SESSION_DUPLICATE_STEER`（details 附已关联 runId），不再可能重复执行；Swift 的"安全重试"条件不变（仍要求 Host 判定未持久化，且重试使用全新 ID）。
+- promptId / steerId 幂等（ADR 0027 决定 5）：Host 维护会话级已见 ID（LRU 256），重复提交返回诚实错误 `SESSION_DUPLICATE_PROMPT` / `SESSION_DUPLICATE_STEER`（details 附已关联 runId）；幂等仅在同一 Host 进程生命周期内、已见 ID 窗口（LRU 256）内成立——Host 重启后已见 ID 不复存在，同一 ID 会被再次执行，判定上次是否落盘需正文比对 + parentId 链；Swift 的"安全重试"条件不变（仍要求 Host 判定未持久化，且重试使用全新 ID）。
 - 本机存储熔断可见化 + 显式重试：五个本机 store（会话草稿 / 会话变更账本 / 后续消息队列 / 活动关注 / 验证证据账本）暴露熔断探测与用户显式重试（重新 load 校验或立即补写）；设置 › Host 诊断 新增"本机存储状态"区（正常 / 熔断 + 路径 + [重试保存]）；会话草稿熔断在 Composer 常驻提示；验证证据区新增熔断提示条与[重新载入]，"revision 待补"区分补全中 / 账本暂停，证据账本熔断期间的内存记录在恢复后补写。
 - 恢复链路去静默：自构建重启后恢复会话失败出现 notice 并提示手动打开；移除 Source Folder 时提示受影响范围（失去授权的文件标签数与不再归属原项目的已加载会话数）。
 - Host SIGINT 与 SIGTERM 同走 graceful shutdown；新增 [ADR 0027](doc/决策档案/0027-中断状态可辨认与恢复边界.md) 与 [PRD 0020](doc/40-版本实施方案/0020-0.0.19-失败与恢复加固产品需求.md)。

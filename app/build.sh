@@ -61,7 +61,7 @@ NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.19 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.20 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then

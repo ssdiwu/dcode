@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ComposerView: View {
     @Environment(AppModel.self) private var model
@@ -103,6 +104,10 @@ struct ComposerView: View {
                     selectedCommandIndex = 0
                 }
 
+                if !model.composerImages.isEmpty {
+                    composerAttachmentTray
+                }
+
                 runtimeControls
             }
             if model.isNewSessionDraftActive {
@@ -134,7 +139,7 @@ struct ComposerView: View {
 
     private var runtimeControls: some View {
         HStack(spacing: 4) {
-            oneShotResourceMenu
+            attachmentButton
 
             Spacer(minLength: 0)
 
@@ -217,72 +222,98 @@ struct ComposerView: View {
         .font(.caption)
     }
 
-    /// 一次性资源调用（0.0.16）：`+` 入口把 `/…` 调用写入当前草稿——只预填不发送，
-    /// 实际采用的资源以草稿中可见的调用文本与菜单里的来源描述为准；
-    /// 清单与 设置 > 本机资源 同源（Pi 真实加载合同）。
-    private var oneShotResourceMenu: some View {
-        Menu {
-            if let snapshot = model.resources.snapshot {
-                let commands = snapshot.commands.filter { entry in
-                    !entry.name.hasPrefix("skill:") && entry.source != "prompt"
-                }
-                let skills = snapshot.commands.filter { $0.name.hasPrefix("skill:") }
-                let prompts = snapshot.commands.filter { $0.source == "prompt" }
-                if commands.isEmpty && skills.isEmpty && prompts.isEmpty {
-                    Text("Pi 当前没有加载可调用资源")
-                }
-                if !commands.isEmpty {
-                    Menu("命令") {
-                        ForEach(commands) { resourceInvocationButton($0) }
+    /// 附件入口（0.0.20 dogfood 反馈）：`+` 是纯按钮而非 Menu——macOS Menu 样式
+    /// 会附带下拉指示符，正是要移除的多余箭头。图片经用户显式选择成为图片附件
+    /// （随下一条消息发送，ADR 0028）；其他文件插入路径引用（ADR 0024 决定 2）。
+    /// 原 0.0.16 一次性资源调用入口由统一 `/` 面板承接（Skill / 模板 / 命令混排）。
+    /// 图片附件托盘（0.0.20）：随下一条消息发送的图片以 chip 常驻输入区，
+    /// 可逐张移除；只在内存中持有，不持久化（ADR 0028）。
+    private var composerAttachmentTray: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.composerImages) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: "photo")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(attachment.fileName)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                        Button {
+                            model.removeComposerImageAttachment(id: attachment.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("移除附件 \(attachment.fileName)")
                     }
-                }
-                if !skills.isEmpty {
-                    Menu("Skill") {
-                        ForEach(skills) { resourceInvocationButton($0) }
-                    }
-                }
-                if !prompts.isEmpty {
-                    Menu("Prompt 模板") {
-                        ForEach(prompts) { resourceInvocationButton($0) }
-                    }
-                }
-                Divider()
-                Button("刷新资源列表") {
-                    Task { await model.loadResources() }
-                }
-            } else if model.resources.isLoading {
-                Text("正在读取 Pi 资源…")
-            } else {
-                Text("资源清单不可用")
-                Button("重试") {
-                    Task { await model.loadResources() }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .help("图片附件 · \(attachment.mimeType) · 随下一条消息发送，不进入后续消息队列")
                 }
             }
+        }
+        .frame(maxHeight: 30)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("图片附件 \(model.composerImages.count) 张")
+    }
+
+    private var attachmentButton: some View {
+        Button {
+            presentAttachmentPicker()
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .medium))
                 .frame(minHeight: PiDCodeMetrics.compactControlHeight)
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.borderless)
         .fixedSize()
-        .help("为这条消息选择本机 Skill / Prompt / Command（写入输入框，仍由你发送）")
-        .accessibilityLabel("资源调用")
+        .help("添加附件：图片随消息发送给模型；其他文件插入路径引用")
+        .accessibilityLabel("添加附件")
     }
 
-    private func resourceInvocationButton(_ command: ResourceCommandEntry) -> some View {
-        Button {
-            model.insertComposerReference(command.composerInvocationText)
+    private func presentAttachmentPicker() {
+        let panel = NSOpenPanel()
+        panel.title = "添加附件"
+        panel.message = "图片将随下一条消息发送；其他文件插入路径引用"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else {
             focused = true
-        } label: {
-            HStack {
-                Text(command.name)
-                    .lineLimit(1)
-                if let description = command.description, !description.isEmpty {
-                    Text(description)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+            return
+        }
+        for url in panel.urls {
+            handlePickedAttachmentURL(url)
+        }
+        focused = true
+    }
+
+    private func handlePickedAttachmentURL(_ url: URL) {
+        let type = (try? url.resourceValues(forKeys: [.typeIdentifierKey]))?.typeIdentifier
+            .flatMap { UTType($0) }
+            ?? UTType(filenameExtension: url.pathExtension)
+        guard let type, type.conforms(to: .image) else {
+            model.insertComposerReference(url.path)
+            return
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            if let failure = model.addComposerImageAttachment(
+                fileName: url.lastPathComponent,
+                mimeType: type.preferredMIMEType ?? "image/png",
+                data: data
+            ) {
+                model.showNotice(failure, level: "warning")
             }
+        } catch {
+            model.showNotice("无法读取“\(url.lastPathComponent)”。", level: "warning")
         }
     }
 
@@ -1106,53 +1137,73 @@ struct ComposerView: View {
     }
 
     private var commandPalette: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(commandSuggestions.prefix(6).enumerated()), id: \.element.id) { index, command in
-                Button {
-                    applyCommandSelection(at: index)
-                } label: {
-                    HStack(spacing: 10) {
-                        Text("/\(command.name)")
-                            .font(.callout.monospaced().weight(.medium))
-                            .foregroundStyle(.primary)
-                        Text(command.description ?? command.source)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                        Text(command.source)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(visibleCommandSuggestions.enumerated()), id: \.element.id) { index, suggestion in
+                    Button {
+                        applyCommandSelection(at: index)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(suggestion.displayCommand)
+                                .font(.callout.monospaced().weight(.medium))
+                                .foregroundStyle(.primary)
+                            Text(suggestion.description ?? "—")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(suggestion.typeLabel)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.primary.opacity(0.05), in: Capsule())
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: PiDCodeMetrics.minimumTarget)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .background(
+                        index == selectedCommandIndex
+                            ? Color.accentColor.opacity(0.12)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius, style: .continuous)
+                    )
+                    .accessibilityAddTraits(index == selectedCommandIndex ? .isSelected : [])
+                    .accessibilityLabel("\(suggestion.typeLabel) \(suggestion.displayCommand)")
+                    // 悬停显示完整描述（0.0.20 dogfood 反馈）：单行截断的描述经 help 全文可读。
+                    .help(suggestion.hoverDescription)
                 }
-                .buttonStyle(.plain)
-                .background(
-                    index == selectedCommandIndex
-                        ? Color.accentColor.opacity(0.12)
-                        : Color.clear,
-                    in: RoundedRectangle(cornerRadius: PiDCodeMetrics.compactRadius, style: .continuous)
-                )
-                .accessibilityAddTraits(index == selectedCommandIndex ? .isSelected : [])
             }
+            .padding(.vertical, 5)
         }
-        .padding(.vertical, 5)
+        .frame(maxHeight: PaletteMetrics.maxHeight)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
+    private var visibleCommandSuggestions: [ComposerCommandSuggestion] {
+        Array(commandSuggestions.prefix(PaletteMetrics.visibleLimit))
+    }
+
+    private enum PaletteMetrics {
+        /// 面板内一次可滚动的行数上限；统一混排后资源可能超过一屏，不再硬截断到固定 6 行。
+        static let visibleLimit = 12
+        static let rowHeight: CGFloat = 30
+        static var maxHeight: CGFloat { rowHeight * 7 }
+    }
+
     private func applyCommandSelection(at index: Int) {
-        let suggestions = Array(commandSuggestions.prefix(6))
+        let suggestions = visibleCommandSuggestions
         guard suggestions.indices.contains(index) else { return }
-        model.updateComposerText("/\(suggestions[index].name) ")
+        model.updateComposerText(suggestions[index].invocationText)
         selectedCommandIndex = 0
         focused = true
     }
 
     /// 命令面板键盘导航（↑↓ 选择、Esc 关闭）；返回false表示事件交回输入框默认处理。
     private func handlePaletteKey(_ key: ComposerPaletteKey) -> Bool {
-        let visibleCount = min(commandSuggestions.count, 6)
+        let visibleCount = visibleCommandSuggestions.count
         guard visibleCount > 0 else { return false }
         switch key {
         case .up:
@@ -1180,13 +1231,19 @@ struct ComposerView: View {
             && !model.followUp.isMutatingQueue
     }
 
-    private var commandSuggestions: [CommandDescriptor] {
+    private var commandSuggestions: [ComposerCommandSuggestion] {
         guard !model.shouldQueueComposerText,
               model.canWrite,
               model.composerText.hasPrefix("/") else { return [] }
         let fragment = model.composerText.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
         guard !model.composerText.contains(" ") else { return [] }
-        return model.availableCommands.filter { fragment.isEmpty || $0.name.localizedCaseInsensitiveContains(fragment) }
+        // 统一面板（0.0.20）：扩展命令 + 命令 / Skill / 模板 一次混排，
+        // 行尾类型标注、描述常显、悬停完整描述。
+        return ComposerCommandSuggestion.build(
+            commands: model.availableCommands,
+            resources: model.resources.snapshot?.commands ?? [],
+            fragment: fragment
+        )
     }
 
     private var contextHelpLabel: String {

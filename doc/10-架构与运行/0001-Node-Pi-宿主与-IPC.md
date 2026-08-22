@@ -98,8 +98,9 @@ open "dist/D Code.app"
 | `session.open`、`session.close` | 打开即接管：校验目标后关闭当前会话、以 `force` 取得目标 Lease，并在指定 `pathId` 上建立唯一可写 runtime；关闭时释放所有权。Protocol 校验仍解释遗留的 `mode / writeIntent / preserveActive` 字段，但运行时不建立只读路径、始终执行可写接管；这是待清理的实现缺口，不构成只读产品能力 |
 | `session.setName` | 在当前会话空闲、Lease 稳定时调用 Pi SDK 写入 Session Name；空字符串恢复自动名称，单行名称最多 200 个 UTF-16 code unit |
 | `session.trash` | 只将唯一、空的 D Code 创建 Session 移入当前 macOS 用户废纸篓；取得临时 Lease 后再次校验身份、来源、消息数和子会话关系，失败不执行永久删除 |
-| `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径 |
-| `session.steer` | 携带预期 Run ID，在当前 Host Run 仍为同一 `running`、没有结构化等待时调用 Pi 专用 `AgentSession.steer()`；Run 已变化则拒绝，不经过可降级为普通 Prompt 的异步 input handler，不建立新 Run、不执行斜杠命令、不中止正在执行的工具，在下一安全模型边界应用介入信息 |
+| `session.repair` | 受控修复尾部不完整的会话 JSONL（0.0.19）：仅当「尾部恰好一条记录不完整且其余记录完整」时可修；同目录完整备份 `.bak-<uuid>` → 修剪尾行 → 严格读取器复验 → 原子替换，任一环节失败原文件零改动；其余损坏形态拒绝并返回字段级原因。`session.open` 的 `INVALID_SESSION` 失败 details 附 `repairable` 与 `repairReason`，作为该入口的发现路径 |
+| `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径；可选 `images`（≤8 张 `{ type: "image", data: base64, mimeType: image/* }`，单张 data ≤ 7,000,000 字符）经 Pi `PromptOptions.images` 进入模型输入（0.0.20） |
+| `session.steer` | 携带预期 Run ID（与可选 `images`，同 `session.prompt` 合同），在当前 Host Run 仍为同一 `running`、没有结构化等待时调用 Pi 专用 `AgentSession.steer()`；Run 已变化则拒绝，不经过可降级为普通 Prompt 的异步 input handler，不建立新 Run、不执行斜杠命令、不中止正在执行的工具，在下一安全模型边界应用介入信息 |
 | `session.copy` | 在源稳定且空闲时把完整已持久化历史复制成新 Session ID 与目标 `cwd`；源文件不改，失败目标不进入正常会话目录 |
 | `session.getState`、`session.getCommands`、`session.contextBreakdown` | 获取当前权威状态、D Code-owned Run State、命令 / 模板 / skills 与按消息种类估算的上下文构成 |
 | `resources.list`、`resources.setPackageEnabled` | 投影 Pi 当前真实加载的扩展包、Extension、Skill、Prompt、Command 与诊断；只对有 Pi 配置合同的扩展包执行启停并热重载，Skill / Prompt / Command 保持只读 |
@@ -117,6 +118,8 @@ open "dist/D Code.app"
 `host.hello.capabilities.mermaidUnicode=true` 表示该 Host 提供上述原生渲染动作，不表示支持 Mermaid 的全部图表语法。当前渲染器来自精确固定的 `grok-mermaid@0.2.2`，Swift 不自行解析图表语法。
 
 参数的可执行权威位于 `host/src/protocol.ts`；Swift 客户端不得依赖未列入 Protocol v1 的内部对象字段。
+
+恢复相关失败码（0.0.19 起）：`session.open` 对损坏 JSONL 返回 `INVALID_SESSION`（details 附 `repairable` 与 `repairReason`，尾部不完整时可经 `session.repair` 显式修复）；同一 `promptId` / `steerId` 在同一 Host 进程的已见 ID 窗口内重复提交返回 `SESSION_DUPLICATE_PROMPT` / `SESSION_DUPLICATE_STEER`（details 附已关联 runId）——已见 ID 仅内存级（LRU 256），Host 重启后不跨进程成立，判定历史提交是否落盘需正文比对 + `parentId` 链。
 
 ### 事件组
 
@@ -151,6 +154,8 @@ open "dist/D Code.app"
 `host.hello.capabilities.sessionChangeLedger=true` 表示 Host 能把本次 D Code Run 内成功、结构化的文件工具结果投影为 `session.changeRecorded`。首版 adapter 只接受 DHashline-compatible `edit` 的 unified patch 元数据与 create-only `write` details；失败结果、未知工具、缺失结构、Bash 与外部写入全部不猜测。
 
 `host.hello.capabilities.sessionRunCorrelation=true` 表示 Host 会把 D Code 传入的稳定 Prompt ID 作为当前 Run ID，在 `session.event` 中回传 `runId`，并在用户条目通过 Lease 核验后以 `session.promptCompleted` 返回匹配的 Session ID、Prompt ID 与 Entry ID。这是 `0.0.5` Follow-up Queue 的所有权转移证据；Host 仍不保存、编辑或重排 D Code 的待派发队列。
+
+`host.hello.capabilities.sessionRepair=true` 表示该 Host 提供 `session.repair` 受控修复与 `INVALID_SESSION.details.repairable` 发现路径（0.0.19）；`promptImages=true` 表示 `session.prompt` / `session.steer` 接受可选 `images` 图片附件（0.0.20）。
 
 `host.hello.capabilities.sessionRunState=true` 表示 Host 会为当前唯一 D Code-owned Run 公开 `running`、`waitingForUser`、`stopRequested`、`completed`、`failed`、`aborted` 或 `unknown`。`waitingForUser` 另以 `waitingFor=select|confirm|input|editor` 区分非颜色等待语义；多个结构化请求必须全部关闭后才恢复 `running`。点击停止只先进入 `stopRequested`，直到 Agent 真正收敛才成为 `aborted`；正常完成还必须在本轮输入之后取得最终 assistant Entry 的稳定 ID，即使其后追加了安全元数据条目，仍以 `runId:entryId` 形成 completion identity。冲突、进程结束或无法证明终态时进入 `unknown`，App 必须阻止自动派发、重复发送与不安全重试。`agent_end` 只结束流式展示，不是终态证据；Follow-up Queue 只按匹配 Session / Run 的终态 Run State 结算。
 

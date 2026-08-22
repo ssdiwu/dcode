@@ -221,6 +221,45 @@ test("method parameter validation rejects invalid values", () => {
     }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("session.prompt", {
+    message: "look at this",
+    promptId: "prompt-image",
+    images: [{ type: "image", data: "aGlzdG9ncmFt", mimeType: "image/png" }],
+  }));
+  assert.doesNotThrow(() => validateMethodParams("session.steer", {
+    message: "and this one",
+    steerId: "steer-image",
+    expectedRunId: "run-active",
+    images: [{ type: "image", data: "aGlzdG9ncmFt", mimeType: "image/png" }],
+  }));
+  for (const badImages of [
+    [],
+    [{ type: "image", data: "aGVsbG8=", mimeType: "text/plain" }],
+    [{ type: "file", data: "aGVsbG8=", mimeType: "image/png" }],
+    [{ type: "image", data: "", mimeType: "image/png" }],
+    [{ type: "image", data: "aGVsbG8=" }],
+    Array.from({ length: 9 }, () => ({ type: "image", data: "aGVsbG8=", mimeType: "image/png" })),
+    "not-an-array",
+  ]) {
+    assert.throws(
+      () => validateMethodParams("session.prompt", {
+        message: "bad images",
+        promptId: "prompt-bad-images",
+        images: badImages,
+      }),
+      (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+      `images=${JSON.stringify(badImages).slice(0, 40)} 应被拒绝`,
+    );
+  }
+  assert.throws(
+    () => validateMethodParams("session.steer", {
+      message: "bad steer images",
+      steerId: "steer-bad-images",
+      expectedRunId: "run-active",
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "application/pdf" }],
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.equal(isHostMethod("extension.customInput"), false);
   assert.equal(isHostMethod("extension.customResize"), false);
   assert.equal(HOST_METHODS.includes("extension.respond"), true);

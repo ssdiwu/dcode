@@ -1451,7 +1451,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.19",
+            hostVersion: "0.0.20",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1472,7 +1472,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.19",
+            hostVersion: "0.0.20",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1757,7 +1757,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.19",
+                    "hostVersion": "0.0.20",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1927,7 +1927,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.19",
+                    "hostVersion": "0.0.20",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2247,7 +2247,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.19", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.20", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":

@@ -933,23 +933,44 @@ private struct SessionRepairBanner: View {
     let prompt: AppModel.SessionRepairPrompt
 
     var body: some View {
-        HStack(spacing: PiDCodeMetrics.spacingStandard) {
-            Label(
-                "会话文件尾部不完整（可能上次 Host 中断）：\(prompt.reason)",
-                systemImage: "wrench.and.screwdriver"
-            )
-            .font(.callout)
-            .lineLimit(2)
-            Spacer(minLength: PiDCodeMetrics.spacingGroup)
-            Button("备份并修复后打开") {
-                Task { await model.repairSessionAndReopen() }
+        VStack(alignment: .leading, spacing: PiDCodeMetrics.spacingGroup) {
+            HStack(spacing: PiDCodeMetrics.spacingStandard) {
+                Label(
+                    "会话文件尾部不完整（可能上次 Host 中断）：\(prompt.reason)",
+                    systemImage: "wrench.and.screwdriver"
+                )
+                .font(.callout)
+                .lineLimit(2)
+                Spacer(minLength: PiDCodeMetrics.spacingGroup)
+                Button("备份并修复后打开") {
+                    Task { await model.repairSessionAndReopen() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("取消", role: .cancel) {
+                    model.dismissSessionRepairPrompt()
+                }
+                .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            Button("取消", role: .cancel) {
-                model.dismissSessionRepairPrompt()
+            // eval 反馈（0.0.20）：被修剪的正是崩溃前最后一句——修复卡在执行前
+            // 展示全文供复制保存，不把它留在 200 字预览或 .bak 里等用户自己找。
+            if let trimmed = prompt.trimmedContent, !trimmed.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("修复将移除这条写到一半的记录（请先复制保存；完整原文也在同目录 .bak 备份里）：")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(trimmed)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 96)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
             }
-            .controlSize(.small)
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))

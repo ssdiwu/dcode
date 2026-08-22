@@ -271,6 +271,20 @@ final class AppModelHostIntegrationTests: XCTestCase {
         await harness.client.emit(HostEvent(
             name: "extension.notification",
             data: .object([
+                "message": .string("pi-marketplace loaded — search/audit/install pi packages"),
+                "level": .string("info"),
+            ])
+        ))
+
+        XCTAssertNil(harness.model.notice, "pi-marketplace 的扩展就绪广播不应弹横幅")
+        XCTAssertEqual(
+            harness.model.hostDiagnosticLog.last?.message,
+            "扩展状态提示：pi-marketplace loaded — search/audit/install pi packages"
+        )
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
                 "message": .string("提醒：站会 10 分钟后开始"),
                 "level": .string("info"),
             ])

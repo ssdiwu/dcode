@@ -39,7 +39,7 @@ import {
   packageSourceKey,
 } from "./resources.js";
 import { ExtensionUIBridge } from "./extension-ui.js";
-import type { HostMethod } from "./protocol.js";
+import type { HostMethod, PromptImageInput } from "./protocol.js";
 import { SessionLease, SessionLeaseError, sessionSnapshotDigest } from "./session-lease.js";
 import {
   SessionReader,
@@ -63,7 +63,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.19";
+const HOST_VERSION = "0.0.20";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -444,6 +444,8 @@ export class PiHost {
             sessionRename: true,
             sessionRunCorrelation: true,
             sessionRunState: true,
+            sessionRepair: true,
+            promptImages: true,
             preSessionModelSelection: true,
             modelSettings: true,
             sessionSteer: true,
@@ -510,12 +512,14 @@ export class PiHost {
           typeof params.pathAction === "object" && params.pathAction !== null
             ? params.pathAction as unknown as SessionPathAction
             : undefined,
+          params.images as PromptImageInput[] | undefined,
         );
       case "session.steer":
         return await this.steer(
           params.message as string,
           params.steerId as string,
           params.expectedRunId as string,
+          params.images as PromptImageInput[] | undefined,
         );
       case "session.abort": {
         const active = this.requireWritable();
@@ -1044,6 +1048,7 @@ export class PiHost {
           ...baseDetails,
           repairable: inspection?.repairable ?? false,
           ...(inspection ? { repairReason: inspection.reason } : {}),
+          ...(inspection?.repairable ? { trimmedContent: inspection.trimmedContent } : {}),
         });
       }
       throw error;
@@ -1434,6 +1439,7 @@ export class PiHost {
     message: string,
     promptId: string,
     pathAction?: SessionPathAction,
+    images?: PromptImageInput[],
   ): Promise<unknown> {
     if (pathAction && message.trim().length === 0) {
       throw new PiHostError("EMPTY_PATH_PROMPT", "路径草稿不能为空");
@@ -1489,6 +1495,7 @@ export class PiHost {
       };
       const operation = this.promptCall.run(call, () => active.session.prompt(message, {
           source: "rpc",
+          ...(images && images.length > 0 ? { images } : {}),
           preflightResult: (success) => { if (success) accept(false); },
         }));
       void operation.then(async () => {
@@ -1523,7 +1530,12 @@ export class PiHost {
     });
   }
 
-  private async steer(message: string, steerId: string, expectedRunId: string): Promise<unknown> {
+  private async steer(
+    message: string,
+    steerId: string,
+    expectedRunId: string,
+    images?: PromptImageInput[],
+  ): Promise<unknown> {
     const seenSteerRunId = this.seenSteerIds.get(steerId);
     if (seenSteerRunId !== undefined) {
       throw new PiHostError(
@@ -1555,7 +1567,7 @@ export class PiHost {
       );
     }
     try {
-      await active.session.steer(message);
+      await active.session.steer(message, images && images.length > 0 ? images : undefined);
     } catch {
       throw new PiHostError("STEER_REJECTED", "Pi did not accept the steering message");
     }

@@ -17,17 +17,21 @@
 - 将完整已持久化 Session 以新 ID、新 `cwd` 和源谱系复制到目标 Source Folder：隐藏暂存中逐行校验，源稳定后用 hard link 原子发布；归档 ID 在 Recent、Project 与 Search 的分页、排序和结果上限前排除；
 - 在 Pi cwd-scoped 目录创建新会话，将 Header 与 D Code 创建来源标记一次写入初始 JSONL；该文档发布即为创建提交点并立即返回，不扫描全库、不取得新 Lease，也不等待旧 Runtime 关闭；App 再以独立打开请求切换并取得新会话所有权；
 - 对空的 D Code 创建会话提供可恢复的 `session.trash`：唯一 ID 解析、D Code 来源、零消息、无子会话、非可写和 Lease 复核全部成立后才移入用户废纸篓；失败不回退为永久删除；
+- 受控修复尾部不完整的会话 JSONL（`session.repair`，0.0.19）：仅当尾部恰好一条记录不完整且其余记录完整时可修；同目录完整备份 `.bak-<uuid>`、修剪后以严格读取器复验、原子替换，任一环节失败原文件零改动；`session.open` 的 `INVALID_SESSION` details 附 `repairable` / `repairReason`；
+- 会话级 `promptId` / `steerId` 幂等登记（0.0.19）：同一 Host 进程的已见 ID 窗口（LRU 256）内重复提交返回 `SESSION_DUPLICATE_PROMPT` / `SESSION_DUPLICATE_STEER`；已见 ID 仅内存级，Host 重启后不跨进程成立；
 - 通过 Pi SDK 持久修改当前 Session Name，同一名称供 Pi、D Code 左栏、搜索与窗口顶部使用；空名称恢复 Pi 的自动标题；
 - 打开既有会话即以 `force` 取得 Session Lease 并成为唯一写入所有者；没有只读观察模式。外部写入或另一 D Code 实例抢占会触发明确冲突、停止当前运行并关闭失效所有权，草稿由 App 保留后可显式重新接管；
 - 使用固定 Pi SDK 加载现有 settings、模型、会话、流式事件及可兼容的结构化扩展能力；
 - 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，Host 不另建产品队列；
 - 运行中可在 Host Run State 仍为 `running` 时使用 Pi 原生 steer 介入下一安全模型边界；它不替换 Run ID，也不伪装成立即中止工具；
+- `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
 - 模型设置主目录只投影已认证 Provider 的模型；未认证 Provider 通过独立认证桥调用 Pi `ModelRuntime.login`，支持 API Key / OAuth prompt、浏览器链接、设备代码、取消与脱敏错误，凭据只由 Pi 持久化；
 - 投影 Pi `resourceLoader` 真实加载的 Extension、Skill、Prompt 与 Command，按 Pi `SettingsManager.setPackages` 修改扩展包启停并热重载；D Code 自有隐藏扩展不进入用户清单；
 - 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade；当前生产合同只确认 `changes` / `lineage`，`evidence` / `project` 的 Swift 存储兼容缺口见 [0.0.15 PRD](../doc/40-版本实施方案/0016-0.0.15-界面即上下文与本机资源产品需求.md)；
 - 提供 `modelProviders.list / save / remove` 管理 Pi `models.json` 自定义供应商：候选文件经结构检查与 Pi `ModelConfig` 校验后原子替换。该界面的嵌套 header 脱敏、删除后目录刷新与并发写入边界尚未收口，见 [0.0.16 PRD](../doc/40-版本实施方案/0017-0.0.16-自定义模型供应商与一次性资源调用产品需求.md)；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
+- SIGINT 与 SIGTERM 同走 graceful shutdown（清理活动会话、尾行合法 JSON、中断态如实报 `phase=unknown`，退出码均为 143）；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；
 - 通过精确固定的 `grok-mermaid` 提供原生 Unicode Mermaid 渲染，并对不支持的类型返回结构化失败；
 - 临时目录自动测试覆盖快速创建、会话复制 / 废纸篓安全边界、路径、租约、搜索、Project / Recent、打开即接管、Run State、模型 / 认证、资源、自定义供应商、扩展与进程生命周期回归；测试全绿不替代跨 Swift / Host 的真实存储、完整 Protocol 组合与人工验收，精确证据和已知缺口见[版本实施方案](../doc/40-版本实施方案/README.md)。

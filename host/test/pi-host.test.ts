@@ -112,7 +112,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.19");
+    assert.equal(hello.hostVersion, "0.0.20");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -132,6 +132,8 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
     assert.equal(hello.capabilities.modelSettings, true);
     assert.equal(hello.capabilities.sessionSteer, true);
     assert.equal(hello.capabilities.modelAuthentication, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionRepair, true, "修复能力必须在 hello 能力位可发现");
+    assert.equal((hello.capabilities as Record<string, boolean>).promptImages, true, "图片附件能力必须在 hello 能力位可发现");
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId }) as { mode: string };
@@ -475,6 +477,99 @@ test("steering an active run uses Pi steer semantics without replacing the run i
       (error: unknown) => error instanceof PiHostError && error.code === "SESSION_RUN_CHANGED",
     );
     active.currentRun = undefined;
+    active.session.steer = originalSteer;
+    delete (active.session as { isStreaming?: boolean }).isStreaming;
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("prompt and steer deliver image attachments and malformed images are rejected", async () => {
+  const f = await fixture();
+  const host = new PiHost({
+    agentDir: f.agentDir,
+    leaseQuietWindowMs: 1,
+    conflictPollMs: 60_000,
+    emit: () => {},
+  });
+  type ImageInput = { type: "image"; data: string; mimeType: string };
+  type PromptOptions = {
+    source?: string;
+    images?: ImageInput[];
+    preflightResult?: (success: boolean) => void;
+  };
+  type WritableInternals = {
+    session: {
+      prompt: (message: string, options?: PromptOptions) => Promise<void>;
+      steer: (message: string, images?: ImageInput[]) => Promise<void>;
+      isStreaming: boolean;
+    };
+    currentRun?: {
+      id: string;
+      toolCalls: Map<string, unknown>;
+      state: {
+        sessionId: string;
+        runId: string;
+        phase: "running";
+        startedAt: string;
+        updatedAt: string;
+        inputPersisted: boolean;
+        retryable: boolean;
+      };
+    };
+  };
+  const internals = host as unknown as { active?: WritableInternals };
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable", writeIntent: true });
+    const active = internals.active;
+    assert.ok(active);
+    const originalPrompt = active.session.prompt;
+    const originalSteer = active.session.steer;
+
+    let promptImages: ImageInput[] | undefined;
+    active.session.prompt = async (_message, options) => {
+      promptImages = options?.images;
+      options?.preflightResult?.(true);
+    };
+    const image: ImageInput = { type: "image", data: "aGlzdG9ncmFt", mimeType: "image/png" };
+    await host.handle("session.prompt", {
+      message: "look at this",
+      promptId: "prompt-with-image",
+      images: [image],
+    });
+    assert.deepEqual(promptImages, [image]);
+
+    await host.handle("session.prompt", { message: "text only", promptId: "prompt-text-only" });
+    assert.equal(promptImages, undefined, "无图片时不注入空数组");
+
+    let steerImages: ImageInput[] | undefined;
+    Object.defineProperty(active.session, "isStreaming", { value: true, configurable: true });
+    const now = new Date().toISOString();
+    active.currentRun = {
+      id: "run-active",
+      toolCalls: new Map(),
+      state: {
+        sessionId: f.sessionId,
+        runId: "run-active",
+        phase: "running",
+        startedAt: now,
+        updatedAt: now,
+        inputPersisted: true,
+        retryable: false,
+      },
+    };
+    active.session.steer = async (_message, images) => { steerImages = images; };
+    await host.handle("session.steer", {
+      message: "and this one",
+      steerId: "steer-with-image",
+      expectedRunId: "run-active",
+      images: [image],
+    });
+    assert.deepEqual(steerImages, [image]);
+
+    active.currentRun = undefined;
+    active.session.prompt = originalPrompt;
     active.session.steer = originalSteer;
     delete (active.session as { isStreaming?: boolean }).isStreaming;
   } finally {
@@ -2138,10 +2233,8 @@ test("session.repair trims an incomplete trailing record with a full backup (ADR
   const f = await fixture();
   const path = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
   const original = await readFile(path, "utf8");
-  await appendFile(
-    path,
-    `{"type":"message","id":"broken","parentId":"assistant","timestamp":"${new Date().toISOString()}","message":{"role":"user"`,
-  );
+  const brokenTail = `{"type":"message","id":"broken","parentId":"assistant","timestamp":"${new Date().toISOString()}","message":{"role":"user"`;
+  await appendFile(path, brokenTail);
   const host = new PiHost({ agentDir: f.agentDir, emit: () => undefined });
   try {
     await host.handle("host.hello", {});
@@ -2150,9 +2243,14 @@ test("session.repair trims an incomplete trailing record with a full backup (ADR
       (error: unknown) => {
         assert.ok(error instanceof PiHostError);
         assert.equal(error.code, "INVALID_SESSION");
-        const details = error.details as { repairable?: boolean; repairReason?: string };
+        const details = error.details as {
+          repairable?: boolean;
+          repairReason?: string;
+          trimmedContent?: string;
+        };
         assert.equal(details.repairable, true, "尾部不完整必须标记可修");
         assert.ok(details.repairReason?.includes("尾部"));
+        assert.equal(details.trimmedContent, brokenTail, "打开失败即返回被修剪记录全文，修复卡可在执行前展示");
         return true;
       },
     );
@@ -2161,9 +2259,11 @@ test("session.repair trims an incomplete trailing record with a full backup (ADR
       ok: boolean;
       backupPath: string;
       entryCount: number;
+      trimmedContent: string;
     };
     assert.equal(repaired.ok, true);
     assert.equal(repaired.entryCount, 5);
+    assert.equal(repaired.trimmedContent, brokenTail, "修复结果同样携带被修剪记录全文");
     await access(repaired.backupPath);
     assert.equal(await readFile(path, "utf8"), original, "修复后内容回到完好前缀");
 

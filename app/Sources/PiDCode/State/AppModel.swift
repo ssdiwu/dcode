@@ -40,6 +40,8 @@ struct PendingPromptDraft: Equatable {
     let draftTarget: SessionDraftTarget?
     let followUpQueueID: String?
     let followUpItemID: String?
+    /// 随本条 prompt 发送的图片附件；失败恢复时与正文一起回到输入框（0.0.20）。
+    let images: [ComposerImageAttachment]
 
     init(
         sessionID: String,
@@ -47,7 +49,8 @@ struct PendingPromptDraft: Equatable {
         draft: String,
         draftTarget: SessionDraftTarget? = nil,
         followUpQueueID: String? = nil,
-        followUpItemID: String? = nil
+        followUpItemID: String? = nil,
+        images: [ComposerImageAttachment] = []
     ) {
         self.sessionID = sessionID
         self.promptID = promptID
@@ -55,6 +58,7 @@ struct PendingPromptDraft: Equatable {
         self.draftTarget = draftTarget
         self.followUpQueueID = followUpQueueID
         self.followUpItemID = followUpItemID
+        self.images = images
     }
 
     var isFollowUpDispatch: Bool { followUpQueueID != nil && followUpItemID != nil }
@@ -66,6 +70,8 @@ struct PendingSteerDraft: Equatable {
     let steerID: String
     let draft: String
     let draftTarget: SessionDraftTarget?
+    /// 随本条 steer 发送的图片附件；失败恢复时与正文一起回到输入框（0.0.20）。
+    var images: [ComposerImageAttachment] = []
     var accepted: Bool
 }
 
@@ -146,6 +152,9 @@ final class AppModel {
     var workingMessage: String?
     let modelSettings = ModelSettingsState()
     var availableCommands: [CommandDescriptor] = []
+    /// Composer 图片附件（0.0.20）：随下一条 prompt / steer 发送；仅内存持有，
+    /// 会话切换清空，失败恢复回输入框（与正文草稿同一模式）。
+    var composerImages: [ComposerImageAttachment] = []
     let search = SearchModel()
     /// HTML 预览联网策略（ADR 0026）：默认阻断、尝试询问、“本次允许”会话内有效。
     let htmlPreview = HTMLPreviewState()
@@ -1190,6 +1199,9 @@ final class AppModel {
     struct SessionRepairPrompt: Equatable, Sendable {
         let sessionID: String
         let reason: String
+        /// 被修剪的尾部记录全文（0.0.20，eval 反馈）：修复卡在执行前展示，
+        /// 用户可先复制保存——那通常正是崩溃前最想留下的最后一句。
+        var trimmedContent: String?
     }
 
     /// 本机存储状态条目（设置 › Host 诊断呈现）。
@@ -1237,8 +1249,12 @@ final class AppModel {
     }
 
     /// 打开失败后呈现修复卡（备份 → 修剪尾部不完整记录 → 重开）。
-    func presentSessionRepairPrompt(sessionID: String, reason: String) {
-        sessionRepairPrompt = SessionRepairPrompt(sessionID: sessionID, reason: reason)
+    func presentSessionRepairPrompt(sessionID: String, reason: String, trimmedContent: String? = nil) {
+        sessionRepairPrompt = SessionRepairPrompt(
+            sessionID: sessionID,
+            reason: reason,
+            trimmedContent: trimmedContent
+        )
     }
 
     func dismissSessionRepairPrompt() {
@@ -1811,6 +1827,48 @@ final class AppModel {
         } else {
             updateComposerText(composerText + "\n\n" + trimmed)
         }
+    }
+
+    // MARK: - Composer 图片附件（0.0.20，ADR 0028）
+
+    /// 一条消息的图片上限与单张体积上限（原始字节）；协议侧对应
+    /// `validatePromptImages` 的 8 张 / 7,000,000 base64 字符。
+    static let composerImageCountLimit = 8
+    static let composerImageByteLimit = 5_000_000
+
+    /// 添加一张图片附件；返回值为用户可读的失败原因（nil = 成功）。
+    /// 附件只在内存中持有：不写会话 JSONL、不进草稿资料，随下一条消息发送。
+    @discardableResult
+    func addComposerImageAttachment(fileName: String, mimeType: String, data: Data) -> String? {
+        guard composerImages.count < Self.composerImageCountLimit else {
+            return "一条消息最多附带 \(Self.composerImageCountLimit) 张图片。"
+        }
+        guard data.count <= Self.composerImageByteLimit else {
+            return "“\(fileName)”约 \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))，超过 \(ByteCountFormatter.string(fromByteCount: Int64(Self.composerImageByteLimit), countStyle: .file)) 上限。"
+        }
+        let base64 = data.base64EncodedString()
+        composerImages.append(ComposerImageAttachment(
+            id: UUID(),
+            fileName: fileName,
+            mimeType: mimeType,
+            base64Data: base64,
+            byteCount: data.count
+        ))
+        return nil
+    }
+
+    func removeComposerImageAttachment(id: UUID) {
+        composerImages.removeAll { $0.id == id }
+    }
+
+    func clearComposerImageAttachments() {
+        composerImages.removeAll()
+    }
+
+    /// 协议 `images` 参数；空附件返回 nil（不发送空数组）。
+    var composerImageRequestPayload: JSONValue? {
+        guard !composerImages.isEmpty else { return nil }
+        return .array(composerImages.map(\.requestPayload))
     }
 
     func beginPathDraft(from item: TranscriptItem) {
@@ -2758,6 +2816,11 @@ final class AppModel {
               let pathID = currentPathIdentity,
               let lineageEntryID = currentLineageEntryID,
               pendingPathDraft == nil else { return }
+        // 后续消息队列只承载文本（0.0.20）：图片附件不排队、不静默丢弃。
+        guard composerImages.isEmpty else {
+            showNotice("带图片附件的消息不能加入后续消息队列。请等当前运行结束后直接发送。", level: "warning")
+            return
+        }
         let originalDraft = composerText
         let trimmed = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else { return }
@@ -3044,23 +3107,30 @@ final class AppModel {
         guard await flushCurrentDraft() else { return }
 
         let steerID = UUID().uuidString
+        let attachments = composerImages
         followUp.pendingSteer = PendingSteerDraft(
             sessionID: sessionID,
             runID: runID,
             steerID: steerID,
             draft: draft,
             draftTarget: currentDraftTarget,
+            images: attachments,
             accepted: false
         )
         composerText = ""
+        clearComposerImageAttachments()
         isSendingRequest = true
         defer { isSendingRequest = false }
         do {
-            let result: SessionSteerResult = try await client.request("session.steer", params: [
+            var params: [String: JSONValue] = [
                 "message": .string(message),
                 "steerId": .string(steerID),
                 "expectedRunId": .string(runID),
-            ])
+            ]
+            if !attachments.isEmpty {
+                params["images"] = .array(attachments.map(\.requestPayload))
+            }
+            let result: SessionSteerResult = try await client.request("session.steer", params: params)
             guard result.accepted,
                   result.steerID == steerID,
                   result.runID == runID else {
@@ -3104,6 +3174,7 @@ final class AppModel {
         let restored = combineDraft(pending.draft, with: composerText)
         if pending.sessionID == selectedSessionID {
             composerText = restored
+            if !pending.images.isEmpty { composerImages = pending.images }
         }
         if let target = pending.draftTarget {
             setDraftText(restored, for: target)
@@ -3316,19 +3387,27 @@ final class AppModel {
         }
         let sessionID = sourceSessionID
         let promptID = UUID().uuidString
+        // 图片附件只随用户正文（fixedMessage 为批准卡等固定文本，不带附件）；
+        // 与正文同一恢复模式：发送时清空，失败经 pendingPrompt 一起恢复。
+        let attachments: [ComposerImageAttachment] = fixedMessage == nil ? composerImages : []
         pendingPrompt = PendingPromptDraft(
             sessionID: sessionID,
             promptID: promptID,
             draft: fixedMessage ?? draft,
-            draftTarget: draftTarget
+            draftTarget: draftTarget,
+            images: attachments
         )
         if fixedMessage == nil { composerText = "" }
+        if fixedMessage == nil { clearComposerImageAttachments() }
         optimisticUserMessage = message
         do {
             var params: [String: JSONValue] = [
                 "message": .string(message),
                 "promptId": .string(promptID),
             ]
+            if !attachments.isEmpty {
+                params["images"] = .array(attachments.map(\.requestPayload))
+            }
             if let pathAction {
                 params["pathAction"] = .object([
                     "kind": .string(pathAction.kind.rawValue),
@@ -4161,7 +4240,8 @@ final class AppModel {
                payload.details?["repairable"]?.boolValue == true {
                 presentSessionRepairPrompt(
                     sessionID: id,
-                    reason: payload.details?["repairReason"]?.stringValue ?? "尾部记录不完整"
+                    reason: payload.details?["repairReason"]?.stringValue ?? "尾部记录不完整",
+                    trimmedContent: payload.details?["trimmedContent"]?.stringValue
                 )
             }
             if presentFailure {
@@ -4320,6 +4400,7 @@ final class AppModel {
         modelSettings.models = []
         modelSettings.thinkingLevels = []
         availableCommands = []
+        clearComposerImageAttachments()
         pendingPrompt = nil
         currentDraftTarget = nil
         composerText = ""
@@ -4864,6 +4945,7 @@ final class AppModel {
         let nextDraft = deferred ?? composerText
         restored = combineDraft(pendingPrompt.draft, with: nextDraft)
         updateComposerText(restored)
+        if !pendingPrompt.images.isEmpty { composerImages = pendingPrompt.images }
         self.pendingPrompt = nil
         optimisticUserMessage = nil
     }

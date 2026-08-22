@@ -126,6 +126,53 @@ function optionalString(params: Record<string, unknown>, key: string): string | 
   return value;
 }
 
+/** Prompt 图片附件合同（0.0.20）：与 Pi SDK `ImageContent` 结构一致，
+ *  经 `session.prompt` 的 `images` 与 `session.steer` 的 `images` 传递。 */
+export interface PromptImageInput {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
+const MAX_PROMPT_IMAGES = 8;
+const MAX_PROMPT_IMAGE_BASE64_LENGTH = 7_000_000;
+
+function validatePromptImages(params: Record<string, unknown>, key: string): void {
+  const value = params[key];
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PROMPT_IMAGES) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      `Expected params.${key} to be a non-empty array containing at most ${MAX_PROMPT_IMAGES} images`,
+    );
+  }
+  for (const item of value) {
+    if (
+      !isRecord(item)
+      || item.type !== "image"
+      || typeof item.data !== "string"
+      || typeof item.mimeType !== "string"
+    ) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        `Expected every params.${key} item to be { type: "image", data, mimeType }`,
+      );
+    }
+    if (item.data.length === 0 || item.data.length > MAX_PROMPT_IMAGE_BASE64_LENGTH) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        `Expected every params.${key} item data to be base64 of 1..${MAX_PROMPT_IMAGE_BASE64_LENGTH} characters`,
+      );
+    }
+    if (!/^image\/[a-z0-9.+-]+$/i.test(item.mimeType) || item.mimeType.length > 64) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        `Expected every params.${key} item mimeType to be an image/* MIME type`,
+      );
+    }
+  }
+}
+
 function requireStringArray(
   params: Record<string, unknown>,
   key: string,
@@ -474,6 +521,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if (promptId.length > 128) {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");
       }
+      validatePromptImages(params, "images");
       if (params.streamingBehavior !== undefined) {
         throw new ProtocolValidationError(
           "INVALID_PARAMS",
@@ -523,6 +571,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
           "Expected steer and run identifiers to be at most 128 characters",
         );
       }
+      validatePromptImages(params, "images");
       return;
     }
     case "modelAuth.start": {
