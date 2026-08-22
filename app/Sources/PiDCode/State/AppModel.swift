@@ -142,6 +142,8 @@ final class AppModel {
     let modelSettings = ModelSettingsState()
     var availableCommands: [CommandDescriptor] = []
     let search = SearchModel()
+    /// HTML 预览联网策略（ADR 0026）：默认阻断、尝试询问、“本次允许”会话内有效。
+    let htmlPreview = HTMLPreviewState()
     let selfBuild = SelfBuildModel()
     let resources = ResourcesModel()
     let modelProviders = ModelProvidersModel()
@@ -1202,13 +1204,15 @@ final class AppModel {
         workspaceFileTabs[index].viewMode = mode
     }
 
-    /// 从当前快照建立编辑缓冲区；仅限已读取、授权有效的 Markdown 文件。
+    /// 从当前快照建立编辑缓冲区；仅限已读取、授权有效的 Markdown / HTML 文件
+    /// （Markdown 由用户显式进入，HTML 打开即建立——ADR 0026 决定 1、5）。
     func startEditingWorkspaceFile(path: String) {
         guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }),
               workspaceFileTabs[index].draft == nil,
               let snapshot = workspaceFileTabs[index].snapshot,
               workspaceFileTabs[index].authorizationAvailable,
-              WorkspaceFileEditPolicy.isEditableMarkdown(path: path) else { return }
+              WorkspaceFileEditPolicy.isEditableMarkdown(path: path)
+                  || WorkspaceFileEditPolicy.isEditableHTML(path: path) else { return }
         workspaceFileTabs[index].draft = WorkspaceFileDraft(
             text: snapshot.text,
             baseText: snapshot.text,
@@ -1476,6 +1480,10 @@ final class AppModel {
             workspaceFileTabs[currentIndex].errorMessage = nil
             workspaceFileTabs[currentIndex].isLoading = false
             workspaceFileLoadIDs.removeValue(forKey: path)
+            // HTML 打开即进入编辑缓冲区（ADR 0026 决定 5：双栏形态，无切换）。
+            if WorkspaceFileEditPolicy.isEditableHTML(path: path) {
+                startEditingWorkspaceFile(path: path)
+            }
         } catch {
             guard workspaceFileLoadIDs[path] == loadID,
                   let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }) else {

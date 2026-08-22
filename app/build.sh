@@ -30,6 +30,13 @@ require_file() {
     fi
 }
 
+require_directory() {
+    if [[ ! -d "$1" ]]; then
+        echo "error: required directory is missing: $1" >&2
+        exit 1
+    fi
+}
+
 require_file "${ROOT_DIR}/app/Info.plist"
 require_file "${APP_ICON_FILE}"
 require_file "${HOST_DIR}/package.json"
@@ -54,7 +61,7 @@ NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.17 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.18 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
@@ -119,6 +126,8 @@ printf '==> Building internal PiDCode release executable\n'
 SWIFT_BIN_DIR="$(cd "${ROOT_DIR}" && swift build -c release --show-bin-path)"
 require_file "${SWIFT_BIN_DIR}/PiDCode"
 require_file "${HOST_DIR}/dist/src/index.js"
+SWIFT_RESOURCE_BUNDLE="${SWIFT_BIN_DIR}/PiDCode_PiDCode.bundle"
+require_directory "${SWIFT_RESOURCE_BUNDLE}"
 
 printf '==> Assembling %s\n' "${APP_DIR}"
 rm -rf "${APP_DIR}"
@@ -129,6 +138,7 @@ chmod 755 "${MACOS_DIR}/D Code" "${RESOURCES_DIR}/runtime/node"
 ditto "${HOST_DIR}/dist/src" "${HOST_RESOURCES_DIR}/dist/src"
 ditto "${HOST_DIR}/package.json" "${HOST_RESOURCES_DIR}/package.json"
 ditto "${APP_ICON_FILE}" "${RESOURCES_DIR}/AppIcon.icns"
+ditto "${SWIFT_RESOURCE_BUNDLE}" "${RESOURCES_DIR}/PiDCode_PiDCode.bundle"
 ditto "${ROOT_DIR}/app/Info.plist" "${CONTENTS_DIR}/Info.plist"
 ditto "${D_CODE_LICENSE_FILE}" "${LEGAL_RESOURCES_DIR}/D-Code-LICENSE.txt"
 ditto "${THIRD_PARTY_NOTICES_FILE}" "${LEGAL_RESOURCES_DIR}/THIRD-PARTY-NOTICES.md"

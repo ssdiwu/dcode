@@ -35,6 +35,8 @@ struct WorkspaceContentView<ConversationContent: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(saveShortcutAnchor)
+        .onAppear { syncHTMLPreviewSelection() }
+        .onChange(of: model.workspaceTabSelection) { syncHTMLPreviewSelection() }
         .confirmationDialog(
             "有未保存的修改",
             isPresented: Binding(
@@ -88,6 +90,11 @@ struct WorkspaceContentView<ConversationContent: View>: View {
             .disabled(!model.canSaveSelectedWorkspaceFileDraft)
             .accessibilityHidden(true)
         }
+    }
+
+    /// 切换文件 / 回到对话：联网放行与询问不跨文件延续（ADR 0026 决定 3）。
+    private func syncHTMLPreviewSelection() {
+        model.htmlPreview.handleFileSelectionChanged(selectedPath: model.selectedWorkspaceFilePath)
     }
 }
 
@@ -169,6 +176,10 @@ private struct WorkspaceFilePreviewView: View {
         WorkspaceFileEditPolicy.isEditableMarkdown(path: tab.path)
     }
 
+    private var isHTML: Bool {
+        WorkspaceFileEditPolicy.isEditableHTML(path: tab.path)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             fileHeader
@@ -190,7 +201,14 @@ private struct WorkspaceFilePreviewView: View {
                 }
                 if let draft = tab.draft {
                     draftNotices(draft)
-                    if isMarkdown, tab.viewMode == .preview {
+                    if isHTML {
+                        // HTML 打开即“编辑缓冲区 | 即时预览”双栏（ADR 0026 决定 5）。
+                        WorkspaceHTMLSplitView(
+                            path: tab.path,
+                            sourceFolderPath: tab.sourceFolderPath,
+                            draft: draft
+                        )
+                    } else if isMarkdown, tab.viewMode == .preview {
                         markdownPreview(source: draft.text, draft: draft)
                     } else {
                         WorkspaceFileEditorView(path: tab.path, draft: draft)
@@ -306,7 +324,7 @@ private struct WorkspaceFilePreviewView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(draft.isSaving)
-            } else if isMarkdown, tab.authorizationAvailable {
+            } else if isMarkdown || isHTML, tab.authorizationAvailable {
                 Button("编辑") {
                     model.startEditingWorkspaceFile(path: tab.path)
                 }
@@ -425,6 +443,71 @@ private struct WorkspaceMarkdownPreviewView: View {
             guard !Task.isCancelled else { return }
             document = MarkdownDocument.parse(source)
         }
+    }
+}
+
+/// HTML 双栏（ADR 0026 决定 5）：左“编辑缓冲区”右“即时预览”，窄窗口上下堆叠；
+/// 不做源码 / 预览切换，预览跟随缓冲区并按联网策略隔离。
+private struct WorkspaceHTMLSplitView: View {
+    @Environment(AppModel.self) private var model
+    let path: String
+    let sourceFolderPath: String
+    let draft: WorkspaceFileDraft
+
+    private var directoryPath: String {
+        (path as NSString).deletingLastPathComponent
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            if proxy.size.width >= 720 {
+                HStack(spacing: 0) {
+                    editorPane
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(width: 1)
+                        .accessibilityHidden(true)
+                    previewPane
+                }
+            } else {
+                VStack(spacing: 0) {
+                    editorPane
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 1)
+                        .accessibilityHidden(true)
+                    previewPane
+                }
+            }
+        }
+    }
+
+    private var editorPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: PiDCodeMetrics.spacingStandard) {
+                Label("编辑缓冲区", systemImage: "square.and.pencil")
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: PiDCodeMetrics.spacingGroup)
+                Text(draft.isDirty ? "未保存" : "与磁盘一致")
+                    .font(.caption)
+                    .foregroundStyle(draft.isDirty ? Color.accentColor : Color.secondary)
+            }
+            .padding(.horizontal, PiDCodeMetrics.spacingSection)
+            .frame(minHeight: 32)
+            WorkspaceFileEditorView(path: path, draft: draft)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var previewPane: some View {
+        WorkspaceHTMLPreviewView(
+            path: path,
+            draftText: draft.text,
+            sourceFolderPath: sourceFolderPath,
+            directoryPath: directoryPath,
+            isDirty: draft.isDirty
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

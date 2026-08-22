@@ -56,6 +56,12 @@ enum WorkspaceFileEditPolicy {
     static func isEditableMarkdown(path: String) -> Bool {
         URL(fileURLWithPath: path).pathExtension.lowercased() == "md"
     }
+
+    /// 0.0.18 HTML 编辑（ADR 0026 决定 1）：复用 0025 缓冲区与保存模型。
+    static func isEditableHTML(path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ext == "html" || ext == "htm"
+    }
 }
 
 enum WorkspaceTabSelection: Equatable, Sendable {
@@ -327,6 +333,53 @@ enum WorkspaceFileReader {
 
     static func standardizedAbsolutePath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    /// 预览资源读取（ADR 0026 决定 4）：与文本读取同一安全路径，但返回原始
+    /// 字节（CSS / 图片 / 字体等），不做二进制与 UTF-8 检测；上限由调用方给定。
+    static func readRawBytes(
+        path: String,
+        sourceFolderPath: String,
+        maximumBytes: Int
+    ) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            let root = standardizedAbsolutePath(sourceFolderPath)
+            let candidate = standardizedAbsolutePath(path)
+            guard let relativeComponents = relativeComponents(of: candidate, inside: root) else {
+                throw WorkspaceFileReaderError.outsideSourceFolder
+            }
+            let fileDescriptor = try securelyOpenFile(
+                rootPath: root,
+                relativeComponents: relativeComponents
+            )
+            defer { Darwin.close(fileDescriptor) }
+            var metadata = stat()
+            guard Darwin.fstat(fileDescriptor, &metadata) == 0 else {
+                throw WorkspaceFileReaderError.cannotRead
+            }
+            guard metadata.st_mode & S_IFMT == S_IFREG else {
+                throw WorkspaceFileReaderError.notRegularFile
+            }
+            guard metadata.st_size >= 0, metadata.st_size <= off_t(maximumBytes) else {
+                throw WorkspaceFileReaderError.fileTooLarge(maximumBytes: maximumBytes)
+            }
+            var data = Data()
+            data.reserveCapacity(Int(metadata.st_size))
+            var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+            while true {
+                let count = Darwin.read(fileDescriptor, &buffer, buffer.count)
+                if count == 0 { break }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw WorkspaceFileReaderError.cannotRead
+                }
+                guard data.count + count <= maximumBytes else {
+                    throw WorkspaceFileReaderError.fileTooLarge(maximumBytes: maximumBytes)
+                }
+                data.append(buffer, count: count)
+            }
+            return data
+        }.value
     }
 
     static func relativeComponents(of candidatePath: String, inside rootPath: String) -> [String]? {
