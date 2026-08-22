@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -135,37 +135,96 @@ export class ModelProvidersStore {
     return new ModelProvidersStore(join(agentDir, "models.json"));
   }
 
+  private queue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * 串行化本 Store 的全部读写（PiHost 内单例）：并发请求不会交错执行
+   * “读快照 → 合并 → 原子替换”，D Code 自身永远不做丢失更新的后写者。
+   * 外部写手（Pi CLI 直改 models.json）不参与该互斥，由写入前的内容 CAS 兜底。
+   */
+  private serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(operation, operation);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
   private async loadConfig(path = this.path): Promise<ModelConfigInstance> {
     return ModelConfig.load(path);
   }
 
-  private async readRawProviders(): Promise<
-    | { ok: true; providers: Map<string, RawProvider>; fingerprint: string | null }
-    | { ok: false; error: string }
-  > {
-    const fingerprint = await this.sourceFingerprint();
-    const config = await this.loadConfig();
-    const parseError = config.getError();
-    if (parseError) return { ok: false, error: parseError };
-    const providers = new Map<string, RawProvider>();
-    for (const id of config.getProviderIds()) {
-      const provider = config.getProvider(id);
-      if (provider !== undefined) providers.set(id, provider as unknown as RawProvider);
+  /** 同一 fd 上 fstat + 读全文：指纹与内容哈希来自同一份字节。 */
+  private async readSourceSnapshot(): Promise<{
+    bytes: Buffer | null;
+    fingerprint: string | null;
+    contentHash: string;
+  }> {
+    let handle: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      handle = await open(this.path, "r");
+      const info = await handle.stat();
+      const bytes = await handle.readFile();
+      return {
+        bytes,
+        fingerprint: `${info.mtimeMs}:${info.size}`,
+        contentHash: createHash("sha256").update(bytes).digest("hex"),
+      };
+    } catch {
+      return { bytes: null, fingerprint: null, contentHash: "(missing)" };
+    } finally {
+      await handle?.close();
     }
-    return { ok: true, providers, fingerprint };
   }
 
-  /** 源指纹（mtimeMs+size）：编辑期间被外部修改则拒绝写入，避免盲覆盖。 */
-  private async sourceFingerprint(): Promise<string | null> {
+  private async readRawProviders(): Promise<
+    | { ok: true; providers: Map<string, RawProvider>; fingerprint: string | null; contentHash: string; bytes: Buffer | null }
+    | { ok: false; error: string; contentHash: string; bytes: Buffer | null }
+  > {
+    // 解析基于读入内存的字节（写入临时副本交给 Pi 的 ModelConfig，保注释语义），
+    // 保证解析对象、指纹与 CAS 基准三者指向同一份内容。
+    const snapshot = await this.readSourceSnapshot();
+    const sourcePath = `${this.path}.parse-${randomUUID()}`;
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    await writeFile(sourcePath, snapshot.bytes ?? Buffer.from("{ \"providers\": {} }", "utf8"));
     try {
-      const info = await stat(this.path);
-      return `${info.mtimeMs}:${info.size}`;
-    } catch {
-      return null;
+      const config = await this.loadConfig(sourcePath);
+      const parseError = config.getError();
+      if (parseError) {
+        return { ok: false, error: parseError, contentHash: snapshot.contentHash, bytes: snapshot.bytes };
+      }
+      const providers = new Map<string, RawProvider>();
+      for (const id of config.getProviderIds()) {
+        const provider = config.getProvider(id);
+        if (provider !== undefined) providers.set(id, provider as unknown as RawProvider);
+      }
+      return { ok: true, providers, fingerprint: snapshot.fingerprint, contentHash: snapshot.contentHash, bytes: snapshot.bytes };
+    } finally {
+      await rm(sourcePath, { force: true });
     }
+  }
+
+  /**
+   * 写入前的内容 CAS：rename 前重读文件并比对内容 SHA-256，与进入临界区时
+   * 不一致即放弃写入。窗口从“整个编辑会话”缩到“校验与 rename 之间”；
+   * POSIX rename 不支持条件替换，跨进程的最后间隙是文件系统协作边界，如实保留。
+   */
+  private async sourceContentUnchanged(expectedContentHash: string): Promise<boolean> {
+    const snapshot = await this.readSourceSnapshot();
+    return snapshot.contentHash === expectedContentHash;
   }
 
   async list(): Promise<ProviderListResult> {
+    return this.serialized(() => this.listUnchecked());
+  }
+
+  async save(input: ProviderSaveInput): Promise<ProviderSaveResult> {
+    return this.serialized(() => this.saveUnchecked(input));
+  }
+
+  async remove(id: string): Promise<ProviderSaveResult> {
+    return this.serialized(() => this.removeUnchecked(id));
+  }
+
+  private async listUnchecked(): Promise<ProviderListResult> {
     const config = await this.loadConfig();
     const parseError = config.getError() ?? null;
     const providers: ProviderView[] = [];
@@ -209,7 +268,7 @@ export class ModelProvidersStore {
     };
   }
 
-  async save(input: ProviderSaveInput): Promise<ProviderSaveResult> {
+  private async saveUnchecked(input: ProviderSaveInput): Promise<ProviderSaveResult> {
     const errors: FieldError[] = [];
     const id = input.id?.trim() ?? "";
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
@@ -253,8 +312,8 @@ export class ModelProvidersStore {
       };
     }
 
-    const drifted = await this.sourceFingerprint();
-    if (drifted !== loaded.fingerprint) {
+    const drifted = await this.readSourceSnapshot();
+    if (drifted.fingerprint !== loaded.fingerprint) {
       return {
         ok: false,
         errors: [{ field: "models.json", message: "models.json 在编辑期间被外部修改，本次未写入；请重新加载后再试" }],
@@ -264,13 +323,13 @@ export class ModelProvidersStore {
     const nextProviders = new Map(loaded.providers);
     nextProviders.set(id, merged);
 
-    const write = await this.validateAndWrite(nextProviders);
+    const write = await this.validateAndWrite(nextProviders, loaded.contentHash);
     if (!write.ok) return { ok: false, errors: write.errors };
-    const fresh = await this.list();
+    const fresh = await this.listUnchecked();
     return { ok: true, providers: fresh.providers, parseError: fresh.parseError };
   }
 
-  async remove(id: string): Promise<ProviderSaveResult> {
+  private async removeUnchecked(id: string): Promise<ProviderSaveResult> {
     const loaded = await this.readRawProviders();
     if (!loaded.ok) {
       return {
@@ -278,8 +337,8 @@ export class ModelProvidersStore {
         errors: [{ field: "models.json", message: `当前 models.json 无法解析，拒绝写入：${loaded.error}` }],
       };
     }
-    const drifted = await this.sourceFingerprint();
-    if (drifted !== loaded.fingerprint) {
+    const drifted = await this.readSourceSnapshot();
+    if (drifted.fingerprint !== loaded.fingerprint) {
       return {
         ok: false,
         errors: [{ field: "models.json", message: "models.json 在编辑期间被外部修改，本次未写入；请重新加载后再试" }],
@@ -287,9 +346,9 @@ export class ModelProvidersStore {
     }
     const nextProviders = new Map(loaded.providers);
     nextProviders.delete(id);
-    const write = await this.validateAndWrite(nextProviders);
+    const write = await this.validateAndWrite(nextProviders, loaded.contentHash);
     if (!write.ok) return { ok: false, errors: write.errors };
-    const fresh = await this.list();
+    const fresh = await this.listUnchecked();
     return { ok: true, providers: fresh.providers, parseError: fresh.parseError };
   }
 
@@ -373,6 +432,7 @@ export class ModelProvidersStore {
 
   private async validateAndWrite(
     providers: Map<string, RawProvider>,
+    expectedContentHash: string,
   ): Promise<{ ok: true } | { ok: false; errors: FieldError[] }> {
     const document = {
       providers: Object.fromEntries([...providers.entries()].map(([id, value]) => [id, value])),
@@ -386,6 +446,13 @@ export class ModelProvidersStore {
       if (error) {
         await rm(temporary, { force: true });
         return { ok: false, errors: [{ field: "models.json", message: `Pi 拒绝该配置：${error}` }] };
+      }
+      if (!(await this.sourceContentUnchanged(expectedContentHash))) {
+        await rm(temporary, { force: true });
+        return {
+          ok: false,
+          errors: [{ field: "models.json", message: "models.json 在写入时被外部修改，本次未写入；请重新加载后再试" }],
+        };
       }
       await rename(temporary, this.path);
       return { ok: true };

@@ -1,25 +1,33 @@
-## [Unreleased]
+## [0.0.17] - 2026-08-22
 
 ### Added
 
+- Markdown 编辑缓冲区与安全保存（ADR 0025 / PRD 0018）：`.md` 文件标签提供 源码 / 预览 分段切换——预览默认渲染缓冲区文本而非磁盘事实（未保存时明确标注），源码态未进入编辑时保持 0.0.4 行号只读呈现（行定位请求优先源码态）、进入编辑后为等宽编辑器。保存（⌘S，作用于当前选中标签）走与读取同一套安全路径（逐级 `openat`、拒符号链接、限授权根）：同目录 `O_EXCL` 临时文件 → `fsync` → `renameat` 原子替换（精确保留原权限位）→ 目录 `fsync`；写入前重读磁盘校验内容 SHA-256 与基准一致，不匹配即冲突拒绝。磁盘冲突以冲突卡三选裁决（重新加载磁盘版 / 显式覆盖保存 / 继续编辑，继续编辑后普通保存仍被拒绝）；关闭有未保存修改的标签必须确认（保存并关闭 / 不保存 / 取消），“停止编辑”放弃修改同样确认；标签与标题栏常显脏标识，授权撤销后缓冲区保留可编辑但保存禁用；App 重启如实丢弃缓冲区，不建持久草稿。
 - `app/build.sh` 新增发布打包硬性检查：工作区不干净（`git status --porcelain` 非空）时拒绝构建，可用 `PI_DCODE_ALLOW_DIRTY_BUILD=1` 显式做本地调试构建（产物不得当作发布物分发）；`app/Info.plist`、`host/package.json`、`host/package-lock.json` 三处版本号不一致时拒绝构建，无绕过项。构建产物新增 Git revision / describe 与工作区干净状态记录；HEAD 不在对应 `v<version>` tag 上时打印警告。`AGENTS.md` 补充对应交付前提。
 
 ### Changed
 
 - 上下文圆环弹层对齐同类产品：主数字改为「已用 / 窗口」（如 `307k / 400k`）并保留剩余百分比；构成改为分段彩色条 + 图例一一对应（分项带 token 数与百分比）；新增压缩区——自动压缩阈值（按 Pi 语义：用量超过 窗口 − reserveTokens 时自动进行，缺省预留 16384，项目覆盖全局）与「手动压缩」动作（Pi 合同 `session.compact()`，会先中止当前操作；进行中沿用 0.0.15 的压缩状态呈现）。协议新增 `session.compactionInfo` / `session.compact`。
+- 压缩弹层修复跨会话状态：阈值改为每次打开弹层重新请求（此前首次载入后不再刷新，切换 Project 仍显示前一目录的项目覆盖阈值）；运行中不再禁用「手动压缩」——与 Host「先中止当前操作再压缩」语义一致，按钮在运行中明确标注后果。
+- `dcode_facts` 的 `changes.source` 判定改为生产值 `structured-tool-v1`（此前每条变更都被错误标注“来源非 D Code”）；project 归属匹配先解析符号链接再比较（对齐 Swift `ProjectSessionOwnershipResolver`，经符号链接打开的工作目录不再匹配失败）。Host 测试夹具改为 Swift 编码器真实字段形状（golden fixture）并新增符号链接归属用例。
 
 ### Docs
 
-- 校准 `v0.0.16` 前后的文档与实现现状：版本索引拆分 Source（源码标签）与 Acceptance（验收），补齐 `v0.0.7–v0.0.16` 的远端标签状态并记录已知缺口；架构与分层 README 补入 `0.0.14–0.0.16` 的主页 Composer、本机资源、自定义供应商、Self-build、验证证据等现实能力；已被 ADR 0018／0023 取代的"共享观察 / 按需写入""权限卡"等过期现状改写为历史基线记录，`0.0.15`／`0.0.16` PRD 中不成立的验收项重新取消勾选。
+- 校准 `v0.0.16` 前后的文档与实现现状：版本索引拆分 Source（源码标签）与 Acceptance（验收），补齐 `v0.0.7–v0.0.16` 的远端标签状态并记录已知缺口；架构与分层 README 补入 `0.0.14–v0.0.16` 的主页 Composer、本机资源、自定义供应商、Self-build、验证证据等现实能力；已被 ADR 0018／0023 取代的"共享观察 / 按需写入""权限卡"等过期现状改写为历史基线记录，`0.0.15`／`0.0.16` PRD 中不成立的验收项重新取消勾选。
+- 新增 ADR 0025（Markdown 编辑缓冲区与原子保存边界）与 PRD 0018（0.0.17 范围冻结）；版本演进、设计系统 0002（§7.4 文件标签编辑语义）与版本实施方案索引同步，已知缺口清单按 0.0.17 收口结果刷新。
 
 ### Fixed
 
-- 自定义供应商设置不再回传或接受整体替换 `modelOverrides.<model>.headers`：此前该字段随 Provider 快照整体序列化进入 Swift 高级 JSON 编辑器，其中若含 token 正文即违反凭据脱敏合同；Host 现在始终原样保留既有 `modelOverrides`，界面移除对应编辑框。
-- `models.json` 写入前核对源文件指纹（mtime + size），编辑期间被外部修改时拒绝写入并提示重新加载，避免并发覆盖外部编辑。
+- 自定义供应商设置不再回传或接受整体替换 `modelOverrides.<model>.headers`：此前该字段随 Provider 快照整体序列化进入 Swift 高级 JSON 编辑器，其中若含 token 正文即违反凭据脱敏合同；Host 现在始终原样保留既有 `modelOverrides`，界面移除对应编辑框。0.0.17 补 Host 嵌套脱敏断言（`modelOverrides.m1.headers.X-Token` 不出现在 `list()` 视图）。
+- `models.json` 写入收紧并发边界：Store 内全部读写串行化（并发 save / remove / list 不交错，D Code 自身永不成为丢失更新的后写者），rename 前重读文件比对内容 SHA-256（解析基于读入内存的字节，解析对象 / 指纹 / 基准同源）——窗口从“整个编辑会话”缩到“校验与 rename 之间”；POSIX rename 无条件替换原语，跨进程最后间隙为文件系统协作边界，如实保留。并发写用例锁定。
+- Composer `+` 的 Prompt 模板参数提示贯通：`resources.list` 的 `commands` 投影携带 `argumentHint`（扩展命令与 Skill 为 null），Swift 侧带提示的模板预填为 `/<name> <hint>` 占位——此前 hint 在投影中丢失，只插入 `/<name> `（0.0.16 审计 P1）。
+- 删除自定义供应商后联动刷新 Model Settings 目录快照：此前被删 Provider 可在缓存中继续显示到下一次手动刷新（0.0.16 审计 P1）。
+- 搜索正文命中打开加回归钉子并删除死代码：`openSearchResult` 断言以 writable + `expectedEntryId` 打开且不携带 `expectedEntryDigest`（Protocol v1 禁止该组合）；从未被生产调用的 `SessionOpenRequestPlan.searchResult(_:)` 移除（其 readOnly 形状曾误导审计）。
 - 搜索正文命中消息现在可以正常打开：此前以可写身份打开会话时仍附带 `expectedEntryDigest`，被 Protocol v1 明确拒绝该参数组合（可写打开的新鲜度已由租约与静默窗口保证），导致命中消息实际无法打开。
 - `dcode_facts` 的 `evidence` / `project` facts 改读 Swift 侧真实存储合同：验证证据账本按 `{version, records}` 与 `ok`/`failure`/`unknown` 三态退出码读取，项目登记改读 `projects-v1.json` 的 `{version, projects}`；此前读取的文件名、文档形状与生产不一致，导致这两类事实在真实环境下始终不可用，此前测试因夹具自造格式而误判通过。
-- `host/package-lock.json` 根包版本回补到 `0.0.16`，与 `host/package.json` 一致。
+- `host/package-lock.json` 根包版本回补并随版本提升保持与 `host/package.json` 一致。
 - 会话前草稿（主页输入框）不再显示上下文余量圆环：此前圆环以禁用的空环形态常驻，但草稿尚无任何运行上下文；会话创建、存在真实上下文后才显示。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.17`。
 
 ## [0.0.16] - 2026-08-22
 

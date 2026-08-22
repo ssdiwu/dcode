@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -38,6 +38,15 @@ async function readJsonFile(path: string): Promise<unknown | null> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 目录可能已被删除：符号链接解析失败时保留原样，匹配结果如实。 */
+async function resolveRealPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
 }
 
 export function createDCodeFactsExtension(
@@ -121,7 +130,8 @@ async function changeFactsSummary(sessionId: string, factsDir: string): Promise<
     const additions = typeof record.additions === "number" ? record.additions : 0;
     const deletions = typeof record.deletions === "number" ? record.deletions : 0;
     const line = typeof record.firstChangedLine === "number" ? `，首次变更行 ${record.firstChangedLine}` : "";
-    const source = record.source === "dcode" ? "" : "，来源非 D Code";
+    // Swift 账本合同：source 恒为 "structured-tool-v1"（SessionChangeModels.swift 校验）。
+    const source = record.source === "structured-tool-v1" ? "" : "，来源非 D Code";
     return `- ${file}（+${additions} −${deletions}${line}${source}）`;
   });
   const more = mine.length > 30 ? `\n…共 ${mine.length} 条，仅显示最近 30 条` : "";
@@ -195,12 +205,21 @@ async function projectFactsSummary(context: DCodeFactsContext, factsDir: string)
   if (list === null) {
     return "D Code 项目登记不可用（文件缺失或损坏）。";
   }
-  const owned = list
-    .map((project) => project as ProjectLike)
-    .filter((project) =>
-      Array.isArray(project.sourceFolders)
-        && project.sourceFolders.some((folder) => isRecord(folder) && folder.path === cwd),
+  // 与 Swift ProjectSessionOwnershipResolver 对齐：解析符号链接后再比较，
+  // 否则经符号链接打开的工作目录（如 /tmp → /private/tmp）会匹配失败。
+  const normalizedCwd = await resolveRealPath(cwd);
+  const owned: ProjectLike[] = [];
+  for (const project of list.map((entry) => entry as ProjectLike)) {
+    const folders = Array.isArray(project.sourceFolders)
+      ? project.sourceFolders.filter(isRecord)
+      : [];
+    const matches = await Promise.all(
+      folders.map(async (folder) =>
+        typeof folder.path === "string"
+          && await resolveRealPath(folder.path) === normalizedCwd),
     );
+    if (matches.some((matched) => matched)) owned.push(project);
+  }
   if (owned.length === 0) {
     return `当前工作目录 ${cwd} 未归入任何 D Code 项目。`;
   }

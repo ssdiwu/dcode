@@ -26,7 +26,10 @@ test("model providers list sanitizes secrets and tolerates comments", async () =
             "headers": { "X-Org": "org-token" },
             "models": [
               { "id": "m1", "name": "M1", "reasoning": true, "contextWindow": 128000 }
-            ]
+            ],
+            "modelOverrides": {
+              "m1": { "headers": { "X-Model-Token": "model-token-secret" } }
+            }
           }
         }
       }
@@ -39,8 +42,14 @@ test("model providers list sanitizes secrets and tolerates comments", async () =
     assert.equal(provider.authMode, "apiKey");
     assert.equal(provider.authConfigured, true);
     assert.deepEqual(provider.headerKeys, ["X-Org"]);
+    assert.equal(provider.modelOverridesJson, null, "modelOverrides 恒不回传（可嵌套凭据）");
     assert.equal(JSON.stringify(provider).includes("sk-secret-value"), false, "凭据正文不得进入视图");
     assert.equal(JSON.stringify(provider).includes("org-token"), false, "header 值不得进入视图");
+    assert.equal(
+      JSON.stringify(provider).includes("model-token-secret"),
+      false,
+      "modelOverrides.<model>.headers 的值正文不得进入视图（0.0.16 审计 P1）",
+    );
     assert.equal(provider.models[0]!.id, "m1");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -208,6 +217,31 @@ test("compaction info merges project over global and falls back to defaults", as
       () => assert.fail("无打开会话时必须报错"),
       (error: { code?: string }) => assert.notEqual(error.code, undefined),
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model providers serialize concurrent writes so no update is lost", async () => {
+  const { store, root } = await makeStore();
+  try {
+    await writeFile(store.path, JSON.stringify({
+      providers: { base: { name: "Base", models: [{ id: "a" }] } },
+    }));
+
+    // 并发保存 / 删除：串行化保证每次操作都基于最新文件合并，不出现交错或丢失更新。
+    const operations = await Promise.all([
+      store.save({ id: "p1", name: "One", models: [{ id: "m1" }] }),
+      store.save({ id: "p2", name: "Two", models: [{ id: "m2" }] }),
+      store.save({ id: "p1", name: "One Prime", models: [{ id: "m1" }, { id: "m1b" }] }),
+      store.remove("base"),
+    ]);
+    for (const result of operations) assert.equal(result.ok, true, JSON.stringify(result));
+
+    const raw = JSON.parse(await readFile(store.path, "utf8"));
+    assert.deepEqual(Object.keys(raw.providers).sort(), ["p1", "p2"]);
+    assert.equal(raw.providers.p1.name, "One Prime", "后写合并胜出且不丢其他结果");
+    assert.equal(raw.providers.p1.models.length, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -258,7 +258,7 @@ struct ComposerView: View {
 
     private func resourceInvocationButton(_ command: ResourceCommandEntry) -> some View {
         Button {
-            model.insertComposerReference("/\(command.name) ")
+            model.insertComposerReference(command.composerInvocationText)
             focused = true
         } label: {
             HStack {
@@ -886,13 +886,12 @@ struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Button("手动压缩…") {
+            Button(model.isStreaming ? "手动压缩（将中止当前运行）…" : "手动压缩…") {
                 Task { await model.compactSession() }
             }
             .controlSize(.small)
             .disabled(
-                model.isStreaming
-                    || model.hostState?.isCompacting == true
+                model.hostState?.isCompacting == true
                     || !model.canWrite
             )
             .help("立即压缩当前会话上下文（Pi 会先中止当前操作；进行中会显示压缩状态）")

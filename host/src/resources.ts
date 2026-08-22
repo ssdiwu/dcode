@@ -49,6 +49,8 @@ export interface CommandEntry {
   name: string;
   description: string | null;
   source: string;
+  /** Prompt 模板的参数提示（0.0.17：随 commands 投影带入 Composer 预填）；扩展命令与 Skill 为 null。 */
+  argumentHint: string | null;
 }
 
 export interface ResourceDiagnosticEntry {
@@ -163,17 +165,20 @@ export function collectResourcesSnapshot(options: {
         name: command.name,
         description: command.description ?? null,
         source: sourceLabel(extension.sourceInfo),
+        argumentHint: null,
       })),
     ),
     ...prompts.map((prompt) => ({
       name: prompt.name,
       description: prompt.description,
       source: "prompt",
+      argumentHint: prompt.argumentHint,
     })),
     ...skills.map((skill) => ({
       name: `skill:${skill.name}`,
       description: skill.description,
       source: "skill",
+      argumentHint: null,
     })),
   ];
 

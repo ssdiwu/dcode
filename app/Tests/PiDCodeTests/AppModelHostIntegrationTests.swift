@@ -365,6 +365,47 @@ final class SessionTakeoverIntegrationTests: XCTestCase {
     }
 }
 
+// MARK: - 搜索正文命中打开
+
+@MainActor
+final class SearchOpenIntegrationTests: XCTestCase {
+    /// 0.0.16 审计 P1 回归钉子：打开即接管（ADR 0018）下搜索命中以可写打开，
+    /// 但 Protocol v1 禁止 writable 携带 expectedEntryDigest——新鲜度由租约与
+    /// 静默窗口保证，搜索结果即使带 digest 也不得进入请求参数。
+    func testOpenSearchResultSendsWritableOpenWithoutDigest() async throws {
+        let harness = HostTestHarness()
+        await harness.installDefaultScript()
+        await harness.model.start()
+
+        let result = SessionSearchResult(
+            sessionId: "session-1",
+            entryId: "message-7",
+            entryDigest: "v1:" + String(repeating: "a", count: 64),
+            matchKind: "message",
+            role: "assistant",
+            title: "搜索设计",
+            cwd: "/work/dcode",
+            modified: "2026-08-11T08:00:00.000Z",
+            snippet: "项目搜索应该立即出现结果",
+            matchCount: 1
+        )
+        harness.model.search.presented = true
+        harness.model.search.results = [result]
+        harness.model.search.selection = 0
+        harness.model.search.resultGeneration = harness.model.search.generation
+
+        await harness.model.openSearchResult(result)
+
+        let openRequests = await harness.client.requests.filter { $0.method == "session.open" }
+        XCTAssertEqual(openRequests.count, 1, "搜索命中必须发起一次打开")
+        let params = openRequests[0].params
+        XCTAssertEqual(params["mode"], .string("writable"), "打开即接管：搜索命中以可写打开")
+        XCTAssertEqual(params["writeIntent"], .bool(true))
+        XCTAssertEqual(params["expectedEntryId"], .string("message-7"))
+        XCTAssertNil(params["expectedEntryDigest"], "协议禁止 writable 携带 expectedEntryDigest")
+    }
+}
+
 // MARK: - 主页草稿模型补载
 
 @MainActor

@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -7,6 +8,8 @@ struct WorkspaceFileSnapshot: Equatable, Sendable {
     let relativePath: String
     let text: String
     let byteCount: Int
+    /// 磁盘内容 SHA-256（十六进制）；保存前的冲突校验以它为基准（ADR 0025）。
+    let contentDigest: String
     let loadedAt: Date
 }
 
@@ -20,9 +23,38 @@ struct WorkspaceFileTab: Identifiable, Equatable, Sendable {
     var errorMessage: String?
     var isLoading: Bool
     var authorizationAvailable: Bool
+    /// 编辑缓冲区（ADR 0025）：仅在用户显式进入编辑后存在；nil 表示只读呈现。
+    var draft: WorkspaceFileDraft?
+    var viewMode: WorkspaceFileViewMode = .preview
 
     var title: String {
         URL(fileURLWithPath: path).lastPathComponent
+    }
+}
+
+enum WorkspaceFileViewMode: Equatable, Sendable {
+    case preview
+    case source
+}
+
+/// Markdown 编辑缓冲区：内存态、身份随标签（ADR 0025 决定 3）。
+struct WorkspaceFileDraft: Equatable, Sendable {
+    var text: String
+    /// 上次加载或保存成功时的文本，`text` 与它的差异即未保存修改。
+    var baseText: String
+    /// 上次加载或保存成功时的磁盘内容 SHA-256，保存前据此校验磁盘现状。
+    var baseDigest: String
+    var isSaving: Bool = false
+    var isConflicted: Bool = false
+    var failureMessage: String?
+
+    var isDirty: Bool { text != baseText }
+}
+
+enum WorkspaceFileEditPolicy {
+    /// 0.0.17 编辑范围仅限 Markdown（ADR 0025 决定 2）；通用代码编辑由路线图排除。
+    static func isEditableMarkdown(path: String) -> Bool {
+        URL(fileURLWithPath: path).pathExtension.lowercased() == "md"
     }
 }
 
@@ -84,6 +116,98 @@ enum WorkspaceFileAuthorization {
     }
 }
 
+enum WorkspaceFileDigest {
+    static func sha256Hex(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// 共享的安全路径遍历（ADR 0025 决定 1）：读取与写入走同一套从 `/` 逐级
+/// `openat`、全程 `O_NOFOLLOW` 的实现，符号链接与越出授权根对两条路径同样失败关闭。
+enum WorkspaceFileSecurePathError: Error, Equatable, Sendable {
+    case outsideSourceFolder
+    case symbolicLink
+    case notRegularFile
+    case cannotOpen
+}
+
+enum WorkspaceFileSecurePath {
+    /// 逐级打开到 rootPath，再逐级打开 relativeComponents（全部必须存在且为目录），
+    /// 返回最终目录描述符；调用方负责 `close`。任一环节失败即关闭已打开的描述符。
+    static func openParentDirectory(rootPath: String, relativeComponents: [String]) throws -> Int32 {
+        var directoryDescriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directoryDescriptor >= 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
+        do {
+            let rootComponents = URL(fileURLWithPath: rootPath).standardizedFileURL.pathComponents
+                .filter { $0 != "/" }
+            for component in rootComponents {
+                directoryDescriptor = try openNext(component, from: directoryDescriptor)
+            }
+            for component in relativeComponents {
+                directoryDescriptor = try openNext(component, from: directoryDescriptor)
+            }
+            return directoryDescriptor
+        } catch {
+            Darwin.close(directoryDescriptor)
+            throw error
+        }
+    }
+
+    /// 在目录内以 `O_NOFOLLOW` 只读打开既有普通文件；不存在返回 nil，
+    /// 符号链接与目录冒充按 `WorkspaceFileSecurePathError` 分类。
+    static func openExistingFile(directoryDescriptor: Int32, filename: String) throws -> Int32? {
+        let fileDescriptor = Darwin.openat(
+            directoryDescriptor,
+            filename,
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        )
+        if fileDescriptor >= 0 { return fileDescriptor }
+        if errno == ENOENT { return nil }
+        throw classifyOpenError(
+            directoryDescriptor: directoryDescriptor,
+            component: filename,
+            openError: errno
+        )
+    }
+
+    static func classifyOpenError(
+        directoryDescriptor: Int32,
+        component: String,
+        openError: Int32
+    ) -> WorkspaceFileSecurePathError {
+        if openError == ELOOP { return .symbolicLink }
+        if isSymbolicLink(directoryDescriptor, component) { return .symbolicLink }
+        return .cannotOpen
+    }
+
+    private static func isSymbolicLink(_ directoryDescriptor: Int32, _ component: String) -> Bool {
+        var metadata = stat()
+        return Darwin.fstatat(
+            directoryDescriptor,
+            component,
+            &metadata,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0 && metadata.st_mode & S_IFMT == S_IFLNK
+    }
+
+    private static func openNext(_ component: String, from parent: Int32) throws -> Int32 {
+        let next = Darwin.openat(
+            parent,
+            component,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard next >= 0 else {
+            throw classifyOpenError(
+                directoryDescriptor: parent,
+                component: component,
+                openError: errno
+            )
+        }
+        Darwin.close(parent)
+        return next
+    }
+}
+
 enum WorkspaceFileReaderError: LocalizedError, Equatable {
     case outsideSourceFolder
     case symbolicLink
@@ -115,6 +239,15 @@ enum WorkspaceFileReaderError: LocalizedError, Equatable {
             "无法打开该文件。"
         case .cannotRead:
             "无法完整读取该文件。"
+        }
+    }
+
+    static func from(_ error: WorkspaceFileSecurePathError) -> WorkspaceFileReaderError {
+        switch error {
+        case .outsideSourceFolder: .outsideSourceFolder
+        case .symbolicLink: .symbolicLink
+        case .notRegularFile: .notRegularFile
+        case .cannotOpen: .cannotOpen
         }
     }
 }
@@ -186,6 +319,7 @@ enum WorkspaceFileReader {
                 relativePath: relativeComponents.joined(separator: "/"),
                 text: text,
                 byteCount: data.count,
+                contentDigest: WorkspaceFileDigest.sha256Hex(of: data),
                 loadedAt: now()
             )
         }.value
@@ -205,94 +339,41 @@ enum WorkspaceFileReader {
         return Array(candidateComponents.dropFirst(rootComponents.count))
     }
 
+    /// 两次 fstat 是否指向同一文件（未被替换）。
+    static func areStableInodes(_ before: stat, _ after: stat) -> Bool {
+        before.st_dev == after.st_dev
+            && before.st_ino == after.st_ino
+            && before.st_size == after.st_size
+    }
+
     private static func securelyOpenFile(
         rootPath: String,
         relativeComponents: [String]
     ) throws -> Int32 {
-        var directoryDescriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard directoryDescriptor >= 0 else { throw WorkspaceFileReaderError.cannotOpen }
-
+        guard let filename = relativeComponents.last else {
+            throw WorkspaceFileReaderError.notRegularFile
+        }
         do {
-            let rootComponents = URL(fileURLWithPath: rootPath).standardizedFileURL.pathComponents
-                .filter { $0 != "/" }
-            for component in rootComponents {
-                let next = Darwin.openat(
-                    directoryDescriptor,
-                    component,
-                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-                )
-                if next < 0 {
-                    let openError = errno
-                    throw classifiedOpenError(
-                        directoryDescriptor: directoryDescriptor,
-                        component: component,
-                        openError: openError
-                    )
-                }
-                Darwin.close(directoryDescriptor)
-                directoryDescriptor = next
-            }
-
-            for component in relativeComponents.dropLast() {
-                let next = Darwin.openat(
-                    directoryDescriptor,
-                    component,
-                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-                )
-                if next < 0 {
-                    let openError = errno
-                    throw classifiedOpenError(
-                        directoryDescriptor: directoryDescriptor,
-                        component: component,
-                        openError: openError
-                    )
-                }
-                Darwin.close(directoryDescriptor)
-                directoryDescriptor = next
-            }
-
-            guard let filename = relativeComponents.last else {
-                throw WorkspaceFileReaderError.notRegularFile
-            }
-            let fileDescriptor = Darwin.openat(
-                directoryDescriptor,
-                filename,
-                O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+            let directoryDescriptor = try WorkspaceFileSecurePath.openParentDirectory(
+                rootPath: rootPath,
+                relativeComponents: Array(relativeComponents.dropLast())
             )
-            if fileDescriptor < 0 {
-                let openError = errno
-                throw classifiedOpenError(
+            do {
+                guard let fileDescriptor = try WorkspaceFileSecurePath.openExistingFile(
                     directoryDescriptor: directoryDescriptor,
-                    component: filename,
-                    openError: openError
-                )
+                    filename: filename
+                ) else {
+                    throw WorkspaceFileSecurePathError.cannotOpen
+                }
+                Darwin.close(directoryDescriptor)
+                return fileDescriptor
+            } catch {
+                Darwin.close(directoryDescriptor)
+                throw error
             }
-            Darwin.close(directoryDescriptor)
-            directoryDescriptor = -1
-            return fileDescriptor
-        } catch {
-            if directoryDescriptor >= 0 { Darwin.close(directoryDescriptor) }
-            throw error
+        } catch let error as WorkspaceFileSecurePathError {
+            throw WorkspaceFileReaderError.from(error)
         }
-    }
-
-    private static func classifiedOpenError(
-        directoryDescriptor: Int32,
-        component: String,
-        openError: Int32
-    ) -> WorkspaceFileReaderError {
-        if openError == ELOOP { return .symbolicLink }
-        var metadata = stat()
-        if Darwin.fstatat(
-            directoryDescriptor,
-            component,
-            &metadata,
-            AT_SYMLINK_NOFOLLOW
-        ) == 0,
-           metadata.st_mode & S_IFMT == S_IFLNK {
-            return .symbolicLink
-        }
-        return .cannotOpen
     }
 
     private static func stable(_ before: stat, _ after: stat) -> Bool {

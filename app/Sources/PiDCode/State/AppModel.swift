@@ -1172,7 +1172,162 @@ final class AppModel {
         workspaceTabSelection = .file(path)
     }
 
+    // MARK: - Markdown 编辑缓冲区（ADR 0025）
+
+    /// 等待关闭确认的脏标签；非 nil 时界面弹“保存并关闭 / 不保存 / 取消”。
+    var pendingWorkspaceFileClose: String?
+    /// 等待确认的“放弃修改”目标标签。
+    var pendingWorkspaceFileDiscard: String?
+
+    var selectedWorkspaceFilePath: String? {
+        if case let .file(path) = workspaceTabSelection { return path }
+        return nil
+    }
+
+    var canSaveSelectedWorkspaceFileDraft: Bool {
+        guard let path = selectedWorkspaceFilePath,
+              let tab = workspaceFileTabs.first(where: { $0.path == path }),
+              let draft = tab.draft else { return false }
+        return tab.authorizationAvailable && draft.isDirty && !draft.isSaving
+    }
+
+    /// 确认弹层之后真正执行放弃（与直接调用 discardWorkspaceFileDraft 区分入口）。
+    func discardAllPendingWorkspaceFileDraft() {
+        guard let path = pendingWorkspaceFileDiscard else { return }
+        discardWorkspaceFileDraft(path: path)
+    }
+
+    func setWorkspaceFileViewMode(path: String, mode: WorkspaceFileViewMode) {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }) else { return }
+        workspaceFileTabs[index].viewMode = mode
+    }
+
+    /// 从当前快照建立编辑缓冲区；仅限已读取、授权有效的 Markdown 文件。
+    func startEditingWorkspaceFile(path: String) {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+              workspaceFileTabs[index].draft == nil,
+              let snapshot = workspaceFileTabs[index].snapshot,
+              workspaceFileTabs[index].authorizationAvailable,
+              WorkspaceFileEditPolicy.isEditableMarkdown(path: path) else { return }
+        workspaceFileTabs[index].draft = WorkspaceFileDraft(
+            text: snapshot.text,
+            baseText: snapshot.text,
+            baseDigest: snapshot.contentDigest
+        )
+    }
+
+    func updateWorkspaceFileDraft(path: String, text: String) {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }) else { return }
+        workspaceFileTabs[index].draft?.text = text
+        workspaceFileTabs[index].draft?.failureMessage = nil
+    }
+
+    /// 保存缓冲区；`force` 为冲突态用户显式选择覆盖（跳过基准比对，仍不创建新文件）。
+    @discardableResult
+    func saveWorkspaceFileDraft(path: String, force: Bool = false) async -> Bool {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+              var draft = workspaceFileTabs[index].draft,
+              !draft.isSaving else { return false }
+        guard workspaceFileTabs[index].authorizationAvailable else {
+            draft.failureMessage = "来源授权已移除，无法保存；缓冲区仍保留在内存中。"
+            workspaceFileTabs[index].draft = draft
+            return false
+        }
+        let root = workspaceFileTabs[index].sourceFolderPath
+        draft.isSaving = true
+        draft.failureMessage = nil
+        workspaceFileTabs[index].draft = draft
+        defer {
+            if let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }) {
+                workspaceFileTabs[currentIndex].draft?.isSaving = false
+            }
+        }
+        do {
+            let snapshot = try await WorkspaceFileWriter.save(
+                path: path,
+                sourceFolderPath: root,
+                text: draft.text,
+                expectedBaseDigest: force ? nil : draft.baseDigest
+            )
+            guard let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+                  var currentDraft = workspaceFileTabs[currentIndex].draft else { return false }
+            workspaceFileTabs[currentIndex].snapshot = snapshot
+            // 保存的是发起时的文本；期间的新输入仍以 dirty 呈现，不吞修改。
+            currentDraft.baseText = snapshot.text
+            currentDraft.baseDigest = snapshot.contentDigest
+            currentDraft.isConflicted = false
+            currentDraft.failureMessage = nil
+            workspaceFileTabs[currentIndex].draft = currentDraft
+            return true
+        } catch {
+            guard let currentIndex = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+                  var currentDraft = workspaceFileTabs[currentIndex].draft else { return false }
+            if case WorkspaceFileWriterError.conflict = error {
+                currentDraft.isConflicted = true
+            }
+            currentDraft.failureMessage = DiagnosticSanitizer.redact(error.localizedDescription)
+            workspaceFileTabs[currentIndex].draft = currentDraft
+            return false
+        }
+    }
+
+    enum WorkspaceFileConflictAction {
+        case reloadFromDisk
+        case overwrite
+        case continueEditing
+    }
+
+    func resolveWorkspaceFileConflict(path: String, action: WorkspaceFileConflictAction) async {
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }),
+              workspaceFileTabs[index].draft != nil else { return }
+        switch action {
+        case .reloadFromDisk:
+            // 放弃缓冲区，重新安全读取磁盘；source 态回到只读呈现，编辑需重新进入。
+            workspaceFileTabs[index].draft = nil
+            await loadWorkspaceFile(path: path)
+        case .overwrite:
+            await saveWorkspaceFileDraft(path: path, force: true)
+        case .continueEditing:
+            workspaceFileTabs[index].draft?.isConflicted = false
+        }
+    }
+
+    /// 丢弃缓冲区回到只读呈现（关闭确认流之外的非破坏退出编辑入口）。
+    func discardWorkspaceFileDraft(path: String) {
+        pendingWorkspaceFileDiscard = nil
+        guard let index = workspaceFileTabs.firstIndex(where: { $0.path == path }) else { return }
+        workspaceFileTabs[index].draft = nil
+    }
+
+    func cancelWorkspaceFileDiscard() {
+        pendingWorkspaceFileDiscard = nil
+    }
+
     func closeWorkspaceFileTab(path: String) {
+        if let tab = workspaceFileTabs.first(where: { $0.path == path }),
+           let draft = tab.draft, draft.isDirty || draft.isConflicted {
+            pendingWorkspaceFileClose = path
+            return
+        }
+        performCloseWorkspaceFileTab(path: path)
+    }
+
+    func cancelCloseWorkspaceFileTab() {
+        pendingWorkspaceFileClose = nil
+    }
+
+    /// 关闭确认的裁决：保存失败时保留标签与缓冲区，错误已在缓冲区状态中呈现。
+    func closeWorkspaceFileTabAfterConfirmation(save: Bool) async {
+        guard let path = pendingWorkspaceFileClose else { return }
+        pendingWorkspaceFileClose = nil
+        if save {
+            let saved = await saveWorkspaceFileDraft(path: path)
+            guard saved else { return }
+        }
+        performCloseWorkspaceFileTab(path: path)
+    }
+
+    private func performCloseWorkspaceFileTab(path: String) {
         workspaceTabSelection = WorkspaceTabNavigation.selectionAfterClosing(
             path: path,
             tabs: workspaceFileTabs,
@@ -1180,6 +1335,8 @@ final class AppModel {
         )
         workspaceFileTabs.removeAll(where: { $0.path == path })
         workspaceFileLoadIDs.removeValue(forKey: path)
+        if pendingWorkspaceFileClose == path { pendingWorkspaceFileClose = nil }
+        if pendingWorkspaceFileDiscard == path { pendingWorkspaceFileDiscard = nil }
     }
 
     func openWorkspaceFile(
@@ -1209,6 +1366,11 @@ final class AppModel {
 
         if let index = workspaceFileTabs.firstIndex(where: { $0.path == canonicalPath }) {
             workspaceFileTabs[index].requestedLine = line
+            if line != nil,
+               WorkspaceFileEditPolicy.isEditableMarkdown(path: canonicalPath),
+               workspaceFileTabs[index].viewMode == .preview {
+                workspaceFileTabs[index].viewMode = .source
+            }
             workspaceTabSelection = .file(canonicalPath)
             return
         }
@@ -1220,7 +1382,10 @@ final class AppModel {
             snapshot: nil,
             errorMessage: nil,
             isLoading: true,
-            authorizationAvailable: true
+            authorizationAvailable: true,
+            viewMode: WorkspaceFileEditPolicy.isEditableMarkdown(path: canonicalPath) && line == nil
+                ? .preview
+                : .source
         ))
         workspaceTabSelection = .file(canonicalPath)
         await loadWorkspaceFile(path: canonicalPath)
@@ -4106,9 +4271,10 @@ final class AppModel {
     }
 
     /// 压缩设置（0.0.16 弹层）：项目覆盖全局、缺省回落 Pi 默认。
+    /// 弹层每次打开都重新请求——阈值随当前会话的项目覆盖与 Pi 设置变化，
+    /// 不做跨会话缓存（0.0.17 修复：此前首次载入后不再刷新，切换 Project 仍显示旧阈值）。
     func loadCompactionInfo() async {
         guard let client = readyClient else { return }
-        if let info = compactionInfo { _ = info; return }
         compactionInfo = try? await client.request("session.compactionInfo")
     }
 
@@ -4193,6 +4359,11 @@ final class AppModel {
                     parseError: result.parseError,
                     providers: result.providers ?? []
                 )
+                // 删除同样改变 Pi 目录：已加载的 Model Settings 快照立即刷新，
+                // 被删 Provider 不得在缓存里继续可选（0.0.16 审计 P1）。
+                if modelSettings.snapshot != nil {
+                    Task { await refreshModelSettingsAfterProviderChange() }
+                }
                 return []
             }
             return result.errors ?? [ProviderFieldError(field: "models.json", message: "删除失败")]

@@ -208,17 +208,6 @@ struct SessionOpenRequestPlan: Equatable, Sendable {
         if let pathID { result["pathId"] = .string(pathID) }
         return result
     }
-
-    static func searchResult(_ result: SessionSearchResult) -> SessionOpenRequestPlan {
-        SessionOpenRequestPlan(
-            sessionID: result.sessionId,
-            writable: false,
-            expectedEntryID: result.entryId,
-            expectedEntryDigest: result.entryDigest,
-            preserveActive: true,
-            pathID: nil
-        )
-    }
 }
 
 struct ConversationTarget: Equatable, Sendable {

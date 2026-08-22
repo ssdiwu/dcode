@@ -260,6 +260,26 @@ final class ConversationRenderTests: XCTestCase {
 
 @MainActor
 final class ResourcesSettingsRenderTests: XCTestCase {
+    /// 0.0.17：Prompt 模板的 argumentHint 随 commands 合同进入 Composer 预填
+    /// （0.0.16 审计 P1——此前 hint 在 Host 投影时丢失，只剩 `/<name> `）。
+    func testResourceCommandEntryCarriesArgumentHintIntoComposerPrefill() throws {
+        let decoder = JSONDecoder()
+        let promptCommand = try decoder.decode(ResourceCommandEntry.self, from: Data("""
+        {"name":"review","description":"代码评审","source":"prompt","argumentHint":"目标"}
+        """.utf8))
+        XCTAssertEqual(promptCommand.composerInvocationText, "/review <目标>")
+
+        let plainCommand = try decoder.decode(ResourceCommandEntry.self, from: Data("""
+        {"name":"dgoal","description":null,"source":"extension","argumentHint":null}
+        """.utf8))
+        XCTAssertEqual(plainCommand.composerInvocationText, "/dgoal ")
+
+        let legacyCommand = try decoder.decode(ResourceCommandEntry.self, from: Data("""
+        {"name":"dgoal","description":null,"source":"extension"}
+        """.utf8))
+        XCTAssertEqual(legacyCommand.composerInvocationText, "/dgoal ", "缺 argumentHint 的旧快照按无提示解码")
+    }
+
     func testResourcesSettingsPageRendersSnapshotStates() {
         let model = AppModel()
         model.resources.snapshot = ResourcesListResult(

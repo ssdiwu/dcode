@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.16"
+    static let appVersion = "0.0.17"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -130,8 +130,19 @@ struct ResourceCommandEntry: Codable, Equatable, Sendable, Identifiable {
     let name: String
     let description: String?
     let source: String
+    /// Prompt 模板的参数提示；随 `+` 预填为 `/<name> <hint>` 占位（0.0.17 贯通），其余为 nil。
+    let argumentHint: String?
 
     var id: String { "\(source)/\(name)" }
+
+    /// `+` 一次性调用的预填文本：Prompt 模板带参数提示时附 `<hint>` 占位，
+    /// 其余资源只预填调用名与空格；只写入草稿，仍由用户发送（ADR 0024）。
+    var composerInvocationText: String {
+        if let argumentHint, !argumentHint.isEmpty {
+            return "/\(name) <\(argumentHint)>"
+        }
+        return "/\(name) "
+    }
 }
 
 struct ResourceDiagnosticEntry: Codable, Equatable, Sendable, Identifiable {

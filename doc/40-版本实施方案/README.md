@@ -2,21 +2,19 @@
 
 本目录保存已经确认、用于指导当前版本交付与验收的 PRD 和专项规格，也是发布、实现候选、本地回归基线、人工验收与持续回归状态的唯一文档索引。具体测试与人工证据保留在对应 PRD 的 Verification Record（验证记录）中，其他 README 只链接本页，不复制动态状态。文档完成后只要仍是有效验收基准，就继续保留在本目录；仅在被取代、放弃或只供追溯时归档。
 
-当前公开源码基线是 `main@1e9f80a` 与源码标签 `v0.0.16`；`v0.0.1` 至 `v0.0.16` 均已推送到 `origin`。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；2026-08-22 本轮核验未发现 GitHub Release。精确 `v0.0.16` checkout 的 Host `136/136` 与 Swift `205/205` 自动测试通过，但下列已知缺口和各 PRD 未勾选的人工场景仍是当前验收边界。
+当前公开源码基线是 `main@1e9f80a` 与源码标签 `v0.0.16`；`v0.0.1` 至 `v0.0.16` 均已推送到 `origin`。`0.0.17` 已按 0018 PRD 完成实现与自动门禁（Swift 224/224、Host 139/139，2026-08-22 本机），候选改动在 `main` 工作树中尚未提交、未打标签。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；2026-08-22 本轮核验未发现 GitHub Release。各 PRD 未勾选的人工场景仍是当前验收边界。
 
 ### 当前已知缺口
 
-- `0.0.16` 自定义供应商的 `modelOverrides.<model>.headers` 仍可能把 header 值正文带入 Swift 高级 JSON 编辑器，违反凭据脱敏合同；在修复前不要把该页面视为可安全验收的凭据界面。
-- 搜索正文命中携带 `expectedEntryDigest`，App 当前又以 writable 打开；Protocol v1 明确拒绝这个参数组合，因此正文搜索结果打开尚未形成有效回归。
-- `0.0.15` 的 `dcode_facts` 中 `evidence` / `project` 与 Swift 真实存储文件名、文档形状和退出状态值不一致；当前只有 `changes` / `lineage` 的生产合同有实现证据。
-- `host/package-lock.json` 的根包版本仍为 `0.0.14`，与 `host/package.json`、App / Host 兼容门禁和源码标签的 `0.0.16` 不一致。
+此前记录的四项缺口已全部收口：`modelOverrides.<model>.headers` 凭据正文不再进入 Swift（0.0.16 审计 P1，40e02b9 修复、0.0.17 补嵌套脱敏断言）；搜索正文命中打开不再携带被 Protocol v1 拒绝的 `expectedEntryDigest`（40e02b9 修复、0.0.17 加回归钉子并删除误导审计的死代码）；`dcode_facts` 的 `evidence` / `project` 合同已对齐 Swift 真实存储（40e02b9 修复文件名与形状，0.0.17 再修 `changes.source` 枚举、project 符号链接归属并落地 golden fixture）；`host/package-lock.json` 版本已回补并随 `0.0.17` 提版保持一致。当前剩余边界为各 PRD 未勾选的人工验收场景。
 
 `0.0.13 → 0.0.20+ → 0.1.0` 的已确认顺序、逐版差异和“连续自构建后才晋升”的门禁见[版本界面演进](../20-产品与交互/原型/版本演进/README.md)。该路线允许按真实 dogfood 缺口继续增加 `0.0.x`。
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
-| [0017-0.0.16 自定义模型供应商与一次性资源调用产品需求](0017-0.0.16-自定义模型供应商与一次性资源调用产品需求.md) | Published Source Tag `v0.0.16` | Automated Passed；Manual Pending；Known Gaps | Pi `models.json` 自定义供应商管理与 Composer `+` 一次性资源调用验收权威；凭据脱敏、Prompt 参数提示与删除后目录刷新仍按已知缺口收口。 |
-| [0016-0.0.15 界面即上下文与本机资源产品需求](0016-0.0.15-界面即上下文与本机资源产品需求.md) | Published Source Tag `v0.0.15` | Automated Passed；Manual Pending；Known Gap | Composer 预填、压缩可见性、本机资源页、扩展包启停、`dcode_facts`、文件树键盘与性能收口验收权威；facade 的两类生产合同仍待修正。 |
+| [0018-0.0.17 Markdown 编辑缓冲区与安全保存产品需求](0018-0.0.17-Markdown-编辑缓冲区与安全保存产品需求.md) | Candidate（`main` 工作树，未提交未打标） | Automated Passed；Manual Pending | Markdown 编辑缓冲区、Source / Preview 切换与安全保存（ADR 0025）验收权威；同时收口 0.0.16 三项审计缺口、`dcode_facts` 残留与 `models.json` 并发写入收紧。 |
+| [0017-0.0.16 自定义模型供应商与一次性资源调用产品需求](0017-0.0.16-自定义模型供应商与一次性资源调用产品需求.md) | Published Source Tag `v0.0.16` | Automated Passed；Manual Pending；0.0.17 收口审计缺口 | Pi `models.json` 自定义供应商管理与 Composer `+` 一次性资源调用验收权威；审计发现的 argumentHint / 删除刷新 / 嵌套 headers 缺口与并发写入已在 0.0.17 收口。 |
+| [0016-0.0.15 界面即上下文与本机资源产品需求](0016-0.0.15-界面即上下文与本机资源产品需求.md) | Published Source Tag `v0.0.15` | Automated Passed；Manual Pending；facade 合同 0.0.17 收口 | Composer 预填、压缩可见性、本机资源页、扩展包启停、`dcode_facts`、文件树键盘与性能收口验收权威；facade 两类生产合同的不一致已在 0.0.17 修复并落地 golden fixture。 |
 | [0015-0.0.14 主页落地 Composer 与界面收口产品需求](0015-0.0.14-主页落地-Composer-与界面收口产品需求.md) | Published Source Tag `v0.0.14` | Automated Passed；Manual Pending | 主页会话前草稿、会话打开加载态、⌘N、发送按钮与字号收口、Host 诊断页及 ADR 0023 固定完全访问验收权威。 |
 | [0014-0.0.13 第一次 Self-build Loop 产品需求](0014-0.0.13-第一次-Self-build-Loop-产品需求.md) | Published Source Tag `v0.0.13` | Automated Passed；Core Manual Loop Pending | 候选构建隔离、受控替换 / 回滚 / 重启恢复与第一次真实闭环验收权威。 |
 | [0013-0.0.12 结构化验证证据产品需求](0013-0.0.12-结构化验证证据产品需求.md) | Published Source Tag `v0.0.12` | Automated Passed；Manual Pending | bash 执行证据账本、退出推导、revision 补全、会话检查器呈现与非门禁边界权威。 |

@@ -279,30 +279,6 @@ final class SearchModelsTests: XCTestCase {
         ))
     }
 
-    func testSearchOpenRequestPreservesCurrentSessionAndPinsMessageContent() {
-        let digest = "v1:" + String(repeating: "a", count: 64)
-        let result = SessionSearchResult(
-            sessionId: "session-1",
-            entryId: "message-7",
-            entryDigest: digest,
-            matchKind: "message",
-            role: "assistant",
-            title: "搜索设计",
-            cwd: "/work/dcode",
-            modified: "2026-08-11T08:00:00.000Z",
-            snippet: "项目搜索应该立即出现结果",
-            matchCount: 1
-        )
-
-        XCTAssertEqual(SessionOpenRequestPlan.searchResult(result).parameters, [
-            "sessionId": .string("session-1"),
-            "mode": .string("readOnly"),
-            "expectedEntryId": .string("message-7"),
-            "expectedEntryDigest": .string(digest),
-            "preserveActive": .bool(true),
-        ])
-    }
-
     func testSearchOpenFailureKeepsResultsAndConversationTargetClearsOnlyForItsToken() {
         let model = AppModel()
         let result = SessionSearchResult(

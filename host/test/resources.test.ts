@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -115,6 +115,12 @@ test("resource snapshot lists facts, hides inline extensions and marks disabled 
   assert.ok(commandNames.includes("dgoal"), "扩展命令进入命令列表");
   assert.ok(commandNames.includes("review"), "prompt 模板进入命令列表");
   assert.ok(commandNames.includes("skill:llm-wiki"), "skill 命令进入命令列表");
+  // 0.0.17：Prompt 模板的 argumentHint 必须随 commands 投影进入 Composer 预填合同。
+  const reviewCommand = snapshot.commands.find((command) => command.name === "review");
+  assert.equal(reviewCommand?.source, "prompt");
+  assert.equal(reviewCommand?.argumentHint, "目标");
+  const dgoalCommand = snapshot.commands.find((command) => command.name === "dgoal");
+  assert.equal(dgoalCommand?.argumentHint, null, "扩展命令没有参数提示");
   assert.ok(snapshot.diagnostics.some((entry) => entry.message.includes("broken.ts")));
 });
 
@@ -148,27 +154,57 @@ test("dcode_facts reads ledgers and reports missing files honestly", async () =>
           {
             recordId: "r1",
             sessionId: "session-a",
+            runId: "run-1",
             filePath: "/repo/a.swift",
             additions: 3,
             deletions: 1,
             firstChangedLine: 12,
-            source: "dcode",
+            source: "structured-tool-v1",
           },
-          { recordId: "r2", sessionId: "session-b", filePath: "/repo/b.swift", additions: 1, deletions: 0 },
+          { recordId: "r2", sessionId: "session-b", runId: "run-2", filePath: "/repo/b.swift", additions: 1, deletions: 0, source: "structured-tool-v1" },
         ],
       }),
       "utf8",
     );
     // 夹具使用 Swift 侧真实编码形状（0.0.16 审计 P1：此前夹具自造数组/枚举导致假绿）：
-    // VerificationEvidenceDocument { version, records } + exitKind ∈ ok/failure/unknown；
+    // VerificationEvidenceDocument { version, records } + exitKind ∈ ok/failure/unknown，
+    // 记录字段完整对齐 VerificationEvidenceRecord（VerificationModels.swift）；
+    // changes 的 source 恒为 "structured-tool-v1"（SessionChangeModels.swift 校验）；
     // ProjectStore 写 projects-v1.json 的 { version, projects }。
     await writeFile(
       join(factsDir, "verification-evidence-v1.json"),
       JSON.stringify({
         version: 1,
         records: [
-          { recordId: "e1", sessionId: "session-a", command: "npm test", exitKind: "ok", gitRevision: "abc1234def" },
-          { recordId: "e2", sessionId: "session-a", command: "swift test", exitKind: "failure", exitCode: 65 },
+          {
+            recordId: "e1",
+            sessionId: "session-a",
+            runId: "run-1",
+            toolCallId: "tool-1",
+            command: "npm test",
+            exitKind: "ok",
+            exitCode: 0,
+            startedAt: "2026-08-22T10:00:00Z",
+            endedAt: "2026-08-22T10:00:05Z",
+            cwd: "/repo",
+            modelProvider: "anthropic",
+            modelId: "claude-sonnet",
+            gitRevision: "abc1234def",
+          },
+          {
+            recordId: "e2",
+            sessionId: "session-a",
+            runId: "run-1",
+            toolCallId: "tool-2",
+            command: "swift test",
+            exitKind: "failure",
+            exitCode: 65,
+            startedAt: "2026-08-22T10:01:00Z",
+            endedAt: "2026-08-22T10:01:20Z",
+            cwd: "/repo",
+            modelProvider: "anthropic",
+            modelId: "claude-sonnet",
+          },
         ],
       }),
       "utf8",
@@ -197,6 +233,7 @@ test("dcode_facts reads ledgers and reports missing files honestly", async () =>
     assert.ok(changes.content[0]!.text.includes("/repo/a.swift"));
     assert.ok(changes.content[0]!.text.includes("+3 −1"));
     assert.ok(!changes.content[0]!.text.includes("b.swift"), "只归因当前会话");
+    assert.ok(!changes.content[0]!.text.includes("来源非 D Code"), "生产 source 值不得被错误标注");
 
     const evidence = await tool.execute("t2", { kind: "evidence" });
     assert.ok(evidence.content[0]!.text.includes("npm test → 成功"));
@@ -233,6 +270,40 @@ test("dcode_facts reports unavailable instead of empty success when ledgers are 
     assert.ok(changes.content[0]!.text.includes("不可用"), "账本缺失如实报不可用");
     const evidence = await tool.execute("t2", { kind: "evidence" });
     assert.ok(evidence.content[0]!.text.includes("不可用"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dcode_facts project ownership resolves symlinks like Swift does", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-facts-symlink-"));
+  const factsDir = join(root, "facts");
+  const repoReal = join(root, "real-repo");
+  const repoAlias = join(root, "alias-repo");
+  await mkdir(factsDir, { recursive: true });
+  await mkdir(repoReal);
+  await symlink(repoReal, repoAlias);
+  try {
+    await writeFile(
+      join(factsDir, "projects-v1.json"),
+      JSON.stringify({
+        version: 1,
+        projects: [{
+          id: "11111111-2222-3333-4444-555555555555",
+          name: "Symlink 项目",
+          sourceFolders: [{ path: await realpath(repoReal) }],
+        }],
+      }),
+      "utf8",
+    );
+    // cwd 走符号链接别名：与登记路径字符串不等，解析符号链接后应匹配
+    // （对齐 Swift ProjectSessionOwnershipResolver 的 resolvingSymlinksInPath 语义）。
+    const tool = captureFactsTool(
+      { sessionId: () => "session-a", cwd: () => repoAlias, paths: () => [] },
+      factsDir,
+    );
+    const result = await tool.execute("t1", { kind: "project" });
+    assert.ok(result.content[0]!.text.includes("Symlink 项目"), "符号链接路径归入登记项目");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
