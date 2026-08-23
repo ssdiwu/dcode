@@ -2,6 +2,7 @@
 .build/
 build/
 dist/
+dist-candidate/
 DerivedData/
 *.xcuserstate
 

@@ -484,23 +484,76 @@ struct SelfBuildSettingsView: View {
         let selfBuild = model.selfBuild
         SettingsPageContainer(
             title: "自构建",
-            subtitle: "在隔离目录构建候选 App，校验后受控替换并重启；失败不影响当前运行。"
+            subtitle: "从明确的源码 checkout 运行完整回归，生成带来源清单的本机候选，再受控替换并重启。"
         ) {
             VStack(spacing: PiDCodeMetrics.spacingSection) {
+                SettingsGroup {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("源码 Checkout")
+                                    .font(.body.weight(.medium))
+                                Text("只接受完整 D Code 源码目录；选择会跨重启保留。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 18)
+                            if let project = model.selectedProject {
+                                Button("使用当前项目") {
+                                    _ = selfBuild.setSourceRoot(project.directory.url)
+                                }
+                                .disabled(isBusy)
+                            }
+                            Button("选择…", action: chooseSourceRoot)
+                                .disabled(isBusy)
+                        }
+                        Text(selfBuild.rootDirectory.path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        if let sourceRootIssue = selfBuild.sourceRootIssue {
+                            Label(sourceRootIssue, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else if let selectionIssue = selfBuild.sourceRootSelectionIssue {
+                            Label(selectionIssue, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else if let snapshot = selfBuild.sourceSnapshot {
+                            HStack(spacing: 8) {
+                                Text(snapshot.dirty ? "未提交工作树 · 仅本机候选" : "干净工作树 · 仍为本机候选")
+                                Text("·")
+                                Text("\(snapshot.changedFileCount) 个变化")
+                                Text("·")
+                                Text(snapshot.digest.prefix(12))
+                                    .monospaced()
+                            }
+                            .font(.caption)
+                            .foregroundStyle(snapshot.dirty ? Color.orange : Color.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                }
+
                 SettingsGroup {
                     HStack(spacing: PiDCodeMetrics.spacingGroup) {
                         Button {
                             Task { await model.startSelfBuild() }
                         } label: {
-                            if selfBuild.phase == .building {
+                            if selfBuild.phase == .verifying {
+                                HStack { ProgressView().controlSize(.small); Text("验证中…") }
+                            } else if selfBuild.phase == .building {
                                 HStack { ProgressView().controlSize(.small); Text("构建中…") }
                             } else {
-                                Text("构建候选 App")
+                                Text("验证并构建候选 App")
                             }
                         }
                         .controlSize(.large)
                         .buttonStyle(.borderedProminent)
-                        .disabled(selfBuild.phase == .building)
+                        .disabled(isBusy || selfBuild.sourceRootIssue != nil)
                         if let output = selfBuild.lastOutput {
                             Text(output.succeeded ? "上次构建成功 · \(output.durationMs / 1000) 秒" : "上次构建失败")
                                 .font(.caption)
@@ -529,8 +582,49 @@ struct SelfBuildSettingsView: View {
                     }
                 }
 
+                if !selfBuild.verificationResults.isEmpty {
+                    SettingsGroup {
+                        sectionLabel("自动门禁")
+                        Divider().padding(.leading, 20)
+                        ForEach(Array(selfBuild.verificationResults.enumerated()), id: \.element.id) { index, result in
+                            if index > 0 { Divider().padding(.leading, 20) }
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: result.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .foregroundStyle(result.succeeded ? Color.green : Color.red)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(result.label)
+                                            .font(.body.weight(.medium))
+                                        Text(result.command)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(result.succeeded ? "通过" : "失败")
+                                        .font(.caption.weight(.semibold))
+                                    Text("\(result.durationMs / 1000) 秒")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                                if !result.succeeded, !result.outputTail.isEmpty {
+                                    DisclosureGroup("失败输出") {
+                                        Text(result.outputTail.joined(separator: "\n"))
+                                            .font(.caption.monospaced())
+                                            .textSelection(.enabled)
+                                    }
+                                    .font(.caption)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                        }
+                    }
+                }
+
                 if let candidate = selfBuild.candidate {
                     SettingsGroup {
+                        sectionLabel("候选构建")
+                        Divider().padding(.leading, 20)
                         candidateRow("App 版本", value: candidate.appVersion)
                         Divider().padding(.leading, 20)
                         candidateRow("内嵌 Host", value: candidate.hostVersion)
@@ -556,14 +650,53 @@ struct SelfBuildSettingsView: View {
                                 .padding(.horizontal, 20)
                                 .padding(.bottom, PiDCodeMetrics.spacingGroup)
                         }
+                        if let manifest = candidate.manifest {
+                            Divider().padding(.leading, 20)
+                            candidateRow("来源 revision", value: String(manifest.sourceRevision.prefix(12)))
+                            Divider().padding(.leading, 20)
+                            candidateRow("来源 digest", value: String(manifest.sourceDigest.prefix(12)))
+                            Divider().padding(.leading, 20)
+                            HStack {
+                                Label(
+                                    manifest.sourceDirty ? "含未提交改动" : "干净工作树",
+                                    systemImage: manifest.sourceDirty ? "exclamationmark.triangle.fill" : "checkmark.circle"
+                                )
+                                .foregroundStyle(manifest.sourceDirty ? Color.orange : Color.secondary)
+                                Spacer()
+                                Text("仅本机 · 不可分发")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            }
+                            .padding(.horizontal, 20)
+                            .frame(minHeight: 44)
+                        }
                         Divider().padding(.leading, 20)
                         HStack(spacing: PiDCodeMetrics.spacingGroup) {
                             Button("重启到候选") { confirmRestart = true }
                                 .controlSize(.large)
-                                .disabled(!candidate.isReady || selfBuild.phase == .building)
+                                .disabled(!candidate.isReady || isBusy)
                             Text("当前会话将在新构建中自动恢复。")
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                    }
+                }
+
+                if let activeManifest = selfBuild.activeManifest {
+                    SettingsGroup {
+                        sectionLabel("当前运行构建")
+                        Divider().padding(.leading, 20)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("当前运行的是 Self-build 候选", systemImage: "checkmark.seal")
+                                .font(.body.weight(.medium))
+                            Text("来源 \(activeManifest.sourceRevision.prefix(12)) · digest \(activeManifest.sourceDigest.prefix(12)) · 仅本机")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                            Text("这只证明来源、自动门禁与启动；原生界面和真实 Pi 行为仍需人工验收。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, PiDCodeMetrics.spacingGroup)
@@ -624,6 +757,33 @@ struct SelfBuildSettingsView: View {
         }
         .padding(.horizontal, 20)
         .frame(minHeight: 44)
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.horizontal, 20)
+            .padding(.top, PiDCodeMetrics.spacingGroup)
+    }
+
+    private var isBusy: Bool {
+        model.selfBuild.phase == .verifying || model.selfBuild.phase == .building
+    }
+
+    private func chooseSourceRoot() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 D Code 源码 Checkout"
+        panel.prompt = "选择"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            _ = model.selfBuild.setSourceRoot(url)
+        }
     }
 }
 

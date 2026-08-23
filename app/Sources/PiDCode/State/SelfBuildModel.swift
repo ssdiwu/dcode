@@ -8,6 +8,7 @@ import Observation
 final class SelfBuildModel {
     enum Phase: Equatable {
         case idle
+        case verifying
         case building
         case built
         case failed
@@ -18,19 +19,51 @@ final class SelfBuildModel {
     var candidate: SelfBuildCandidateInfo?
     private(set) var issue: String?
     private(set) var backupAvailable = false
+    private(set) var verificationResults: [SelfBuildCommandResult] = []
+    private(set) var sourceSnapshot: SelfBuildSourceSnapshot?
+    private(set) var activeManifest: SelfBuildCandidateManifest?
+    private(set) var sourceRootIssue: String?
+    private(set) var sourceRootSelectionIssue: String?
 
-    @ObservationIgnored var rootDirectory: URL
+    var rootDirectory: URL
     @ObservationIgnored var distDirectory: URL
     @ObservationIgnored var scriptURL: URL
+    @ObservationIgnored private let followsRootDistDirectory: Bool
+    @ObservationIgnored private let followsRootScriptURL: Bool
+    @ObservationIgnored private let verificationRunner: @Sendable (URL) async -> [SelfBuildCommandResult]
+    @ObservationIgnored private let buildRunner: @Sendable (URL, [String: String], URL) async -> SelfBuildOutput
+    @ObservationIgnored private let snapshotter: @Sendable (URL) throws -> SelfBuildSourceSnapshot
 
     init(
-        rootDirectory: URL = URL(fileURLWithPath: "/Users/diwu/Workspace/Codes/Apps/dcode"),
+        rootDirectory: URL? = nil,
         distDirectory: URL? = nil,
-        scriptURL: URL? = nil
+        scriptURL: URL? = nil,
+        verificationRunner: @escaping @Sendable (URL) async -> [SelfBuildCommandResult] = SelfBuildVerificationRunner.run,
+        buildRunner: @escaping @Sendable (URL, [String: String], URL) async -> SelfBuildOutput = { script, environment, root in
+            await SelfBuildRunner.run(
+                scriptURL: script,
+                additionalEnvironment: environment,
+                currentDirectoryURL: root
+            )
+        },
+        snapshotter: @escaping @Sendable (URL) throws -> SelfBuildSourceSnapshot = SelfBuildSourceSnapshotter.capture
     ) {
-        self.rootDirectory = rootDirectory
-        self.distDirectory = distDirectory ?? rootDirectory.appending(path: "dist")
-        self.scriptURL = scriptURL ?? rootDirectory.appending(path: "app/build.sh")
+        let configuredPath = UserDefaults.standard.string(forKey: SelfBuildModels.sourceRootPreferenceKey)
+        let info = rootDirectory.map(SelfBuildSourceRootResolver.validate)
+            ?? SelfBuildSourceRootResolver.discover(configuredPath: configuredPath)
+        let resolvedRoot = info?.rootURL
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+                .standardizedFileURL.resolvingSymlinksInPath()
+        self.rootDirectory = resolvedRoot
+        followsRootDistDirectory = distDirectory == nil
+        followsRootScriptURL = scriptURL == nil
+        self.distDirectory = distDirectory ?? resolvedRoot.appending(path: "dist")
+        self.scriptURL = scriptURL ?? resolvedRoot.appending(path: "app/build.sh")
+        self.verificationRunner = verificationRunner
+        self.buildRunner = buildRunner
+        self.snapshotter = snapshotter
+        sourceRootIssue = info == nil ? "尚未找到有效的 D Code 源码 checkout" : info?.issue
+        activeManifest = SelfBuildCandidateManifest.load(from: Bundle.main.bundleURL)
         refreshBackupState()
     }
 
@@ -43,29 +76,125 @@ final class SelfBuildModel {
         backupAvailable = SelfBuildBundleSwapper.backupExists(distDirectory: distDirectory)
     }
 
+    @discardableResult
+    func setSourceRoot(_ candidate: URL, persist: Bool = true) -> Bool {
+        let info = SelfBuildSourceRootResolver.validate(candidate)
+        guard info.isValid else {
+            sourceRootSelectionIssue = info.issue
+            return false
+        }
+        rootDirectory = info.rootURL
+        if followsRootDistDirectory { distDirectory = info.rootURL.appending(path: "dist") }
+        if followsRootScriptURL { scriptURL = info.rootURL.appending(path: "app/build.sh") }
+        sourceRootIssue = nil
+        sourceRootSelectionIssue = nil
+        self.candidate = nil
+        verificationResults = []
+        sourceSnapshot = nil
+        phase = .idle
+        if persist {
+            UserDefaults.standard.set(info.rootURL.path, forKey: SelfBuildModels.sourceRootPreferenceKey)
+        }
+        refreshBackupState()
+        return true
+    }
+
     /// 构建候选：产物落 dist-candidate，不触碰在用 App。
     func build() async {
-        guard phase != .building else { return }
-        phase = .building
+        guard phase != .building, phase != .verifying else { return }
         issue = nil
+        candidate = nil
+        verificationResults = []
+        sourceSnapshot = nil
+        lastOutput = nil
+
+        let sourceInfo = SelfBuildSourceRootResolver.validate(rootDirectory)
+        guard sourceInfo.isValid else {
+            sourceRootIssue = sourceInfo.issue
+            issue = sourceInfo.issue
+            phase = .failed
+            return
+        }
+        sourceRootIssue = nil
+        if FileManager.default.fileExists(atPath: candidateBundleURL.path) {
+            try? FileManager.default.removeItem(at: candidateBundleURL)
+        }
+
+        let initialSnapshot: SelfBuildSourceSnapshot
+        do {
+            initialSnapshot = try snapshotter(rootDirectory)
+        } catch {
+            issue = error.localizedDescription
+            phase = .failed
+            return
+        }
+        sourceSnapshot = initialSnapshot
+        phase = .verifying
+        let checks = await verificationRunner(rootDirectory)
+        verificationResults = checks
+        guard checks.count == 2, checks.allSatisfy(\.succeeded) else {
+            issue = checks.last.map { "\($0.label)未通过" } ?? "自动门禁未能运行"
+            phase = .failed
+            return
+        }
+
         let candidateDist = rootDirectory.appending(path: SelfBuildModels.candidateDirectoryName)
-        try? FileManager.default.createDirectory(at: candidateDist, withIntermediateDirectories: true)
-        // 清掉旧候选，避免 build.sh 失败时把陈旧产物当新候选
+        do {
+            try FileManager.default.createDirectory(at: candidateDist, withIntermediateDirectories: true)
+        } catch {
+            issue = "无法建立候选目录：\(error.localizedDescription)"
+            phase = .failed
+            return
+        }
+        // 再次清掉旧候选，避免检查到构建之间的异常残留冒充新候选。
         let staleCandidate = candidateBundleURL
         if FileManager.default.fileExists(atPath: staleCandidate.path) {
             try? FileManager.default.removeItem(at: staleCandidate)
         }
-        let output = await SelfBuildRunner.run(
-            scriptURL: scriptURL,
-            additionalEnvironment: ["PI_DCODE_DIST_DIR": candidateDist.path],
-            currentDirectoryURL: rootDirectory
-        )
+
+        let manifest = SelfBuildCandidateManifest(snapshot: initialSnapshot, verifications: checks)
+        let manifestURL = candidateDist.appending(path: ".self-build-manifest-\(UUID().uuidString).json")
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(manifest).write(to: manifestURL, options: [.atomic])
+        } catch {
+            issue = "无法生成候选来源清单：\(error.localizedDescription)"
+            phase = .failed
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+
+        phase = .building
+        let buildEnvironment = [
+                "PI_DCODE_DIST_DIR": candidateDist.path,
+                "PI_DCODE_ALLOW_DIRTY_BUILD": "1",
+                "PI_DCODE_SELF_BUILD_MANIFEST": manifestURL.path,
+            ]
+        let output = await buildRunner(scriptURL, buildEnvironment, rootDirectory)
         lastOutput = output
         if output.succeeded {
-            candidate = SelfBuildCandidateValidator.validate(candidateBundleURL: candidateBundleURL)
-            phase = .built
+            do {
+                let finalSnapshot = try snapshotter(rootDirectory)
+                guard finalSnapshot == initialSnapshot else {
+                    try? FileManager.default.removeItem(at: staleCandidate)
+                    issue = "构建期间源码发生变化；本次候选已废弃"
+                    phase = .failed
+                    refreshBackupState()
+                    return
+                }
+                let info = SelfBuildCandidateValidator.validate(candidateBundleURL: candidateBundleURL)
+                candidate = info
+                issue = info.issue
+                phase = info.isReady ? .built : .failed
+            } catch {
+                try? FileManager.default.removeItem(at: staleCandidate)
+                issue = error.localizedDescription
+                phase = .failed
+            }
         } else {
             candidate = nil
+            issue = "候选构建未通过"
             phase = .failed
         }
         refreshBackupState()

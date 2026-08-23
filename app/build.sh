@@ -13,11 +13,13 @@ LEGAL_RESOURCES_DIR="${RESOURCES_DIR}/Legal"
 APP_ICON_FILE="${ROOT_DIR}/app/Resources/AppIcon.icns"
 NODE_BIN="${PI_DCODE_NODE_BIN:-${HOME}/.hermes/node/bin/node}"
 NODE_ROOT="$(dirname "$(dirname "${NODE_BIN}")")"
+NPM_BIN="${PI_DCODE_NPM_BIN:-${NODE_ROOT}/bin/npm}"
 NODE_LICENSE_FILE="${PI_DCODE_NODE_LICENSE:-${NODE_ROOT}/LICENSE}"
 D_CODE_LICENSE_FILE="${ROOT_DIR}/LICENSE"
 THIRD_PARTY_NOTICES_FILE="${ROOT_DIR}/THIRD_PARTY_NOTICES.md"
 PI_LICENSE_FILE="${ROOT_DIR}/legal/Pi-v0.84.1-MIT.txt"
 MISSING_NPM_NOTICES_FILE="${ROOT_DIR}/legal/Missing-NPM-License-Notices.txt"
+SELF_BUILD_MANIFEST_FILE="${PI_DCODE_SELF_BUILD_MANIFEST:-}"
 AWS_LICENSE_FILE="${HOST_DIR}/node_modules/@aws-sdk/client-bedrock-runtime/LICENSE"
 GROK_MERMAID_LICENSE_FILE="${HOST_DIR}/node_modules/grok-mermaid/LICENSE"
 MODULE_LIST="$(mktemp)"
@@ -44,6 +46,9 @@ require_file "${D_CODE_LICENSE_FILE}"
 require_file "${THIRD_PARTY_NOTICES_FILE}"
 require_file "${PI_LICENSE_FILE}"
 require_file "${MISSING_NPM_NOTICES_FILE}"
+if [[ -n "${SELF_BUILD_MANIFEST_FILE}" ]]; then
+    require_file "${SELF_BUILD_MANIFEST_FILE}"
+fi
 require_file "${AWS_LICENSE_FILE}"
 require_file "${GROK_MERMAID_LICENSE_FILE}"
 if [[ ! -d "${HOST_DIR}/node_modules" ]]; then
@@ -55,13 +60,19 @@ if [[ ! -x "${NODE_BIN}" ]]; then
     echo "Set PI_DCODE_NODE_BIN to an arm64 Node v22.22.3 binary." >&2
     exit 1
 fi
+if [[ ! -x "${NPM_BIN}" ]]; then
+    echo "error: npm runtime is not executable: ${NPM_BIN}" >&2
+    echo "Set PI_DCODE_NPM_BIN or install npm beside PI_DCODE_NODE_BIN." >&2
+    exit 1
+fi
 require_file "${NODE_LICENSE_FILE}"
+export PATH="$(dirname "${NODE_BIN}"):${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
 
 NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.25 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.26 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
@@ -114,8 +125,8 @@ fi
 printf '==> Building Node/Pi Host\n'
 (
     cd "${HOST_DIR}"
-    npm run build
-    npm ls --all --omit=dev --parseable > "${MODULE_LIST}"
+    "${NPM_BIN}" run build
+    "${NPM_BIN}" ls --all --omit=dev --parseable > "${MODULE_LIST}"
 )
 
 printf '==> Building internal PiDCode release executable\n'
@@ -147,6 +158,9 @@ ditto "${MISSING_NPM_NOTICES_FILE}" "${LEGAL_RESOURCES_DIR}/Missing-NPM-License-
 ditto "${NODE_LICENSE_FILE}" "${LEGAL_RESOURCES_DIR}/Node.js-LICENSE.txt"
 ditto "${AWS_LICENSE_FILE}" "${LEGAL_RESOURCES_DIR}/Apache-2.0-LICENSE.txt"
 ditto "${GROK_MERMAID_LICENSE_FILE}" "${LEGAL_RESOURCES_DIR}/grok-mermaid-LICENSE.txt"
+if [[ -n "${SELF_BUILD_MANIFEST_FILE}" ]]; then
+    ditto "${SELF_BUILD_MANIFEST_FILE}" "${RESOURCES_DIR}/self-build-manifest.json"
+fi
 printf 'APPL????' > "${CONTENTS_DIR}/PkgInfo"
 
 printf '==> Copying production Node dependencies\n'

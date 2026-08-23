@@ -157,6 +157,8 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 - Hover / focus 显示 pin 与 archive；全局置顶区中的 `pin.fill` 常显。Context menu 与 Session header menu 提供等价操作。
 - Archive 是可恢复的 D Code 可见性操作，不修改 Pi JSONL；Trash 只适用于符合安全条件的空 D Code Session。
 - 设置与归档管理都不占用日常会话导航。齿轮和 `Command-,` 进入当前窗口内的 Settings 工具页面；该页面临时使用完整工作台画布，以继承会话栏实际宽度的页内设置导航组织“模型 / 本机资源 / 自定义供应商 / 外观 / 工作台 / 已归档会话 / 自构建 / Host 诊断 / 关于 D Code”，右侧正文限制为约 `780pt`，使用少量语义分组与整行控件，而不是一张铺满窗口的表或卡片瀑布。设置页内拖动左侧边缘会更新全局共享宽度，返回 Workspace 后会话栏立即采用同一宽度。进入设置期间隐藏日常会话栏和信息检查器，但只暂时让出空间，不改写它们的显示偏好；返回 Workspace 后恢复。已归档会话复用同一设置外壳与页内导航，不得叠加 Sheet、卡片式弹窗或第二窗口。“关于 D Code”也复用该外壳，集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub，不为静态身份资料新开窗口。
+- 自构建页按 Source Checkout（源码 checkout）→ Verification（自动门禁）→ Candidate（候选）→ Active Build（当前构建）四段呈现。源码根必须显示真实路径与可操作错误；脏工作树使用橙色“仅本机 / 不可分发”，但不以警告重量压过测试失败。Swift / Host 门禁逐项显示命令、结果与耗时，失败输出按需展开；候选卡集中显示 App / Host 版本、签名、revision、digest 和来源状态，重启仍是显式确认动作。
+
 ### 7.2 Information Inspector 与 Project Files
 
 - Project 的 Files 直接把唯一项目目录根的 children 作为首层；项目目录不在 Composer 暴露，但可在 Project 编辑和文件检查器内如实查看。

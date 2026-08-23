@@ -1,3 +1,18 @@
+## [0.0.26] - 2026-08-23
+
+### Added
+
+- Sol 自迭代候选闭环（ADR 0031 / PRD 0023）：自构建源码根改为显式、可校验并可跨重启保存的 D Code checkout；可从当前 Project 或系统目录选择器设置，不再依赖作者机器的固定路径。
+- Self-build 在完整 Swift / Host 回归通过后生成 Local-only Candidate：Candidate Manifest 在签名前写入 App bundle，记录 Git revision、dirty 状态、变化文件数、来源 digest、固定两项自动门禁与生成时间；构建前后来源变化会废弃候选，重启后可只读核对当前运行构建的来源。
+- 自构建设置页分离源码、自动门禁、候选与当前运行构建；错误 checkout 保留原有效配置，候选继续要求显式确认重启并保留单份回滚备份。
+- 新增隔离网页原型与本地 eval 记录：三个独立浏览器 case 全部完成来源恢复、候选核对与本机重启 / 分发边界判断；原生 App 与真实 Pi / Sol 闭环仍保留为人工验收。
+
+### Changed
+
+- Finder 启动环境下的自构建不再依赖用户 shell `PATH`：Host 门禁与 `app/build.sh` 默认使用 `PI_DCODE_NODE_BIN` 同目录的 npm，可由 `PI_DCODE_NPM_BIN` 覆盖。
+- 普通 `app/build.sh` 继续拒绝脏工作树；只有显式 Self-build 环境可以生成标记为仅本机、不可分发的脏候选。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.26`。
+
 ## [0.0.25] - 2026-08-23
 
 ### Added

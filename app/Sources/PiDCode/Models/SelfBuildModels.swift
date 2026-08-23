@@ -8,6 +8,7 @@ enum SelfBuildModels {
     static let activeBundleName = "D Code.app"
     static let restartMarkerKey = "dcode.selfBuildRestart"
     static let pendingSessionKey = "dcode.selfBuildPendingSessionId"
+    static let sourceRootPreferenceKey = "dcode.selfBuildSourceRoot"
 }
 
 struct SelfBuildOutput: Equatable, Sendable {
@@ -89,9 +90,10 @@ struct SelfBuildCandidateInfo: Equatable, Sendable {
     let appVersion: String
     let hostVersion: String
     let codesignValid: Bool
+    let manifest: SelfBuildCandidateManifest?
     let issue: String?
 
-    var isReady: Bool { codesignValid && issue == nil }
+    var isReady: Bool { codesignValid && manifest?.isValid == true && issue == nil }
 }
 
 enum SelfBuildCandidateValidator {
@@ -100,9 +102,17 @@ enum SelfBuildCandidateValidator {
         let infoPlistURL = candidateBundleURL.appending(path: "Contents/Info.plist")
         let hostPackageURL = candidateBundleURL.appending(path: "Contents/Resources/host/package.json")
         guard let plist = NSDictionary(contentsOf: infoPlistURL) else {
-            return SelfBuildCandidateInfo(bundlePath: candidateBundleURL.path, appVersion: "", hostVersion: "", codesignValid: false, issue: "候选缺少 Info.plist")
+            return SelfBuildCandidateInfo(
+                bundlePath: candidateBundleURL.path,
+                appVersion: "",
+                hostVersion: "",
+                codesignValid: false,
+                manifest: nil,
+                issue: "候选缺少 Info.plist"
+            )
         }
         let appVersion = (plist["CFBundleShortVersionString"] as? String) ?? ""
+        let manifest = SelfBuildCandidateManifest.load(from: candidateBundleURL)
         var hostVersion = ""
         if let data = try? Data(contentsOf: hostPackageURL),
            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -128,12 +138,15 @@ enum SelfBuildCandidateValidator {
         if appVersion.isEmpty { issue = "候选缺少 App 版本" }
         else if hostVersion.isEmpty { issue = "候选缺少内嵌 Host 版本" }
         else if appVersion != hostVersion { issue = "App 版本 \(appVersion) 与内嵌 Host \(hostVersion) 不一致" }
+        else if manifest == nil { issue = "候选缺少来源与验证清单" }
+        else if manifest?.isValid != true { issue = "候选来源或自动门禁清单无效" }
         else if !codesignValid { issue = "候选签名校验未通过" }
         return SelfBuildCandidateInfo(
             bundlePath: candidateBundleURL.path,
             appVersion: appVersion,
             hostVersion: hostVersion,
             codesignValid: codesignValid,
+            manifest: manifest,
             issue: issue
         )
     }

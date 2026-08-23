@@ -50,6 +50,8 @@ product
 
 `0.0.14–0.0.16` 已把主页收口为会话前 Composer，增加界面对象引用预填、压缩可见性、本机资源页、扩展包启停、只读 `dcode_facts` facade 与自定义供应商设置。`0.0.25` 将主页下挂条收口为仅选择 Project，Composer 控制行收口为 `+`、推理强度与发送，`+` 只提供附件、Skill、命令、目标与计划。源码存在不等于验收完成；跨协议组合、真实存储与凭据脱敏的当前缺口由[版本实施方案](doc/40-版本实施方案/README.md)如实记录。
 
+`0.0.26` 把 Self-build 从固定个人路径与“只要能打包”收口为可核对候选：显式 D Code 源码 checkout、脏工作树本机候选、Swift / Host 完整回归、来源 digest、签名前嵌入的 Candidate Manifest，以及重启后的当前构建来源只读呈现。Sol 或其他模型只负责改动，不构成测试、候选或发布证据；重启与人工验收继续由用户掌控。
+
 工作台层级也必须连续：Session Sidebar（会话栏）是比 Main Workspace（主工作区）更低的导航 surface，Information Inspector（信息检查器）与 Composer 是可同时操作的 raised surfaces。每个 Project 直接平铺其唯一项目目录的根内容；打开属于 Project 的 Session 后，信息检查器仍保留该 Project 的 Files / Changes，并叠加会话概览。
 
 工作台几何同样只有一个事实源：Settings 的页内导航与会话栏共享左侧实际宽度，信息检查器在所有页面与作用域共享右侧实际宽度；从任一显示该栏位的页面调整后，其他页面立即继承，不出现“设置里一套、工作台里另一套”的宽度。

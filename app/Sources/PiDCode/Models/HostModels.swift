@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.25"
+    static let appVersion = "0.0.26"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
