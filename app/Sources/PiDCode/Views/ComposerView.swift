@@ -6,8 +6,8 @@ struct ComposerView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
     @State private var showingContext = false
+    @State private var showingAddActions = false
     @State private var showingFollowUpQueue = true
-    @State private var branchState: GitBranchLookupState = .idle
     @State private var selectedCommandIndex = 0
     @AppStorage("dcode.runningMessageDeliveryMode") private var runningDeliveryRawValue = RunningMessageDeliveryMode.steer.rawValue
     @AppStorage(DCodeInterfaceFontScale.storageKey) private var interfaceFontScaleRawValue = DCodeInterfaceFontScale.standard.rawValue
@@ -110,13 +110,24 @@ struct ComposerView: View {
 
                 runtimeControls
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .dCodeFloatingSurface(cornerRadius: 16)
+            .zIndex(1)
             if model.isNewSessionDraftActive {
                 scopeTray
+                    .padding(.horizontal, 12)
+                    .padding(.top, 18)
+                    .padding(.bottom, 10)
+                    .background(
+                        Color(nsColor: .windowBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                    .shadow(color: .black.opacity(0.08), radius: 14, y: 6)
+                    .offset(y: -6)
+                    .padding(.bottom, -6)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .dCodeFloatingSurface(cornerRadius: 16)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .task(id: model.canUseHostSessions) {
@@ -203,7 +214,7 @@ struct ComposerView: View {
                 .accessibilityLabel("上下文：\(contextAccessibilityLabel)")
             }
 
-            modelAndThinkingMenu
+            thinkingPickerMenu
                 .disabled(
                     model.pendingPathDraft != nil
                         || model.isPromptTransactionActive
@@ -224,11 +235,8 @@ struct ComposerView: View {
         .font(.caption)
     }
 
-    /// 附件入口（0.0.20 dogfood 反馈）：`+` 是纯按钮而非 Menu——macOS Menu 样式
-    /// 会附带下拉指示符，正是要移除的多余箭头。图片经用户显式选择成为图片附件
-    /// （随下一条消息发送，ADR 0028）；其他文件插入路径引用（ADR 0024 决定 2）。
-    /// 原 0.0.16 一次性资源调用入口由统一 `/` 面板承接（Skill / 模板 / 命令混排）。
-    /// 图片附件托盘（0.0.20）：随下一条消息发送的图片以 chip 常驻输入区，
+    /// `+` 是能力入口（ADR 0030）：文件、Skill、命令、目标与计划都从这里开始，
+    /// 顶层保持纯 glyph，不携带下拉指示符。图片附件托盘随下一条消息发送，
     /// 可逐张移除；只在内存中持有，不持久化（ADR 0028）。
     private var composerAttachmentTray: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -268,7 +276,7 @@ struct ComposerView: View {
 
     private var attachmentButton: some View {
         Button {
-            presentAttachmentPicker()
+            showingAddActions.toggle()
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .medium))
@@ -276,8 +284,104 @@ struct ComposerView: View {
         }
         .buttonStyle(.borderless)
         .fixedSize()
-        .help("添加附件：图片随消息发送给模型；其他文件插入路径引用")
-        .accessibilityLabel("添加附件")
+        .popover(isPresented: $showingAddActions, arrowEdge: .bottom) {
+            addActionPopover
+        }
+        .help("添加文件、Skill、命令、目标或计划")
+        .accessibilityLabel("添加操作")
+    }
+
+    private var addActionPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("添加与工作操作")
+                .font(.headline)
+            Button {
+                showingAddActions = false
+                presentAttachmentPicker()
+            } label: {
+                Label("添加文件或图片…", systemImage: "paperclip")
+            }
+            Divider()
+            Menu {
+                if quickSkillSuggestions.isEmpty {
+                    Text("当前没有可用 Skill")
+                } else {
+                    ForEach(quickSkillSuggestions) { suggestion in
+                        Button(suggestion.displayCommand) {
+                            applyAddAction(suggestion)
+                        }
+                    }
+                }
+            } label: {
+                Label("Skill", systemImage: "list.bullet.rectangle")
+            }
+            Menu {
+                if quickCommandSuggestions.isEmpty {
+                    Text("当前没有可用命令")
+                } else {
+                    ForEach(quickCommandSuggestions) { suggestion in
+                        Button(suggestion.displayCommand) {
+                            applyAddAction(suggestion)
+                        }
+                    }
+                }
+            } label: {
+                Label("命令", systemImage: "command")
+            }
+            if let dgoal = dgoalSuggestion {
+                Divider()
+                Button {
+                    prefillGoal(using: dgoal)
+                } label: {
+                    Label("目标", systemImage: "target")
+                }
+                Button {
+                    prefillPlan(using: dgoal)
+                } label: {
+                    Label("计划", systemImage: "list.bullet.clipboard")
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private var quickActionSuggestions: [ComposerCommandSuggestion] {
+        ComposerCommandSuggestion.build(
+            commands: model.availableCommands,
+            resources: model.resources.snapshot?.commands ?? [],
+            fragment: ""
+        )
+    }
+
+    private var quickSkillSuggestions: [ComposerCommandSuggestion] {
+        quickActionSuggestions.filter { $0.typeLabel == "Skill" }
+    }
+
+    private var quickCommandSuggestions: [ComposerCommandSuggestion] {
+        quickActionSuggestions.filter { $0.typeLabel == "命令" }
+    }
+
+    private var dgoalSuggestion: ComposerCommandSuggestion? {
+        quickActionSuggestions.first { $0.displayCommand == "/dgoal" }
+    }
+
+    private func applyAddAction(_ suggestion: ComposerCommandSuggestion) {
+        showingAddActions = false
+        model.updateComposerText(suggestion.invocationText)
+        focused = true
+    }
+
+    private func prefillGoal(using suggestion: ComposerCommandSuggestion) {
+        showingAddActions = false
+        model.updateComposerText("\(suggestion.invocationText)请为当前项目建立一个清晰、可验收的目标。")
+        focused = true
+    }
+
+    private func prefillPlan(using suggestion: ComposerCommandSuggestion) {
+        showingAddActions = false
+        model.updateComposerText("\(suggestion.invocationText)请先形成带阶段与验收标准的计划，等待我确认后再执行。")
+        focused = true
     }
 
     private func presentAttachmentPicker() {
@@ -327,90 +431,49 @@ struct ComposerView: View {
         return "arrow.up"
     }
 
-    /// 作用域托盘：与输入框连体的下挂条。承载新会话草稿的 Source Folder
-    /// 选择（默认用户目录）；选中 Git 仓库目录后追加只读分支 chip。
+    /// 作用域托盘：主页只选择 Project；目录、分支与 Session cwd 不在输入区暴露。
     private var scopeTray: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: PiDCodeMetrics.spacingGroup) {
-                Button {
-                    presentSourceFolderPicker()
+        HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                Menu {
+                    if model.projects.isEmpty {
+                        Text("请先在会话栏新建项目")
+                    } else {
+                        ForEach(model.projects) { project in
+                            Button {
+                                Task { await model.changeNewSessionDraftProject(to: project) }
+                            } label: {
+                                if project.id == model.newSessionDraftProject?.id {
+                                    Label(project.name, systemImage: "checkmark")
+                                } else {
+                                    Text(project.name)
+                                }
+                            }
+                        }
+                    }
                 } label: {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Image(systemName: "folder")
-                        Text(folderDisplayTitle)
+                        Text(model.newSessionDraftProject?.name ?? "选择项目")
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Color.primary.opacity(0.05),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .padding(.vertical, 5)
+                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .buttonStyle(.plain)
-                .dCodeAccessibleButton("选择新会话工作目录，当前 \(folderDisplayTitle)")
-                .help(folderPathHelp)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .dCodeAccessibleButton("选择新会话项目，当前 \(model.newSessionDraftProject?.name ?? "未选择")")
+                .help("选择本次工作所属的项目")
                 .disabled(folderPickerDisabled)
-
-                if case let .ready(branch) = branchState {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.triangle.branch")
-                        Text(branch)
-                            .lineLimit(1)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("当前目录的 Git 分支（只读）")
-                    .accessibilityLabel("当前 Git 分支 \(branch)")
-                }
-
                 Spacer(minLength: 0)
-            }
-            .padding(.top, PiDCodeMetrics.spacingStandard)
-        }
-        .task(id: model.newSessionDraftDirectoryPath) {
-            guard let path = model.newSessionDraftDirectoryPath else { return }
-            branchState = await GitBranchCache.shared.read(at: path)
-        }
-    }
-
-    private func presentSourceFolderPicker() {
-        let panel = NSOpenPanel()
-        panel.title = "选择新会话的工作目录"
-        panel.prompt = "选择"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { await model.changeNewSessionDraftDirectory(to: url) }
         }
     }
 
     private var folderPickerDisabled: Bool {
-        model.isCreatingSession || model.isSendingRequest || model.pendingPrompt != nil
-    }
-
-    private var folderDisplayTitle: String {
-        guard let path = model.newSessionDraftDirectoryPath else { return "~" }
-        if path == FileManager.default.homeDirectoryForCurrentUser.path {
-            return "~"
-        }
-        let name = URL(fileURLWithPath: path, isDirectory: true).lastPathComponent
-        return name.isEmpty ? path : name
-    }
-
-    private var folderPathHelp: String {
-        "新会话将在该目录中运行，正文与模型选择随目录保留；当前：\(model.newSessionDraftDirectoryPath ?? "~")"
+        model.projects.isEmpty || model.isCreatingSession || model.isSendingRequest || model.pendingPrompt != nil
     }
 
     private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
@@ -634,87 +697,6 @@ struct ComposerView: View {
         .buttonStyle(.borderless)
     }
 
-    private var modelAndThinkingMenu: some View {
-        Menu {
-            modelPickerMenu
-            Divider()
-            thinkingPickerMenu
-            speedPickerMenu
-            if model.isNewSessionDraftActive {
-                Divider()
-                Button {
-                    model.resetNewSessionRuntimeToPiDefaults()
-                } label: {
-                    Label("重置为 Pi 默认设置", systemImage: "arrow.counterclockwise")
-                }
-                .disabled(model.modelSettings.defaultModel == nil)
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "cpu")
-                Text(model.modelSettings.isLoadingModels ? "载入模型…" : (model.composerModel?.displayName ?? "选择模型"))
-                    .lineLimit(1)
-                if let thinkingLevel = model.composerThinkingLevel {
-                    Text(thinkingLabel(thinkingLevel))
-                        .foregroundStyle(.purple)
-                }
-            }
-            .font(.caption)
-            .controlSize(.small)
-            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("配置模型、思考强度与速度")
-        .accessibilityLabel(
-            "模型 \(model.composerModel?.displayName ?? "未选择")，思考强度 \(thinkingLabel(model.composerThinkingLevel))，速度 \(speedLabel)"
-        )
-    }
-
-    private var modelPickerMenu: some View {
-        Menu {
-            if model.modelSettings.isLoadingModels {
-                Text("正在读取 Pi 模型…")
-            } else if let issue = model.modelSettings.modelIssue {
-                Text(issue)
-                Button("重新载入模型") {
-                    Task { await model.reloadNewSessionModels() }
-                }
-            } else if model.modelSettings.models.isEmpty {
-                Text("没有可用模型")
-            } else {
-                ForEach(Array(Dictionary(grouping: model.modelSettings.models, by: \.provider).keys.sorted()), id: \.self) { provider in
-                    Menu(provider) {
-                        ForEach(model.modelSettings.models.filter { $0.provider == provider }) { candidate in
-                            Button {
-                                if model.isNewSessionDraftActive {
-                                    model.selectNewSessionModel(candidate)
-                                } else {
-                                    Task { await model.setModel(candidate) }
-                                }
-                            } label: {
-                                let title = model.isNewSessionDraftActive && model.isPiDefaultNewSessionModel(candidate)
-                                    ? "\(candidate.displayName) · Pi 默认"
-                                    : candidate.displayName
-                                if candidate.id == model.composerModel?.id,
-                                   candidate.provider == model.composerModel?.provider {
-                                    Label(title, systemImage: "checkmark")
-                                } else {
-                                    Text(title)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            Label(
-                "模型 · \(model.modelSettings.isLoadingModels ? "载入中" : (model.composerModel?.displayName ?? "未选择"))",
-                systemImage: "cpu"
-            )
-        }
-    }
-
     private var thinkingPickerMenu: some View {
         Menu {
             ForEach(model.composerThinkingLevels, id: \.self) { level in
@@ -729,39 +711,17 @@ struct ComposerView: View {
                 }
             }
         } label: {
-            Label("推理强度 · \(thinkingLabel(model.composerThinkingLevel))", systemImage: "brain")
+            Text("推理强度 · \(thinkingLabel(model.composerThinkingLevel))")
+                .font(.caption)
+                .foregroundStyle(.purple)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("配置推理强度")
+        .accessibilityLabel("推理强度 \(thinkingLabel(model.composerThinkingLevel))")
         .disabled(model.composerModel == nil || model.composerThinkingLevels.isEmpty)
-    }
-
-    private var speedPickerMenu: some View {
-        Menu {
-            Button {
-                Task { await model.setComposerFastModeEnabled(false) }
-            } label: {
-                if !model.composerFastModeEnabled {
-                    Label("标准", systemImage: "checkmark")
-                } else {
-                    Text("标准")
-                }
-            }
-            Button {
-                Task { await model.setComposerFastModeEnabled(true) }
-            } label: {
-                if model.composerFastModeEnabled {
-                    Label("极速", systemImage: "checkmark")
-                } else {
-                    Text("极速")
-                }
-            }
-            .disabled(!model.composerFastModeSupported)
-            if !model.composerFastModeSupported {
-                Divider()
-                Text("当前模型不支持极速")
-            }
-        } label: {
-            Label("速度 · \(speedLabel)", systemImage: "gauge.with.dots.needle.50percent")
-        }
     }
 
     private var contextPopover: some View {
@@ -1266,11 +1226,6 @@ struct ComposerView: View {
         } ?? "剩余量待估算"
         let tokens = usage.tokens?.formatted() ?? "待估算"
         return "\(remaining)，已用 \(tokens) / \(usage.contextWindow.formatted()) token"
-    }
-
-    private var speedLabel: String {
-        if model.composerFastModeEnabled, !model.composerFastModeSupported { return "极速（不支持）" }
-        return model.composerFastModeEnabled ? "极速" : "标准"
     }
 
     private var composerPlaceholder: String {

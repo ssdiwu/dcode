@@ -97,7 +97,7 @@ final class SearchModelsTests: XCTestCase {
                 projectName: "D Code",
                 sourceFolderName: "dcode"
             )),
-            "搜索设计，项目搜索应该立即出现结果，助手回复，共 2 处命中，项目 D Code，源文件夹 dcode，工作目录 /work/dcode"
+            "搜索设计，项目搜索应该立即出现结果，助手回复，共 2 处命中，项目 D Code，项目目录 dcode，工作目录 /work/dcode"
         )
 
         let recent = SessionSearchResult(
@@ -152,14 +152,14 @@ final class SearchModelsTests: XCTestCase {
             name: "A",
             sourceFolders: [SourceFolder(path: "/work/shared")]
         )
-        let projectB = DCodeProject(name: "B", sourceFolders: [])
+        let projectB = DCodeProject(name: "B", directory: SourceFolder(path: "/work/other"))
         let model = AppModel()
         model.projects = [projectA, projectB]
         model.search.projectID = projectA.id
         model.search.sourceFolderPath = "/work/shared"
 
         model.projects = [
-            DCodeProject(id: projectA.id, name: "A", sourceFolders: []),
+            DCodeProject(id: projectA.id, name: "A", directory: SourceFolder(path: "/work/a-next")),
             DCodeProject(
                 id: projectB.id,
                 name: "B",

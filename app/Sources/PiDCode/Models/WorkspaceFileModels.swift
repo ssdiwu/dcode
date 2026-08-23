@@ -228,7 +228,7 @@ enum WorkspaceFileReaderError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .outsideSourceFolder:
-            "该文件不在当前登记的源文件夹内，已停止读取。"
+            "该文件不在当前登记的项目目录内，已停止读取。"
         case .symbolicLink:
             "该路径包含符号链接。为避免越过项目边界，D Code 不会读取。"
         case .notRegularFile:

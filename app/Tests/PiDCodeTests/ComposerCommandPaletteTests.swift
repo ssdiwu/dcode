@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import PiDCode
 
-/// 统一命令面板（0.0.20）：扩展命令 + 命令 / Skill / 模板 混排、
-/// 同名去重、类型标注与悬停全文。
+/// 统一命令面板（0.0.20）：命令 / Skill / 模板混排、同名去重、
+/// 类型标注与悬停全文；扩展只作为命令的内部来源。
 @MainActor
 final class ComposerCommandSuggestionTests: XCTestCase {
     private func command(_ name: String, description: String? = nil) -> CommandDescriptor {
@@ -37,7 +37,7 @@ final class ComposerCommandSuggestionTests: XCTestCase {
         )
 
         XCTAssertEqual(rows.map(\.displayCommand), ["/mcp", "/skill:llm-wiki", "/review", "/dhash"])
-        XCTAssertEqual(rows.map(\.typeLabel), ["扩展", "Skill", "模板", "命令"])
+        XCTAssertEqual(rows.map(\.typeLabel), ["命令", "Skill", "模板", "命令"])
         XCTAssertEqual(rows[0].description, "MCP 状态", "同名扩展命令以 getCommands 版本为准")
         XCTAssertEqual(
             rows[2].invocationText, "/review <目标>",
@@ -78,7 +78,7 @@ final class ComposerCommandSuggestionTests: XCTestCase {
             resources: [],
             fragment: ""
         )[0]
-        XCTAssertEqual(undescribed.hoverDescription, "扩展 · /mcp")
+        XCTAssertEqual(undescribed.hoverDescription, "命令 · /mcp")
     }
 
     func testEmptyFragmentShowsEverythingAndIdsStayStable() {
@@ -305,7 +305,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             "mermaidUnicode": True, "projectCwdScope": True,
             "contextUsage": True, "contextBreakdown": True, "permissionGate": True,
             "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
-            "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
+            "sessionSearch": True, "sessionPaths": True, "sessionCopy": True, "sessionCwdRelocation": True,
             "sessionTrash": True, "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True, "sessionRename": True,
             "sessionRunCorrelation": True, "sessionRunState": True,
@@ -347,7 +347,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.20", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.25", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":

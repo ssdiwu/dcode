@@ -287,11 +287,11 @@ test("dcode_facts project ownership resolves symlinks like Swift does", async ()
     await writeFile(
       join(factsDir, "projects-v1.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         projects: [{
           id: "11111111-2222-3333-4444-555555555555",
           name: "Symlink 项目",
-          sourceFolders: [{ path: await realpath(repoReal) }],
+          directory: { path: await realpath(repoReal) },
         }],
       }),
       "utf8",
@@ -304,6 +304,7 @@ test("dcode_facts project ownership resolves symlinks like Swift does", async ()
     );
     const result = await tool.execute("t1", { kind: "project" });
     assert.ok(result.content[0]!.text.includes("Symlink 项目"), "符号链接路径归入登记项目");
+    assert.ok(result.content[0]!.text.includes("项目目录"), "当前 Project schema 使用单个项目目录描述");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

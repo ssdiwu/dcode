@@ -459,6 +459,12 @@ final class HomeDraftModelRecoveryTests: XCTestCase {
             }
         }
         await harness.model.start()
+        let project = DCodeProject(
+            name: "主页测试项目",
+            directory: SourceFolder(path: FileManager.default.temporaryDirectory.path)
+        )
+        harness.model.projects = [project]
+        harness.model.selectedProjectID = project.id
 
         await harness.model.ensureHomeDraft()
         XCTAssertTrue(harness.model.isNewSessionDraftActive, "主页自动激活草稿")
@@ -474,6 +480,126 @@ final class HomeDraftModelRecoveryTests: XCTestCase {
             "草稿已在但模型缺失时必须补载"
         )
         XCTAssertNil(harness.model.modelSettings.modelIssue)
+    }
+
+    func testHomeDraftUsesAndSwitchesProjectsWithoutExposingASeparateDirectoryChoice() async throws {
+        let harness = HostTestHarness()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "session.list": .object(["sessions": .array([])])
+            case "session.getModels": .object(["models": .array([])])
+            default: .object([:])
+            }
+        }
+        let firstDirectory = harness.root.appending(path: "first", directoryHint: .isDirectory)
+        let secondDirectory = harness.root.appending(path: "second", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+        let first = DCodeProject(name: "第一项目", directory: SourceFolder(path: firstDirectory.path))
+        let second = DCodeProject(name: "第二项目", directory: SourceFolder(path: secondDirectory.path))
+        await harness.model.start()
+        harness.model.projects = [first, second]
+        harness.model.selectedProjectID = first.id
+
+        await harness.model.ensureHomeDraft()
+        XCTAssertEqual(harness.model.newSessionDraftProject?.id, first.id)
+        XCTAssertEqual(harness.model.newSessionDraftDirectoryPath, try ProjectStore.canonicalDirectoryPath(firstDirectory))
+
+        harness.model.updateComposerText("保留正文")
+        await harness.model.changeNewSessionDraftProject(to: second)
+        XCTAssertEqual(harness.model.newSessionDraftProject?.id, second.id)
+        XCTAssertEqual(harness.model.newSessionDraftDirectoryPath, try ProjectStore.canonicalDirectoryPath(secondDirectory))
+        XCTAssertEqual(harness.model.composerText, "保留正文")
+    }
+
+    func testLegacyHomeDraftIsReboundToTheSelectedProjectBeforeItCanSend() async throws {
+        let harness = HostTestHarness()
+        let legacyDirectory = harness.root.appending(path: "legacy", directoryHint: .isDirectory)
+        let projectDirectory = harness.root.appending(path: "project", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        let draftStore = SessionDraftStore(fileURL: harness.root.appending(path: "drafts.json"))
+        try await draftStore.save(
+            SessionDraftDocument(newSessionDraft: NewSessionDraft(
+                directoryPath: legacyDirectory.path,
+                text: "保留旧草稿"
+            )),
+            revision: 1
+        )
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "session.list": .object(["sessions": .array([])])
+            case "session.getModels": .object([
+                "models": .array([
+                    .object([
+                        "provider": .string("openai-codex"),
+                        "id": .string("gpt-5.3-codex-spark"),
+                        "name": .string("GPT-5.3 Codex Spark"),
+                        "reasoning": .bool(true),
+                        "contextWindow": .number(400_000),
+                        "maxTokens": .number(64_000),
+                    ]),
+                ]),
+                "defaultModel": .object([
+                    "provider": .string("openai-codex"),
+                    "id": .string("gpt-5.3-codex-spark"),
+                    "name": .string("GPT-5.3 Codex Spark"),
+                    "reasoning": .bool(true),
+                    "contextWindow": .number(400_000),
+                    "maxTokens": .number(64_000),
+                ]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        let project = DCodeProject(name: "当前项目", directory: SourceFolder(path: projectDirectory.path))
+        harness.model.projects = [project]
+        harness.model.selectedProjectID = project.id
+
+        await harness.model.ensureHomeDraft()
+
+        XCTAssertEqual(harness.model.newSessionDraftProject?.id, project.id)
+        XCTAssertEqual(harness.model.newSessionDraftDirectoryPath, try ProjectStore.canonicalDirectoryPath(projectDirectory))
+        XCTAssertEqual(harness.model.composerText, "保留旧草稿")
+        XCTAssertTrue(harness.model.canSubmitComposerText, "重绑后才能把旧草稿发送到明确项目")
+    }
+
+    func testParkedDraftFollowsItsProjectAfterTheProjectDirectoryChanges() async throws {
+        let harness = HostTestHarness()
+        let sourceDirectory = harness.root.appending(path: "source", directoryHint: .isDirectory)
+        let targetDirectory = harness.root.appending(path: "target", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
+        await harness.installDefaultScript()
+        await harness.model.start()
+
+        let original = DCodeProject(name: "迁移项目", directory: SourceFolder(path: sourceDirectory.path))
+        harness.model.projects = [original]
+        harness.model.selectedProjectID = original.id
+        await harness.model.createSession(at: sourceDirectory, projectID: original.id)
+        harness.model.updateComposerText("目录变更后仍要保留的草稿")
+
+        let migrated = DCodeProject(
+            id: original.id,
+            name: original.name,
+            directory: SourceFolder(path: targetDirectory.path)
+        )
+        harness.model.projects = [migrated]
+        await harness.model.selectProject(UUID()) // 停靠会话前草稿，模拟用户离开主页后返回。
+        harness.model.selectedProjectID = migrated.id
+
+        await harness.model.ensureHomeDraft()
+
+        XCTAssertEqual(harness.model.newSessionDraftProject?.id, migrated.id)
+        XCTAssertEqual(
+            harness.model.newSessionDraftDirectoryPath,
+            try ProjectStore.canonicalDirectoryPath(targetDirectory),
+            "同一 Project 的草稿不能在目录迁移后继续保留旧 cwd"
+        )
+        XCTAssertEqual(harness.model.composerText, "目录变更后仍要保留的草稿")
     }
 }
 

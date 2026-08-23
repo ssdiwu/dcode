@@ -59,9 +59,9 @@ export function createDCodeFactsExtension(
       name: DCODE_FACTS_TOOL_NAME,
       label: "D Code 事实",
       description:
-        "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目的 Source Folder 集合。全部只读。",
+        "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目及其项目目录。全部只读。",
       promptSnippet:
-        "dcode_facts: 读取 D Code 宿主独有的会话变更归因、验证证据、会话谱系与项目 Source Folder（只读）。",
+        "dcode_facts: 读取 D Code 宿主独有的会话变更归因、验证证据、会话谱系与项目目录（只读）。",
       parameters: Type.Object({
         kind: Type.Union([
           Type.Literal("changes"),
@@ -191,7 +191,22 @@ function lineageFactsSummary(context: DCodeFactsContext): string {
 
 interface ProjectLike {
   name?: unknown;
+  directory?: unknown;
   sourceFolders?: unknown;
+}
+
+/**
+ * `projects-v1.json` 是固定的本机文件名，不是数据 schema 版本。当前 Project
+ * 文档（v2）以单个 `directory` 保存一对一关系；保留 v1 的 `sourceFolders`
+ * 读取只是为了让尚未被 App 写回的旧资料继续可用。
+ */
+function projectDirectories(project: ProjectLike): Record<string, unknown>[] {
+  if (isRecord(project.directory) && typeof project.directory.path === "string") {
+    return [project.directory];
+  }
+  return Array.isArray(project.sourceFolders)
+    ? project.sourceFolders.filter(isRecord).filter((folder) => typeof folder.path === "string")
+    : [];
 }
 
 async function projectFactsSummary(context: DCodeFactsContext, factsDir: string): Promise<string> {
@@ -210,11 +225,9 @@ async function projectFactsSummary(context: DCodeFactsContext, factsDir: string)
   const normalizedCwd = await resolveRealPath(cwd);
   const owned: ProjectLike[] = [];
   for (const project of list.map((entry) => entry as ProjectLike)) {
-    const folders = Array.isArray(project.sourceFolders)
-      ? project.sourceFolders.filter(isRecord)
-      : [];
+    const directories = projectDirectories(project);
     const matches = await Promise.all(
-      folders.map(async (folder) =>
+      directories.map(async (folder) =>
         typeof folder.path === "string"
           && await resolveRealPath(folder.path) === normalizedCwd),
     );
@@ -224,10 +237,8 @@ async function projectFactsSummary(context: DCodeFactsContext, factsDir: string)
     return `当前工作目录 ${cwd} 未归入任何 D Code 项目。`;
   }
   const sections = owned.map((project) => {
-    const folders = Array.isArray(project.sourceFolders)
-      ? project.sourceFolders.filter(isRecord).map((folder) => String(folder.path))
-      : [];
-    return `- ${String(project.name ?? "(未命名项目)")}：${folders.join("、")}`;
+    const directories = projectDirectories(project).map((folder) => String(folder.path));
+    return `- ${String(project.name ?? "(未命名项目)")}：${directories.join("、")}`;
   });
-  return `当前工作目录归属的 D Code 项目与 Source Folder 集合：\n${sections.join("\n")}`;
+  return `当前工作目录归属的 D Code 项目与项目目录：\n${sections.join("\n")}`;
 }

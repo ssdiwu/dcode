@@ -95,9 +95,9 @@ private struct ProjectFilesView: View {
         switch ProjectFileTreeLayout.resolve(for: project) {
         case .empty:
             ContentUnavailableView(
-                "没有源文件夹",
+                "项目目录不可用",
                 systemImage: "folder.badge.plus",
-                description: Text("编辑项目并添加源文件夹后，这里会显示真实文件树。")
+                description: Text("编辑项目并选择可访问的项目目录后，这里会显示真实文件树。")
             )
         case let .flattened(folder):
             FlattenedFileTreeRoot(folder: folder)

@@ -88,6 +88,20 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             details: nil
         ))
         XCTAssertTrue(restoreFailed.localizedDescription.contains("仍被完整保留"))
+
+        let nonEmptyTarget = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "TARGET_DIRECTORY_NOT_EMPTY",
+            message: "Move files requires an empty target directory",
+            details: nil
+        ))
+        XCTAssertTrue(nonEmptyTarget.localizedDescription.contains("目标项目目录必须为空"))
+
+        let migrationBusy = PiHostClientError.hostFailure(HostErrorPayload(
+            code: "SESSION_CHANGED_DURING_MIGRATION",
+            message: "Session changed",
+            details: nil
+        ))
+        XCTAssertTrue(migrationBusy.localizedDescription.contains("没有提交目录迁移"))
     }
 
     func testRequestEncodingIsOneJSONLine() throws {
@@ -1330,7 +1344,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
 
     func testProjectSelectionPreservesCurrentSessionTranscriptAndDraft() async {
         let model = AppModel(projectStore: ProjectStore(fileURL: temporaryURL("projects.json")))
-        let project = DCodeProject(name: "D Code", sourceFolders: [])
+        let project = DCodeProject(name: "D Code", directory: SourceFolder(path: "/work/dcode"))
         let transcript = TranscriptItem(id: "a", role: .assistant, timestamp: nil, blocks: [.text(id: "t", value: "keep")])
         model.projects = [project]
         model.selectedSessionID = "session"
@@ -1446,12 +1460,13 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("modelSettings"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionSteer"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("modelAuthentication"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionCwdRelocation"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.20",
+            hostVersion: "0.0.25",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1472,7 +1487,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.20",
+            hostVersion: "0.0.25",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1737,6 +1752,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionSearch": True,
             "sessionPaths": True,
             "sessionCopy": True,
+            "sessionCwdRelocation": True,
             "sessionTrash": True,
             "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True,
@@ -1757,7 +1773,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.20",
+                    "hostVersion": "0.0.25",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1854,6 +1870,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionSearch": True,
             "sessionPaths": True,
             "sessionCopy": True,
+            "sessionCwdRelocation": True,
             "sessionTrash": True,
             "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True,
@@ -1927,7 +1944,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.20",
+                    "hostVersion": "0.0.25",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2095,7 +2112,11 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         await model.start()
         XCTAssertEqual(model.connectionState, .ready)
 
-        await model.createSession(at: workspace)
+        let project = DCodeProject(name: "运行参数测试", directory: SourceFolder(path: workspace.path))
+        model.projects = [project]
+        model.selectedProjectID = project.id
+
+        await model.createSession(at: workspace, projectID: project.id)
         XCTAssertTrue(model.isNewSessionDraftActive)
         XCTAssertEqual(model.modelSettings.models.map(\.qualifiedName), ["openai/gpt-4o-mini"])
         XCTAssertNil(model.selectedNewSessionModel)
@@ -2109,7 +2130,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertFalse(model.isNewSessionDraftActive)
         XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
 
-        await model.createSession(at: workspace)
+        await model.createSession(at: workspace, projectID: project.id)
         model.updateComposerText("第一条真实消息")
         XCTAssertFalse(model.canSubmitComposerText)
         model.selectNewSessionModel(try XCTUnwrap(model.modelSettings.models.first))
@@ -2126,6 +2147,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(
             parkedDrafts.newSessionDraft,
             NewSessionDraft(
+                projectID: project.id,
                 directoryPath: workspace.path,
                 text: "第一条真实消息",
                 selectedModel: NewSessionModelSelection(provider: "openai", modelID: "gpt-4o-mini"),
@@ -2150,7 +2172,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: agentDirectory.appending(path: "create-requested").path))
 
-        await model.createSession(at: workspace)
+        await model.createSession(at: workspace, projectID: project.id)
         XCTAssertTrue(model.isNewSessionDraftActive)
         XCTAssertEqual(model.composerText, "第一条真实消息")
 
@@ -2217,7 +2239,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "sessionLease": True, "onDemandWrite": True, "structuredPlan": True,
             "mermaidUnicode": True, "projectCwdScope": True, "contextUsage": True, "contextBreakdown": True, "permissionGate": True,
             "fastMode": True, "sessionExternalSync": True, "dcodeSessionOrigin": True,
-            "sessionSearch": True, "sessionPaths": True, "sessionCopy": True,
+            "sessionSearch": True, "sessionPaths": True, "sessionCopy": True, "sessionCwdRelocation": True,
             "sessionTrash": True, "sessionVisibilityExclusions": True,
             "sessionChangeLedger": True, "sessionRename": True,
             "sessionRunCorrelation": True,
@@ -2247,7 +2269,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.20", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.25", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":
@@ -2294,7 +2316,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         )
         await model.start()
         XCTAssertEqual(model.connectionState, .ready)
-        await model.createSession(at: workspace)
+        let project = DCodeProject(name: "草稿转移测试", directory: SourceFolder(path: workspace.path))
+        model.projects = [project]
+        model.selectedProjectID = project.id
+        await model.createSession(at: workspace, projectID: project.id)
         XCTAssertEqual(model.selectedNewSessionModel?.qualifiedName, "openai/gpt-4o-mini")
         XCTAssertTrue(model.isPiDefaultNewSessionModel(try XCTUnwrap(model.selectedNewSessionModel)))
         XCTAssertFalse(model.composerFastModeEnabled)
@@ -2367,10 +2392,8 @@ final class ProtocolAndTranscriptTests: XCTestCase {
     func testProjectStorePersistsOrderAndCanonicalizesSymlinkAliases() async throws {
         let root = temporaryURL("project-store")
         let sourceA = root.appending(path: "a", directoryHint: .isDirectory)
-        let sourceB = root.appending(path: "b", directoryHint: .isDirectory)
         let aliasA = root.appending(path: "alias-a", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: sourceA, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: sourceB, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: aliasA, withDestinationURL: sourceA)
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -2378,19 +2401,18 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let first = try ProjectStore.applying(
             projectID: nil,
             name: "D Code",
-            folderURLs: [aliasA, sourceB],
-            to: [],
-            moveConflicts: false
+            directoryURL: aliasA,
+            to: []
         )
         try await store.save(first.projects)
         let restored = try await store.load()
 
         XCTAssertEqual(restored.map(\.name), ["D Code"])
-        XCTAssertEqual(restored[0].sourceFolders.map(\.path), [sourceA.path, sourceB.path])
-        XCTAssertEqual(restored[0].sourceFolders.map(\.id), [sourceA.path, sourceB.path])
+        XCTAssertEqual(restored[0].directory.path, sourceA.path)
+        XCTAssertEqual(restored[0].sourceFolders.map(\.id), [sourceA.path])
     }
 
-    func testProjectMoveRequiresConfirmationAndDoesNotTouchDirectories() async throws {
+    func testProjectDirectoryCannotBeAssignedToAnotherProject() async throws {
         let root = temporaryURL("project-move")
         let sourceA = root.appending(path: "a", directoryHint: .isDirectory)
         let sourceB = root.appending(path: "b", directoryHint: .isDirectory)
@@ -2403,33 +2425,80 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let storeURL = root.appending(path: "projects.json")
         let store = ProjectStore(fileURL: storeURL)
         try await store.save([projectA, projectB])
-        let before = try Data(contentsOf: storeURL)
-
         XCTAssertThrowsError(try ProjectStore.applying(
             projectID: projectB.id,
             name: projectB.name,
-            folderURLs: [sourceB, sourceA],
-            to: [projectA, projectB],
-            moveConflicts: false
+            directoryURL: sourceA,
+            to: [projectA, projectB]
         )) { error in
-            guard case ProjectStoreError.missingMoveConfirmation = error else {
-                return XCTFail("Expected explicit move confirmation")
+            guard case ProjectStoreError.directoryAlreadyAssigned = error else {
+                return XCTFail("Expected duplicate directory rejection")
             }
         }
-        XCTAssertEqual(try Data(contentsOf: storeURL), before)
         XCTAssertTrue(FileManager.default.fileExists(atPath: sourceA.path))
+    }
 
-        let moved = try ProjectStore.applying(
-            projectID: projectB.id,
-            name: projectB.name,
-            folderURLs: [sourceB, sourceA],
-            to: [projectA, projectB],
-            moveConflicts: true
+    func testLegacyMultiDirectoryProjectSplitsWithoutDroppingDirectories() async throws {
+        let root = temporaryURL("project-v1-split")
+        let first = root.appending(path: "first", directoryHint: .isDirectory)
+        let second = root.appending(path: "second", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originalID = UUID()
+        let storeURL = root.appending(path: "projects.json")
+        let legacy = Data(#"{"version":1,"projects":[{"id":"\#(originalID.uuidString)","name":"Legacy","sourceFolders":[{"path":"\#(first.path)"},{"path":"\#(second.path)"}]}]}"#.utf8)
+        try legacy.write(to: storeURL)
+
+        let projects = try await ProjectStore(fileURL: storeURL).load()
+
+        XCTAssertEqual(projects.map(\.directory.path), [first.path, second.path])
+        XCTAssertEqual(projects.first?.id, originalID)
+        XCTAssertEqual(projects.map(\.name), ["Legacy", "Legacy · second"])
+        XCTAssertEqual(try Data(contentsOf: storeURL), legacy, "读取旧资料不能静默覆盖原文件")
+    }
+
+    func testProjectDirectoryMigrationCallsHostBeforePersistingTheNewDirectory() async throws {
+        let harness = HostTestHarness()
+        let source = harness.root.appending(path: "source", directoryHint: .isDirectory)
+        let target = harness.root.appending(path: "target", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        await harness.client.script { method, params in
+            switch method {
+            case "host.hello":
+                HostTestHarness.helloValue()
+            case "session.list":
+                .object(["sessions": .array([])])
+            case "session.relocateCwd":
+                .object([
+                    "relocated": .bool(true),
+                    "sourceCwd": params["sourceCwd"] ?? .null,
+                    "targetCwd": params["targetCwd"] ?? .null,
+                    "sessionIds": .array([.string("session-1")]),
+                    "movedFileEntries": .array([]),
+                    "closedActiveSessionId": .null,
+                ])
+            default:
+                .object([:])
+            }
+        }
+        await harness.model.start()
+        let project = DCodeProject(name: "迁移", directory: SourceFolder(path: source.path))
+        harness.model.projects = [project]
+
+        _ = try await harness.model.migrateProjectDirectory(
+            id: project.id,
+            name: project.name,
+            directoryURL: target,
+            moveFiles: false
         )
-        try await store.save(moved.projects)
-        XCTAssertTrue(moved.projects.first(where: { $0.id == projectA.id })?.sourceFolders.isEmpty == true)
-        XCTAssertEqual(moved.projects.first(where: { $0.id == projectB.id })?.sourceFolders.map(\.path), [sourceB.path, sourceA.path])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceA.path))
+
+        XCTAssertEqual(harness.model.projects.first?.directory.path, try ProjectStore.canonicalDirectoryPath(target))
+        let relocation = await harness.client.requests.first(where: { $0.method == "session.relocateCwd" })
+        XCTAssertEqual(relocation?.params["sourceCwd"], .string(try ProjectStore.canonicalDirectoryPath(source)))
+        XCTAssertEqual(relocation?.params["targetCwd"], .string(try ProjectStore.canonicalDirectoryPath(target)))
+        XCTAssertEqual(relocation?.params["moveFiles"], .bool(false))
     }
 
     func testProjectStoreLeavesMalformedDocumentUntouched() async throws {
@@ -2456,17 +2525,17 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let storeURL = root.appending(path: "projects.json")
         let store = ProjectStore(fileURL: storeURL)
 
-        let unsupported = Data(#"{"projects":[],"version":2}"#.utf8)
+        let unsupported = Data(#"{"projects":[],"version":3}"#.utf8)
         try unsupported.write(to: storeURL)
         do {
             _ = try await store.load()
             XCTFail("Expected unsupported version to fail")
-        } catch ProjectStoreError.invalidDocumentVersion(2) {
+        } catch ProjectStoreError.invalidDocumentVersion(3) {
             XCTAssertEqual(try Data(contentsOf: storeURL), unsupported)
         }
 
         let duplicateID = UUID()
-        let duplicate = Data(#"{"projects":[{"id":"\#(duplicateID.uuidString)","name":"A","sourceFolders":[]},{"id":"\#(duplicateID.uuidString)","name":"B","sourceFolders":[]}],"version":1}"#.utf8)
+        let duplicate = Data(#"{"projects":[{"id":"\#(duplicateID.uuidString)","name":"A","directory":{"path":"/work/a"}},{"id":"\#(duplicateID.uuidString)","name":"B","directory":{"path":"/work/b"}}],"version":2}"#.utf8)
         try duplicate.write(to: storeURL)
         do {
             _ = try await store.load()
@@ -2512,39 +2581,19 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertNil(ProjectSessionOwnershipResolver.resolve(cwd: nested.path, projects: [project]))
     }
 
-    func testProjectFileTreeLayoutFlattensOnlyOneSourceFolder() {
+    func testProjectFileTreeLayoutFlattensTheProjectDirectory() {
         let first = SourceFolder(path: "/workspace/first")
-        let second = SourceFolder(path: "/workspace/second")
-
         XCTAssertEqual(
-            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "Empty", sourceFolders: [])),
-            .empty
-        )
-        XCTAssertEqual(
-            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "One", sourceFolders: [first])),
+            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "One", directory: first)),
             .flattened(first)
-        )
-        XCTAssertEqual(
-            ProjectFileTreeLayout.resolve(for: DCodeProject(name: "Many", sourceFolders: [first, second])),
-            .grouped([first, second])
         )
     }
 
-    func testProjectSessionCreationRouteSkipsChooserForOneSourceFolder() {
+    func testProjectSessionCreationRouteUsesTheProjectDirectory() {
         let first = SourceFolder(path: "/workspace/first")
-        let second = SourceFolder(path: "/workspace/second")
-
         XCTAssertEqual(
-            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "Empty", sourceFolders: [])),
-            .unavailable
-        )
-        XCTAssertEqual(
-            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "One", sourceFolders: [first])),
+            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "One", directory: first)),
             .direct(first)
-        )
-        XCTAssertEqual(
-            ProjectSessionCreationRoute.resolve(for: DCodeProject(name: "Many", sourceFolders: [first, second])),
-            .choose([first, second])
         )
     }
 

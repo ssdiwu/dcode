@@ -39,7 +39,7 @@ enum FileTreeReaderError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .outsideSourceFolder: "该目录已经离开源文件夹范围，已停止读取。"
+        case .outsideSourceFolder: "该目录已经离开项目目录范围，已停止读取。"
         case .symbolicLinkNotExpandable: "符号链接只显示位置，不会递归展开。"
         }
     }

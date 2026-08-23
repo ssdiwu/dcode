@@ -98,7 +98,7 @@ struct SessionDetailView: View {
             if model.connectionState == .failed {
                 Text("Pi 运行服务未能启动。检查错误提示后重试。")
             } else {
-                Text("在侧栏继续既有会话、从用户首页创建会话，或在项目内选择 Source Folder。")
+                Text("在侧栏继续既有会话、从用户首页创建会话，或在项目内开始新会话。")
             }
         }
     }

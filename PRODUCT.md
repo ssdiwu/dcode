@@ -12,7 +12,7 @@ product
 
 ## Product Purpose
 
-`D Code` 把现有 Pi 会话与运行能力呈现为可信、原生、可日常使用的 macOS 工作台。User Home 只汇集由 D Code 创建的近期工作；用户以自有 Project 组织多个 Source Folder 后，对应的旧 Pi Session 才作为项目历史出现。Pi Session 继续作为唯一对话事实；用户能从正确的项目与会话关系继续工作、查看项目文件和 Git 状态，并在 App 与 CLI 之间安全切换。D Code 不建立竞争性的会话数据库；点击“新建会话”只进入本地会话前草稿，首次提交非空正文时 Host 才创建真实 Pi Session。“复制到项目”则始终创建拥有新身份、目标 `cwd` 与源谱系的独立 Pi Session。
+`D Code` 把现有 Pi 会话与运行能力呈现为可信、原生、可日常使用的 macOS 工作台。User Home 只汇集由 D Code 创建的近期工作；每个自有 Project 只关联一个项目目录，目录也只属于一个 Project，对应的旧 Pi Session 才作为项目历史出现。Pi Session 继续作为唯一对话事实；用户能从正确的项目与会话关系继续工作、查看项目文件和 Git 状态，并在 App 与 CLI 之间安全切换。D Code 不建立竞争性的会话数据库；点击“新建会话”只进入绑定 Project 的本地会话前草稿，首次提交非空正文时 Host 才创建真实 Pi Session。改 Project 目录时，Host 原地迁移关联会话 Header 的 `cwd`，而“复制到项目”仍始终创建拥有新身份、目标 `cwd` 与源谱系的独立 Pi Session。
 
 ## Brand Personality
 
@@ -40,7 +40,7 @@ product
 
 `0.0.7` 在当前 Run 期间增加与耐久队列并列的“立即介入”：它调用 Pi steer，在当前工具安全结束后、下一次模型调用前加入同一 Run，不等同于强杀工具或创建下一轮。Composer 明确显示“立即介入 / 排队等待”选择；介入正文先由当前路径草稿保留，Run 正常完成才清除，失败、中止、断连或结果未知时恢复。Return 按当前选择提交，斜杠命令、路径草稿和结构化等待不允许 steer。
 
-新会话遵循同一事实边界：按钮只打开没有 Session ID 的本地会话前草稿，空白草稿不进入资料并在离开时消失；非空正文可以在本机恢复，但直到首次发送都不是 Pi Session 或消息。首次发送才创建真实 Session 并转入普通 Prompt transaction；若创建已提交而打开或发送失败，Recent 保留真实对象，正文转为该 Session 草稿，不自动删除或伪装成未创建。
+新会话遵循同一事实边界：按钮只打开没有 Session ID、但已绑定 Project 的本地会话前草稿，空白草稿不进入资料并在离开时消失；非空正文可以在本机恢复，但直到首次发送都不是 Pi Session 或消息。首次发送才创建真实 Session 并转入普通 Prompt transaction；若创建已提交而打开或发送失败，Recent 保留真实对象，正文转为该 Session 草稿，不自动删除或伪装成未创建。
 
 `0.0.6` 在会话栏增加 Activity View（活动视图），但不替换默认置顶 / Recent / Project 导航：铃铛只切换同一可见 Session 集合的投影，优先显示可靠的等待、当前运行与带蓝点的新完成结果，其余按最后可证明活动时间排列。蓝点是“最新完成结果尚未在 Conversation 成功呈现”的 User Attention（用户关注态），不是成功、未读消息或运行中；当前单活动 Session 架构也不得被画成多个后台 Agent。同时，当前 Session 的活动、队列、等待输入、停止与安全重试在 Composer 附近收敛为 Interaction Dock。
 
@@ -48,13 +48,13 @@ product
 
 `0.0.8–0.0.13` 已把 App 状态按域拆分，并建立 dgoal 原生投影、上下文构成、打开即接管、Exact Git Diff、结构化验证证据与受控 Self-build Loop。`0.0.10` 的动作级权限机制只是历史源码基线，已由 ADR 0023 在 `0.0.14` 整体移除；当前固定完全访问，没有权限卡、授权表、审计或模式切换。
 
-`0.0.14–0.0.16` 已把主页收口为会话前 Composer，增加界面对象引用预填、压缩可见性、本机资源页、扩展包启停、只读 `dcode_facts` facade、自定义供应商设置与 Composer `+` 的 Command / Skill / Prompt 一次性预填。源码存在不等于验收完成；跨协议组合、真实存储与凭据脱敏的当前缺口由[版本实施方案](doc/40-版本实施方案/README.md)如实记录。
+`0.0.14–0.0.16` 已把主页收口为会话前 Composer，增加界面对象引用预填、压缩可见性、本机资源页、扩展包启停、只读 `dcode_facts` facade 与自定义供应商设置。`0.0.25` 将主页下挂条收口为仅选择 Project，Composer 控制行收口为 `+`、推理强度与发送，`+` 只提供附件、Skill、命令、目标与计划。源码存在不等于验收完成；跨协议组合、真实存储与凭据脱敏的当前缺口由[版本实施方案](doc/40-版本实施方案/README.md)如实记录。
 
-工作台层级也必须连续：Session Sidebar（会话栏）是比 Main Workspace（主工作区）更低的导航 surface，Information Inspector（信息检查器）与 Composer 是可同时操作的 raised surfaces。Project 只有一个 Source Folder 时直接平铺根内容；打开属于 Project 的 Session 后，信息检查器仍保留该 Project 的 Files / Changes，并叠加会话概览。
+工作台层级也必须连续：Session Sidebar（会话栏）是比 Main Workspace（主工作区）更低的导航 surface，Information Inspector（信息检查器）与 Composer 是可同时操作的 raised surfaces。每个 Project 直接平铺其唯一项目目录的根内容；打开属于 Project 的 Session 后，信息检查器仍保留该 Project 的 Files / Changes，并叠加会话概览。
 
 工作台几何同样只有一个事实源：Settings 的页内导航与会话栏共享左侧实际宽度，信息检查器在所有页面与作用域共享右侧实际宽度；从任一显示该栏位的页面调整后，其他页面立即继承，不出现“设置里一套、工作台里另一套”的宽度。
 
-会话整理遵循同一原则：已置顶会话集中到会话栏全局独立区域，并从 Recent / Project 普通列表去重，但不会扩大任何会话的来源或 Project 可见资格；直接归档只改变 D Code 可见性。Settings（设置）是当前窗口内的工具型 Workbench Page（工作台页面）：进入后临时使用完整工作台画布，以页内设置导航组织模型、本机资源、自定义供应商、外观、工作台、会话管理、自构建、Host 诊断和“关于 D Code”，以受限宽度的分组内容承载具体选项；“设置 > 已归档会话”与“设置 > 关于 D Code”继续使用同一页面外壳，不打开第二窗口、Sheet 或卡片式弹窗。关于页集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub。返回 Workspace 后，会话栏与信息检查器恢复进入设置前的显示偏好。两者都不修改 Pi JSONL、`cwd`、来源或 Project 归属。
+会话整理遵循同一原则：已置顶会话集中到会话栏全局独立区域，并从 Recent / Project 普通列表去重，但不会扩大任何会话的来源或 Project 可见资格；直接归档只改变 D Code 可见性。Settings（设置）是当前窗口内的工具型 Workbench Page（工作台页面）：进入后临时使用完整工作台画布，以页内设置导航组织模型、本机资源、自定义供应商、外观、工作台、会话管理、自构建、Host 诊断和“关于 D Code”，以受限宽度的分组内容承载具体选项；“设置 > 已归档会话”与“设置 > 关于 D Code”继续使用同一页面外壳，不打开第二窗口、Sheet 或卡片式弹窗。关于页集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub。返回 Workspace 后，会话栏与信息检查器恢复进入设置前的显示偏好。除 Project 编辑中的显式目录迁移外，这些页面不修改 Pi JSONL、`cwd`、来源或 Project 归属。
 
 对话中的 Pi 结构化图片内容使用原生方形缩略图呈现，点击后可以查看和缩放原图。图片原始数据仍只属于 Pi Session JSONL，D Code 仅做有界内存解码，不建立第二份缓存或附件存储；任意远程 Markdown 图片不会自动加载，Composer 图片输入与发送不随本切片开放。
 

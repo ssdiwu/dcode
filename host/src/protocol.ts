@@ -8,6 +8,7 @@ export const HOST_METHODS = [
   "session.refresh",
   "session.create",
   "session.copy",
+  "session.relocateCwd",
   "session.trash",
   "session.repair",
   "session.open",
@@ -453,6 +454,13 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.copy":
       requireString(params, "sessionId");
       requireString(params, "targetCwd");
+      return;
+    case "session.relocateCwd":
+      requireString(params, "sourceCwd");
+      requireString(params, "targetCwd");
+      if (typeof params.moveFiles !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.moveFiles to be a boolean");
+      }
       return;
     case "session.trash":
       requireString(params, "sessionId");

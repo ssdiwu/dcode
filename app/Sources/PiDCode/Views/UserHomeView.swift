@@ -24,13 +24,17 @@ struct HomeWorkspaceView: View {
             )
             VStack(spacing: recentsSpacing) {
                 if model.canUseHostSessions {
-                    ComposerView()
-                        .frame(maxWidth: 640)
-                        .overlay(alignment: .top) {
-                            HomeBrandingView()
-                                .offset(y: HomeBrandingMetrics.overlayOffset)
-                        }
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
+                    if model.projects.isEmpty {
+                        homeProjectRequired
+                    } else {
+                        ComposerView()
+                            .frame(maxWidth: 640)
+                            .overlay(alignment: .top) {
+                                HomeBrandingView()
+                                    .offset(y: HomeBrandingMetrics.overlayOffset)
+                            }
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
+                    }
                 } else {
                     connectionNotice
                 }
@@ -75,6 +79,20 @@ struct HomeWorkspaceView: View {
                 ProgressView("正在连接 Pi 运行服务…")
                     .controlSize(.large)
             }
+        }
+        .frame(maxWidth: 640)
+    }
+
+    private var homeProjectRequired: some View {
+        VStack(spacing: PiDCodeMetrics.spacingGroup) {
+            HomeBrandingView()
+            ContentUnavailableView(
+                "先创建一个项目",
+                systemImage: "folder.badge.plus",
+                description: Text("每个项目对应一个工作目录；新会话会从选定项目开始。")
+            )
+            Button("新建项目", action: newProject)
+                .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: 640)
     }

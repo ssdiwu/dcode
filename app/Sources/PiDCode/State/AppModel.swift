@@ -173,6 +173,7 @@ final class AppModel {
     var sessionChangeSummary: SessionChangeSummary?
     var currentDraftTarget: SessionDraftTarget?
     var isCopyingSession = false
+    var isMigratingProjectDirectory = false
     var isTrashingSession = false
     var isRenamingSession = false
     var isMutatingArchive = false
@@ -394,6 +395,7 @@ final class AppModel {
               activity.currentRunState?.phase != .unknown else { return false }
         if isNewSessionDraftActive {
             return !hasActiveRun
+                && newSessionDraftProject != nil
                 && !modelSettings.isLoadingModels
                 && modelSettings.modelIssue == nil
                 && selectedNewSessionModel != nil
@@ -498,6 +500,12 @@ final class AppModel {
 
     var newSessionDraftDirectoryPath: String? {
         isNewSessionDraftActive ? newSessionDraft?.directoryPath : nil
+    }
+
+    var newSessionDraftProject: DCodeProject? {
+        guard isNewSessionDraftActive,
+              let projectID = newSessionDraft?.projectID else { return nil }
+        return projects.first(where: { $0.id == projectID })
     }
 
     var selectedNewSessionModel: HostModel? {
@@ -1515,7 +1523,7 @@ final class AppModel {
         ) else {
             issue = AppIssue(
                 title: "无法打开文件",
-                message: "该来源文件夹已不在当前 D Code 项目中，未读取磁盘内容。"
+                message: "该项目目录已不在当前 D Code 项目中，未读取磁盘内容。"
             )
             return
         }
@@ -1523,7 +1531,7 @@ final class AppModel {
         guard WorkspaceFileReader.relativeComponents(of: canonicalPath, inside: canonicalRoot) != nil else {
             issue = AppIssue(
                 title: "无法打开文件",
-                message: "该文件不在当前登记的来源文件夹内，已停止读取。"
+                message: "该文件不在当前登记的项目目录内，已停止读取。"
             )
             return
         }
@@ -1581,7 +1589,7 @@ final class AppModel {
         } else {
             issue = AppIssue(
                 title: "无法定位本机文件",
-                message: "该相对路径缺少唯一的会话工作目录或项目来源文件夹。"
+                message: "该相对路径缺少唯一的会话工作目录或项目目录。"
             )
             return
         }
@@ -1592,7 +1600,7 @@ final class AppModel {
         ) else {
             issue = AppIssue(
                 title: "无法打开本机文件",
-                message: "该路径不属于任何已登记的 D Code 项目来源文件夹，未交给系统或其他应用打开。"
+                message: "该路径不属于任何已登记的 D Code 项目目录，未交给系统或其他应用打开。"
             )
             return
         }
@@ -2169,7 +2177,7 @@ final class AppModel {
         }
     }
 
-    func createSession(at directory: URL) async {
+    func createSession(at directory: URL, projectID: UUID? = nil) async {
         guard readyClient != nil,
               !isStreaming,
               !isCreatingSession,
@@ -2202,9 +2210,24 @@ final class AppModel {
             draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draft
         }
         if let existingDraft, existingDraft.directoryPath != canonicalDirectoryPath {
-            showNotice("已恢复之前未发送的新会话草稿；发送或取消后，才能在其他目录开始新会话。", level: "info")
+            if let projectID, existingDraft.projectID == projectID {
+                // Project 是目录唯一权威：同一 Project 改目录后，未发送草稿不能
+                // 继续把第一条消息创建到旧 cwd。正文和运行选择仍由草稿保留。
+                newSessionDraft?.directoryPath = canonicalDirectoryPath
+            } else {
+                showNotice("已恢复之前未发送的新会话草稿；发送或取消后，才能在其他目录开始新会话。", level: "info")
+            }
         }
-        let draft = existingDraft ?? NewSessionDraft(directoryPath: canonicalDirectoryPath, text: "")
+        var draft = newSessionDraft.flatMap { candidate in
+            candidate.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : candidate
+        } ?? NewSessionDraft(
+            projectID: projectID,
+            directoryPath: canonicalDirectoryPath,
+            text: ""
+        )
+        if draft.directoryPath == canonicalDirectoryPath {
+            draft.projectID = projectID
+        }
 
         clearActiveSessionPresentation()
         workbenchDestination = .workspace
@@ -2231,13 +2254,18 @@ final class AppModel {
         workspaceTabSelection = .conversation
     }
 
-    /// 全局新建会话入口（⌘N、会话栏动词行、顶栏按钮共用）：以用户目录为工作目录。
+    /// 新建会话入口（⌘N、会话栏动词行、顶栏按钮共用）：从当前或首个 Project 开始。
     func startGlobalSession() async {
-        await createSession(at: FileManager.default.homeDirectoryForCurrentUser)
+        guard let project = selectedProject ?? projects.first else {
+            showNotice("请先创建并选择一个项目。", level: "info")
+            return
+        }
+        await createSession(at: project.directory.url, projectID: project.id)
     }
 
-    /// 主页落地即可打字：工作台无会话且无草稿时，自动恢复或创建新会话草稿。
-    /// 已停靠的非空草稿按其原目录恢复（不弹“目录不同”提示）；无草稿时以用户目录开始。
+    /// 主页落地即可打字：工作台无会话且无草稿时，以已选或第一个 Project 创建草稿。
+    /// 已停靠的非空草稿按其 Project / 目录恢复；旧草稿没有 Project 身份时，
+    /// 仅在已有 Project 后临时归入当前选择，仍可在下挂条改选后再发送。
     /// 草稿已在但模型从未载入（如视图任务曾被取消）时补一次加载。
     func ensureHomeDraft() async {
         guard readyClient != nil,
@@ -2255,24 +2283,40 @@ final class AppModel {
             }
             return
         }
-        let directory = newSessionDraft.map {
-            URL(fileURLWithPath: $0.directoryPath, isDirectory: true)
-        } ?? FileManager.default.homeDirectoryForCurrentUser
-        await createSession(at: directory)
+        if let draft = newSessionDraft {
+            if let project = projects.first(where: { $0.id == draft.projectID })
+                ?? projects.first(where: {
+                    ProjectStore.canonicalDirectoryPathIfAvailable($0.directory.url) == draft.directoryPath
+                }) {
+                await createSession(at: project.directory.url, projectID: project.id)
+            } else if let project = selectedProject ?? projects.first {
+                var rebased = draft
+                rebased.projectID = project.id
+                rebased.directoryPath = (try? ProjectStore.canonicalDirectoryPath(project.directory.url))
+                    ?? project.directory.path
+                newSessionDraft = rebased
+                showNotice("已恢复之前未归入项目的草稿；发送前可在下方切换项目。", level: "info")
+                await createSession(at: project.directory.url, projectID: project.id)
+            }
+            return
+        }
+        guard let project = selectedProject ?? projects.first else { return }
+        await createSession(at: project.directory.url, projectID: project.id)
     }
 
-    /// 主页作用域托盘切换 Source Folder：草稿正文保留，仅迁移目录并重载该目录模型。
-    func changeNewSessionDraftDirectory(to directory: URL) async {
+    /// 主页作用域托盘只切换 Project；工作目录由该 Project 唯一持有。
+    func changeNewSessionDraftProject(to project: DCodeProject) async {
         guard isNewSessionDraftActive else { return }
         let canonicalDirectoryPath: String
         do {
-            canonicalDirectoryPath = try ProjectStore.canonicalDirectoryPath(directory)
+            canonicalDirectoryPath = try ProjectStore.canonicalDirectoryPath(project.directory.url)
         } catch {
             present(error, title: "新会话工作目录不可用")
             return
         }
-        guard canonicalDirectoryPath != newSessionDraft?.directoryPath else { return }
+        guard canonicalDirectoryPath != newSessionDraft?.directoryPath || newSessionDraft?.projectID != project.id else { return }
         newSessionDraft?.directoryPath = canonicalDirectoryPath
+        newSessionDraft?.projectID = project.id
         persistNewSessionDraftIfMeaningful()
         await reloadNewSessionModels()
     }
@@ -2639,7 +2683,7 @@ final class AppModel {
             .contains(where: { $0.path == canonicalTarget }) == true else {
             issue = AppIssue(
                 title: "复制目标已变化",
-                message: "所选 Source Folder 已不再属于当前 Project。请重新选择目标。"
+                message: "所选项目目录已不再属于当前 Project。请重新选择目标。"
             )
             return false
         }
@@ -3961,60 +4005,108 @@ final class AppModel {
         mermaidCacheOrder.append(source)
     }
 
-    func projectFolderConflicts(folderURLs: [URL], excluding projectID: UUID?) throws -> [ProjectFolderConflict] {
-        var paths: [String] = []
-        for url in folderURLs {
-            let path = try ProjectStore.canonicalDirectoryPath(url)
-            if !paths.contains(path) { paths.append(path) }
-        }
-        return ProjectStore.conflicts(paths: paths, in: projects, excluding: projectID)
+    func projectDirectoryConflict(directoryURL: URL, excluding projectID: UUID?) throws -> ProjectFolderConflict? {
+        let path = try ProjectStore.canonicalDirectoryPath(directoryURL)
+        return ProjectStore.conflicts(paths: [path], in: projects, excluding: projectID).first
     }
 
     @discardableResult
     func saveProject(
         id: UUID?,
         name: String,
-        folderURLs: [URL],
-        moveConflicts: Bool
+        directoryURL: URL
     ) async throws -> UUID {
         guard projectStoreWritable else { throw ProjectStoreError.unavailableAfterLoadFailure }
-        guard !isCopyingSession else { throw ProjectStoreError.mutationBlockedDuringSessionCopy }
+        guard !isCopyingSession, !isMigratingProjectDirectory else { throw ProjectStoreError.mutationBlockedDuringSessionCopy }
         let result = try ProjectStore.applying(
             projectID: id,
             name: name,
-            folderURLs: folderURLs,
-            to: projects,
-            moveConflicts: moveConflicts
-        )
-        // ADR 0027 权限中断可见化：被移除的 Source Folder 影响范围如实提示。
-        let previousFolders = Set(projects.flatMap { $0.sourceFolders }.map(\.path))
-        let updatedFolders = Set(result.projects.flatMap { $0.sourceFolders }.map(\.path))
-        let removedFolders = Set(
-            previousFolders.subtracting(updatedFolders)
-                .map(WorkspaceFileReader.standardizedAbsolutePath)
+            directoryURL: directoryURL,
+            to: projects
         )
         try await projectStore.save(result.projects)
-        projects = result.projects
+        applyProjectMutation(result.projects, selectedProjectID: result.savedProjectID)
+        return result.savedProjectID
+    }
+
+    @discardableResult
+    func migrateProjectDirectory(
+        id: UUID,
+        name: String,
+        directoryURL: URL,
+        moveFiles: Bool
+    ) async throws -> UUID {
+        guard projectStoreWritable else { throw ProjectStoreError.unavailableAfterLoadFailure }
+        guard !isCopyingSession, !isMigratingProjectDirectory else { throw ProjectStoreError.mutationBlockedDuringSessionCopy }
+        guard let project = projects.first(where: { $0.id == id }) else {
+            throw ProjectStoreError.unavailableAfterLoadFailure
+        }
+        let sourceDirectory = try ProjectStore.canonicalDirectoryPath(project.directory.url)
+        let targetDirectory = try ProjectStore.canonicalDirectoryPath(directoryURL)
+        if sourceDirectory == targetDirectory {
+            return try await saveProject(id: id, name: name, directoryURL: directoryURL)
+        }
+        if let conflict = try projectDirectoryConflict(directoryURL: directoryURL, excluding: id) {
+            throw ProjectStoreError.directoryAlreadyAssigned(conflict)
+        }
+        guard let client = readyClient else {
+            throw ProjectStoreError.hostUnavailable
+        }
+        let result = try ProjectStore.applying(
+            projectID: id,
+            name: name,
+            directoryURL: directoryURL,
+            to: projects
+        )
+        struct CwdMigrationResult: Codable {
+            let relocated: Bool
+            let sourceCwd: String
+            let targetCwd: String
+            let sessionIds: [String]
+            let movedFileEntries: [String]
+            let closedActiveSessionId: String?
+        }
+        isMigratingProjectDirectory = true
+        defer { isMigratingProjectDirectory = false }
+        let migration: CwdMigrationResult = try await client.request("session.relocateCwd", params: [
+            "sourceCwd": .string(sourceDirectory),
+            "targetCwd": .string(targetDirectory),
+            "moveFiles": .bool(moveFiles),
+        ])
+        do {
+            try await projectStore.save(result.projects)
+        } catch {
+            do {
+                let _: CwdMigrationResult = try await client.request("session.relocateCwd", params: [
+                    "sourceCwd": .string(targetDirectory),
+                    "targetCwd": .string(sourceDirectory),
+                    "moveFiles": .bool(moveFiles),
+                ])
+            } catch {
+                throw ProjectStoreError.directoryMigrationRecoveryRequired
+            }
+            throw error
+        }
+        applyProjectMutation(result.projects, selectedProjectID: result.savedProjectID)
+        showNotice(
+            moveFiles
+                ? "已迁移 \(migration.sessionIds.count) 个会话的工作目录，并移动 \(migration.movedFileEntries.count) 个目录项。"
+                : "已迁移 \(migration.sessionIds.count) 个会话的工作目录；项目文件保持原处。",
+            level: "success"
+        )
+        if let closedActiveSessionId = migration.closedActiveSessionId {
+            await selectSession(closedActiveSessionId)
+        }
+        return result.savedProjectID
+    }
+
+    private func applyProjectMutation(_ updatedProjects: [DCodeProject], selectedProjectID: UUID) {
+        projects = updatedProjects
         reconcileSearchScope()
         reconcileWorkspaceFileAuthorizations()
-        if !removedFolders.isEmpty {
-            let revokedTabs = workspaceFileTabs
-                .filter { !$0.authorizationAvailable && removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.sourceFolderPath)) }
-                .count
-            let affectedSessions = recentSessions
-                .filter { removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.cwd)) }
-                .count
-                + projectSessions.values.flatMap(\.self)
-                    .filter { removedFolders.contains(WorkspaceFileReader.standardizedAbsolutePath($0.cwd)) }
-                    .count
-            showNotice(
-                "已移除 \(removedFolders.count) 个来源文件夹：\(revokedTabs) 个文件标签失去授权（缓冲区保留在内存），\(affectedSessions) 个已加载会话不再归属原项目。",
-                level: "warning"
-            )
-        }
-        selectedProjectID = result.savedProjectID
-        expandedProjectIDs.insert(result.savedProjectID)
-        inspectorScope = .project(result.savedProjectID)
+        self.selectedProjectID = selectedProjectID
+        expandedProjectIDs.insert(selectedProjectID)
+        inspectorScope = .project(selectedProjectID)
         projectSessions.removeAll()
         projectHasMore.removeAll()
         projectSessionErrors.removeAll()
@@ -4025,7 +4117,6 @@ final class AppModel {
             }
         }
         if search.presented { scheduleSearch(refresh: true) }
-        return result.savedProjectID
     }
 
     func deleteProject(_ projectID: UUID) async throws {

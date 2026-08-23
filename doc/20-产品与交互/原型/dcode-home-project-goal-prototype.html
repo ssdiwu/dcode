@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>D Code · 项目优先主页原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f6f6f4;
+      --surface: rgba(255, 255, 255, .88);
+      --surface-strong: #fff;
+      --ink: #191919;
+      --muted: #757575;
+      --hint: #a9aaa8;
+      --line: rgba(29, 29, 29, .13);
+      --line-strong: rgba(29, 29, 29, .20);
+      --accent: #0878f9;
+      --accent-soft: #e8f2ff;
+      --positive: #248b55;
+      --shadow: 0 18px 48px rgba(27, 27, 27, .11), 0 2px 8px rgba(27, 27, 27, .06);
+      --soft-shadow: 0 10px 28px rgba(27, 27, 27, .10), 0 1px 3px rgba(27, 27, 27, .05);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 50% 18%, #fff 0 16%, var(--canvas) 57%);
+      color: var(--ink);
+    }
+
+    button, input, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(8, 120, 249, .35);
+      outline-offset: 2px;
+    }
+
+    .prototype-note {
+      width: min(1200px, calc(100% - 40px));
+      margin: 22px auto 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      color: #5f615e;
+      font-size: 13px;
+    }
+
+    .prototype-note strong { color: #252625; }
+    .reset {
+      border: 0;
+      background: transparent;
+      color: #686966;
+      padding: 6px 8px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .reset:hover { background: rgba(0,0,0,.06); color: var(--ink); }
+
+    .window {
+      width: min(1200px, calc(100% - 40px));
+      min-height: 760px;
+      margin: 18px auto 42px;
+      overflow: hidden;
+      border: 1px solid rgba(24,24,24,.13);
+      border-radius: 18px;
+      background: var(--surface-strong);
+      box-shadow: 0 30px 90px rgba(22, 22, 22, .14);
+    }
+
+    .windowbar {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid rgba(27,27,27,.08);
+      padding: 0 18px;
+      background: rgba(255,255,255,.72);
+    }
+    .traffic { display: flex; gap: 8px; }
+    .traffic i { display: block; width: 12px; height: 12px; border-radius: 50%; }
+    .traffic i:nth-child(1) { background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+    .window-title {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      color: #70716f;
+      letter-spacing: .01em;
+    }
+
+    .home {
+      min-height: 712px;
+      display: grid;
+      grid-template-rows: minmax(100px, 1fr) auto minmax(84px, 1fr);
+      justify-items: center;
+      padding: 42px 28px 30px;
+      background:
+        radial-gradient(circle at 50% 39%, rgba(255,255,255,.9), rgba(255,255,255,0) 48%),
+        linear-gradient(180deg, #fff, #fafaf8);
+    }
+
+    .composer-zone { width: min(840px, 100%); position: relative; }
+    .brand {
+      display: grid;
+      place-items: center;
+      width: 86px;
+      height: 86px;
+      margin: 0 auto 28px;
+      border-radius: 27px;
+      background: #1c1c1c;
+      box-shadow: 0 12px 30px rgba(0,0,0,.13);
+    }
+    .brand svg { width: 53px; height: 53px; }
+
+    .composer {
+      position: relative;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .composer-main {
+      position: relative;
+      z-index: 2;
+      padding: 22px 24px 10px;
+      border: 1px solid rgba(24,24,24,.12);
+      border-radius: 23px;
+      background: var(--surface-strong);
+      box-shadow: var(--shadow);
+    }
+    .prompt-wrap { position: relative; }
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 162px;
+      padding: 0;
+      resize: none;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.52;
+      letter-spacing: -.015em;
+    }
+    textarea::placeholder { color: var(--hint); }
+    textarea:focus { outline: none; }
+
+    .slash-panel {
+      position: absolute;
+      z-index: 5;
+      top: 48px;
+      left: 0;
+      width: min(570px, calc(100vw - 96px));
+      padding: 8px;
+      border: 1px solid rgba(18,18,18,.15);
+      border-radius: 16px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 20px 48px rgba(0,0,0,.17);
+    }
+    .slash-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 9px 10px 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .slash-heading kbd { font: inherit; color: #999; }
+    .slash-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 28px minmax(116px, .8fr) minmax(160px, 1.7fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .slash-row:hover { background: var(--accent-soft); }
+    .slash-row .command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 650; }
+    .slash-row .description { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .type-badge { color: #686966; font-size: 11px; padding: 3px 6px; border-radius: 6px; background: #f0f0ee; }
+
+    .attachment-tray { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 8px; }
+    .attachment-tray:empty { display: none; }
+    .attachment-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(24,24,24,.08);
+      border-radius: 9px;
+      padding: 6px 8px;
+      background: #f4f5f5;
+      font-size: 12px;
+      color: #4e504d;
+    }
+    .attachment-chip button { border: 0; padding: 0; background: none; color: #747571; cursor: pointer; }
+
+    .control-row {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .control-button, .thinking-button, .send-button, .project-button {
+      border: 0;
+      cursor: pointer;
+      transition: background .15s ease, transform .15s ease;
+    }
+    .control-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 0 9px;
+      border-radius: 9px;
+      background: transparent;
+      font-size: 13px;
+      color: #565754;
+    }
+    .control-button:hover, .thinking-button:hover { background: #f1f1ef; color: var(--ink); }
+    .control-button svg, .project-button svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+    .control-button .mark { display: inline-grid; place-items: center; width: 16px; height: 16px; color: #6a51c9; }
+    .spacer { flex: 1; }
+    .thinking-button {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 8px;
+      border-radius: 9px;
+      background: transparent;
+      font-size: 13px;
+      color: #7357cc;
+    }
+    .send-button {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 2px 5px rgba(8,120,249,.26);
+    }
+    .send-button:hover { transform: translateY(-1px); background: #056fe5; }
+    .send-button svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+    .project-tray {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      min-height: 68px;
+      margin-top: -7px;
+      padding: 19px 24px 12px;
+      border: 1px solid rgba(24,24,24,.08);
+      border-top: 0;
+      border-radius: 0 0 23px 23px;
+      background: linear-gradient(180deg, #fafaf9, #f6f6f4);
+      box-shadow: 0 18px 30px rgba(27,27,27,.09), 0 2px 5px rgba(27,27,27,.04);
+    }
+    .project-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 0 9px;
+      border-radius: 9px;
+      background: transparent;
+      color: #30312f;
+      font-size: 13px;
+    }
+    .project-button:hover { background: rgba(0,0,0,.06); }
+    .project-copy strong { font-size: 15px; font-weight: 620; line-height: 1.1; }
+
+    .floating-menu {
+      position: absolute;
+      z-index: 12;
+      min-width: 300px;
+      border: 1px solid rgba(18,18,18,.16);
+      border-radius: 15px;
+      padding: 8px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 18px 42px rgba(0,0,0,.16);
+    }
+    .floating-menu[hidden], .slash-panel[hidden] { display: none; }
+    .menu-title { padding: 9px 10px 6px; font-size: 12px; color: #878885; }
+    .menu-rule { height: 1px; background: var(--line); margin: 6px 8px; }
+    .menu-action {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+    }
+    .menu-action:hover { background: #f0f5fc; }
+    .menu-action svg { width: 18px; height: 18px; stroke: #686a67; fill: none; stroke-width: 1.7; }
+    .menu-action strong { display: block; font-size: 13px; font-weight: 600; }
+    .menu-action small { display: block; margin-top: 2px; color: #7d7f7b; font-size: 11px; line-height: 1.3; }
+    .menu-action .check { color: var(--accent); font-size: 14px; }
+    .menu-action.disabled { color: #a0a19e; cursor: default; }
+    .menu-action.disabled:hover { background: transparent; }
+
+    #project-menu { left: 16px; bottom: 70px; width: min(350px, calc(100vw - 96px)); }
+    #attachment-menu { left: 18px; bottom: 76px; width: 330px; }
+
+    .plan-card {
+      margin-top: 16px;
+      display: none;
+      border: 1px solid rgba(106,81,201,.22);
+      border-radius: 14px;
+      padding: 14px 16px;
+      background: linear-gradient(105deg, #fbfaff, #fff);
+      box-shadow: var(--soft-shadow);
+    }
+    .plan-card.open { display: block; }
+    .plan-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .plan-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; }
+    .plan-title .orb { width: 9px; height: 9px; border-radius: 50%; background: #7054cf; }
+    .plan-state { color: #765fbd; font-size: 11px; background: #efeafd; padding: 3px 6px; border-radius: 5px; }
+    .plan-card h2 { margin: 10px 0 4px; font-size: 16px; letter-spacing: -.015em; }
+    .plan-card p { margin: 0; color: #6f706e; font-size: 12px; }
+    .plan-steps { display: grid; gap: 7px; margin: 13px 0 0; padding: 0; list-style: none; }
+    .plan-steps li { display: flex; gap: 8px; align-items: center; color: #565754; font-size: 12px; }
+    .plan-steps i { width: 15px; height: 15px; border-radius: 50%; border: 1px solid #b9b6c9; }
+    .plan-steps li:first-child i { background: #7256cf; border-color: #7256cf; box-shadow: inset 0 0 0 4px #fff; }
+
+    .recent {
+      width: min(760px, 100%);
+      align-self: start;
+      margin-top: 24px;
+      color: #5e605d;
+    }
+    .recent-heading { margin: 0 0 7px; color: #a0a19e; font-size: 12px; }
+    .recent-row {
+      display: grid;
+      grid-template-columns: 20px minmax(0,1fr) auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      padding: 10px 8px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+    }
+    .recent-row:hover { background: rgba(0,0,0,.045); }
+    .recent-row svg { width: 18px; height: 18px; stroke: #858783; fill: none; stroke-width: 1.8; }
+    .recent-row strong { font-size: 14px; font-weight: 560; }
+    .recent-row span { color: #8c8d8a; font-size: 12px; }
+
+    dialog {
+      width: min(500px, calc(100% - 36px));
+      padding: 0;
+      border: 1px solid rgba(20,20,20,.16);
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 28px 80px rgba(0,0,0,.24);
+    }
+    dialog::backdrop { background: rgba(17,17,17,.28); backdrop-filter: blur(4px); }
+    .sheet { padding: 22px; }
+    .sheet-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .sheet h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+    .sheet p { margin: 5px 0 0; color: #777875; font-size: 13px; line-height: 1.45; }
+    .sheet label { display: block; margin-top: 22px; color: #555654; font-size: 13px; font-weight: 600; }
+    .sheet input { width: 100%; margin-top: 7px; border: 1px solid var(--line-strong); border-radius: 9px; padding: 10px 11px; background: #fff; color: var(--ink); }
+    .folder-stack { display: grid; gap: 7px; margin-top: 8px; }
+    .folder-row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; background: #f4f4f2; font-size: 13px; }
+    .folder-row span { color: #747572; font-size: 12px; }
+    .text-button { margin-top: 8px; border: 0; padding: 5px 0; background: transparent; color: #0878f9; cursor: pointer; font-size: 13px; }
+    .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+    .secondary, .primary { border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+    .secondary { background: #ededeb; color: #40413f; }
+    .primary { background: var(--accent); color: #fff; }
+    .migration-choice {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      margin-top: 18px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: #f5f5f3;
+      color: #3d3e3c;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .migration-choice input { width: auto; margin: 2px 0 0; }
+    .migration-choice small { display: block; margin-top: 3px; color: #7a7b78; font-size: 11px; }
+
+    .toast {
+      position: fixed;
+      z-index: 60;
+      left: 50%;
+      bottom: 28px;
+      transform: translate(-50%, 14px);
+      pointer-events: none;
+      opacity: 0;
+      padding: 10px 13px;
+      border-radius: 10px;
+      background: rgba(24,24,24,.92);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(0,0,0,.2);
+      font-size: 13px;
+      transition: opacity .2s ease, transform .2s ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 720px) {
+      .prototype-note { width: calc(100% - 28px); }
+      .window { width: calc(100% - 20px); margin-top: 10px; border-radius: 14px; }
+      .home { min-height: 720px; padding: 32px 14px 24px; }
+      .composer-main { padding: 18px 16px 8px; }
+      textarea { min-height: 144px; font-size: 18px; }
+      .control-button .label { display: none; }
+      .control-button { padding: 0 8px; }
+      .project-tray { min-height: 62px; padding: 18px 12px 10px; }
+      #project-menu { left: 0; }
+    }
+
+    @media (min-width: 721px) and (max-height: 760px) {
+      .home {
+        min-height: 500px;
+        grid-template-rows: minmax(18px, 1fr) auto minmax(12px, .38fr);
+        padding: 22px 28px 14px;
+      }
+      .brand {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 14px;
+        border-radius: 20px;
+      }
+      .brand svg { width: 41px; height: 41px; }
+      .composer-main { padding: 18px 20px 8px; }
+      textarea { min-height: 116px; font-size: 18px; }
+      .project-tray { min-height: 56px; padding: 14px 20px 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="prototype-note">
+    <span><strong>可丢弃原型</strong> · 项目优先主页与真实能力入口</span>
+    <button class="reset" id="reset" type="button">重置演示</button>
+  </header>
+
+  <main class="window" aria-label="D Code 项目优先主页原型">
+    <header class="windowbar" aria-label="窗口控制带">
+      <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="window-title">D Code</span>
+    </header>
+
+    <section class="home">
+      <div></div>
+      <div class="composer-zone">
+        <div class="brand" aria-label="D Code">
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M10 10h25c12 0 20 8 20 22S47 54 35 54H10z" fill="none" stroke="white" stroke-width="7" stroke-linejoin="round"/>
+            <path d="M25 24l-7 8 7 8M38 24l7 8-7 8" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+
+        <section class="composer" aria-label="开始一项项目工作">
+          <div class="composer-main">
+            <div class="prompt-wrap">
+              <textarea id="prompt" aria-label="交给 D Code 一项工作" placeholder="交给 D Code 一项工作，/ 使用命令"></textarea>
+              <section class="slash-panel" id="slash-panel" hidden aria-label="可用命令、技能与模板">
+                <div class="slash-heading"><span>可用资源</span><kbd>↑↓ 选择 · Esc 关闭</kbd></div>
+                <button class="slash-row" type="button" data-insert="/dgoal ">
+                  <span aria-hidden="true">◎</span><span class="command">/dgoal</span><span class="description">在当前项目会话中建立目标与可审阅计划</span><span class="type-badge">命令</span>
+                </button>
+                <button class="slash-row" type="button" data-insert="/skill:507-explore ">
+                  <span aria-hidden="true">⌁</span><span class="command">/skill:507-explore</span><span class="description">先读项目证据，再界定当前可推进的问题</span><span class="type-badge">Skill</span>
+                </button>
+                <button class="slash-row" type="button" data-insert="/review ">
+                  <span aria-hidden="true">✓</span><span class="command">/review</span><span class="description">围绕明确改动进行交付审查</span><span class="type-badge">命令</span>
+                </button>
+                <button class="slash-row" type="button" data-insert="/start-with-acceptance ">
+                  <span aria-hidden="true">◇</span><span class="command">/start-with-acceptance</span><span class="description">从目标、边界与验收标准开始一项工作</span><span class="type-badge">模板</span>
+                </button>
+              </section>
+            </div>
+            <div class="attachment-tray" id="attachment-tray" aria-label="待发送附件"></div>
+
+            <div class="control-row">
+              <button class="control-button" type="button" id="attachment-trigger" aria-label="添加操作" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              <span class="spacer"></span>
+              <button class="thinking-button" type="button" id="thinking-trigger" aria-label="配置推理强度">
+                推理强度 · 中
+              </button>
+              <button class="send-button" type="button" id="send" aria-label="发送并创建会话">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <footer class="project-tray">
+            <button class="project-button" type="button" id="project-trigger" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2h7A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z"/></svg>
+              <span class="project-copy"><strong id="project-name">D Code</strong></span>
+            </button>
+          </footer>
+
+          <section class="floating-menu" id="project-menu" hidden role="menu" aria-label="选择 D Code 项目">
+            <div class="menu-title">选择项目</div>
+            <button class="menu-action" type="button" data-project="D Code" data-directory="…/Workspace/Codes/Apps/dcode">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2h7A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z"/></svg>
+              <span><strong>D Code</strong></span><span class="check">✓</span>
+            </button>
+            <button class="menu-action" type="button" data-project="Curio" data-directory="…/Workspace/Codes/Apps/Curio">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4l2 2h7A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z"/></svg>
+              <span><strong>Curio</strong></span><span></span>
+            </button>
+            <div class="menu-rule"></div>
+            <button class="menu-action" type="button" data-action="new-project">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/><path d="M3 19.5V9.6A2.6 2.6 0 0 1 5.6 7h4l2-2h1.8A2.6 2.6 0 0 1 16 7.6V8"/></svg>
+              <span><strong>新建项目…</strong><small>命名项目，并为它选择一个工作目录</small></span><span></span>
+            </button>
+            <button class="menu-action" type="button" data-action="manage-projects">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05-2.1 2.1-.05-.05a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20.3h-3v-.11A1.7 1.7 0 0 0 10.7 18.6a1.7 1.7 0 0 0-1.88.34l-.05.05-2.1-2.1.05-.05A1.7 1.7 0 0 0 7.06 15a1.7 1.7 0 0 0-1.55-1.03H5.4v-3h.11A1.7 1.7 0 0 0 7.06 9.94 1.7 1.7 0 0 0 6.72 8.06l-.05-.05 2.1-2.1.05.05a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V4.7h3v.11a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.05-.05 2.1 2.1-.05.05A1.7 1.7 0 0 0 19.4 9.94a1.7 1.7 0 0 0 1.55 1.03h.11v3h-.11A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+              <span><strong>管理项目…</strong><small>更换项目目录或编辑名称</small></span><span></span>
+            </button>
+          </section>
+
+          <section class="floating-menu" id="attachment-menu" hidden role="menu" aria-label="添加与工作操作">
+            <div class="menu-title">添加与工作操作</div>
+            <button class="menu-action" type="button" data-attachment="image">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.4"/><path d="m4 18 5-5 3 3 2-2 6 4"/></svg>
+              <span><strong>添加文件或图片…</strong><small>图片作为附件发送，其他文件仅插入路径引用</small></span><span></span>
+            </button>
+            <div class="menu-rule"></div>
+            <button class="menu-action" type="button" data-plus-action="skill">
+              <span aria-hidden="true">⌁</span>
+              <span><strong>Skill</strong><small>从当前实际加载的 Skill 中选择</small></span><span>›</span>
+            </button>
+            <button class="menu-action" type="button" data-plus-action="command">
+              <span aria-hidden="true">⌘</span>
+              <span><strong>命令</strong><small>从当前实际注册的命令中选择</small></span><span>›</span>
+            </button>
+            <div class="menu-rule"></div>
+            <button class="menu-action" type="button" data-plus-action="goal">
+              <span aria-hidden="true" style="color:#7357cc">◎</span>
+              <span><strong>目标</strong><small>为这项工作先设定要达成的结果</small></span><span></span>
+            </button>
+            <button class="menu-action" type="button" data-plus-action="plan">
+              <span aria-hidden="true" style="color:#7357cc">≡</span>
+              <span><strong>计划</strong><small>查看或建立带阶段与验收的计划</small></span><span></span>
+            </button>
+          </section>
+        </section>
+
+        <section class="plan-card" id="plan-card" aria-label="计划示例">
+          <div class="plan-top"><span class="plan-title"><i class="orb"></i>计划</span><span class="plan-state">待批准提案</span></div>
+          <h2>让首页从“目录选择”变成“项目工作起点”</h2>
+          <p>开始执行前，确认范围、验收和不做什么。</p>
+          <ol class="plan-steps">
+            <li><i></i>读取现有 Project 与 Composer 交互</li>
+            <li><i></i>绘制项目优先的入口原型</li>
+            <li><i></i>用真实路径验证创建与审阅边界</li>
+          </ol>
+        </section>
+
+        <section class="recent" aria-label="最近会话">
+          <p class="recent-heading">最近会话</p>
+          <button class="recent-row" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><strong>首页 Composer 与项目作用域</strong><span>刚刚</span></button>
+          <button class="recent-row" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><strong>梳理 dgoal 工作清单原生呈现</strong><span>昨天</span></button>
+        </section>
+      </div>
+      <div></div>
+    </section>
+  </main>
+
+  <dialog id="project-dialog" aria-labelledby="project-dialog-title">
+    <form class="sheet" method="dialog" id="project-form">
+      <header class="sheet-header">
+        <div><h2 id="project-dialog-title">新建 D Code 项目</h2><p>一个项目对应一个工作目录，并关联其中的 D Code 会话；不移动真实文件或 Git。</p></div>
+      </header>
+      <label for="new-project-name">项目名称</label>
+      <input id="new-project-name" autocomplete="off" placeholder="例如：刚刚">
+      <label>项目目录</label>
+      <div class="folder-stack"><div class="folder-row" id="project-directory-row">▣ <strong>刚刚</strong><span>…/Workspace/Codes/Apps/ganggang</span></div></div>
+      <button class="text-button" type="button" id="choose-directory">选择项目目录…</button>
+      <footer class="sheet-actions"><button class="secondary" value="cancel">取消</button><button class="primary" type="submit" value="create">创建项目</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="migration-dialog" aria-labelledby="migration-dialog-title">
+    <form class="sheet" method="dialog" id="migration-form">
+      <header class="sheet-header">
+        <div><h2 id="migration-dialog-title">修改项目目录</h2><p>“<span id="migration-project-name">D Code</span>”关联的会话保留原身份，并直接把 `cwd` 改为新目录。</p></div>
+      </header>
+      <label>新项目目录</label>
+      <div class="folder-stack"><div class="folder-row" id="migration-directory-row">▣ <strong>新目录</strong><span>…/Workspace/Codes/Apps/dcode-next</span></div></div>
+      <button class="text-button" type="button" id="choose-migration-directory">选择新目录…</button>
+      <label class="migration-choice"><input type="checkbox" id="move-files"><span><strong>同时迁移目录内文件</strong><small>这是独立的第二步选择；不选时只修改会话 `cwd` 与项目目录。</small></span></label>
+      <footer class="sheet-actions"><button class="secondary" value="cancel">取消</button><button class="primary" type="submit" value="migrate">修改并迁移</button></footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const prompt = document.querySelector('#prompt');
+      const slashPanel = document.querySelector('#slash-panel');
+      const projectMenu = document.querySelector('#project-menu');
+      const attachmentMenu = document.querySelector('#attachment-menu');
+      const projectTrigger = document.querySelector('#project-trigger');
+      const attachmentTrigger = document.querySelector('#attachment-trigger');
+      const projectName = document.querySelector('#project-name');
+      const planCard = document.querySelector('#plan-card');
+      const tray = document.querySelector('#attachment-tray');
+      const toast = document.querySelector('#toast');
+      const dialog = document.querySelector('#project-dialog');
+      const projectForm = document.querySelector('#project-form');
+      const newProjectName = document.querySelector('#new-project-name');
+      const projectDirectoryRow = document.querySelector('#project-directory-row');
+      const migrationDialog = document.querySelector('#migration-dialog');
+      const migrationForm = document.querySelector('#migration-form');
+      const migrationProjectName = document.querySelector('#migration-project-name');
+      const migrationDirectoryRow = document.querySelector('#migration-directory-row');
+      const moveFiles = document.querySelector('#move-files');
+      let toastTimer;
+      let selectedProject = 'D Code';
+      let selectedProjectDirectory = '…/Workspace/Codes/Apps/dcode';
+      let attachmentIndex = 0;
+
+      const allMenus = [projectMenu, attachmentMenu];
+      const triggers = [projectTrigger, attachmentTrigger];
+
+      function closeMenus() {
+        allMenus.forEach(menu => menu.hidden = true);
+        triggers.forEach(trigger => trigger.setAttribute('aria-expanded', 'false'));
+      }
+      function toggle(menu, trigger) {
+        const opening = menu.hidden;
+        closeMenus();
+        slashPanel.hidden = true;
+        menu.hidden = !opening;
+        trigger.setAttribute('aria-expanded', String(opening));
+      }
+      function say(message) {
+        toast.textContent = message;
+        toast.classList.add('show');
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2400);
+      }
+      function updateSlashPanel() {
+        slashPanel.hidden = !(prompt.value.startsWith('/') && !prompt.value.includes(' '));
+      }
+      function setProject(name, directory) {
+        selectedProject = name;
+        selectedProjectDirectory = directory;
+        projectName.textContent = name;
+        document.querySelectorAll('[data-project]').forEach(row => {
+          row.lastElementChild.textContent = row.dataset.project === name ? '✓' : '';
+        });
+      }
+
+      projectTrigger.addEventListener('click', () => toggle(projectMenu, projectTrigger));
+      attachmentTrigger.addEventListener('click', () => toggle(attachmentMenu, attachmentTrigger));
+      document.querySelector('#thinking-trigger').addEventListener('click', () => {
+        say('原型中保留独立的推理强度选择；模型设置不在 Composer 显示');
+      });
+
+      prompt.addEventListener('input', () => { updateSlashPanel(); closeMenus(); });
+      prompt.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { prompt.value = ''; updateSlashPanel(); }
+        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); document.querySelector('#send').click(); }
+      });
+      document.querySelectorAll('.slash-row').forEach(row => row.addEventListener('click', () => {
+        prompt.value = row.dataset.insert; updateSlashPanel(); prompt.focus(); say('已预填 ' + row.querySelector('.command').textContent + '，仍需你确认后发送');
+      }));
+
+      document.querySelectorAll('[data-project]').forEach(row => row.addEventListener('click', () => {
+        setProject(row.dataset.project, row.dataset.directory);
+        closeMenus();
+        say('已切换到项目“' + row.dataset.project + '”');
+      }));
+
+      document.querySelectorAll('[data-action="new-project"]').forEach(row => row.addEventListener('click', () => {
+        closeMenus();
+        dialog.showModal();
+        newProjectName.focus();
+      }));
+      document.querySelector('[data-action="manage-projects"]').addEventListener('click', () => {
+        closeMenus();
+        migrationProjectName.textContent = selectedProject;
+        migrationDirectoryRow.innerHTML = '▣ <strong>新目录</strong><span>' + selectedProjectDirectory + '-next</span>';
+        moveFiles.checked = false;
+        migrationDialog.showModal();
+      });
+
+      document.querySelectorAll('[data-attachment]').forEach(row => row.addEventListener('click', () => {
+        attachmentIndex += 1;
+        const image = row.dataset.attachment === 'image';
+        const name = image ? '架构草图-' + attachmentIndex + '.png' : '需求边界-' + attachmentIndex + '.md';
+        const chip = document.createElement('span');
+        chip.className = 'attachment-chip';
+        chip.innerHTML = (image ? '▧ ' : '▤ ') + name + '<button type="button" aria-label="移除 ' + name + '">×</button>';
+        chip.querySelector('button').addEventListener('click', () => chip.remove());
+        tray.append(chip);
+        closeMenus();
+        say(image ? '图片会随下一条消息发送' : '文件将以路径引用写入草稿');
+      }));
+
+      document.querySelectorAll('[data-plus-action]').forEach(row => row.addEventListener('click', () => {
+        closeMenus();
+        const action = row.dataset.plusAction;
+        if (action === 'skill') {
+          prompt.value = '/skill:';
+          updateSlashPanel(); prompt.focus(); say('已打开 Skill 选择；仍需你确认后发送');
+        } else if (action === 'command') {
+          prompt.value = '/';
+          updateSlashPanel(); prompt.focus(); say('已打开命令选择；仍需你确认后发送');
+        } else if (action === 'goal') {
+          prompt.value = '为“' + selectedProject + '”建立一个带范围、验收与阶段的目标：';
+          updateSlashPanel(); prompt.focus(); say('已预填目标请求；发送前仍可修改');
+        } else if (action === 'plan') {
+          planCard.classList.toggle('open'); say(planCard.classList.contains('open') ? '已展开计划示例' : '已收起计划示例');
+        }
+      }));
+
+      document.querySelector('#send').addEventListener('click', () => {
+        if (!prompt.value.trim()) { say('先写下要交给 D Code 的工作'); prompt.focus(); return; }
+        say('原型只模拟：首次发送后才创建“' + selectedProject + '”内的真实 Pi Session');
+      });
+
+      document.querySelector('#choose-directory').addEventListener('click', () => {
+        projectDirectoryRow.innerHTML = '▣ <strong>刚刚</strong><span>…/Workspace/Codes/Apps/ganggang-next</span>';
+        say('原生实现将在这里打开系统目录选择器；原型只模拟结果');
+      });
+      projectForm.addEventListener('submit', event => {
+        event.preventDefault();
+        const name = newProjectName.value.trim() || '未命名项目';
+        const directory = projectDirectoryRow.querySelector('span').textContent;
+        setProject(name, directory);
+        dialog.close(); say('已在原型中创建项目“' + name + '”');
+      });
+
+      document.querySelector('#choose-migration-directory').addEventListener('click', () => {
+        migrationDirectoryRow.innerHTML = '▣ <strong>新目录</strong><span>' + selectedProjectDirectory + '-migrated</span>';
+        say('原生实现将在这里打开系统目录选择器；原型只模拟结果');
+      });
+      migrationForm.addEventListener('submit', event => {
+        event.preventDefault();
+        const directory = migrationDirectoryRow.querySelector('span').textContent;
+        setProject(selectedProject, directory);
+        migrationDialog.close();
+        say(moveFiles.checked
+          ? '已模拟：会话 cwd 已改写，并选择同时迁移目录内文件'
+          : '已模拟：会话 cwd 已改写，目录内文件保持原处');
+      });
+
+      document.querySelector('#reset').addEventListener('click', () => window.location.reload());
+      document.addEventListener('click', event => {
+        if (!event.target.closest('.floating-menu') && !event.target.closest('.control-button') && !event.target.closest('.project-button')) closeMenus();
+        if (!event.target.closest('.prompt-wrap') && !event.target.closest('[data-plus-action="skill"], [data-plus-action="command"]')) slashPanel.hidden = true;
+      });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMenus(); slashPanel.hidden = true; } });
+    })();
+  </script>
+</body>
+</html>

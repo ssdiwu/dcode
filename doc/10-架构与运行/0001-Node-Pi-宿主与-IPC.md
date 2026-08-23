@@ -9,10 +9,10 @@
 Swift 负责原生呈现与用户输入；Host 负责：
 
 - 发现、解析和恢复 Pi Session；
-- 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的精确 Source Folder `cwd` 查询全部关联 Session Summary；
+- 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的唯一项目目录精确 `cwd` 查询全部关联 Session Summary；
 - 在独立 Worker 中为上述可见会话建立可删除、可重建的 SQLite FTS5 本机索引，并搜索标题与当前活动路径的用户/助手正文；
 - 读取同一 Pi Session 的真实路径谱系，并在用户第一次发送时按明确路径动作切换 Agent 上下文；
-- 把完整已持久化 Session 以新 ID、新 `cwd` 和源谱系有界复制到目标 Source Folder，经隐藏暂存、严格验证后原子发布；
+- 把完整已持久化 Session 以新 ID、新 `cwd` 和源谱系有界复制到目标项目目录，经隐藏暂存、严格验证后原子发布；
 - 在列表分页与搜索排序、截断之前排除由 Swift 本机归档资料指定的 Session ID；
 - 打开既有会话即取得 Session Lease，执行单写入所有权、抢占、外部写入检测与冲突恢复；没有只读观察模式；
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
@@ -91,8 +91,8 @@ open "dist/D Code.app"
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
-| `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照和路径摘要；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配 Source Folder，`excludedSessionIds` 在分页前排除归档对象；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
-| `session.search` | 在独立 Worker 中查询可见会话本机索引；请求携带完整 Project Source Folder 范围、归档排除 ID 与可选筛选范围，Host 在排序、分组和 `limit` 前再次强制可见性；搜索本身不打开会话、不创建租约 |
+| `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照和路径摘要；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配项目目录，`excludedSessionIds` 在分页前排除归档对象；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
+| `session.search` | 在独立 Worker 中查询可见会话本机索引；请求携带完整 Project 目录范围、归档排除 ID 与可选筛选范围，Host 在排序、分组和 `limit` 前再次强制可见性；搜索本身不打开会话、不创建租约 |
 | `session.refresh` | 从当前活动会话的已知规范路径读取最新快照，不重新扫描全部 Session 目录；用于外部 Pi 条目落盘后的合并刷新 |
 | `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建并立即返回，不扫描全库、不创建 Lease、不加载扩展，也不关闭当前 Runtime；从 `0.0.5` 起 App 只在本地会话前草稿首次提交非空正文时调用，随后用独立 writable `session.open` 与 `session.prompt` 发送 |
 | `session.open`、`session.close` | 打开即接管：校验目标后关闭当前会话、以 `force` 取得目标 Lease，并在指定 `pathId` 上建立唯一可写 runtime；关闭时释放所有权。Protocol 校验仍解释遗留的 `mode / writeIntent / preserveActive` 字段，但运行时不建立只读路径、始终执行可写接管；这是待清理的实现缺口，不构成只读产品能力 |
@@ -102,6 +102,7 @@ open "dist/D Code.app"
 | `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径；可选 `images`（≤8 张 `{ type: "image", data: base64, mimeType: image/* }`，单张 data ≤ 7,000,000 字符）经 Pi `PromptOptions.images` 进入模型输入（0.0.20） |
 | `session.steer` | 携带预期 Run ID（与可选 `images`，同 `session.prompt` 合同），在当前 Host Run 仍为同一 `running`、没有结构化等待时调用 Pi 专用 `AgentSession.steer()`；Run 已变化则拒绝，不经过可降级为普通 Prompt 的异步 input handler，不建立新 Run、不执行斜杠命令、不中止正在执行的工具，在下一安全模型边界应用介入信息 |
 | `session.copy` | 在源稳定且空闲时把完整已持久化历史复制成新 Session ID 与目标 `cwd`；源文件不改，失败目标不进入正常会话目录 |
+| `session.relocateCwd` | 在明确 Project 目录迁移中，以稳定租约原地改写旧项目目录精确匹配 Session Header 的 `cwd`，保持 Session ID、历史、文件路径与谱系；可选移动目录内文件，但目标必须为空且绝不合并或覆盖 |
 | `session.getState`、`session.getCommands`、`session.contextBreakdown` | 获取当前权威状态、D Code-owned Run State、命令 / 模板 / skills 与按消息种类估算的上下文构成 |
 | `resources.list`、`resources.setPackageEnabled` | 投影 Pi 当前真实加载的扩展包、Extension、Skill、Prompt、Command 与诊断；只对有 Pi 配置合同的扩展包执行启停并热重载，Skill / Prompt / Command 保持只读 |
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
@@ -123,7 +124,7 @@ open "dist/D Code.app"
 
 ### 事件组
 
-- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`、`session.searchIndexChanged`、`session.runStateChanged`；搜索索引事件只报告 idle/building/updating/rebuilding/ready/failed、完成度与可选错误，不携带正文；Run State 事件只携带稳定身份、阶段、时间、等待原因、输入持久化与安全重试门禁，不携带会话正文；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
+- 生命周期：`host.ready`、`session.opened`、`session.closed`、`session.changed`、`session.syncError`、`session.conflict`、`session.searchIndexChanged`、`session.runStateChanged`、`session.cwdRelocated`；搜索索引事件只报告 idle/building/updating/rebuilding/ready/failed、完成度与可选错误，不携带正文；`session.cwdRelocated` 只携带旧/新目录、受影响 Session ID、可选移动目录项和已关闭活动会话 ID，不携带 JSONL 正文；Run State 事件只携带稳定身份、阶段、时间、等待原因、输入持久化与安全重试门禁，不携带会话正文；`session.promptCompleted` / `session.promptFailed` 以 Session ID 与 Prompt ID 关联一次真实 RPC Prompt（远程调用输入）：普通消息在这次调用自身、且来源仍为 RPC 的 user record（用户记录）进入 verified owned snapshot（已验证本方快照）后确认；同一异步链里嵌套的 extension prompt（扩展输入）会进入独立来源边界，不能确认外层 RPC；扩展直接处理且不产生 RPC user record 的命令在该调用本身完成后确认；
 - Pi 运行：`session.event`，其中载荷来自 `AgentSessionEvent`，`message_update.partial` 不转发累积快照；Host 为 D Code 发起的 Run 补充稳定 Session ID、Prompt / Run ID 与已持久化 Path user entry ID，但不把这些字段写入 Pi JSONL；
 - 会话变更：`session.changeRecorded` 只在当前 D Code Run 中的成功 `edit` / `write` 结果满足已知结构化合同时发出；只携带 Session / Run / Path / tool-call 标识、规范路径、动作、首行、增删行和时间，不携带工具参数正文、源码或完整 patch；
 - 计划：`plan.changed`，只识别 `dgoal-work-v1` 与 `dgoal-plan-v2`；
@@ -135,7 +136,7 @@ open "dist/D Code.app"
 搜索数据库不是会话历史权威。Pi JSONL 仍保存完整 Session、消息与活动路径；`~/Library/Caches/D Code/Search/search-v1.sqlite3` 只保存当前版本允许搜索的可重建投影，用户删除缓存或数据库损坏后都可以从可见 Pi Session 重建。
 
 - Host 主线程只负责请求关联、状态事件和 Worker 生命周期；正文解析、增量更新与 SQLite FTS5 查询在独立 Worker 中执行，不阻塞普通聊天协议队列。
-- 可见集合是 D Code 创建的 Recent 与当前 Project Source Folder 精确 `cwd` 投影的并集。每次查询仍把完整 Project 范围和归档排除 ID 传入 Worker，并在排序、分组与 `limit` 之前执行归档排除、可见性与 Project / Source Folder 筛选；缓存中的陈旧行不能绕过当前归属。
+- 可见集合是 D Code 创建的 Recent 与当前 Project Directory 精确 `cwd` 投影的并集。每次查询仍把完整 Project 目录范围和归档排除 ID 传入 Worker，并在排序、分组与 `limit` 之前执行归档排除、可见性与 Project 筛选；缓存中的陈旧行不能绕过当前归属。
 - 每个 Session 只索引当前活动路径的标题、用户正文与助手正文。thinking、工具调用、工具结果、自定义数据和认证字段不会进入搜索文档。
 - Worker 使用文件路径、device、inode、size、mtimeNs 与 leaf ID 判断增量变化；正在追加的半条目保持索引 `complete=false` 并自动重试，刷新期间到达的新失效代际会触发后续刷新，不会被本轮完成状态吞掉。
 - `session.search` 不打开 Session、不创建 Session Lease、不触发 Write Intent，也不写 Pi JSONL、Project、工作区文件或 Git。搜索结果只携带稳定 Session ID、可选 Entry ID 与展示片段；真正打开前 Host 会再次验证目标条目和文件版本。
@@ -155,7 +156,7 @@ open "dist/D Code.app"
 
 `host.hello.capabilities.sessionRunCorrelation=true` 表示 Host 会把 D Code 传入的稳定 Prompt ID 作为当前 Run ID，在 `session.event` 中回传 `runId`，并在用户条目通过 Lease 核验后以 `session.promptCompleted` 返回匹配的 Session ID、Prompt ID 与 Entry ID。这是 `0.0.5` Follow-up Queue 的所有权转移证据；Host 仍不保存、编辑或重排 D Code 的待派发队列。
 
-`host.hello.capabilities.sessionRepair=true` 表示该 Host 提供 `session.repair` 受控修复与 `INVALID_SESSION.details.repairable` 发现路径（0.0.19）；`promptImages=true` 表示 `session.prompt` / `session.steer` 接受可选 `images` 图片附件（0.0.20）。
+`host.hello.capabilities.sessionRepair=true` 表示该 Host 提供 `session.repair` 受控修复与 `INVALID_SESSION.details.repairable` 发现路径（0.0.19）；`promptImages=true` 表示 `session.prompt` / `session.steer` 接受可选 `images` 图片附件（0.0.20）；`sessionCwdRelocation=true` 表示该 Host 支持 Project 目录迁移的受控 Header `cwd` 原地改写（0.0.25）。
 
 `host.hello.capabilities.sessionRunState=true` 表示 Host 会为当前唯一 D Code-owned Run 公开 `running`、`waitingForUser`、`stopRequested`、`completed`、`failed`、`aborted` 或 `unknown`。`waitingForUser` 另以 `waitingFor=select|confirm|input|editor` 区分非颜色等待语义；多个结构化请求必须全部关闭后才恢复 `running`。点击停止只先进入 `stopRequested`，直到 Agent 真正收敛才成为 `aborted`；正常完成还必须在本轮输入之后取得最终 assistant Entry 的稳定 ID，即使其后追加了安全元数据条目，仍以 `runId:entryId` 形成 completion identity。冲突、进程结束或无法证明终态时进入 `unknown`，App 必须阻止自动派发、重复发送与不安全重试。`agent_end` 只结束流式展示，不是终态证据；Follow-up Queue 只按匹配 Session / Run 的终态 Run State 结算。
 

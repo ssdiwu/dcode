@@ -51,7 +51,7 @@ struct SidebarView: View {
             }
             Button("取消", role: .cancel) { projectToDelete = nil }
         } message: {
-            Text("只删除 D Code 的组织关系，不删除源文件夹、Git 或 Pi 会话。")
+            Text("只删除 D Code 的项目组织关系，不删除项目目录、Git 或 Pi 会话。")
         }
     }
 
@@ -421,7 +421,7 @@ private struct ProjectNavigationView: View {
                 } else if sessions.isEmpty,
                           !hasPinnedSessions,
                           !model.loadingProjectIDs.contains(project.id) {
-                    Text(project.sourceFolders.isEmpty ? "尚未添加源文件夹" : "没有关联的旧会话")
+                    Text("没有关联的旧会话")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 30)
@@ -465,18 +465,9 @@ private struct ProjectNavigationView: View {
     @ViewBuilder
     private var sessionCreationControl: some View {
         switch ProjectSessionCreationRoute.resolve(for: project) {
-        case .unavailable:
-            Button {} label: {
-                IconActionGlyph(systemName: "plus")
-            }
-            .buttonStyle(IconActionStyle())
-            .disabled(true)
-            .dCodeAccessibleButton("在 \(project.name) 新建会话")
-            .help("请先为项目添加源文件夹")
-
         case let .direct(folder):
             Button {
-                Task { await model.createSession(at: folder.url) }
+                Task { await model.createSession(at: folder.url, projectID: project.id) }
             } label: {
                 IconActionGlyph(systemName: "plus")
             }
@@ -484,22 +475,6 @@ private struct ProjectNavigationView: View {
             .disabled(sessionCreationDisabled)
             .dCodeAccessibleButton("在 \(project.name) 新建会话")
             .help("在 \(folder.displayName) 新建会话")
-
-        case let .choose(folders):
-            Menu {
-                ForEach(folders) { folder in
-                    Button(folder.displayName) {
-                        Task { await model.createSession(at: folder.url) }
-                    }
-                }
-            } label: {
-                IconActionGlyph(systemName: "plus")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: PiDCodeMetrics.iconActionTarget, height: PiDCodeMetrics.iconActionTarget)
-            .accessibilityLabel("在 \(project.name) 新建会话")
-            .disabled(sessionCreationDisabled)
         }
     }
 }
@@ -740,7 +715,7 @@ private struct SessionNavigationItem: View {
     private var selectionAccessibilityLabel: String {
         let projectLabel = ownership?.project.name ?? "未归入项目"
         let updatedLabel = session.modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "时间未知"
-        return "打开会话 \(session.displayTitle)，\(isPinned ? "已置顶" : "未置顶")，项目 \(projectLabel)，源文件夹 \(fallbackFolderName)，工作目录 \(session.cwd)，\(branchAccessibilityLabel)，更新时间 \(updatedLabel)"
+        return "打开会话 \(session.displayTitle)，\(isPinned ? "已置顶" : "未置顶")，项目 \(projectLabel)，项目目录 \(fallbackFolderName)，工作目录 \(session.cwd)，\(branchAccessibilityLabel)，更新时间 \(updatedLabel)"
     }
     private var ownership: ProjectSessionOwnership? { model.projectOwnership(for: session) }
     private var fallbackFolderName: String {
@@ -855,7 +830,7 @@ private struct SessionNavigationMetadataPopover: View {
             metadataRow(icon: "folder", title: "项目") {
                 Text(projectName ?? "未归入项目")
             }
-            metadataRow(icon: "folder.badge.gearshape", title: "源文件夹") {
+            metadataRow(icon: "folder.badge.gearshape", title: "项目目录") {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(sourceFolderName)
                     Text(session.cwd)

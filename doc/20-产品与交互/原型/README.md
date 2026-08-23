@@ -10,6 +10,8 @@
 
 [查看设置“用量与费用”专项探索原型](dcode-settings-usage-cost.html)（[验证结论与边界](dcode-settings-usage-cost-验证.md)；当前不绑定具体版本）
 
+[查看“项目优先主页与真实能力入口”原型](dcode-home-project-goal-prototype.html)（[验证结论与边界](dcode-home-project-goal-prototype-验证.md)；方向已确认，保留为人工走查参考）
+
 [查看 `0.0.2` 搜索索引技术验证](0.0.2-搜索索引技术验证.md)
 
 该原型使用模拟数据表达已经确认的目标交互，供后续设计、版本切割和 AI 实现参考。它不是当前 Swift App 的运行截图，也不能单独证明任何 Host、Pi 扩展、搜索索引、文件树或 Git 能力已经接通；版本状态与验收记录统一由[版本实施方案](../../40-版本实施方案/README.md)路由，当前实现仍以对应源码、测试和[架构文档](../../10-架构与运行/README.md)为证。

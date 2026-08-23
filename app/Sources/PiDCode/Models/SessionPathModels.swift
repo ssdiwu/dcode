@@ -107,7 +107,8 @@ struct NewSessionModelSelection: Codable, Hashable, Sendable {
 }
 
 struct NewSessionDraft: Codable, Hashable, Sendable {
-    /// 会话前草稿的工作目录：作用域托盘可整体迁移，正文与模型选择保留。
+    /// 会话前草稿的 Project 身份与工作目录：目录来自该 Project，正文与模型选择保留。
+    var projectID: UUID? = nil
     var directoryPath: String
     var text: String
     var selectedModel: NewSessionModelSelection? = nil
@@ -115,12 +116,14 @@ struct NewSessionDraft: Codable, Hashable, Sendable {
     var fastModeEnabled = false
 
     init(
+        projectID: UUID? = nil,
         directoryPath: String,
         text: String,
         selectedModel: NewSessionModelSelection? = nil,
         selectedThinkingLevel: String? = nil,
         fastModeEnabled: Bool = false
     ) {
+        self.projectID = projectID
         self.directoryPath = directoryPath
         self.text = text
         self.selectedModel = selectedModel
@@ -129,6 +132,7 @@ struct NewSessionDraft: Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case projectID
         case directoryPath
         case text
         case selectedModel
@@ -138,6 +142,7 @@ struct NewSessionDraft: Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try container.decodeIfPresent(UUID.self, forKey: .projectID)
         directoryPath = try container.decode(String.self, forKey: .directoryPath)
         text = try container.decode(String.self, forKey: .text)
         selectedModel = try container.decodeIfPresent(NewSessionModelSelection.self, forKey: .selectedModel)

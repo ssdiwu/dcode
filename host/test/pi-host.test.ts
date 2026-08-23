@@ -112,7 +112,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.20");
+    assert.equal(hello.hostVersion, "0.0.25");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -124,6 +124,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
     assert.equal(hello.capabilities.dcodeSessionOrigin, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionSearch, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionTrash, true);
+    assert.equal((hello.capabilities as Record<string, boolean>).sessionCwdRelocation, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionChangeLedger, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRename, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRunCorrelation, true);
@@ -163,6 +164,34 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("project directory migration keeps Session identity while rewriting cwd through the Host", async () => {
+  const f = await fixture();
+  const target = await mkdtemp(join(tmpdir(), "pi-dcode-project-target-"));
+  const events: Array<{ event: string; data?: unknown }> = [];
+  const host = new PiHost({ agentDir: f.agentDir, leaseQuietWindowMs: 1, emit: (event, data) => events.push({ event, data }) });
+  try {
+    await host.handle("session.open", { sessionId: f.sessionId, mode: "writable" });
+    const result = await host.handle("session.relocateCwd", {
+      sourceCwd: f.root,
+      targetCwd: target,
+      moveFiles: false,
+    }) as { relocated: boolean; sessionIds: string[]; closedActiveSessionId?: string };
+    assert.equal(result.relocated, true);
+    assert.deepEqual(result.sessionIds, [f.sessionId]);
+    assert.equal(result.closedActiveSessionId, f.sessionId);
+    const inspection = await host.handle("session.inspect", { sessionId: f.sessionId }) as {
+      summary: { id: string; cwd: string };
+    };
+    assert.equal(inspection.summary.id, f.sessionId);
+    assert.equal(inspection.summary.cwd, await realpath(target));
+    assert.ok(events.some(({ event }) => event === "session.cwdRelocated"));
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+    await rm(target, { recursive: true, force: true });
   }
 });
 

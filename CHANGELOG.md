@@ -1,3 +1,18 @@
+## [0.0.25] - 2026-08-23
+
+### Added
+
+- Project ↔ Directory 一一对应（ADR 0029 / PRD 0022）：每个 Project 只关联一个规范化目录，同一目录最多属于一个 Project；旧多 Source Folder 资料无损拆分为独立 Project。
+- Project 目录迁移：只由 Host 在关联 Session 空闲、租约与文件稳定时原地改写 Header `cwd`，保留 Session ID、历史、路径与谱系；目录内文件是否迁移由用户第二步选择，目标冲突或校验失败时拒绝且不伪装完成。
+- 会话前草稿绑定 Project 而非裸目录；主页下挂条只选择 Project，项目目录变化后草稿与关联会话保持同一工作上下文。
+- Composer 控制行收口为 `+`、推理强度与发送；`+` 只呈现添加文件或图片、Skill、命令、目标和计划，目标 / 计划不暴露能力来源。
+
+### Changed
+
+- 模型选择继续属于设置与新会话事实，不再以模型名、CPU 图标或下拉占据 Composer 一级动作位；已有 `/` 面板、图片附件、Workspace HTML 预览与设置中的本机资源管理保持可用。
+- `dcode_facts` 同时兼容 Project v1 / v2 资料，并按唯一项目目录计算 Session 归属。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.25`。
+
 ## [0.0.20] - 2026-08-22
 
 ### Added

@@ -65,6 +65,18 @@ test("method parameter validation rejects invalid values", () => {
     () => validateMethodParams("session.create", { cwd: "" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  assert.doesNotThrow(() => validateMethodParams("session.relocateCwd", {
+    sourceCwd: "/work/old",
+    targetCwd: "/work/new",
+    moveFiles: false,
+  }));
+  assert.throws(
+    () => validateMethodParams("session.relocateCwd", {
+      sourceCwd: "/work/old",
+      targetCwd: "/work/new",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.doesNotThrow(() => validateMethodParams("session.getModels", {}));
   assert.doesNotThrow(() => validateMethodParams("session.getModels", { cwd: "/work" }));
   assert.throws(

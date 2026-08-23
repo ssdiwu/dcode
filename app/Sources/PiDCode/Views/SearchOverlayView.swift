@@ -107,25 +107,6 @@ struct SearchOverlayView: View {
             .accessibilityLabel("项目筛选")
             .disabled(model.isOpeningSession || model.isPromptTransactionActive)
 
-            Picker(
-                "源文件夹",
-                selection: Binding(
-                    get: { model.search.sourceFolderPath },
-                    set: { model.selectSearchSourceFolder($0) }
-                )
-            ) {
-                Text("全部源文件夹").tag(Optional<String>.none)
-                ForEach(selectedProject?.sourceFolders ?? []) { folder in
-                    Text(folder.displayName).tag(Optional(folder.path))
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(maxWidth: 220, minHeight: PiDCodeMetrics.compactControlHeight, alignment: .leading)
-            .contentShape(Rectangle())
-            .disabled(selectedProject == nil || model.isOpeningSession || model.isPromptTransactionActive)
-            .accessibilityLabel("源文件夹筛选")
-
             Spacer(minLength: 0)
             indexStatus
         }
@@ -245,11 +226,6 @@ struct SearchOverlayView: View {
         .font(.caption)
         .padding(.horizontal, 16)
         .frame(minHeight: PiDCodeMetrics.minimumTarget)
-    }
-
-    private var selectedProject: DCodeProject? {
-        guard let id = model.search.projectID else { return nil }
-        return model.projects.first(where: { $0.id == id })
     }
 
     @ViewBuilder

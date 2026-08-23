@@ -55,6 +55,7 @@ import { ModelAuthBridge } from "./model-auth.js";
 import { publishNewFileAtomically } from "./atomic-file.js";
 import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
 import { SessionCopier } from "./session-copy.js";
+import { ProjectDirectoryMigrator, ProjectDirectoryMigrationError } from "./project-directory-migration.js";
 import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
 
@@ -63,7 +64,7 @@ import { structuredToolChange } from "./session-change.js";
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.20";
+const HOST_VERSION = "0.0.25";
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -325,6 +326,7 @@ export class PiHost {
   readonly reader: SessionReader;
   readonly searchIndex: SessionSearchIndex;
   readonly sessionCopier: SessionCopier;
+  readonly projectDirectoryMigrator = new ProjectDirectoryMigrator();
   readonly trashDirectory: string;
   private active?: ActiveSession;
   private shutdownRequested = false;
@@ -438,6 +440,7 @@ export class PiHost {
             sessionSearch: true,
             sessionPaths: true,
             sessionCopy: true,
+            sessionCwdRelocation: true,
             sessionTrash: true,
             sessionVisibilityExclusions: true,
             sessionChangeLedger: true,
@@ -480,6 +483,12 @@ export class PiHost {
         return await this.createSession(params.cwd as string);
       case "session.copy":
         return await this.copySession(params.sessionId as string, params.targetCwd as string);
+      case "session.relocateCwd":
+        return await this.relocateSessionCwd(
+          params.sourceCwd as string,
+          params.targetCwd as string,
+          params.moveFiles as boolean,
+        );
       case "session.trash":
         return await this.trashSession(params.sessionId as string);
       case "session.repair":
@@ -761,6 +770,111 @@ export class PiHost {
             ...errorRecord(error),
           });
           this.poisonWritesForSession(sessionId, "A copied session lease could not be released");
+        }
+      }
+    }
+  }
+
+  /**
+   * Project directory migration keeps existing Pi Session identities. The Host
+   * owns every JSONL write and closes a matching active runtime before Header
+   * `cwd` values change, so Swift never edits Pi storage directly.
+   */
+  private async relocateSessionCwd(sourceCwd: string, targetCwd: string, moveFiles: boolean): Promise<unknown> {
+    this.assertWriteHealthy();
+    const canonicalDirectory = async (cwd: string, code: string): Promise<string> => {
+      try {
+        const canonical = await realpath(cwd);
+        if (!(await stat(canonical)).isDirectory()) throw new Error("not a directory");
+        return canonical;
+      } catch (error) {
+        throw new PiHostError(code, `Project directory is not accessible: ${cwd}`, {
+          cwd,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    const canonicalSource = await canonicalDirectory(sourceCwd, "SOURCE_CWD_NOT_ACCESSIBLE");
+    const canonicalTarget = await canonicalDirectory(targetCwd, "TARGET_CWD_NOT_ACCESSIBLE");
+    if (canonicalSource === canonicalTarget) {
+      throw new PiHostError("CWD_UNCHANGED", "The target directory is already the Project directory");
+    }
+
+    let closedActiveSessionId: string | undefined;
+    const active = this.active;
+    const activeCwd = active
+      ? await realpath(active.inspection.summary.cwd).catch(() => active.inspection.summary.cwd)
+      : undefined;
+    if (active && activeCwd === canonicalSource) {
+      this.assertCopyIdle(active);
+      await this.assertLeaseStable(active);
+      closedActiveSessionId = active.inspection.summary.id;
+      await this.closeActive();
+      this.assertWriteHealthy();
+    }
+
+    const sessions = await this.reader.list({
+      cwdScope: { match: "exact", paths: [canonicalSource] },
+    });
+    const leases = new Map<string, SessionLease>();
+    try {
+      for (const summary of [...sessions].sort((left, right) => left.id.localeCompare(right.id))) {
+        const lease = await SessionLease.acquire({
+          agentDir: this.leaseAgentDir,
+          sessionId: summary.id,
+          sessionPath: summary.path,
+          quietWindowMs: this.leaseQuietWindowMs,
+        });
+        leases.set(summary.id, lease);
+        await lease.assertUnchanged();
+        const inspection = await this.reader.inspect(summary.id);
+        if (inspection.summary.path !== summary.path || inspection.summary.cwd !== summary.cwd) {
+          throw new PiHostError(
+            "SESSION_CHANGED_DURING_MIGRATION",
+            "A Project session changed before its directory could be migrated",
+            { sessionId: summary.id, expectedPath: summary.path, expectedCwd: summary.cwd, actual: inspection.summary },
+          );
+        }
+      }
+      const result = await this.projectDirectoryMigrator.relocate({
+        sourceCwd: canonicalSource,
+        targetCwd: canonicalTarget,
+        sessions,
+        moveFiles,
+        assertStable: async (summary) => {
+          const lease = leases.get(summary.id);
+          if (!lease) throw new PiHostError("SESSION_LEASE_MISSING", "Migration lost its Session lease", { sessionId: summary.id });
+          await lease.assertUnchanged();
+          const actual = await this.reader.resolve(summary.id);
+          if (actual.path !== summary.path || actual.cwd !== summary.cwd) {
+            throw new PiHostError(
+              "SESSION_CHANGED_DURING_MIGRATION",
+              "A Project session changed during directory migration",
+              { sessionId: summary.id, expectedPath: summary.path, expectedCwd: summary.cwd, actual },
+            );
+          }
+        },
+      });
+      this.searchIndex.invalidate();
+      this.options.emit("session.cwdRelocated", {
+        ...result,
+        ...(closedActiveSessionId ? { closedActiveSessionId } : {}),
+      });
+      return { ...result, ...(closedActiveSessionId ? { closedActiveSessionId } : {}) };
+    } catch (error) {
+      if (error instanceof ProjectDirectoryMigrationError) {
+        throw new PiHostError(error.code, error.message, error.details);
+      }
+      throw error;
+    } finally {
+      for (const lease of [...leases.values()].reverse()) {
+        try {
+          await lease.release();
+        } catch (error) {
+          this.options.emit("session.cleanupError", {
+            step: "project directory migration lease release",
+            ...errorRecord(error),
+          });
         }
       }
     }

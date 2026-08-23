@@ -11,10 +11,11 @@
 - Protocol v1 的请求、响应和事件信封；
 - 请求参数最小运行时校验与结构化错误；
 - 支持分片、连续多行、最大行长度和输出背压的 JSONL 传输；
-- 有界会话发现：Recent 按有效 D Code 创建来源筛选，Project 按 Source Folder 的精确 `cwd` 查询；稳定 ID 快速解析、历史快照与 Active Plan 恢复；
+- 有界会话发现：Recent 按有效 D Code 创建来源筛选，Project 按唯一项目目录的精确 `cwd` 查询；稳定 ID 快速解析、历史快照与 Active Plan 恢复；
 - 可见会话全文搜索：独立 Worker 使用本机 SQLite FTS5 增量索引 D Code Recent 与已关联 Project 的标题、当前活动路径用户/助手正文；查询时重新强制可见范围，缓存损坏可重建，半写入条目会自动重试；
 - 读取同一 Session 的真实终端路径，按选中 leaf 恢复快照与模型上下文，并以 `editUser`、`continueAssistant`、`continuePath` 在首条用户消息持久化时建立新路径；
-- 将完整已持久化 Session 以新 ID、新 `cwd` 和源谱系复制到目标 Source Folder：隐藏暂存中逐行校验，源稳定后用 hard link 原子发布；归档 ID 在 Recent、Project 与 Search 的分页、排序和结果上限前排除；
+- 将完整已持久化 Session 以新 ID、新 `cwd` 和源谱系复制到目标项目目录：隐藏暂存中逐行校验，源稳定后用 hard link 原子发布；归档 ID 在 Recent、Project 与 Search 的分页、排序和结果上限前排除；
+- Project 目录迁移（`session.relocateCwd`，0.0.25）：在所有精确匹配 Session 空闲、租约稳定后原地改写 Header `cwd`，保留 Session ID、历史、JSONL 路径与谱系；目录内文件只在用户选择后移动，目标必须为空，不合并或覆盖；
 - 在 Pi cwd-scoped 目录创建新会话，将 Header 与 D Code 创建来源标记一次写入初始 JSONL；该文档发布即为创建提交点并立即返回，不扫描全库、不取得新 Lease，也不等待旧 Runtime 关闭；App 再以独立打开请求切换并取得新会话所有权；
 - 对空的 D Code 创建会话提供可恢复的 `session.trash`：唯一 ID 解析、D Code 来源、零消息、无子会话、非可写和 Lease 复核全部成立后才移入用户废纸篓；失败不回退为永久删除；
 - 受控修复尾部不完整的会话 JSONL（`session.repair`，0.0.19）：仅当尾部恰好一条记录不完整且其余记录完整时可修；同目录完整备份 `.bak-<uuid>`、修剪后以严格读取器复验、原子替换，任一环节失败原文件零改动；`session.open` 的 `INVALID_SESSION` details 附 `repairable` / `repairReason`；
@@ -34,7 +35,7 @@
 - SIGINT 与 SIGTERM 同走 graceful shutdown（清理活动会话、尾行合法 JSON、中断态如实报 `phase=unknown`，退出码均为 143）；
 - 标准 `select`、`confirm`、`input`、`editor`、通知与状态使用结构化事件；TUI custom/widget 能力显式阻止或忽略；
 - 通过精确固定的 `grok-mermaid` 提供原生 Unicode Mermaid 渲染，并对不支持的类型返回结构化失败；
-- 临时目录自动测试覆盖快速创建、会话复制 / 废纸篓安全边界、路径、租约、搜索、Project / Recent、打开即接管、Run State、模型 / 认证、资源、自定义供应商、扩展与进程生命周期回归；测试全绿不替代跨 Swift / Host 的真实存储、完整 Protocol 组合与人工验收，精确证据和已知缺口见[版本实施方案](../doc/40-版本实施方案/README.md)。
+- 临时目录自动测试覆盖快速创建、会话复制 / Project 目录迁移 / 废纸篓安全边界、路径、租约、搜索、Project / Recent、打开即接管、Run State、模型 / 认证、资源、自定义供应商、扩展与进程生命周期回归；测试全绿不替代跨 Swift / Host 的真实存储、完整 Protocol 组合与人工验收，精确证据和已知缺口见[版本实施方案](../doc/40-版本实施方案/README.md)。
 
 ## 命令
 
@@ -51,6 +52,7 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/jsonl.ts`：JSONL 解码与有序输出。
 - `src/session-reader.ts`：安全会话扫描、快照和 Active Plan 恢复。
 - `src/session-copy.ts`：完整会话的有界流式校验、隐藏暂存与原子发布。
+- `src/project-directory-migration.ts`：Project 目录迁移的 Header `cwd` 原地改写、可选目录项移动与可恢复事务。
 - `src/session-origin.ts`：D Code 创建来源标记的共享协议常量。
 - `src/session-change.ts`：DHashline-compatible 工具结果到会话变更元数据的有界、安全投影。
 - `src/session-search-index.ts`：搜索 Worker 生命周期、请求关联、失败恢复与缓存位置。

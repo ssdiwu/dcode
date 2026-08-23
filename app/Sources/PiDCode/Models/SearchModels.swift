@@ -82,7 +82,7 @@ struct SessionSearchResult: Codable, Identifiable, Hashable, Sendable {
         }
         let location = if let projectName = ownership.projectName,
                           let folderName = ownership.sourceFolderName {
-            "项目 \(projectName)，源文件夹 \(folderName)"
+            "项目 \(projectName)，项目目录 \(folderName)"
         } else {
             "未加入项目"
         }

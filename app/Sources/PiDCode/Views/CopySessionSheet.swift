@@ -7,7 +7,7 @@ struct CopySessionSheet: View {
     let editProject: (DCodeProject?) -> Void
 
     @State private var projectID: UUID?
-    @State private var sourceFolderPath: String?
+    @State private var projectDirectoryPath: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -26,7 +26,7 @@ struct CopySessionSheet: View {
                 ContentUnavailableView {
                     Label("还没有项目", systemImage: "folder.badge.plus")
                 } description: {
-                    Text("先创建 Project，再把会话复制到它的 Source Folder。")
+                    Text("先创建 Project，再把会话复制到它的项目目录。")
                 } actions: {
                     Button("创建项目") { openProjectEditor(nil) }
                         .frame(minHeight: PiDCodeMetrics.compactControlHeight)
@@ -41,39 +41,24 @@ struct CopySessionSheet: View {
                         }
                     }
                     .frame(minHeight: PiDCodeMetrics.minimumTarget)
-                    Picker("Source Folder", selection: $sourceFolderPath) {
-                        Text("请选择").tag(String?.none)
-                        ForEach(selectedProject?.sourceFolders ?? []) { folder in
-                            Text(folder.displayName).tag(Optional(folder.path))
-                        }
-                    }
-                    .frame(minHeight: PiDCodeMetrics.minimumTarget)
-                    if let sourceFolderPath {
-                        LabeledContent("最终 cwd") {
-                            Text(sourceFolderPath)
+                    if let projectDirectoryPath {
+                        LabeledContent("项目目录") {
+                            Text(projectDirectoryPath)
                                 .font(.caption.monospaced())
                                 .textSelection(.enabled)
                                 .lineLimit(2)
                         }
                         if !targetFolderIsValid {
                             HStack {
-                                Text("这个 Source Folder 已失效或真实路径发生变化。")
+                                Text("这个项目目录已失效或真实路径发生变化。")
                                     .foregroundStyle(.orange)
                                 Spacer()
-                                Button("修复 Source Folder") { openProjectEditor(selectedProject) }
+                                Button("修复项目目录") { openProjectEditor(selectedProject) }
                                     .frame(minHeight: PiDCodeMetrics.compactControlHeight)
                             }
                         }
                     }
-                    if selectedProject?.sourceFolders.isEmpty == true {
-                        HStack {
-                            Text("该项目还没有 Source Folder。")
-                                .foregroundStyle(.orange)
-                            Spacer()
-                            Button("添加 Source Folder") { openProjectEditor(selectedProject) }
-                                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
-                        }
-                    } else if let selectedProject {
+                    if let selectedProject {
                         HStack {
                             Spacer()
                             Button("编辑目标项目…") { openProjectEditor(selectedProject) }
@@ -108,10 +93,10 @@ struct CopySessionSheet: View {
                 Spacer()
                 if model.isCopyingSession { ProgressView().controlSize(.small) }
                 Button(mode == .copy ? "复制" : "复制并归档") {
-                    guard let sourceFolderPath, let projectID else { return }
+                    guard let projectDirectoryPath, let projectID else { return }
                     Task {
                         if await model.copySelectedSession(
-                            to: URL(fileURLWithPath: sourceFolderPath, isDirectory: true),
+                            to: URL(fileURLWithPath: projectDirectoryPath, isDirectory: true),
                             in: projectID,
                             archiveSource: mode == .copyAndArchive
                         ) { dismiss() }
@@ -126,7 +111,7 @@ struct CopySessionSheet: View {
         .frame(minWidth: 620, minHeight: 430)
         .interactiveDismissDisabled(model.isCopyingSession)
         .onAppear { selectFirstAvailableTarget() }
-        .onChange(of: projectID) { _, _ in selectFirstFolder() }
+        .onChange(of: projectID) { _, _ in selectProjectDirectory() }
     }
 
     private var selectedProject: DCodeProject? {
@@ -135,17 +120,17 @@ struct CopySessionSheet: View {
     }
 
     private var canSubmit: Bool {
-        guard let sourceFolderPath else { return false }
+        guard let projectDirectoryPath else { return false }
         if mode == .copyAndArchive, model.pendingArchiveRetry != nil { return false }
         if mode == .copyAndArchive, sourceIsArchived { return false }
-        return selectedProject?.sourceFolders.contains(where: { $0.path == sourceFolderPath }) == true
+        return selectedProject?.directory.path == projectDirectoryPath
             && targetFolderIsValid
     }
 
     private var targetFolderIsValid: Bool {
-        guard let sourceFolderPath else { return false }
-        let url = URL(fileURLWithPath: sourceFolderPath, isDirectory: true)
-        return (try? ProjectStore.canonicalDirectoryPath(url)) == sourceFolderPath
+        guard let projectDirectoryPath else { return false }
+        let url = URL(fileURLWithPath: projectDirectoryPath, isDirectory: true)
+        return (try? ProjectStore.canonicalDirectoryPath(url)) == projectDirectoryPath
     }
 
     private var sourceIsArchived: Bool {
@@ -155,12 +140,11 @@ struct CopySessionSheet: View {
 
     private func selectFirstAvailableTarget() {
         if projectID == nil { projectID = model.projects.first?.id }
-        selectFirstFolder()
+        selectProjectDirectory()
     }
 
-    private func selectFirstFolder() {
-        let folders = selectedProject?.sourceFolders ?? []
-        sourceFolderPath = folders.count == 1 ? folders[0].path : nil
+    private func selectProjectDirectory() {
+        projectDirectoryPath = selectedProject?.directory.path
     }
 
     private func openProjectEditor(_ project: DCodeProject?) {

@@ -82,6 +82,22 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "会话文件仍被完整保留，但无法放回原位置。请先不要继续操作，并从错误详情中的保留路径恢复。"
             case "SESSION_BUSY":
                 "会话仍在运行、执行工具或持有可写状态。请等待它结束后重试。"
+            case "CWD_UNCHANGED":
+                "新目录与当前项目目录相同，不需要迁移。"
+            case "SOURCE_CWD_NOT_ACCESSIBLE":
+                "当前项目目录不可用。为保护会话，D Code 没有改动任何目录或会话。"
+            case "TARGET_CWD_NOT_ACCESSIBLE":
+                "新项目目录不可用。请选择有访问权限的目录后重试。"
+            case "TARGET_DIRECTORY_NOT_EMPTY":
+                "选择迁移目录内文件时，目标项目目录必须为空；现有文件没有被覆盖。"
+            case "TARGET_INSIDE_SOURCE", "SOURCE_INSIDE_TARGET":
+                "项目目录不能迁移到当前目录的嵌套位置。请选择一个独立目录。"
+            case "SESSION_CHANGED_DURING_MIGRATION":
+                "关联会话仍在变化。D Code 没有提交目录迁移；请等待会话稳定后重试。"
+            case "CWD_REWRITE_VERIFY_FAILED":
+                "会话工作目录没有通过迁移校验。D Code 没有把未验证结果显示为成功。"
+            case "CWD_MIGRATION_ROLLBACK_FAILED":
+                "项目目录迁移未能完整回滚。请停止继续操作，先核对项目目录和会话文件。"
             case "INVALID_SESSION":
                 "Pi 会话包含未完成或损坏的记录。D Code 已保留上一次完整历史；请等待 Pi 完成写入，持续出现时再检查会话文件。"
             case "MODEL_SETTINGS_UNREADABLE":
