@@ -112,7 +112,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.26");
+    assert.equal(hello.hostVersion, "0.0.27");
     assert.equal(hello.piVersion, "0.84.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
@@ -485,17 +485,29 @@ test("steering an active run uses Pi steer semantics without replacing the run i
         retryable: false,
       },
     };
-    let observed: string | undefined;
-    active.session.steer = async (message) => { observed = message; };
+    const observed: string[] = [];
+    active.session.steer = async (message) => { observed.push(message); };
 
-    const result = await host.handle("session.steer", {
+    const first = await host.handle("session.steer", {
       message: "change direction",
       steerId: "steer-1",
       expectedRunId: "run-active",
     }) as { accepted: boolean; steerId: string; runId: string };
+    const second = await host.handle("session.steer", {
+      message: "add a constraint",
+      steerId: "steer-2",
+      expectedRunId: "run-active",
+    }) as { accepted: boolean; steerId: string; runId: string };
+    const third = await host.handle("session.steer", {
+      message: "finish with a test",
+      steerId: "steer-3",
+      expectedRunId: "run-active",
+    }) as { accepted: boolean; steerId: string; runId: string };
 
-    assert.deepEqual(result, { accepted: true, steerId: "steer-1", runId: "run-active" });
-    assert.equal(observed, "change direction");
+    assert.deepEqual(first, { accepted: true, steerId: "steer-1", runId: "run-active" });
+    assert.deepEqual(second, { accepted: true, steerId: "steer-2", runId: "run-active" });
+    assert.deepEqual(third, { accepted: true, steerId: "steer-3", runId: "run-active" });
+    assert.deepEqual(observed, ["change direction", "add a constraint", "finish with a test"]);
     assert.equal(active.currentRun?.id, "run-active");
     await assert.rejects(
       host.handle("session.steer", {
@@ -1639,7 +1651,7 @@ test("writable open excludes external pi-dfast before extension factories execut
   }
 });
 
-test("fast mode restores only for the session where it was enabled", async () => {
+test("fast mode refuses hidden enablement for unsupported session models", async () => {
   const f = await fixture();
   const firstPath = join(f.agentDir, "sessions", "project", `${f.sessionId}.jsonl`);
   const secondSessionID = "session-other";
@@ -1668,7 +1680,7 @@ test("fast mode restores only for the session where it was enabled", async () =>
 
     await host.handle("session.open", writable(f.sessionId));
     const restored = await host.handle("session.getState", {}) as { fastMode: { enabled: boolean } };
-    assert.equal(restored.fastMode.enabled, true);
+    assert.equal(restored.fastMode.enabled, false);
     await host.handle("session.close", {});
 
     await host.handle("session.open", writable(secondSessionID));

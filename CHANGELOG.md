@@ -1,3 +1,25 @@
+## [Unreleased]
+
+### Added
+
+- `0.0.27` 自进化运行回执（ADR 0032 / PRD 0024）：独立、版本化且损坏熔断的本机 Store 串联 Project、Pi Session、Host Model、可选 Goal 与 Candidate Manifest；Full Receipt 在交换前落 `restart_requested`，新 App 核对 manifest 并恢复同一 Session 后才进入待人工验收。
+- `v0.0.26 → 0.0.27` 一次性 Bootstrap Receipt：从旧重启 marker、当前 candidate manifest 与备份版本建立恢复后回执，明确没有重启前预检且永不计入三次完整循环；运行中的 `0.0.27` 才能为下一版建立可计数 Full Receipt。
+- 设置“自进化”首屏显示当前回执、Local-only 边界与主动作；恢复后的原会话显示轻量状态条，人工接受、恢复重试与回滚均为显式动作。
+- 设置新增“通知”：用户显式开启后，确认完成的 Run 发送不含正文与路径的 macOS 通知；前台可见、点击可回到对应 Session / Entry，冷启动路由不会丢失，外部撤销权限后开关同步关闭。
+- 自进化回执隔离网页 eval 经五轮收敛：证据与构建详情改为可访问的按需入口；Candidate / Blocked 不再伪装已建立运行回执，Bootstrap、Recovery 与 Rolled Back 的 Assurance、计数、进度和追加式事件时间线只呈现已发生事实。12 个有效外部使用 case 覆盖完整路径、恢复后人工发现问题与失败回滚；原生 App / Pi / Sol 闭环仍为人工验收边界。
+
+### Changed
+
+- 自进化重启新增 Project/source、Session 归属、Sol、Run/Prompt、队列、结构化交互、内存附件、文件编辑缓冲区、模型配置和 Candidate 当前性门禁；普通 Self-build 仍可独立使用，不冒充完整自进化。
+- 重启恢复 marker 改为显式区分普通候选、Full Receipt 与 Self-evolution 回滚；仅无类型的 `v0.0.26` marker 可进入 Bootstrap。未终结回执存在时，普通 active / backup 交换在界面与方法层同时拒绝，避免覆盖唯一回滚备份。
+- 修正 `0.0.25` Composer 误读：控制行恢复可点击的当前模型名，不显示 CPU / 芯片图标与外露 `▾`，推理强度继续独立相邻；已有会话切换模型后同步刷新 Thinking levels，旧模型档位不再残留。`+` 从带标题、固定宽度和胶囊按钮的大 Popover 改为紧凑 macOS 原生 Menu，能力范围仍仅为文件或图片、Skill、命令、目标与计划。
+- Composer 现在可把剪贴板 PNG / TIFF 与图片 file URL 直接转入既有内存附件 chip，纯文本粘贴不变且同一图片的多种 pasteboard 表示不重复消费；Skill 在 `+` 与 `/` 面板只显示普通名称、说明和“技能”类型，内部 `/skill:` 仅保留为选中后的可执行 invocation。
+- 普通 Run / 工具执行期间可继续调整模型、推理强度与速度，选择在下一安全模型边界生效；Fast 只在 Host 支持的 OpenAI 模型显示“标准 / 极速”，切离后归一为标准。会话标题不再重复显示常规“运行中”，最新完成轮可展开查看 Pi 已提供的 Thinking 与工具过程。
+- 连续 steer 不再用“介入信息已交给 Pi”卡片占据 Composer；每次 RPC 只锁自身提交，用户可继续补充上下文。多条及重复正文 steer 按稳定身份结算，旧回执不会清除后来输入的持久草稿。
+- Self-build 重启改由交换前暂存的独立 Helper 在旧 PID 完全退出后启动新 App；首次可从已完整校验的 Candidate 自举 Helper，typed intent 先于 bundle 交换落盘，Candidate 校验强制包含可执行 Helper。receipt / helper 失败会保持或精确恢复 active、backup 与 candidate 身份，不再留下孤立 Helper、反向“回滚备份”或已回滚回执配候选 bundle 的矛盾状态。
+- 原生安装验证修复两项恢复竞态：重启恢复 / 通知回跳等直接打开真实 Session 时会先停靠主页草稿并清除仅内存图片，不再同时显示会话 transcript 与“新会话 Project”托盘，也不会把新会话附件带入恢复 Session；Relaunch Helper 在旧 PID 消失并等待 3 秒 macOS 单实例注销窗口后，仅移除继承自旧 App 的 `__CFBundleIdentifier`，再启动一个 `open -W <绝对 App 路径>` 系统等待进程完成 LaunchServices 交接（不使用与 `LSMultipleInstancesProhibited` 冲突的 `-n`），通过 `NSWorkspace.runningApplications` 对路径相同、PID 不同的新实例做连续 1 秒稳定验证，并保留 5 秒有界请求方交接窗口；拒绝把 zombie PID、短暂进程或命令退出码冒充启动成功。
+- 将 App / Host / Info.plist / build.sh 开发版本统一提升为 `0.0.27`。
+
 ## [0.0.26] - 2026-08-23
 
 ### Added

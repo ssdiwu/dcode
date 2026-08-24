@@ -147,6 +147,8 @@ struct ActivityAttentionRecord: Codable, Identifiable, Equatable, Hashable, Send
     let entryID: String
     let completedAt: String
     var presentedAt: String?
+    /// 系统通知已成功交给 macOS 的时间；旧 attention 资料缺失时保持 nil。
+    var notifiedAt: String? = nil
 
     var isUnseen: Bool { presentedAt == nil }
     var completedDate: Date? { ActivityTimestamp.parse(completedAt) }
@@ -274,7 +276,7 @@ actor ActivityAttentionStore {
             guard seen.insert(record.sessionID).inserted else {
                 throw ActivityAttentionStoreError.duplicateSessionID(record.sessionID)
             }
-            for timestamp in [record.completedAt, record.presentedAt].compactMap({ $0 }) {
+            for timestamp in [record.completedAt, record.presentedAt, record.notifiedAt].compactMap({ $0 }) {
                 guard ActivityTimestamp.parse(timestamp) != nil else {
                     throw ActivityAttentionStoreError.invalidTimestamp(timestamp)
                 }

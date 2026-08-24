@@ -7,6 +7,82 @@ import ViewInspector
 /// 状态断言由 Fake-host 集成测试负责，这里验证“关键状态可渲染、不崩”。
 @MainActor
 final class ConversationRenderTests: XCTestCase {
+    func testComposerControlSourceKeepsModelPickerAndNativeAddMenuContract() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = appRoot.appending(path: "Sources/PiDCode/Views/ComposerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("private var modelPickerMenu: some View"),
+            "Composer 必须保留独立、可点击的模型名选择器"
+        )
+        XCTAssertTrue(
+            source.contains("model.composerModel?.displayName ?? \"选择模型\""),
+            "控制行必须显示当前模型名或选择模型占位"
+        )
+        XCTAssertFalse(source.contains("systemImage: \"cpu\""), "模型名旁不显示 CPU 图标")
+        XCTAssertFalse(source.contains("@State private var showingAddActions"), "原生 Menu 不维护自定义 Popover 状态")
+        XCTAssertFalse(source.contains("Text(\"添加与工作操作\")"), "紧凑菜单不显示面板式大标题")
+        XCTAssertTrue(
+            source.contains("private var attachmentButton: some View {\n        Menu {"),
+            "`+` 必须直接使用紧凑原生 Menu，而不是大 Popover"
+        )
+        XCTAssertTrue(
+            source.contains(".disabled(model.pendingPathDraft != nil || !composerIsEnabled)"),
+            "Prompt transaction 在途时必须冻结 `+`，避免失败恢复覆盖新附件"
+        )
+        XCTAssertTrue(
+            source.contains("private var fastModePickerMenu: some View"),
+            "Host 明确支持的 OpenAI 模型必须恢复独立速度菜单"
+        )
+        XCTAssertTrue(
+            source.contains("model.canMutateComposerRuntimeSettings"),
+            "模型、强度与速度必须使用不包含普通 Active Run 的专用门禁"
+        )
+    }
+
+    func testSessionHeaderDoesNotRepeatRoutineRunningState() throws {
+        XCTAssertFalse(SessionHeaderRunStatusPolicy.shouldShow(.running))
+        XCTAssertTrue(SessionHeaderRunStatusPolicy.shouldShow(.waitingForUser))
+        XCTAssertTrue(SessionHeaderRunStatusPolicy.shouldShow(.stopRequested))
+        XCTAssertTrue(SessionHeaderRunStatusPolicy.shouldShow(.unknown))
+        XCTAssertFalse(SessionHeaderRunStatusPolicy.shouldShow(.completed))
+    }
+
+    func testThinkingDisclosureHasExplicitEntryAndStreamingSettlementHook() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = appRoot.appending(path: "Sources/PiDCode/Views/ConversationView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("查看思考与工具"), "完成轮必须提供显式可发现的 Thinking 入口")
+        XCTAssertTrue(source.contains("pendingLatestProcessExpansion"), "Streaming 转持久轮时必须保留最新过程可见性")
+    }
+
+    func testComposerContextControlAndBreakdownCopyStayHonest() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = appRoot.appending(path: "Sources/PiDCode/Views/ComposerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".frame(width: 20, height: 20)"), "圆环视觉尺寸应保持约 20pt")
+        XCTAssertTrue(source.contains("width: PiDCodeMetrics.compactControlHeight"), "圆环必须保留完整命中区")
+        XCTAssertFalse(source.contains("contextDeltaCaption"), "增减 token 不得再占用 Composer 一级控制行")
+        XCTAssertTrue(source.contains("Text(\"构成（估算）\")"), "弹层必须明确构成是估算")
+        XCTAssertTrue(source.contains("Pi 最近一次返回的用量快照"), "弹层必须标注真实总量快照口径")
+        XCTAssertFalse(source.contains("Int((fraction * 100).rounded())"), "小于 1% 的非零构成不得被四舍五入为 0%")
+    }
+
     func testConversationRoundRailRendersNavigationItems() {
         let items = [
             ConversationNavigationItem(
@@ -72,6 +148,80 @@ final class ConversationRenderTests: XCTestCase {
         XCTAssertFalse(host.fittingSize == .zero)
     }
 
+    func testLatestProcessExpansionWaitsForANewPersistedProcessEntry() {
+        let oldProcess = TranscriptItem(
+            id: "thinking-old",
+            role: .assistant,
+            timestamp: nil,
+            blocks: [.thinking(id: "thinking-old-block", value: "旧一轮")]
+        )
+        let oldRound = processRound(id: "round-old", process: oldProcess)
+        let baseline = ConversationProcessExpansionBaseline(rounds: [oldRound])
+
+        XCTAssertNil(
+            ConversationProcessExpansionPolicy.targetRoundID(after: baseline, rounds: [oldRound]),
+            "streaming 结束时不得把上一轮已有 Thinking 当成本轮新增内容"
+        )
+
+        let ordinaryEntry = TranscriptItem(
+            id: "assistant-before-thinking",
+            role: .assistant,
+            timestamp: nil,
+            blocks: [.text(id: "assistant-before-thinking-text", value: "普通条目先到")]
+        )
+        let ordinaryRound = ConversationRound(
+            id: "round-latest",
+            user: nil,
+            processItems: [],
+            finalAssistant: ordinaryEntry,
+            startedAt: nil,
+            completedAt: nil,
+            toolCount: 0,
+            hasError: false,
+            totalTokens: nil,
+            entryIDs: [ordinaryEntry.id],
+            processEntryIDs: []
+        )
+        XCTAssertNil(
+            ConversationProcessExpansionPolicy.targetRoundID(
+                after: baseline,
+                rounds: [oldRound, ordinaryRound]
+            ),
+            "普通 transcript 增量不得冒充过程项或消费待展开目标"
+        )
+
+        let latestProcess = TranscriptItem(
+            id: "thinking-latest",
+            role: .assistant,
+            timestamp: nil,
+            blocks: [.thinking(id: "thinking-latest-block", value: "最新一轮")]
+        )
+        let latestRound = processRound(id: "round-latest", process: latestProcess)
+        XCTAssertEqual(
+            ConversationProcessExpansionPolicy.targetRoundID(
+                after: baseline,
+                rounds: [oldRound, latestRound]
+            ),
+            "round-latest"
+        )
+    }
+
+    private func processRound(id: String, process: TranscriptItem) -> ConversationRound {
+        ConversationRound(
+            id: id,
+            user: nil,
+            processItems: [process],
+            finalAssistant: nil,
+            startedAt: nil,
+            completedAt: nil,
+            toolCount: 0,
+            hasError: false,
+            totalTokens: nil,
+            entryIDs: [process.id],
+            processEntryIDs: [process.id]
+        )
+    }
+
     func testComposerViewRendersWithActiveRunAndQueueMode() {
         let model = AppModel()
         model.selectedSessionID = "session-render"
@@ -98,6 +248,29 @@ final class ConversationRenderTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
 
         XCTAssertFalse(host.fittingSize == .zero)
+    }
+
+    func testRunningComposerUsesCompactStopInsteadOfStatusDock() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = appRoot.appending(path: "Sources/PiDCode/Views/ComposerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private var compactStopButton: some View"))
+        XCTAssertTrue(source.contains("Image(systemName: \"stop.fill\")"))
+        XCTAssertTrue(source.contains(".frame(width: 28, height: 28)"))
+        XCTAssertTrue(source.contains(".help(\"停止当前运行\")"))
+        XCTAssertTrue(source.contains("phase.requiresInteractionDock && phase != .running"))
+        XCTAssertFalse(source.contains("当前 Agent 正在处理；可选择立即介入"))
+        XCTAssertFalse(source.contains("介入信息已交给 Pi"), "accepted steer 不得再渲染常驻确认卡片")
+        XCTAssertFalse(source.contains("pendingSteer"), "Composer 不得再依赖单值 pendingSteer")
+        XCTAssertTrue(source.contains("model.canEditComposerText"), "输入框必须复用提交事务之外的独立可编辑门禁")
+        XCTAssertFalse(source.contains("&& model.followUp.steerSubmissionInFlight == nil"), "steer RPC 在途不得锁住下一段上下文输入")
+        XCTAssertTrue(source.contains("phase.requiresInteractionDock"), "特殊运行状态仍保留结构化状态入口")
+        XCTAssertTrue(source.contains("textView.isEditable = isEnabled"), "AppKit 输入框必须服从独立可编辑门禁")
     }
 
     func testModelSettingsViewRendersWithSnapshot() throws {

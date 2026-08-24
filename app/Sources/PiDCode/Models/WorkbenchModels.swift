@@ -14,6 +14,7 @@ enum SettingsPage: String, CaseIterable, Equatable, Sendable {
     case workbench
     case archivedSessions
     case selfBuild
+    case notifications
     case hostDiagnostics
     case about
 }

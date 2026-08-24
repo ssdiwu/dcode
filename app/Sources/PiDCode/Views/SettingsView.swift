@@ -151,7 +151,7 @@ struct SettingsView: View {
             }
 
             SettingsNavigationRow(
-                title: "自构建",
+                title: "自进化",
                 systemImage: "arrow.triangle.2.circlepath",
                 selected: page == .selfBuild
             ) {
@@ -163,6 +163,14 @@ struct SettingsView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, PiDCodeMetrics.spacingStandard)
                 .padding(.top, PiDCodeMetrics.spacingSection)
+
+            SettingsNavigationRow(
+                title: "通知",
+                systemImage: "bell",
+                selected: page == .notifications
+            ) {
+                model.presentSettings(.notifications)
+            }
 
             SettingsNavigationRow(
                 title: "Host 诊断",
@@ -198,6 +206,9 @@ struct SettingsView: View {
 
         case .customProviders:
             CustomProvidersSettingsView()
+
+        case .notifications:
+            CompletionNotificationSettingsView()
 
         case .appearance:
             SettingsPageContainer(
@@ -440,7 +451,7 @@ struct SettingsGroup<Content: View>: View {
     }
 }
 
-private struct SettingsValueRow<Trailing: View>: View {
+struct SettingsValueRow<Trailing: View>: View {
     let title: String
     let detail: String
     let trailing: Trailing
@@ -479,14 +490,164 @@ struct SelfBuildSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmRestart = false
     @State private var confirmRollback = false
+    @State private var confirmSelfEvolutionRestart = false
+    @State private var confirmSelfEvolutionRollback = false
+    @State private var showsTechnicalDetails = false
 
     var body: some View {
         let selfBuild = model.selfBuild
+        let hasUnfinishedEvolution = model.selfEvolution.unfinishedReceipt != nil
         SettingsPageContainer(
-            title: "自构建",
-            subtitle: "从明确的源码 checkout 运行完整回归，生成带来源清单的本机候选，再受控替换并重启。"
+            title: "自进化",
+            subtitle: "从当前 Project 与 Session 生成可核对候选，安全恢复原任务，再由你明确验收或回滚。"
         ) {
             VStack(spacing: PiDCodeMetrics.spacingSection) {
+                SettingsGroup {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("本次自进化")
+                                    .font(.body.weight(.semibold))
+                                if let receipt = model.selfEvolution.latestReceipt {
+                                    Text("\(receipt.assurance.label) · \(receipt.state.label)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else if let recovery = model.selfEvolution.bootstrapRecovery {
+                                    Text("首次引导恢复需要处理 · \(recovery.reason.label)")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                } else {
+                                    Text("尚无运行回执；先在下方验证并构建候选。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Text("仅本机 · 不可分发")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        }
+                        if let stage = selfBuild.restartStage {
+                            Divider()
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(stage.message)
+                                        .font(.body.weight(.medium))
+                                    if stage == .awaitingNewVersion {
+                                        Text("候选已交换，正在等待新版本启动")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                            }
+                        }
+                        if let issue = selfBuild.issue {
+                            Label(issue, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
+                        if let receipt = model.selfEvolution.latestReceipt {
+                            Text("\(receipt.sourceAppVersion ?? "未知旧版") → \(receipt.candidate.appVersion) · \(receipt.candidate.sourceDigest.prefix(12))")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                            if receipt.assurance == .legacyBootstrap {
+                                Text("恢复后补建；0.0.26 未记录重启前检查，本次不计入三次完整循环。")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            } else if let ordinal = receipt.qualifyingCycleOrdinal {
+                                Text(
+                                    receipt.state == .manualAccepted
+                                        ? "完整循环 \(ordinal)/\(receipt.requiredCycleCount ?? 3)"
+                                        : "人工验收后可计为完整循环 \(ordinal)/\(receipt.requiredCycleCount ?? 3)"
+                                )
+                                .font(.caption.weight(.medium))
+                            }
+                            if let issue = receipt.latestIssue {
+                                Label(issue, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            DisclosureGroup("事件时间线") {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    ForEach(receipt.events) { event in
+                                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                            Text(String(event.occurredAt.prefix(19)))
+                                                .font(.caption2.monospaced())
+                                                .foregroundStyle(.tertiary)
+                                            Text(event.kind.label)
+                                                .font(.caption)
+                                            Spacer()
+                                        }
+                                    }
+                                }
+                                .padding(.top, 6)
+                            }
+                            .font(.caption)
+                            if receipt.state == .sessionRestored {
+                                HStack {
+                                    Button("确认本机可继续使用") {
+                                        Task { await model.acceptSelfEvolutionReceipt() }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    Button("发现问题并回滚") { confirmSelfEvolutionRollback = true }
+                                }
+                            } else if receipt.state == .recoveryRequired {
+                                HStack {
+                                    Button("重试恢复") { Task { await model.retrySelfEvolutionRecovery() } }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("回滚上一构建") { confirmSelfEvolutionRollback = true }
+                                }
+                            }
+                        } else if let recovery = model.selfEvolution.bootstrapRecovery {
+                            Label(recovery.reason.label, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text("旧恢复标记与本机恢复状态都已保留；修复对应条件后可以重新检查。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("重新检查引导恢复") {
+                                Task { await model.retryBootstrapRecovery() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
+                        if let candidate = selfBuild.candidate, candidate.isReady {
+                            Divider()
+                            let blockers = model.selfEvolutionRestartBlockers
+                            HStack(alignment: .center, spacing: 12) {
+                                Button("重启并记录自进化") { confirmSelfEvolutionRestart = true }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.large)
+                                    .disabled(!blockers.isEmpty || isBusy)
+                                Text(
+                                    blockers.first
+                                        ?? "交换前先写完整回执；恢复同一 Session 后等待人工验收。"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(blockers.isEmpty ? .secondary : Color.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else {
+                            Button("准备下一构建") { showsTechnicalDetails = true }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
+                        }
+
+                        Button(showsTechnicalDetails ? "隐藏证据与构建详情" : "查看证据与构建详情") {
+                            showsTechnicalDetails.toggle()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                }
+
+                if showsTechnicalDetails {
                 SettingsGroup {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(alignment: .firstTextBaseline) {
@@ -671,16 +832,38 @@ struct SelfBuildSettingsView: View {
                             .frame(minHeight: 44)
                         }
                         Divider().padding(.leading, 20)
-                        HStack(spacing: PiDCodeMetrics.spacingGroup) {
-                            Button("重启到候选") { confirmRestart = true }
-                                .controlSize(.large)
-                                .disabled(!candidate.isReady || isBusy)
-                            Text("当前会话将在新构建中自动恢复。")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                        if selfBuild.candidateWasConsumed {
+                            Label(
+                                selfBuild.restartStage == nil
+                                    ? "候选已交换；当前版本保留，请按错误提示恢复"
+                                    : "候选已交换，正在等待新版本启动",
+                                systemImage: "arrow.triangle.2.circlepath"
+                            )
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, PiDCodeMetrics.spacingGroup)
+                        } else {
+                            HStack(spacing: PiDCodeMetrics.spacingGroup) {
+                                Button("普通重启到候选") { confirmRestart = true }
+                                    .controlSize(.large)
+                                    .disabled(
+                                        !candidate.isReady
+                                            || selfBuild.phase != .built
+                                            || hasUnfinishedEvolution
+                                            || isBusy
+                                    )
+                                Text(
+                                    hasUnfinishedEvolution
+                                        ? "当前自进化回执未终结；普通交换已暂停，以保留唯一回滚备份。"
+                                        : "当前会话将在新构建中自动恢复。"
+                                )
+                                    .font(.caption2)
+                                    .foregroundStyle(hasUnfinishedEvolution ? Color.orange : Color.secondary)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, PiDCodeMetrics.spacingGroup)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, PiDCodeMetrics.spacingGroup)
                     }
                 }
 
@@ -707,9 +890,13 @@ struct SelfBuildSettingsView: View {
                     HStack(spacing: PiDCodeMetrics.spacingGroup) {
                         Button("回滚到备份构建") { confirmRollback = true }
                             .controlSize(.large)
-                            .disabled(!selfBuild.backupAvailable)
+                            .disabled(!selfBuild.backupAvailable || hasUnfinishedEvolution || isBusy)
                         if !selfBuild.backupAvailable {
                             Text("尚无备份（替换过一次后可用）。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if hasUnfinishedEvolution {
+                            Text("请从“本次自进化”回滚，确保回执与 App 同步。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -722,6 +909,7 @@ struct SelfBuildSettingsView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, PiDCodeMetrics.spacingGroup)
                 }
+                }
             }
         }
         .confirmationDialog(
@@ -731,6 +919,26 @@ struct SelfBuildSettingsView: View {
         ) {
             Button("重启到候选", role: .destructive) {
                 Task { await model.restartIntoSelfBuildCandidate() }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "重启并记录完整自进化？D Code 会先保存重启请求，再替换 App；恢复同一 Session 后仍需你人工验收。",
+            isPresented: $confirmSelfEvolutionRestart,
+            titleVisibility: .visible
+        ) {
+            Button("重启并继续本会话", role: .destructive) {
+                Task { await model.restartIntoSelfEvolutionCandidate() }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "回滚上一构建？本次回执会标记为已回滚，不计入完整自进化循环。",
+            isPresented: $confirmSelfEvolutionRollback,
+            titleVisibility: .visible
+        ) {
+            Button("回滚上一构建", role: .destructive) {
+                Task { await model.rollbackSelfEvolutionReceipt() }
             }
             Button("取消", role: .cancel) {}
         }
@@ -769,7 +977,10 @@ struct SelfBuildSettingsView: View {
     }
 
     private var isBusy: Bool {
-        model.selfBuild.phase == .verifying || model.selfBuild.phase == .building
+        model.selfBuild.phase == .verifying
+            || model.selfBuild.phase == .building
+            || model.selfBuild.isRestarting
+            || model.isSelfEvolutionRestarting
     }
 
     private func chooseSourceRoot() {

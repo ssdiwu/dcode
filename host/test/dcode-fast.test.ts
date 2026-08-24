@@ -50,6 +50,8 @@ test("D Code fast mode keeps the shared pi-dfast snapshot event contract", async
   const busHandlers = new Map<string, (data: unknown) => void>();
   const lifecycleHandlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
   const updates: unknown[] = [];
+  const appendedStates: Array<{ version: number; enabled: boolean }> = [];
+  let fastCommand: ((args: string, context: ExtensionContext) => Promise<void>) | undefined;
   const pi = {
     events: {
       emit(channel: string, data: unknown) {
@@ -61,8 +63,12 @@ test("D Code fast mode keeps the shared pi-dfast snapshot event contract", async
         return () => { busHandlers.delete(channel); };
       },
     },
-    appendEntry: () => undefined,
-    registerCommand: () => undefined,
+    appendEntry(_type: string, state: { version: number; enabled: boolean }) {
+      appendedStates.push(state);
+    },
+    registerCommand(name: string, command: { handler: (args: string, context: ExtensionContext) => Promise<void> }) {
+      if (name === "fast") fastCommand = command.handler;
+    },
     on(event: string, handler: (value: unknown, context: ExtensionContext) => unknown) {
       lifecycleHandlers.set(event, handler);
     },
@@ -72,6 +78,7 @@ test("D Code fast mode keeps the shared pi-dfast snapshot event contract", async
   const context = {
     model: { provider: "openai-codex", id: "gpt-5.6-sol" },
     sessionManager: { getBranch: () => [] },
+    ui: { notify: () => undefined },
   } as unknown as ExtensionContext;
 
   lifecycleHandlers.get("session_start")?.({}, context);
@@ -84,4 +91,16 @@ test("D Code fast mode keeps the shared pi-dfast snapshot event contract", async
   busHandlers.get("pi-dfast/subscribe")?.({ version: 1, consumerId: "pi-dusage" });
   assert.equal(updates.length, beforeSubscribe + 1);
   assert.equal((updates.at(-1) as { version: number }).version, 1);
+
+  assert.ok(fastCommand);
+  await fastCommand("on", context);
+  assert.equal(controller.snapshot.enabled, true);
+  const unsupported = {
+    model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+    sessionManager: { getBranch: () => [] },
+    ui: { notify: () => undefined },
+  } as unknown as ExtensionContext;
+  lifecycleHandlers.get("model_select")?.({}, unsupported);
+  assert.equal(controller.snapshot.enabled, false, "离开支持模型时必须清除隐藏 Fast 意图");
+  assert.deepEqual(appendedStates.at(-1), { version: 1, enabled: false });
 });

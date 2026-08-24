@@ -52,7 +52,8 @@ open "dist/D Code.app"
 - `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
 - `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
-- App 退出应发送 `host.shutdown`；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
+- App 退出先发送 `host.shutdown`；Swift Host client 对该请求与子进程等待设有界超时，超时只 force terminate 当前 App 已登记的 Host PID，再完成退出 reply；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
+- Self-build 交换后的新 App 启动由独立 `DCodeRelaunchHelper` 负责：旧 App PID 消失前不调用启动，新 App 只按规范化 `dist/D Code.app` 路径启动一次；marker 在 Session / receipt 恢复成立前保留。
 - App 在执行任何会话查询前要求 `hostVersion` 与 `HostCompatibility.appVersion` 精确相同，并校验 `HostCompatibility.requiredCapabilities` 中的能力；可执行权威位于 `HostModels.swift` 与 `pi-host.ts`，本文不复制动态版本和完整能力数组。旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航、运行状态、模型、资源、队列所有权或写入路径。
 - Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
 

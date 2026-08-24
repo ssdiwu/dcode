@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum SessionHeaderRunStatusPolicy {
+    static func shouldShow(_ phase: SessionRunPhase) -> Bool {
+        switch phase {
+        case .waitingForUser, .stopRequested, .unknown:
+            true
+        case .running, .completed, .failed, .aborted:
+            false
+        }
+    }
+}
+
 struct SessionDetailView: View {
     @Environment(AppModel.self) private var model
 
@@ -8,6 +19,9 @@ struct SessionDetailView: View {
             if let inspection = model.inspection {
                 VStack(spacing: 0) {
                     sessionHeader(inspection)
+                    if let receipt = selfEvolutionReceipt(for: inspection.summary.id) {
+                        selfEvolutionBanner(receipt)
+                    }
                     ConversationView()
                     if model.activePlan != nil || model.sessionChangeSummary != nil {
                         ActivePlanView(
@@ -34,6 +48,38 @@ struct SessionDetailView: View {
         }
     }
 
+    private func selfEvolutionReceipt(for sessionID: String) -> SelfEvolutionRunRecord? {
+        guard let receipt = model.selfEvolution.latestReceipt,
+              receipt.sessionID == sessionID,
+              receipt.state == .sessionRestored || receipt.state == .recoveryRequired else { return nil }
+        return receipt
+    }
+
+    private func selfEvolutionBanner(_ receipt: SelfEvolutionRunRecord) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: receipt.state == .recoveryRequired ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath")
+                .foregroundStyle(receipt.state == .recoveryRequired ? Color.orange : Color.accentColor)
+            Text(
+                receipt.state == .recoveryRequired
+                    ? "本次自进化需要处理"
+                    : receipt.assurance == .legacyBootstrap
+                        ? "0.0.27 已恢复本会话 · 引导回执不计入完整循环"
+                        : "新构建已恢复本会话 · 等待人工验收"
+            )
+            .font(.caption)
+            .lineLimit(1)
+            Spacer()
+            Button("查看回执") { model.presentSettings(.selfBuild) }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 18)
+        .frame(minHeight: 34)
+        .background((receipt.state == .recoveryRequired ? Color.orange : Color.accentColor).opacity(0.08))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
     private func sessionHeader(_ inspection: SessionInspection) -> some View {
         HStack(spacing: 10) {
             Text(inspection.summary.cwd)
@@ -53,14 +99,12 @@ struct SessionDetailView: View {
                 StatusPill(label: "正在压缩上下文…", systemImage: "compress", color: .orange)
             }
             if let runState = model.activity.currentRunState,
-               runState.phase.isActive || runState.phase == .unknown {
+               SessionHeaderRunStatusPolicy.shouldShow(runState.phase) {
                 StatusPill(
                     label: headerStatusLabel(runState),
                     systemImage: headerStatusIcon(runState.phase),
                     color: runState.phase == .unknown ? .orange : .accentColor
                 )
-            } else if model.isStreaming {
-                StatusPill(label: "运行中", systemImage: "waveform", color: .orange)
             }
         }
         .padding(.horizontal, 18)

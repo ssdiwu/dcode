@@ -1,6 +1,26 @@
 import Foundation
 import Observation
 
+enum ExtensionNotificationPresentationPolicy {
+    static func isTransientStatus(_ message: String) -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("lang:") || trimmed.hasPrefix("i18n:") { return true }
+        for marker in ["pi-marketplace loaded", "pi-sense active"] {
+            guard let range = trimmed.range(of: marker) else { continue }
+            let prefix = trimmed[..<range.lowerBound]
+            if prefix.unicodeScalars.allSatisfy({ scalar in
+                CharacterSet.whitespacesAndNewlines.contains(scalar)
+                    || CharacterSet.symbols.contains(scalar)
+                    || CharacterSet.punctuationCharacters.contains(scalar)
+                    || CharacterSet.nonBaseCharacters.contains(scalar)
+            }) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 /// 扩展事件：请求对话、通知、状态与受限能力。
 extension AppModel {
     func handleExtensionHostEvent(_ event: HostEvent) {
@@ -19,9 +39,7 @@ extension AppModel {
             // 会话的重复噪音。pi-marketplace 的 "loaded" 就绪广播同理：没有用户
             // 动作对应的扩展自报状态。与 host.stderr 同等对待：只进只读诊断日志，
             // 不弹横幅。
-            if message.hasPrefix("lang:")
-                || message.hasPrefix("i18n:")
-                || message.hasPrefix("pi-marketplace loaded") {
+            if ExtensionNotificationPresentationPolicy.isTransientStatus(message) {
                 appendHostDiagnostic("扩展状态提示：\(message)")
             } else {
                 showNotice(message, level: event.data?["level"]?.stringValue ?? "info")

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import PiDCode
@@ -6,8 +7,12 @@ import XCTest
 /// 类型标注与悬停全文；扩展只作为命令的内部来源。
 @MainActor
 final class ComposerCommandSuggestionTests: XCTestCase {
-    private func command(_ name: String, description: String? = nil) -> CommandDescriptor {
-        CommandDescriptor(name: name, description: description, source: "extension", sourceInfo: nil)
+    private func command(
+        _ name: String,
+        description: String? = nil,
+        source: String = "extension"
+    ) -> CommandDescriptor {
+        CommandDescriptor(name: name, description: description, source: source, sourceInfo: nil)
     }
 
     private func resource(
@@ -36,8 +41,8 @@ final class ComposerCommandSuggestionTests: XCTestCase {
             fragment: ""
         )
 
-        XCTAssertEqual(rows.map(\.displayCommand), ["/mcp", "/skill:llm-wiki", "/review", "/dhash"])
-        XCTAssertEqual(rows.map(\.typeLabel), ["命令", "Skill", "模板", "命令"])
+        XCTAssertEqual(rows.map(\.displayCommand), ["/mcp", "llm-wiki", "/review", "/dhash"])
+        XCTAssertEqual(rows.map(\.typeLabel), ["命令", "技能", "模板", "命令"])
         XCTAssertEqual(rows[0].description, "MCP 状态", "同名扩展命令以 getCommands 版本为准")
         XCTAssertEqual(
             rows[2].invocationText, "/review <目标>",
@@ -53,9 +58,10 @@ final class ComposerCommandSuggestionTests: XCTestCase {
             fragment: "llm"
         )
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].displayCommand, "/skill:llm-wiki")
+        XCTAssertEqual(rows[0].displayCommand, "llm-wiki")
         XCTAssertEqual(rows[0].invocationText, "/skill:llm-wiki ")
-        XCTAssertEqual(rows[0].typeLabel, "Skill")
+        XCTAssertEqual(rows[0].typeLabel, "技能")
+        XCTAssertEqual(rows[0].hoverDescription, "技能 · llm-wiki")
 
         let noMatch = ComposerCommandSuggestion.build(
             commands: [],
@@ -63,6 +69,21 @@ final class ComposerCommandSuggestionTests: XCTestCase {
             fragment: "wiki2"
         )
         XCTAssertTrue(noMatch.isEmpty)
+    }
+
+    func testRuntimeSkillUsesPlainDisplayNameAndDedupesResourceCopy() {
+        let rows = ComposerCommandSuggestion.build(
+            commands: [command("skill:507-breakdown", description: "视频拉片", source: "skill")],
+            resources: [resource("skill:507-breakdown", description: "重复资源", source: "skill")],
+            fragment: "507"
+        )
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].displayCommand, "507-breakdown")
+        XCTAssertEqual(rows[0].typeLabel, "技能")
+        XCTAssertEqual(rows[0].description, "视频拉片")
+        XCTAssertEqual(rows[0].invocationText, "/skill:507-breakdown ")
+        XCTAssertFalse(rows[0].hoverDescription.contains("/skill:"))
     }
 
     func testHoverDescriptionIncludesTypeCommandAndFullDescription() {
@@ -89,6 +110,172 @@ final class ComposerCommandSuggestionTests: XCTestCase {
         )
         XCTAssertEqual(rows.count, 3)
         XCTAssertEqual(Set(rows.map(\.id)).count, 3)
+    }
+}
+
+/// 剪贴板图片应进入既有 Composer 附件状态机；纯文本仍交给 NSTextView 默认粘贴。
+@MainActor
+final class ComposerClipboardImageReaderTests: XCTestCase {
+    private var pngData: Data {
+        Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
+    }
+
+    func testPNGImagePasteboardProducesOneAttachmentPayload() throws {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardPNG-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let png = pngData
+        XCTAssertTrue(pasteboard.setData(png, forType: .png))
+
+        let result = ComposerClipboardImageReader.read(from: pasteboard)
+
+        let image = try XCTUnwrap(result.images.first)
+        XCTAssertEqual(result.images.count, 1)
+        XCTAssertEqual(image.fileName, "粘贴图片.png")
+        XCTAssertEqual(image.mimeType, "image/png")
+        XCTAssertEqual(image.data, png)
+    }
+
+    func testTextPasteboardIsNotConsumedAsImage() {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardText-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("普通文本", forType: .string))
+
+        XCTAssertEqual(ComposerClipboardImageReader.read(from: pasteboard), .notImage)
+    }
+
+    func testTIFFPasteboardIsNormalizedToOnePNGAttachment() throws {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardTIFF-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 2,
+            pixelsHigh: 2,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        bitmap.setColor(NSColor(deviceRed: 0, green: 0.4, blue: 1, alpha: 1), atX: 0, y: 0)
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        image.addRepresentation(bitmap)
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        XCTAssertTrue(pasteboard.setData(tiff, forType: .tiff))
+
+        let result = ComposerClipboardImageReader.read(from: pasteboard)
+
+        let attachment = try XCTUnwrap(result.images.first)
+        XCTAssertEqual(result.images.count, 1)
+        XCTAssertEqual(attachment.mimeType, "image/png")
+        XCTAssertNotNil(NSImage(data: attachment.data))
+    }
+
+    func testImageFileURLTakesPriorityOverRawBitmapWithoutDuplicate() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "DCodeClipboardFile-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appending(path: "参考图.png")
+        let fileData = pngData
+        try fileData.write(to: fileURL)
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardFileURL-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setString(fileURL.absoluteString, forType: .fileURL))
+        XCTAssertTrue(item.setData(pngData, forType: .png))
+        let tiffData = try XCTUnwrap(NSImage(data: pngData)?.tiffRepresentation)
+        XCTAssertTrue(item.setData(tiffData, forType: .tiff))
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+
+        let result = ComposerClipboardImageReader.read(from: pasteboard)
+
+        let attachment = try XCTUnwrap(result.images.first)
+        XCTAssertEqual(result.images.count, 1)
+        XCTAssertEqual(attachment.fileName, "参考图.png")
+        XCTAssertEqual(attachment.mimeType, "image/png")
+        XCTAssertEqual(attachment.data, fileData)
+    }
+
+    func testOversizedImageFileURLIsRejectedBeforeReadingThePayload() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "DCodeClipboardOversized-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appending(path: "超大图片.png")
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.truncate(atOffset: UInt64(AppModel.composerImageByteLimit + 1))
+        try handle.close()
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardOversizedURL-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setString(fileURL.absoluteString, forType: .fileURL))
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+
+        guard case let .invalidImage(message) = ComposerClipboardImageReader.read(from: pasteboard) else {
+            return XCTFail("超过附件上限的文件应在完整读取前拒绝")
+        }
+        XCTAssertTrue(message.contains("超过 5 MB"))
+    }
+
+    func testTextViewReadablePasteboardTypesIncludeImagesAndPlainText() {
+        let textView = ComposerNSTextView()
+        let types = textView.readablePasteboardTypes
+
+        XCTAssertTrue(types.contains(.tiff))
+        XCTAssertTrue(types.contains(.png))
+        XCTAssertTrue(types.contains(NSPasteboard.PasteboardType("public.jpeg")))
+        XCTAssertTrue(types.contains(.fileURL))
+        XCTAssertTrue(types.contains(.string), "原有纯文本 Paste 类型必须保留")
+    }
+
+    func testTextViewPasteConsumesImageWithoutInsertingReplacementCharacter() throws {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardTextView-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setData(pngData, forType: .png))
+        let textView = ComposerNSTextView()
+        textView.isEditable = true
+        textView.pasteboardProvider = { pasteboard }
+        var pasted: [ComposerClipboardImage] = []
+        textView.pasteImages = { pasted = $0 }
+
+        textView.paste(nil)
+        XCTAssertEqual(pasted.count, 1)
+        XCTAssertEqual(textView.string, "")
+        XCTAssertFalse(textView.string.unicodeScalars.contains("\u{FFFC}"))
+    }
+
+    func testTextViewPasteKeepsPlainTextOnDefaultResponderPath() {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardPlainText-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("普通文本", forType: .string))
+        let textView = ComposerNSTextView()
+        textView.isEditable = true
+        textView.pasteboardProvider = { pasteboard }
+        textView.pasteImages = { _ in XCTFail("纯文本不得进入图片附件回调") }
+
+        textView.paste(nil)
+        XCTAssertEqual(textView.string, "普通文本")
+        XCTAssertFalse(textView.string.unicodeScalars.contains("\u{FFFC}"))
+    }
+
+    func testInvalidImagePasteIsConsumedWithFailureInsteadOfPastedAsText() {
+        let pasteboard = NSPasteboard(name: .init("DCodeClipboardInvalid-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setData(Data([0x89, 0x50]), forType: .png))
+        let textView = ComposerNSTextView()
+        textView.isEditable = true
+        textView.pasteboardProvider = { pasteboard }
+        var failure: String?
+        textView.pasteImages = { _ in XCTFail("损坏图片不得进入附件") }
+        textView.pasteImageFailure = { failure = $0 }
+
+        textView.paste(nil)
+        XCTAssertNotNil(failure)
+        XCTAssertEqual(textView.string, "")
+        XCTAssertFalse(textView.string.unicodeScalars.contains("\u{FFFC}"))
     }
 }
 
@@ -198,15 +385,14 @@ final class ComposerAttachmentStateTests: XCTestCase {
             base64Data: "aGlzdG9ncmFt",
             byteCount: 8
         )
-        model.followUp.pendingSteer = PendingSteerDraft(
+        model.followUp.acceptedSteerReceipts = [SteerSubmission(
             sessionID: "session-a",
             runID: "run-steer-img",
             steerID: "steer-img",
             draft: "介入正文",
             draftTarget: model.currentDraftTarget,
-            images: [attachment],
-            accepted: true
-        )
+            images: [attachment]
+        )]
         model.composerText = ""
         model.composerImages = []
 
@@ -347,7 +533,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.26", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.27", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":

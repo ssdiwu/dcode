@@ -6,7 +6,6 @@ struct ComposerView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
     @State private var showingContext = false
-    @State private var showingAddActions = false
     @State private var showingFollowUpQueue = true
     @State private var selectedCommandIndex = 0
     @AppStorage("dcode.runningMessageDeliveryMode") private var runningDeliveryRawValue = RunningMessageDeliveryMode.steer.rawValue
@@ -82,9 +81,8 @@ struct ComposerView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                if model.activity.currentRunState?.phase.requiresInteractionDock == true
+                if showsInteractionDockRunState
                     || model.currentFollowUpQueue != nil
-                    || model.followUp.pendingSteer != nil
                     || model.pendingPlanProposal != nil
                     || model.sessionConflict != nil {
                     interactionDock(queue: model.currentFollowUpQueue)
@@ -95,6 +93,10 @@ struct ComposerView: View {
                     font: composerBodyFont,
                     placeholder: composerPlaceholder,
                     onSubmit: submitComposer,
+                    onPasteImages: handlePastedImages,
+                    onPasteImageFailure: { message in
+                        model.showNotice(message, level: "warning")
+                    },
                     navigate: handlePaletteKey
                 )
                 .frame(minHeight: 66, maxHeight: 126, alignment: .topLeading)
@@ -182,6 +184,10 @@ struct ComposerView: View {
                 .menuStyle(.borderlessButton)
                 .help(runningDeliveryMode.detail)
                 .accessibilityLabel("运行中发送方式：\(runningDeliveryMode.label)")
+
+                if shouldShowCompactStopButton {
+                    compactStopButton
+                }
             }
 
             // 会话前草稿没有任何运行上下文，圆环不该以空环形态常驻；
@@ -190,21 +196,14 @@ struct ComposerView: View {
                 Button {
                     showingContext.toggle()
                 } label: {
-                    HStack(spacing: 4) {
-                        contextRemainingRing
-                            .frame(width: 18, height: 18)
-                        if let delta = contextDeltaCaption {
-                            Text(delta)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .help("本轮运行累计的上下文 token 增减：+ 为新增，− 为压缩或修剪释放")
-                        }
-                    }
-                    .frame(
-                        width: PiDCodeMetrics.compactControlHeight,
-                        height: PiDCodeMetrics.compactControlHeight
-                    )
-                    .contentShape(Rectangle())
+                    contextRemainingRing
+                        .frame(width: 20, height: 20)
+                        // 圆环视觉约 20pt，外层保持约 32pt 的完整命中区。
+                        .frame(
+                            width: PiDCodeMetrics.compactControlHeight,
+                            height: PiDCodeMetrics.compactControlHeight
+                        )
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .popover(isPresented: $showingContext, arrowEdge: .bottom) {
@@ -214,11 +213,16 @@ struct ComposerView: View {
                 .accessibilityLabel("上下文：\(contextAccessibilityLabel)")
             }
 
+            modelPickerMenu
+                .disabled(!model.canMutateComposerRuntimeSettings)
+
             thinkingPickerMenu
-                .disabled(
-                    model.pendingPathDraft != nil
-                        || model.isPromptTransactionActive
-                )
+                .disabled(!model.canMutateComposerRuntimeSettings)
+
+            if model.composerFastModeSupported {
+                fastModePickerMenu
+                    .disabled(!model.canMutateComposerRuntimeSettings)
+            }
 
             if !model.isStreaming || model.shouldQueueComposerText {
                 Button {
@@ -275,28 +279,8 @@ struct ComposerView: View {
     }
 
     private var attachmentButton: some View {
-        Button {
-            showingAddActions.toggle()
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 12, weight: .medium))
-                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
-        }
-        .buttonStyle(.borderless)
-        .fixedSize()
-        .popover(isPresented: $showingAddActions, arrowEdge: .bottom) {
-            addActionPopover
-        }
-        .help("添加文件、Skill、命令、目标或计划")
-        .accessibilityLabel("添加操作")
-    }
-
-    private var addActionPopover: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("添加与工作操作")
-                .font(.headline)
+        Menu {
             Button {
-                showingAddActions = false
                 presentAttachmentPicker()
             } label: {
                 Label("添加文件或图片…", systemImage: "paperclip")
@@ -304,16 +288,17 @@ struct ComposerView: View {
             Divider()
             Menu {
                 if quickSkillSuggestions.isEmpty {
-                    Text("当前没有可用 Skill")
+                    Text("当前没有可用技能")
                 } else {
                     ForEach(quickSkillSuggestions) { suggestion in
                         Button(suggestion.displayCommand) {
                             applyAddAction(suggestion)
                         }
+                        .help(suggestion.hoverDescription)
                     }
                 }
             } label: {
-                Label("Skill", systemImage: "list.bullet.rectangle")
+                Label("技能", systemImage: "list.bullet.rectangle")
             }
             Menu {
                 if quickCommandSuggestions.isEmpty {
@@ -323,6 +308,7 @@ struct ComposerView: View {
                         Button(suggestion.displayCommand) {
                             applyAddAction(suggestion)
                         }
+                        .help(suggestion.hoverDescription)
                     }
                 }
             } label: {
@@ -341,9 +327,17 @@ struct ComposerView: View {
                     Label("计划", systemImage: "list.bullet.clipboard")
                 }
             }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
         }
-        .padding(14)
-        .frame(width: 300, alignment: .leading)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .disabled(model.pendingPathDraft != nil || !composerIsEnabled)
+        .fixedSize()
+        .help("添加文件、技能、命令、目标或计划")
+        .accessibilityLabel("添加操作")
     }
 
     private var quickActionSuggestions: [ComposerCommandSuggestion] {
@@ -355,7 +349,7 @@ struct ComposerView: View {
     }
 
     private var quickSkillSuggestions: [ComposerCommandSuggestion] {
-        quickActionSuggestions.filter { $0.typeLabel == "Skill" }
+        quickActionSuggestions.filter { $0.typeLabel == "技能" }
     }
 
     private var quickCommandSuggestions: [ComposerCommandSuggestion] {
@@ -367,19 +361,16 @@ struct ComposerView: View {
     }
 
     private func applyAddAction(_ suggestion: ComposerCommandSuggestion) {
-        showingAddActions = false
         model.updateComposerText(suggestion.invocationText)
         focused = true
     }
 
     private func prefillGoal(using suggestion: ComposerCommandSuggestion) {
-        showingAddActions = false
         model.updateComposerText("\(suggestion.invocationText)请为当前项目建立一个清晰、可验收的目标。")
         focused = true
     }
 
     private func prefillPlan(using suggestion: ComposerCommandSuggestion) {
-        showingAddActions = false
         model.updateComposerText("\(suggestion.invocationText)请先形成带阶段与验收标准的计划，等待我确认后再执行。")
         focused = true
     }
@@ -410,6 +401,14 @@ struct ComposerView: View {
             return
         }
         do {
+            if let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               fileSize > AppModel.composerImageByteLimit {
+                model.showNotice(
+                    "图片“\(url.lastPathComponent)”超过 5 MB，未加入附件。",
+                    level: "warning"
+                )
+                return
+            }
             let data = try Data(contentsOf: url)
             if let failure = model.addComposerImageAttachment(
                 fileName: url.lastPathComponent,
@@ -421,6 +420,25 @@ struct ComposerView: View {
         } catch {
             model.showNotice("无法读取“\(url.lastPathComponent)”。", level: "warning")
         }
+    }
+
+    /// Cmd-V 图片复用与文件选择完全相同的附件状态机；剪贴板只负责解码，
+    /// 上限、发送、失败恢复与清空仍由 AppModel 的单一合同负责。
+    private func handlePastedImages(_ images: [ComposerClipboardImage]) {
+        var firstFailure: String?
+        for image in images {
+            if let failure = model.addComposerImageAttachment(
+                fileName: image.fileName,
+                mimeType: image.mimeType,
+                data: image.data
+            ), firstFailure == nil {
+                firstFailure = failure
+            }
+        }
+        if let firstFailure {
+            model.showNotice(firstFailure, level: "warning")
+        }
+        focused = true
     }
 
     private var submitIconName: String {
@@ -476,9 +494,36 @@ struct ComposerView: View {
         model.projects.isEmpty || model.isCreatingSession || model.isSendingRequest || model.pendingPrompt != nil
     }
 
+    private var showsInteractionDockRunState: Bool {
+        guard let phase = model.activity.currentRunState?.phase else { return false }
+        return phase.requiresInteractionDock && phase != .running
+    }
+
+    private var shouldShowCompactStopButton: Bool {
+        guard let phase = model.activity.currentRunState?.phase else { return model.isStreaming }
+        return phase == .running || phase == .waitingForUser
+    }
+
+    private var compactStopButton: some View {
+        Button {
+            Task { await model.abort() }
+        } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .frame(width: PiDCodeMetrics.compactControlHeight, height: PiDCodeMetrics.compactControlHeight)
+                .contentShape(Rectangle())
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .disabled(!model.canWrite)
+        .help("停止当前运行")
+        .accessibilityLabel("停止当前运行")
+    }
+
     private func interactionDock(queue: FollowUpQueueRecord?) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            if let runState = model.activity.currentRunState, runState.phase.requiresInteractionDock {
+            if let runState = model.activity.currentRunState, showsInteractionDockRunState {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: runStatusIcon(runState.phase))
                         .foregroundStyle(runStatusColor(runState.phase))
@@ -495,17 +540,7 @@ struct ComposerView: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(runStatusLabel(runState))。\(runStatusDetail(runState))")
                     Spacer(minLength: 8)
-                    if runState.phase == .running || runState.phase == .waitingForUser {
-                        Button(role: .destructive) {
-                            Task { await model.abort() }
-                        } label: {
-                            Label("停止", systemImage: "stop.fill")
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(!model.canWrite)
-                        .help("请求停止当前 D Code 拥有的运行")
-                        .accessibilityLabel("停止当前运行")
-                    } else if model.canSafelyRetryCurrentRun {
+                    if model.canSafelyRetryCurrentRun {
                         Button {
                             Task { await model.retryCurrentRunSafely() }
                         } label: {
@@ -518,21 +553,6 @@ struct ComposerView: View {
                 }
             }
 
-            if let pendingSteer = model.followUp.pendingSteer {
-                if model.activity.currentRunState?.phase.requiresInteractionDock == true { Divider() }
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(pendingSteer.accepted ? "介入信息已交给 Pi" : "正在提交介入信息")
-                            .font(.caption.weight(.semibold))
-                        Text("等待当前工具安全结束后应用；若本轮异常结束，正文会恢复到输入框。")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "arrow.turn.up.right")
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
 
             if let conflict = model.sessionConflict {
                 Divider()
@@ -545,12 +565,12 @@ struct ComposerView: View {
             }
 
             if let queue {
-                if model.activity.currentRunState?.phase.requiresInteractionDock == true || model.followUp.pendingSteer != nil {
+                if showsInteractionDockRunState {
                     Divider()
                 }
                 followUpQueue(queue)
             }
-        }
+            }
         .padding(10)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
         .overlay {
@@ -617,7 +637,7 @@ struct ComposerView: View {
     private func runStatusDetail(_ state: SessionRunState) -> String {
         switch state.phase {
         case .running:
-            "当前 Agent 正在处理；可选择立即介入，或等待本轮结束后再发送。"
+            "运行中"
         case .waitingForUser:
             state.waitingFor?.instruction ?? "请在结构化请求中完成处理；普通队列不会截获答案。"
         case .stopRequested:
@@ -697,6 +717,72 @@ struct ComposerView: View {
         .buttonStyle(.borderless)
     }
 
+    private var modelPickerMenu: some View {
+        Menu {
+            if model.modelSettings.isLoadingModels {
+                Text("正在读取 Pi 模型…")
+            } else if let issue = model.modelSettings.modelIssue {
+                Text(issue)
+                Button("重新载入模型") {
+                    Task { await model.reloadNewSessionModels() }
+                }
+            } else if model.modelSettings.models.isEmpty {
+                Text("没有可用模型")
+            } else {
+                ForEach(
+                    Array(Dictionary(grouping: model.modelSettings.models, by: \.provider).keys.sorted()),
+                    id: \.self
+                ) { provider in
+                    Menu(provider) {
+                        ForEach(model.modelSettings.models.filter { $0.provider == provider }) { candidate in
+                            Button {
+                                if model.isNewSessionDraftActive {
+                                    model.selectNewSessionModel(candidate)
+                                } else {
+                                    Task { await model.setModel(candidate) }
+                                }
+                            } label: {
+                                let title = model.isNewSessionDraftActive && model.isPiDefaultNewSessionModel(candidate)
+                                    ? "\(candidate.displayName) · Pi 默认"
+                                    : candidate.displayName
+                                if candidate.id == model.composerModel?.id,
+                                   candidate.provider == model.composerModel?.provider {
+                                    Label(title, systemImage: "checkmark")
+                                } else {
+                                    Text(title)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if model.isNewSessionDraftActive {
+                Divider()
+                Button {
+                    model.resetNewSessionRuntimeToPiDefaults()
+                } label: {
+                    Label("重置为 Pi 默认设置", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(model.modelSettings.defaultModel == nil)
+            }
+        } label: {
+            Text(
+                model.modelSettings.isLoadingModels
+                    ? "载入模型…"
+                    : (model.composerModel?.displayName ?? "选择模型")
+            )
+            .font(.caption)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("选择当前会话使用的模型")
+        .accessibilityLabel("模型 \(model.composerModel?.displayName ?? "未选择")")
+    }
+
     private var thinkingPickerMenu: some View {
         Menu {
             ForEach(model.composerThinkingLevels, id: \.self) { level in
@@ -724,15 +810,77 @@ struct ComposerView: View {
         .disabled(model.composerModel == nil || model.composerThinkingLevels.isEmpty)
     }
 
+    private var fastModePickerMenu: some View {
+        Menu {
+            Button {
+                Task { await model.setComposerFastModeEnabled(false) }
+            } label: {
+                if !model.composerFastModeEnabled {
+                    Label("标准", systemImage: "checkmark")
+                } else {
+                    Text("标准")
+                }
+            }
+            Button {
+                Task { await model.setComposerFastModeEnabled(true) }
+            } label: {
+                if model.composerFastModeEnabled {
+                    Label("极速", systemImage: "checkmark")
+                } else {
+                    Text("极速")
+                }
+            }
+        } label: {
+            Text(fastModeLabel)
+                .font(.caption)
+                .frame(minHeight: PiDCodeMetrics.compactControlHeight)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(fastModeHelp)
+        .accessibilityLabel(fastModeAccessibilityLabel)
+    }
+
+    private var fastModeLabel: String {
+        if model.composerFastModeEnabled, !model.composerFastModeActive {
+            return "速度 · 极速（未生效）"
+        }
+        return model.composerFastModeEnabled ? "速度 · 极速" : "速度 · 标准"
+    }
+
+    private var fastModeHelp: String {
+        if model.composerFastModeEnabled, !model.composerFastModeActive {
+            return "Host 尚未确认 Priority Service Tier 生效：\(model.composerFastModeReason ?? "未知原因")"
+        }
+        return model.composerFastModeEnabled
+            ? "当前支持的 OpenAI 模型请求 Priority Service Tier"
+            : "使用当前 OpenAI 模型的标准服务档位"
+    }
+
+    private var fastModeAccessibilityLabel: String {
+        model.composerFastModeEnabled && !model.composerFastModeActive
+            ? "速度 极速，当前未生效"
+            : "速度 \(model.composerFastModeEnabled ? "极速" : "标准")"
+    }
+
     private var contextPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("上下文")
                 .font(.headline)
             if let usage = model.hostState?.contextUsage {
                 VStack(alignment: .leading, spacing: 4) {
-                    // 主数字回答“用了多少”：已用 / 窗口；剩余百分比是次级信息。
-                    Text("\(ConversationTimingFormatter.tokenText(usedTokens(for: usage))) / \(ConversationTimingFormatter.tokenText(usage.contextWindow))")
-                        .font(.title3.monospacedDigit().weight(.semibold))
+                    // 主数字只取 Pi 最近一次返回的真实 usage 快照；不以估算构成补成 0。
+                    if let tokens = usage.tokens {
+                        Text("\(ConversationTimingFormatter.tokenText(tokens)) / \(ConversationTimingFormatter.tokenText(usage.contextWindow))")
+                            .font(.title3.monospacedDigit().weight(.semibold))
+                    } else {
+                        Text("暂不可用 / \(ConversationTimingFormatter.tokenText(usage.contextWindow))")
+                            .font(.title3.monospacedDigit().weight(.semibold))
+                    }
+                    Text("Pi 最近一次返回的用量快照，不是逐 token 实时计数。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     if let remainingPercent = usage.remainingPercent {
                         Text("剩余 \(remainingPercent.formatted(.number.precision(.fractionLength(0))))%")
                             .font(.caption)
@@ -741,6 +889,11 @@ struct ComposerView: View {
                 }
                 contextSegmentedBar(usage: usage)
                 contextLegend
+                if !model.contextDelta.isEmpty {
+                    Text(contextDeltaPopoverLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 Text("暂不可用")
                     .foregroundStyle(.secondary)
@@ -758,9 +911,6 @@ struct ComposerView: View {
         }
     }
 
-    private func usedTokens(for usage: ContextUsage) -> Int {
-        usage.tokens ?? model.contextBreakdown?.totalTokens ?? 0
-    }
 
     /// 分段彩色条：构成分项从左到右各占一段，颜色与图例一一对应；
     /// 无锚定时退化为单色用量条。
@@ -808,15 +958,20 @@ struct ComposerView: View {
         }
     }
 
-    /// 图例：色点 + 分项 + token 与百分比；与分段条同色。
+    /// 构成按消息类型估算；系统、工具与加载资源是从 Pi 总量快照扣除消息估算后的推算值。
     private var contextLegend: some View {
         VStack(alignment: .leading, spacing: 5) {
+            Text("构成（估算）")
+                .font(.subheadline.weight(.semibold))
+            Text("分项 token 约为估算值；总量与窗口仍以 Pi 最近一次用量快照为准。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             if let breakdown = model.contextBreakdown, breakdown.available {
                 ForEach(breakdown.compositionRows) { row in
-                    contextLegendRow(row, total: breakdown.totalTokens)
+                    contextLegendRow(row)
                 }
                 if breakdown.estimated == true {
-                    Text("尚未取得真实用量锚定；系统与工具部分暂不可推算。")
+                    Text("当前没有真实总量锚定，系统、工具与加载资源暂不能单独推算。")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -832,7 +987,7 @@ struct ComposerView: View {
         }
     }
 
-    private func contextLegendRow(_ row: ContextCompositionRow, total: Int?) -> some View {
+    private func contextLegendRow(_ row: ContextCompositionRow) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(row.kind == .systemTools ? Color.primary.opacity(0.18) : contextPartColor(row.kind))
@@ -842,7 +997,7 @@ struct ComposerView: View {
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
             if let tokens = row.tokens {
-                Text(legendValue(row: row, tokens: tokens, total: total))
+                Text(legendValue(row: row, tokens: tokens))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             } else {
@@ -854,13 +1009,10 @@ struct ComposerView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func legendValue(row: ContextCompositionRow, tokens: Int, total: Int?) -> String {
-        let tokenPart = ConversationTimingFormatter.tokenText(tokens)
-        guard let total, total > 0, let fraction = row.fraction else {
-            return tokenPart
-        }
-        let percent = Int((fraction * 100).rounded())
-        return "\(tokenPart)（\(percent)%）"
+    private func legendValue(row: ContextCompositionRow, tokens: Int) -> String {
+        let tokenPart = "约 \(ConversationTimingFormatter.tokenText(tokens))"
+        guard let percentage = row.percentageLabel else { return tokenPart }
+        return "\(tokenPart)（\(percentage)）"
     }
 
     /// 压缩区：自动阈值（Pi 语义：用量超过 窗口 − reserveTokens 即触发）+ 手动压缩。
@@ -904,75 +1056,6 @@ struct ComposerView: View {
         }
     }
 
-    /// 构成占比：分项 token 为估算口径（与 Pi 压缩判断一致），
-    /// “系统与工具”由真实总量反推；无锚定时只显示消息分项。
-    private var contextCompositionSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider()
-            HStack {
-                Text("构成")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(model.isLoadingContextBreakdown ? "载入中…" : "估算")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if let breakdown = model.contextBreakdown {
-                if breakdown.available {
-                    ForEach(breakdown.compositionRows) { row in
-                        contextCompositionRow(row)
-                    }
-                    if let free = breakdown.freeTokens {
-                        contextCompositionRow(
-                            ContextCompositionRow(kind: .systemTools, tokens: nil, fraction: nil),
-                            freeLabel: "剩余可用 \(free.formatted())"
-                        )
-                    }
-                    if breakdown.estimated == true {
-                        Text("尚未取得真实用量锚定；系统与工具部分暂不可推算。")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("当前为只读观察，构成占比需要打开为可写会话。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !model.isLoadingContextBreakdown {
-                Text("构成占比暂不可用。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func contextCompositionRow(_ row: ContextCompositionRow, freeLabel: String? = nil) -> some View {
-        HStack(spacing: 8) {
-            Text(row.kind.label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 62, alignment: .leading)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    if let fraction = row.fraction {
-                        Capsule()
-                            .fill(contextPartColor(row.kind))
-                            .frame(width: proxy.size.width * fraction)
-                    }
-                }
-            }
-            .frame(height: 6)
-            Text(freeLabel ?? row.tokens.map { $0.formatted() } ?? "推算中")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 64, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            freeLabel ?? "\(row.kind.label) \(row.tokens.map { $0.formatted() } ?? "推算中") token"
-        )
-    }
 
     private func contextPartColor(_ kind: ContextPartKind) -> Color {
         switch kind {
@@ -1063,39 +1146,38 @@ struct ComposerView: View {
         return parts.isEmpty ? "等待用户批准后才进入执行" : parts.joined(separator: " · ") + " · 等待批准"
     }
 
+    /// 圆环只表达“剩余量”：中性色为常态，剩余量低于阈值时才变橙 / 红。
     private var contextRemainingRing: some View {
         ZStack {
             Circle()
-                .stroke(contextRemainingColor, lineWidth: 3)
-            if let usedFraction = model.hostState?.contextUsage?.usedFraction {
+                .stroke(Color.primary.opacity(0.16), lineWidth: 3)
+            if let remainingPercent = model.hostState?.contextUsage?.remainingPercent {
                 Circle()
-                    .trim(from: 0, to: usedFraction)
+                    .trim(from: 0, to: remainingPercent / 100)
                     .stroke(
-                        Color.white.opacity(0.94),
+                        contextRemainingColor,
                         style: StrokeStyle(lineWidth: 3, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
-                    .animation(.smooth(duration: 0.25), value: usedFraction)
+                    .animation(.smooth(duration: 0.25), value: remainingPercent)
             }
         }
         .accessibilityHidden(true)
     }
 
-    /// 余量环保持“蓝为剩余、白为已用”；跌破阈值后底环转橙 / 红，提示即将耗尽。
     private var contextRemainingColor: Color {
-        guard let remaining = model.hostState?.contextUsage?.remainingPercent else { return .accentColor }
+        guard let remaining = model.hostState?.contextUsage?.remainingPercent else { return .secondary }
         if remaining < 8 { return .red }
         if remaining < 20 { return .orange }
-        return .accentColor
+        return .secondary
     }
 
-    private var contextDeltaCaption: String? {
+    private var contextDeltaPopoverLabel: String {
         let delta = model.contextDelta
-        guard !delta.isEmpty else { return nil }
         var parts: [String] = []
-        if delta.added > 0 { parts.append("+\(delta.added.formatted())") }
-        if delta.released > 0 { parts.append("−\(delta.released.formatted())") }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
+        if delta.added > 0 { parts.append("新增约 \(delta.added.formatted()) token") }
+        if delta.released > 0 { parts.append("释放约 \(delta.released.formatted()) token") }
+        return "本轮变化：" + parts.joined(separator: " · ")
     }
 
     private var commandPalette: some View {
@@ -1186,11 +1268,7 @@ struct ComposerView: View {
     }
 
     private var composerIsEnabled: Bool {
-        !model.isCreatingSession
-            && !model.isSendingRequest
-            && model.pendingPrompt == nil
-            && model.followUp.pendingSteer == nil
-            && !model.followUp.isMutatingQueue
+        model.canEditComposerText
     }
 
     private var commandSuggestions: [ComposerCommandSuggestion] {
@@ -1213,19 +1291,21 @@ struct ComposerView: View {
 
     private var contextHelpLabel: String {
         guard let usage = model.hostState?.contextUsage,
-              let remainingPercent = usage.remainingPercent else { return "上下文剩余量暂不可用" }
+              let remainingPercent = usage.remainingPercent else {
+            return "上下文剩余量暂不可用；点击查看 Pi 最近一次用量快照"
+        }
         let remaining = remainingPercent.formatted(.number.precision(.fractionLength(0)))
-        guard let tokens = usage.tokens else { return "上下文剩余 \(remaining)%" }
-        return "上下文剩余 \(remaining)% · 已用 \(tokens.formatted()) / \(usage.contextWindow.formatted()) token"
+        return "上下文剩余 \(remaining)%；点击查看 Pi 最近一次用量快照"
     }
 
     private var contextAccessibilityLabel: String {
-        guard let usage = model.hostState?.contextUsage else { return "暂不可用" }
+        guard let usage = model.hostState?.contextUsage else {
+            return "剩余量暂不可用；点击查看 Pi 最近一次用量快照"
+        }
         let remaining = usage.remainingPercent.map {
             "\($0.formatted(.number.precision(.fractionLength(0))))% 剩余"
-        } ?? "剩余量待估算"
-        let tokens = usage.tokens?.formatted() ?? "待估算"
-        return "\(remaining)，已用 \(tokens) / \(usage.contextWindow.formatted()) token"
+        } ?? "剩余量暂不可用"
+        return "\(remaining)；点击查看 Pi 最近一次用量快照"
     }
 
     private var composerPlaceholder: String {
@@ -1338,6 +1418,105 @@ enum ComposerKeyPolicy {
     }
 }
 
+struct ComposerClipboardImage: Equatable, Sendable {
+    let fileName: String
+    let mimeType: String
+    let data: Data
+}
+
+enum ComposerClipboardImageReadResult: Equatable, Sendable {
+    case notImage
+    case valid([ComposerClipboardImage])
+    case invalidImage(String)
+
+    var images: [ComposerClipboardImage] {
+        guard case let .valid(images) = self else { return [] }
+        return images
+    }
+}
+
+/// 从 macOS 剪贴板只读取一次图片语义：Finder 图片文件优先；否则读取位图并统一为 PNG。
+/// file URL 与 PNG/TIFF 不合并，避免同一张图因多种 pasteboard flavor 被重复添加。
+@MainActor
+enum ComposerClipboardImageReader {
+    static func read(from pasteboard: NSPasteboard) -> ComposerClipboardImageReadResult {
+        let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+        ]
+        let fileURLs = (pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: urlOptions
+        ) as? [URL]) ?? []
+
+        if !fileURLs.isEmpty {
+            let uniqueURLs = fileURLs.reduce(into: [URL]()) { result, url in
+                let standardized = url.standardizedFileURL
+                guard !result.contains(where: { $0.standardizedFileURL.path == standardized.path }) else {
+                    return
+                }
+                result.append(standardized)
+            }
+            // 混合图片和非图片文件时交还 NSTextView，避免静默丢失任一文件。
+            var images: [ComposerClipboardImage] = []
+            for url in uniqueURLs {
+                let type = imageType(for: url)
+                guard let type, type.conforms(to: .image) else { return .notImage }
+                if let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+                   let fileSize = values.fileSize,
+                   fileSize > AppModel.composerImageByteLimit {
+                    return .invalidImage("剪贴板图片“\(url.lastPathComponent)”超过 5 MB，未加入附件。")
+                }
+                guard let data = try? Data(contentsOf: url),
+                      !data.isEmpty,
+                      NSImage(data: data) != nil else {
+                    return .invalidImage("无法读取剪贴板图片“\(url.lastPathComponent)”。")
+                }
+                images.append(ComposerClipboardImage(
+                    fileName: url.lastPathComponent,
+                    mimeType: type.preferredMIMEType ?? "image/png",
+                    data: data
+                ))
+            }
+            return .valid(images)
+        }
+
+        if pasteboard.types?.contains(.png) == true {
+            guard let png = pasteboard.data(forType: .png),
+                  !png.isEmpty,
+                  NSImage(data: png) != nil else {
+                return .invalidImage("剪贴板中的图片无法解码，请重新复制后再试。")
+            }
+            return .valid([ComposerClipboardImage(
+                fileName: "粘贴图片.png",
+                mimeType: "image/png",
+                data: png
+            )])
+        }
+
+        let containsImageRepresentation = pasteboard.types?.contains { pasteboardType in
+            UTType(pasteboardType.rawValue)?.conforms(to: .image) == true
+        } == true
+        guard containsImageRepresentation else { return .notImage }
+        guard let image = NSImage(pasteboard: pasteboard),
+              let tiff = image.tiffRepresentation,
+              let representation = NSBitmapImageRep(data: tiff),
+              let png = representation.representation(using: .png, properties: [:]),
+              !png.isEmpty else {
+            return .invalidImage("剪贴板中的图片无法解码，请重新复制后再试。")
+        }
+        return .valid([ComposerClipboardImage(
+            fileName: "粘贴图片.png",
+            mimeType: "image/png",
+            data: png
+        )])
+    }
+
+    private static func imageType(for url: URL) -> UTType? {
+        (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            ?? UTType(filenameExtension: url.pathExtension)
+    }
+}
+
 /// 命令面板键盘导航事件：由输入框在文本编辑默认处理之前转发。
 enum ComposerPaletteKey {
     case up
@@ -1347,7 +1526,34 @@ enum ComposerPaletteKey {
 
 final class ComposerNSTextView: NSTextView {
     var submit: (() -> Void)?
+    var pasteImages: (([ComposerClipboardImage]) -> Void)?
+    var pasteImageFailure: ((String) -> Void)?
     var navigate: ((ComposerPaletteKey) -> Bool)?
+    /// AppKit 会先用此列表校验 Edit > Paste；图片类型必须和纯文本一起声明，
+    /// 否则纯文本 NSTextView 会在 responder 收到 paste(_:) 前把菜单置灰。
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        var types = super.readablePasteboardTypes
+        let additionalTypes: [NSPasteboard.PasteboardType] = [
+            // 明确保留 NSTextView 的纯文本 / 富文本 Paste 合同；裸 NSTextView 的 super 列表可能为空。
+            .string,
+            .rtf,
+            .rtfd,
+            .html,
+            .tiff,
+            .png,
+            NSPasteboard.PasteboardType("public.jpeg"),
+            NSPasteboard.PasteboardType("public.heic"),
+            NSPasteboard.PasteboardType("public.gif"),
+            .fileURL,
+        ]
+        for type in additionalTypes where !types.contains(type) {
+            types.append(type)
+        }
+        return types
+    }
+
+    /// 仅供隔离测试注入 Pasteboard；生产路径始终读取系统 general pasteboard。
+    var pasteboardProvider: () -> NSPasteboard = { .general }
 
     /// 占位符由文本视图自己绘制在 text container 原点，与真实首行共用同一套
     /// 布局几何：界面字号档位切换时不会再和输入正文错位，也不需要手工偏移常数。
@@ -1398,6 +1604,34 @@ final class ComposerNSTextView: NSTextView {
         }
         super.keyDown(with: event)
     }
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = pasteboardProvider()
+        if handlePasteboard(pasteboard) { return }
+        // 只为隔离测试注入的非 general pasteboard 提供正文回放；生产路径继续走 AppKit super.paste。
+        if pasteboard !== NSPasteboard.general,
+           let text = pasteboard.string(forType: .string) {
+            insertText(text, replacementRange: selectedRange())
+            return
+        }
+        super.paste(sender)
+    }
+
+    /// 独立入口允许以私有 pasteboard 验证图片粘贴，不触碰用户系统剪贴板。
+    @discardableResult
+    func handlePasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        guard isEditable, let pasteImages else { return false }
+        switch ComposerClipboardImageReader.read(from: pasteboard) {
+        case .notImage:
+            return false
+        case let .valid(images):
+            pasteImages(images)
+            return true
+        case let .invalidImage(message):
+            pasteImageFailure?(message)
+            return true
+        }
+    }
 }
 
 private struct ComposerTextEditor: NSViewRepresentable {
@@ -1406,6 +1640,8 @@ private struct ComposerTextEditor: NSViewRepresentable {
     let font: NSFont
     let placeholder: String
     let onSubmit: () -> Void
+    let onPasteImages: ([ComposerClipboardImage]) -> Void
+    let onPasteImageFailure: (String) -> Void
     let navigate: (ComposerPaletteKey) -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -1430,7 +1666,10 @@ private struct ComposerTextEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
+        textView.isEditable = isEnabled
         textView.submit = onSubmit
+        textView.pasteImages = onPasteImages
+        textView.pasteImageFailure = onPasteImageFailure
         textView.navigate = navigate
         textView.placeholder = placeholder
         textView.setAccessibilityLabel("消息输入")
@@ -1442,6 +1681,8 @@ private struct ComposerTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
         context.coordinator.parent = self
         textView.submit = onSubmit
+        textView.pasteImages = onPasteImages
+        textView.pasteImageFailure = onPasteImageFailure
         textView.navigate = navigate
         textView.placeholder = placeholder
         textView.isEditable = isEnabled

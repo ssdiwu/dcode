@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 final class HostProcessLifecycle: @unchecked Sendable {
@@ -18,11 +19,20 @@ final class HostProcessLifecycle: @unchecked Sendable {
         }
     }
 
-    func terminate(expected: Bool = false) {
+    var processIdentifier: Int32? {
+        lock.withLock { process?.processIdentifier }
+    }
+
+    func terminate(expected: Bool = false, force: Bool = false) {
         lock.withLock {
             guard let process, process.isRunning else { return }
             expectedTermination = expectedTermination || expected
-            process.terminate()
+            if force {
+                let pid = process.processIdentifier
+                if pid > 0 { _ = kill(pid, SIGKILL) }
+            } else {
+                process.terminate()
+            }
         }
     }
 
@@ -147,12 +157,23 @@ actor PiHostClient: HostProviding {
     func shutdown() async {
         guard started, !stopping else { return }
         stopping = true
-        _ = try? await requestValue("host.shutdown")
-        for _ in 0..<30 {
-            if process?.isRunning != true { return }
+        let shutdownRequest = Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.requestValue("host.shutdown")
+        }
+        await waitForProcess(upTo: 3.0)
+        shutdownRequest.cancel()
+        guard process?.isRunning == true else { return }
+        lifecycle.terminate(expected: true, force: true)
+        await waitForProcess(upTo: 0.5)
+    }
+
+    private func waitForProcess(upTo seconds: TimeInterval) async {
+        let deadline = Date().timeIntervalSinceReferenceDate + seconds
+        while process?.isRunning == true,
+              Date().timeIntervalSinceReferenceDate < deadline {
             try? await Task.sleep(for: .milliseconds(100))
         }
-        lifecycle.terminate()
     }
 
     private func cancelRequest(_ id: String) {

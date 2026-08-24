@@ -157,6 +157,27 @@ final class DgoalIntegrationTests: XCTestCase {
         XCTAssertEqual(breakdown.freeTokens, 100000)
     }
 
+    func testBreakdownKeepsSystemResourcesSeparateFromShortMessages() throws {
+        let breakdown = try JSONDecoder().decode(
+            ContextBreakdownResult.self,
+            from: Data("""
+            {"available":true,"estimated":false,"totalTokens":28506,
+             "estimatedMessageTokens":6,"contextWindow":272000,
+             "parts":[{"kind":"systemTools","tokens":28500},
+                      {"kind":"user","tokens":1},
+                      {"kind":"assistant","tokens":5}]}
+            """.utf8)
+        )
+
+        let rows = breakdown.compositionRows
+        XCTAssertEqual(rows.first(where: { $0.kind == .systemTools })?.tokens, 28_500)
+        XCTAssertEqual(rows.first(where: { $0.kind == .user })?.tokens, 1)
+        XCTAssertEqual(rows.first(where: { $0.kind == .assistant })?.tokens, 5)
+        XCTAssertEqual(rows.first(where: { $0.kind == .user })?.percentageLabel, "<1%")
+        XCTAssertEqual(rows.first(where: { $0.kind == .assistant })?.percentageLabel, "<1%")
+        XCTAssertEqual(ContextPartKind.systemTools.label, "系统、工具与加载资源（推算）")
+    }
+
     func testLoadContextBreakdownRequestsAndStoresResult() async throws {
         let harness = HostTestHarness()
         await harness.client.script { method, _ in

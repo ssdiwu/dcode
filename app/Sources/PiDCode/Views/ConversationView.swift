@@ -2,11 +2,33 @@ import AppKit
 import Foundation
 import SwiftUI
 
+struct ConversationProcessExpansionBaseline: Equatable {
+    let processItemIDs: Set<String>
+
+    init(rounds: [ConversationRound]) {
+        processItemIDs = Set(rounds.flatMap { $0.processItems.map(\.id) })
+    }
+}
+
+enum ConversationProcessExpansionPolicy {
+    static func targetRoundID(
+        after baseline: ConversationProcessExpansionBaseline,
+        rounds: [ConversationRound]
+    ) -> String? {
+        rounds.reversed().first { round in
+            !Set(round.processItems.map(\.id)).subtracting(baseline.processItemIDs).isEmpty
+        }?.id
+    }
+}
+
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var highlightedEntryID: String?
     @State private var expandedRoundIDs: Set<String> = []
+    @State private var manuallyCollapsedRoundIDs: Set<String> = []
+    @State private var activeStreamingProcessBaseline: ConversationProcessExpansionBaseline?
+    @State private var pendingLatestProcessExpansion: ConversationProcessExpansionBaseline?
     @State private var selectedNavigationRoundID: String?
     @State private var followsLatest = true
     @State private var visibleEntryIDs: Set<String> = []
@@ -149,6 +171,11 @@ struct ConversationView: View {
                         selectedNavigationRoundID = nil
                         highlightedEntryID = nil
                         expandedRoundIDs.removeAll()
+                        manuallyCollapsedRoundIDs.removeAll()
+                        activeStreamingProcessBaseline = model.isStreaming
+                            ? ConversationProcessExpansionBaseline(rounds: rounds)
+                            : nil
+                        pendingLatestProcessExpansion = nil
                         visibleEntryIDs.removeAll()
                         scrollAfterLayout {
                             scrollToBottom(proxy, animated: false)
@@ -179,6 +206,28 @@ struct ConversationView: View {
                     }
                     .onChange(of: model.streamingTools) { _, _ in
                         scrollToBottomAfterLayout(proxy)
+                    }
+                    .onChange(of: model.isStreaming) { wasStreaming, isStreaming in
+                        if !wasStreaming, isStreaming {
+                            // 上一轮确实没有过程项时，到下一 Run 才结束它的等待；
+                            // 普通 user / assistant 条目先落盘不能提前吞掉 pending。
+                            pendingLatestProcessExpansion = nil
+                            activeStreamingProcessBaseline = ConversationProcessExpansionBaseline(rounds: rounds)
+                            return
+                        }
+                        guard wasStreaming, !isStreaming else { return }
+                        pendingLatestProcessExpansion = activeStreamingProcessBaseline
+                            ?? ConversationProcessExpansionBaseline(rounds: rounds)
+                        activeStreamingProcessBaseline = nil
+                        resolvePendingProcessExpansion(rounds)
+                    }
+                    .onChange(of: rounds.map { "\($0.id):\($0.processItems.count)" }) { _, _ in
+                        resolvePendingProcessExpansion(rounds)
+                    }
+                    .onAppear {
+                        if model.isStreaming, activeStreamingProcessBaseline == nil {
+                            activeStreamingProcessBaseline = ConversationProcessExpansionBaseline(rounds: rounds)
+                        }
                     }
                     .task(id: model.conversationTarget?.token) {
                         guard let target = model.conversationTarget else {
@@ -302,10 +351,30 @@ struct ConversationView: View {
         Binding(
             get: { expandedRoundIDs.contains(roundID) },
             set: { expanded in
-                if expanded { expandedRoundIDs.insert(roundID) }
-                else { expandedRoundIDs.remove(roundID) }
+                if expanded {
+                    manuallyCollapsedRoundIDs.remove(roundID)
+                    expandedRoundIDs.insert(roundID)
+                } else {
+                    manuallyCollapsedRoundIDs.insert(roundID)
+                    expandedRoundIDs.remove(roundID)
+                }
             }
         )
+    }
+
+    private func resolvePendingProcessExpansion(_ rounds: [ConversationRound]) {
+        guard let baseline = pendingLatestProcessExpansion else { return }
+        if let roundID = ConversationProcessExpansionPolicy.targetRoundID(
+            after: baseline,
+            rounds: rounds
+        ) {
+            pendingLatestProcessExpansion = nil
+            guard !manuallyCollapsedRoundIDs.contains(roundID) else { return }
+            expandedRoundIDs.insert(roundID)
+            return
+        }
+        // 没有新增过程项就继续等待；普通 user / assistant entry 可能先于
+        // Thinking / tool entry 落盘。下一 Run 开始时才会清掉确实无过程的 pending。
     }
 }
 
@@ -371,10 +440,17 @@ private struct ConversationRoundView: View {
                 .padding(.leading, 6)
             } label: {
                 // 折叠态 = 逐步安静摘要（相邻同类合并），点击展开完整思考与工具过程行。
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(stepSummaries) { step in
-                        stepRow(step)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(stepSummaries) { step in
+                            stepRow(step)
+                        }
                     }
+                    Spacer(minLength: 8)
+                    Text(expanded ? "收起" : "查看思考与工具")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
             }
             .buttonStyle(.plain)

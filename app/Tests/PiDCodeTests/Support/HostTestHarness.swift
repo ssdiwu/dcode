@@ -40,6 +40,9 @@ final class HostTestHarness {
             ),
             followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "followups.json")),
             activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json")),
+            selfEvolution: SelfEvolutionModel(
+                store: SelfEvolutionRunStore(fileURL: root.appending(path: "self-evolution.json"))
+            ),
             hostConfiguration: configuration,
             clientFactory: { _, eventSink in
                 sinkBox.sink = eventSink

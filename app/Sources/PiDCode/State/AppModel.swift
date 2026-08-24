@@ -64,15 +64,17 @@ struct PendingPromptDraft: Equatable {
     var isFollowUpDispatch: Bool { followUpQueueID != nil && followUpItemID != nil }
 }
 
-struct PendingSteerDraft: Equatable {
+struct SteerSubmission: Equatable, Identifiable {
     let sessionID: String
     let runID: String
     let steerID: String
     let draft: String
     let draftTarget: SessionDraftTarget?
     /// 随本条 steer 发送的图片附件；失败恢复时与正文一起回到输入框（0.0.20）。
-    var images: [ComposerImageAttachment] = []
-    var accepted: Bool
+    let images: [ComposerImageAttachment]
+
+    var id: String { steerID }
+    var message: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
 /// 会话冲突呈现：外部写入（EXTERNAL_WRITE_DETECTED）或写入权被其他 D Code 实例接管（LEASE_STOLEN）。
@@ -137,8 +139,11 @@ final class AppModel {
     var isOpeningSession = false
     var isCreatingSession = false
     var isSendingRequest = false
+    var isMutatingRuntimeSettings = false
     var issue: AppIssue?
     var notice: ExtensionNotice?
+    var completionNotificationsEnabled = UserDefaults.standard.bool(forKey: CompletionNotificationSettings.enabledStorageKey)
+    private(set) var completionNotificationAuthorizationState: CompletionNotificationAuthorizationState = .notDetermined
     /// ADR 0027 决定 3：Host 需要重启（观察能力保留、写入被拒）的事实标记，
     /// 驱动“重新连接 Pi Host”入口；重连成功后清除。
     var hostRestartRequired = false
@@ -158,7 +163,8 @@ final class AppModel {
     let search = SearchModel()
     /// HTML 预览联网策略（ADR 0026）：默认阻断、尝试询问、“本次允许”会话内有效。
     let htmlPreview = HTMLPreviewState()
-    let selfBuild = SelfBuildModel()
+    let selfBuild: SelfBuildModel
+    let selfEvolution: SelfEvolutionModel
     let resources = ResourcesModel()
     let modelProviders = ModelProvidersModel()
     private(set) var verificationEvidence: [VerificationEvidenceRecord] = []
@@ -178,6 +184,7 @@ final class AppModel {
     var isRenamingSession = false
     var isMutatingArchive = false
     var isMutatingPins = false
+    private(set) var isSelfEvolutionRestarting = false
     var pendingArchiveRetry: ArchivedSessionRecord?
     var draftStoreIssue: String?
     let followUp = FollowUpModel()
@@ -211,6 +218,7 @@ final class AppModel {
     @ObservationIgnored private var revisionCache: [String: (revision: String, at: Date)] = [:]
     @ObservationIgnored private let followUpQueueStore: FollowUpQueueStore
     @ObservationIgnored private let activityAttentionStore: ActivityAttentionStore
+    @ObservationIgnored private let completionNotificationService: CompletionNotificationService
     @ObservationIgnored private let hostConfiguration: HostLaunchConfiguration?
     @ObservationIgnored private var projectStoreWritable = false
     @ObservationIgnored private var sessionDraftStoreWritable = false
@@ -251,6 +259,9 @@ final class AppModel {
         ),
         followUpQueueStore: FollowUpQueueStore = FollowUpQueueStore(),
         activityAttentionStore: ActivityAttentionStore = ActivityAttentionStore(),
+        completionNotificationService: CompletionNotificationService = CompletionNotificationService(),
+        selfBuild: SelfBuildModel = SelfBuildModel(),
+        selfEvolution: SelfEvolutionModel = SelfEvolutionModel(),
         hostConfiguration: HostLaunchConfiguration? = nil,
         clientFactory: @escaping (
             HostLaunchConfiguration, @escaping HostEventSink
@@ -266,6 +277,9 @@ final class AppModel {
         self.verificationStore = verificationStore
         self.followUpQueueStore = followUpQueueStore
         self.activityAttentionStore = activityAttentionStore
+        self.completionNotificationService = completionNotificationService
+        self.selfBuild = selfBuild
+        self.selfEvolution = selfEvolution
         self.hostConfiguration = hostConfiguration
         self.clientFactory = clientFactory
     }
@@ -294,15 +308,58 @@ final class AppModel {
         isCreatingSession
             || isSendingRequest
             || pendingPrompt != nil
-            || isMutatingArchive
             || isSettlingFollowUpRun
-            || followUp.pendingSteer != nil
+            || followUp.steerSubmissionInFlight != nil
             || hasActiveRun
             || activity.currentRunState?.phase == .unknown
     }
 
     var hasActiveRun: Bool {
         isStreaming || activity.currentRunState?.phase.isActive == true
+    }
+
+    /// 运行参数只在真实身份、写权或参数 RPC 不稳定时冻结。普通 running / tool
+    /// execution 不属于阻塞：变更由 Pi 从下一次模型调用边界开始使用。
+    var canMutateRuntimeSettings: Bool {
+        guard readyClient != nil,
+              selectedSessionID != nil,
+              canWrite,
+              !isMutatingRuntimeSettings,
+              !isSelfEvolutionRestarting,
+              !selfBuild.isRestarting,
+              !isCreatingSession,
+              !isOpeningSession,
+              !isSendingRequest,
+              pendingPrompt == nil,
+              followUp.steerSubmissionInFlight == nil,
+              extensionDialogs.isEmpty,
+              pendingPathDraft == nil,
+              !isShuttingDown,
+              hostState?.conflict == nil,
+              hostState?.isCompacting != true else { return false }
+        switch activity.currentRunState?.phase {
+        case .unknown, .stopRequested, .waitingForUser:
+            return false
+        default:
+            return true
+        }
+    }
+
+    var canMutateComposerRuntimeSettings: Bool {
+        if isNewSessionDraftActive {
+            return !isMutatingRuntimeSettings
+                && !isSelfEvolutionRestarting
+                && !selfBuild.isRestarting
+                && !isCreatingSession
+                && !isOpeningSession
+                && !isSendingRequest
+                && pendingPrompt == nil
+                && extensionDialogs.isEmpty
+                && pendingPathDraft == nil
+                && !isShuttingDown
+                && !modelSettings.isLoadingModels
+        }
+        return canMutateRuntimeSettings
     }
 
     var canPersistSessionDrafts: Bool { sessionDraftStoreWritable && draftStoreIssue == nil }
@@ -383,14 +440,27 @@ final class AppModel {
         canSubmitComposerText(deliveryMode: .queue)
     }
 
+    /// 提交事务与文字编辑是两条门禁。普通 Prompt 仍在事务期间冻结输入，
+    /// 但 steer RPC 已先把本次正文拍成独立 Submission；等待 Host 确认时，
+    /// Composer 必须立即接收下一段上下文，只禁再次提交。
+    var canEditComposerText: Bool {
+        let isWaitingForSteerReceipt = followUp.steerSubmissionInFlight != nil
+        return !isCreatingSession
+            && (!isSendingRequest || isWaitingForSteerReceipt)
+            && pendingPrompt == nil
+            && !followUp.isMutatingQueue
+            && !isShuttingDown
+    }
+
     func canSubmitComposerText(deliveryMode: RunningMessageDeliveryMode) -> Bool {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty,
               readyClient != nil,
+              !isSelfEvolutionRestarting,
               !isCreatingSession,
               !isSendingRequest,
               pendingPrompt == nil,
-              followUp.pendingSteer == nil,
+              followUp.steerSubmissionInFlight == nil,
               !followUp.isMutatingQueue,
               activity.currentRunState?.phase != .unknown else { return false }
         if isNewSessionDraftActive {
@@ -547,6 +617,16 @@ final class AppModel {
         composerModel?.fastModeSupported == true
     }
 
+    var composerFastModeActive: Bool {
+        isNewSessionDraftActive
+            ? (newSessionDraft?.fastModeEnabled ?? false) && composerFastModeSupported
+            : (hostState?.fastMode?.active ?? false)
+    }
+
+    var composerFastModeReason: String? {
+        isNewSessionDraftActive ? nil : hostState?.fastMode?.reason
+    }
+
     @ObservationIgnored private var readyClient: (any HostProviding)? {
         canUseHostSessions ? client : nil
     }
@@ -596,12 +676,14 @@ final class AppModel {
 
     /// 自构建重启后的待恢复会话（ADR 0022 会话恢复钩子）。
     private(set) var pendingSelfBuildReopenSessionID: String?
+    private(set) var pendingSelfEvolutionRunID: String?
 
     func start() async {
         guard connectionState == .idle, client == nil else { return }
         let startupState = Self.signposter.beginInterval("AppStart")
         defer { Self.signposter.endInterval("AppStart", startupState) }
-        pendingSelfBuildReopenSessionID = SelfBuildModel.consumeRestartMarker()
+        await selfEvolution.load()
+        await prepareSelfEvolutionStartupRecovery()
         connectionState = .connecting
         await loadProjects()
         guard await loadSessionMetadata() else {
@@ -629,15 +711,178 @@ final class AppModel {
                 pendingSelfBuildReopenSessionID = nil
                 // ADR 0027 决定 7：自动恢复链路的失败步骤不静默。
                 let reopened = await openSession(reopenID, writable: true, presentFailure: false)
+                if let runID = pendingSelfEvolutionRunID {
+                    await finishSelfEvolutionRecovery(runID: runID, reopened: reopened)
+                } else if reopened {
+                    // Ordinary / rollback marker 只有在同一 Session 真正恢复后才能清除。
+                    SelfBuildModel.acknowledgeRestartIntent()
+                }
                 if !reopened {
-                    showNotice("自构建后恢复会话失败；请从侧栏手动打开原会话。", level: "warning")
+                    showNotice("自构建后恢复会话失败；恢复标记已保留，请重试或手动打开原会话。", level: "warning")
                 }
             }
         } catch {
+            if let runID = pendingSelfEvolutionRunID {
+                try? await selfEvolution.markRecoveryRequired(
+                    runID: runID,
+                    issue: String(
+                        "Pi Host 启动失败：\(DiagnosticSanitizer.redact(error.localizedDescription))".prefix(1_024)
+                    )
+                )
+            }
             connectionState = .failed
             present(error, title: "无法启动 D Code")
             await client?.shutdown()
             client = nil
+        }
+    }
+
+    private var runningAppVersion: String {
+        SelfBuildBundleMetadata.appVersion(at: Bundle.main.bundleURL) ?? HostCompatibility.appVersion
+    }
+
+    private func prepareSelfEvolutionStartupRecovery() async {
+        let intent = SelfBuildModel.restartIntent()
+        let startupRoute = SelfEvolutionStartupPlanner.route(
+            intent: intent,
+            document: selfEvolution.document
+        )
+        let pendingRun: SelfEvolutionRunRecord?
+        if case let .resumeRun(runID) = startupRoute {
+            pendingRun = selfEvolution.document.runs.first(where: { $0.id == runID })
+        } else {
+            pendingRun = nil
+        }
+
+        if let pendingRun {
+            pendingSelfBuildReopenSessionID = pendingRun.sessionID
+            pendingSelfEvolutionRunID = pendingRun.id
+            do {
+                let activeCandidate = SelfBuildCandidateValidator.validate(
+                    candidateBundleURL: Bundle.main.bundleURL
+                )
+                let integrityReady = try await selfEvolution.markAppStarted(
+                    runID: pendingRun.id,
+                    appVersion: activeCandidate.appVersion.isEmpty
+                        ? runningAppVersion
+                        : activeCandidate.appVersion,
+                    manifest: activeCandidate.isReady ? activeCandidate.manifest : nil
+                )
+                if !integrityReady {
+                    pendingSelfBuildReopenSessionID = nil
+                    showNotice("当前 App 与预期候选身份不一致；已停止自动恢复。", level: "warning")
+                }
+            } catch {
+                showNotice(
+                    "自进化回执未能安全推进；恢复意图已保留：\(DiagnosticSanitizer.redact(error.localizedDescription))",
+                    level: "warning"
+                )
+            }
+            return
+        }
+
+        guard let intent else { return }
+        switch startupRoute {
+        case .missingSelfEvolutionRun:
+            showNotice("完整自进化重启标记存在，但对应回执未能载入；标记已保留。", level: "warning")
+            return
+        case let .unknownIntentKind(value):
+            showNotice(
+                "自构建恢复标记类型不可识别（\(DiagnosticSanitizer.redact(value))）；标记已保留，未自动恢复。",
+                level: "warning"
+            )
+            return
+        case .reopenOrdinarySession, .reopenSelfEvolutionRollbackSession:
+            guard selfEvolution.unfinishedReceipt == nil else {
+                showNotice("普通重启标记与未终结自进化回执冲突；两者均已保留，请先停止交换并核对恢复状态。", level: "warning")
+                return
+            }
+            pendingSelfBuildReopenSessionID = intent.sessionID
+            return
+        case .legacyBootstrap:
+            pendingSelfBuildReopenSessionID = intent.sessionID
+        case .none, .resumeRun:
+            return
+        }
+        guard runningAppVersion == "0.0.27" else {
+            return
+        }
+        guard let sessionID = intent.sessionID else {
+            try? await selfEvolution.recordBootstrapRecovery(
+                sessionID: nil,
+                targetAppVersion: runningAppVersion,
+                reason: .missingSessionID
+            )
+            showNotice("旧自构建恢复标记缺少 Session ID；恢复状态与标记已保留。", level: "warning")
+            return
+        }
+        guard selfBuild.backupAppVersion() == "0.0.26" else {
+            try? await selfEvolution.recordBootstrapRecovery(
+                sessionID: sessionID,
+                targetAppVersion: runningAppVersion,
+                reason: .missingBackupVersion
+            )
+            showNotice("首次引导恢复缺少可核对的 0.0.26 备份；恢复状态与标记已保留。", level: "warning")
+            return
+        }
+        let activeCandidate = SelfBuildCandidateValidator.validate(
+            candidateBundleURL: Bundle.main.bundleURL
+        )
+        guard activeCandidate.isReady,
+              let manifest = activeCandidate.manifest else {
+            try? await selfEvolution.recordBootstrapRecovery(
+                sessionID: sessionID,
+                targetAppVersion: runningAppVersion,
+                reason: .missingCandidateEvidence
+            )
+            showNotice("首次引导恢复缺少有效 Candidate Manifest 或签名；恢复状态与标记已保留。", level: "warning")
+            return
+        }
+        do {
+            let record = try await selfEvolution.beginLegacyBootstrap(
+                sessionID: sessionID,
+                sourceAppVersion: "0.0.26",
+                targetAppVersion: activeCandidate.appVersion,
+                targetHostVersion: activeCandidate.hostVersion,
+                manifest: manifest
+            )
+            pendingSelfEvolutionRunID = record.id
+        } catch {
+            showNotice(
+                "首次自进化引导回执未能安全保存；旧恢复标记仍保留：\(DiagnosticSanitizer.redact(error.localizedDescription))",
+                level: "warning"
+            )
+        }
+    }
+
+    private func finishSelfEvolutionRecovery(runID: String, reopened: Bool) async {
+        do {
+            if reopened {
+                let ownership = inspection.flatMap { projectOwnership(for: $0.summary) }
+                try await selfEvolution.markSessionRestored(
+                    runID: runID,
+                    projectID: ownership?.project.id,
+                    modelProvider: hostState?.model?.provider,
+                    modelID: hostState?.model?.id,
+                    goalID: activePlan?.id
+                )
+                let restored = selfEvolution.document.runs.first(where: { $0.id == runID })?.state == .sessionRestored
+                if restored {
+                    // Full / Bootstrap receipt 与 Session 恢复都成立后，才清除 restart marker。
+                    SelfBuildModel.acknowledgeRestartIntent()
+                    pendingSelfEvolutionRunID = nil
+                    showNotice("自进化后已恢复原会话；当前回执等待人工验收。", level: "info")
+                } else {
+                    showNotice("恢复后的 Project 或模型与重启前回执不一致；本次仍需处理。", level: "warning")
+                }
+            } else {
+                try await selfEvolution.markRecoveryRequired(runID: runID, issue: "原 Pi Session 未能恢复")
+            }
+        } catch {
+            showNotice(
+                "自进化恢复结果未能写入回执：\(DiagnosticSanitizer.redact(error.localizedDescription))",
+                level: "warning"
+            )
         }
     }
 
@@ -1307,12 +1552,14 @@ final class AppModel {
         async let followUpBlocked = followUpQueueStore.writeBlockedProbe()
         async let attentionBlocked = activityAttentionStore.writeBlockedProbe()
         async let evidenceBlocked = verificationStore.writeBlockedProbe()
+        async let evolutionBlocked = selfEvolution.writeBlockedProbe()
         return [
             StoreHealthEntry(id: "draft", displayName: "会话草稿", path: sessionDraftStore.fileURL.path, blocked: await draftBlocked),
             StoreHealthEntry(id: "changes", displayName: "会话变更账本", path: sessionChangeStore.fileURL.path, blocked: await changeBlocked),
             StoreHealthEntry(id: "followups", displayName: "后续消息队列", path: followUpQueueStore.fileURL.path, blocked: await followUpBlocked),
             StoreHealthEntry(id: "attention", displayName: "活动关注", path: activityAttentionStore.fileURL.path, blocked: await attentionBlocked),
             StoreHealthEntry(id: "evidence", displayName: "验证证据账本", path: verificationStore.fileURL.path, blocked: await evidenceBlocked),
+            StoreHealthEntry(id: "self-evolution", displayName: "自进化运行回执", path: selfEvolution.storeFileURL.path, blocked: await evolutionBlocked),
         ]
     }
 
@@ -1334,6 +1581,8 @@ final class AppModel {
             if recovered { await flushActivityAttention() }
         case "evidence":
             recovered = await verificationStore.retryFlushUnblock()
+        case "self-evolution":
+            recovered = await selfEvolution.retryStoreUnblock()
         default:
             return
         }
@@ -1985,7 +2234,7 @@ final class AppModel {
 
     @discardableResult
     private func flushCurrentDraft() async -> Bool {
-        if pendingPrompt == nil, followUp.pendingSteer == nil { persistCurrentDraftInMemory() }
+        if pendingPrompt == nil, followUp.steerSubmissionInFlight == nil { persistCurrentDraftInMemory() }
         draftSaveTask?.cancel()
         draftSaveTask = nil
         guard sessionDraftStoreWritable else { return false }
@@ -2067,7 +2316,7 @@ final class AppModel {
         }
     }
 
-    private func recordCompletedRun(_ state: SessionRunState) {
+    private func recordCompletedRun(_ state: SessionRunState, notify: Bool) {
         guard state.phase == .completed,
               let completionID = state.completionID,
               let entryID = state.completionEntryID,
@@ -2078,22 +2327,130 @@ final class AppModel {
             return
         }
         activity.attentionRecords.removeAll(where: { $0.sessionID == state.sessionID })
-        activity.attentionRecords.append(ActivityAttentionRecord(
+        let record = ActivityAttentionRecord(
             sessionID: state.sessionID,
             runID: state.runID,
             completionID: completionID,
             entryID: entryID,
             completedAt: completedAt,
             presentedAt: nil
-        ))
+        )
+        activity.attentionRecords.append(record)
         activity.attentionRecords.sort {
             if $0.completedAt != $1.completedAt { return $0.completedAt > $1.completedAt }
             return $0.sessionID < $1.sessionID
         }
         scheduleActivityAttentionSave()
+        if notify { scheduleCompletionNotification(for: record) }
         if !activity.sessions.contains(where: { $0.id == state.sessionID }) {
             Task { [weak self] in await self?.reloadActivitySessions() }
         }
+    }
+
+
+    private func scheduleCompletionNotification(for record: ActivityAttentionRecord) {
+        guard completionNotificationsEnabled, record.notifiedAt == nil else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let authorization = await completionNotificationService.authorizationState()
+            applyCompletionNotificationAuthorizationState(authorization)
+            guard authorization == .authorized else { return }
+            do {
+                try await completionNotificationService.schedule(
+                    completionID: record.completionID,
+                    sessionID: record.sessionID,
+                    entryID: record.entryID,
+                    sessionName: completionSessionName(for: record.sessionID)
+                )
+                guard let index = activity.attentionRecords.firstIndex(where: {
+                    $0.completionID == record.completionID
+                }) else { return }
+                activity.attentionRecords[index].notifiedAt = Date().ISO8601Format()
+                scheduleActivityAttentionSave()
+            } catch {
+                showNotice("完成通知未能发送：系统通知服务返回错误。", level: "warning")
+            }
+        }
+    }
+
+    private func completionSessionName(for sessionID: String) -> String {
+        let raw = activity.sessions.first(where: { $0.id == sessionID })?.name
+            ?? (inspection?.summary.id == sessionID ? inspection?.summary.name : nil)
+            ?? "会话"
+        return String(raw.replacingOccurrences(of: "\n", with: " ").prefix(80))
+    }
+    func refreshCompletionNotificationAuthorizationState() async {
+        let state = await completionNotificationService.authorizationState()
+        applyCompletionNotificationAuthorizationState(state)
+    }
+
+    private func applyCompletionNotificationAuthorizationState(
+        _ state: CompletionNotificationAuthorizationState
+    ) {
+        completionNotificationAuthorizationState = state
+        if completionNotificationsEnabled, state != .authorized {
+            completionNotificationsEnabled = false
+            UserDefaults.standard.set(false, forKey: CompletionNotificationSettings.enabledStorageKey)
+        }
+    }
+
+    func setCompletionNotificationsEnabled(_ enabled: Bool) async {
+        guard enabled else {
+            completionNotificationsEnabled = false
+            UserDefaults.standard.set(false, forKey: CompletionNotificationSettings.enabledStorageKey)
+            return
+        }
+        var authorization = await completionNotificationService.authorizationState()
+        if authorization == .notDetermined {
+            authorization = await completionNotificationService.requestAuthorization()
+        }
+        applyCompletionNotificationAuthorizationState(authorization)
+        guard authorization == .authorized else {
+            showNotice("系统通知权限未允许；请在 macOS 通知设置中允许 D Code。", level: "warning")
+            return
+        }
+        completionNotificationsEnabled = true
+        UserDefaults.standard.set(true, forKey: CompletionNotificationSettings.enabledStorageKey)
+    }
+
+    func openCompletionNotificationSettings() {
+        CompletionNotificationService.openSystemNotificationSettings()
+    }
+
+    func handleCompletionNotificationResponse(_ userInfo: [AnyHashable: Any]) async {
+        guard let sessionID = userInfo[AnyHashable("sessionID")] as? String,
+              let entryID = userInfo[AnyHashable("entryID")] as? String,
+              userInfo[AnyHashable("completionID")] as? String != nil else {
+            showNotice("通知缺少可定位的完成结果信息。", level: "warning")
+            return
+        }
+        guard !archivedSessions.contains(where: { $0.sessionID == sessionID }) else {
+            showNotice("通知对应的 Session 已归档，未创建替代会话。", level: "warning")
+            return
+        }
+        if selectedSessionID != sessionID {
+            guard !isPromptTransactionActive, !isOpeningSession else {
+                showNotice("当前 Session 仍在运行或发送，暂时无法打开通知对应的完成结果。", level: "warning")
+                return
+            }
+            guard await openSession(sessionID, writable: true, presentFailure: false) else {
+                showNotice("通知对应的 Session 当前不可见或无法打开。", level: "warning")
+                return
+            }
+        } else if !transcript.contains(where: { $0.id == entryID }) {
+            guard await openSession(sessionID, writable: true, presentFailure: false),
+                  transcript.contains(where: { $0.id == entryID }) else {
+                showNotice("通知对应的完成结果已不在当前 Session 可见路径中。", level: "warning")
+                return
+            }
+        }
+        guard transcript.contains(where: { $0.id == entryID }) else {
+            showNotice("通知对应的完成结果未能载入。", level: "warning")
+            return
+        }
+        workbenchDestination = .workspace
+        workspaceTabSelection = .conversation
+        conversationTarget = ConversationTarget(sessionID: sessionID, entryID: entryID, token: UUID())
     }
 
     func markCompletionPresented(entryID: String) {
@@ -3042,6 +3399,12 @@ final class AppModel {
     }
 
     @discardableResult
+    private func flushFollowUpQueues() async -> Bool {
+        guard followUp.queueIssue == nil else { return false }
+        return await persistFollowUpQueues(followUp.queues)
+    }
+
+    @discardableResult
     private func persistFollowUpQueues(_ next: [FollowUpQueueRecord]) async -> Bool {
         guard followUpQueueStoreWritable else { return false }
         followUp.queueRevision += 1
@@ -3143,87 +3506,208 @@ final class AppModel {
               canWrite,
               pendingPathDraft == nil,
               extensionDialogs.isEmpty,
-              followUp.pendingSteer == nil,
+              followUp.steerSubmissionInFlight == nil,
               canPersistSessionDrafts else { return }
         let draft = composerText
         let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, !message.hasPrefix("/") else { return }
         guard await flushCurrentDraft() else { return }
 
-        let steerID = UUID().uuidString
-        let attachments = composerImages
-        followUp.pendingSteer = PendingSteerDraft(
+        let submission = SteerSubmission(
             sessionID: sessionID,
             runID: runID,
-            steerID: steerID,
+            steerID: UUID().uuidString,
             draft: draft,
             draftTarget: currentDraftTarget,
-            images: attachments,
-            accepted: false
+            images: composerImages
         )
+        followUp.steerSubmissionInFlight = submission
         composerText = ""
         clearComposerImageAttachments()
         isSendingRequest = true
         defer { isSendingRequest = false }
         do {
             var params: [String: JSONValue] = [
-                "message": .string(message),
-                "steerId": .string(steerID),
-                "expectedRunId": .string(runID),
+                "message": .string(submission.message),
+                "steerId": .string(submission.steerID),
+                "expectedRunId": .string(submission.runID),
             ]
-            if !attachments.isEmpty {
-                params["images"] = .array(attachments.map(\.requestPayload))
+            if !submission.images.isEmpty {
+                params["images"] = .array(submission.images.map(\.requestPayload))
             }
             let result: SessionSteerResult = try await client.request("session.steer", params: params)
             guard result.accepted,
-                  result.steerID == steerID,
-                  result.runID == runID else {
+                  result.steerID == submission.steerID,
+                  result.runID == submission.runID else {
                 throw PiHostClientError.invalidEnvelope("session.steer 未确认请求的 Steer / Run 身份")
             }
-            guard followUp.pendingSteer?.steerID == steerID else { return }
-            followUp.pendingSteer?.accepted = true
-            if let runState = activity.currentRunState { settlePendingSteer(for: runState) }
+            guard !isShuttingDown else { return }
+            guard followUp.steerSubmissionInFlight?.steerID == submission.steerID else { return }
+            followUp.steerSubmissionInFlight = nil
+            followUp.acceptedSteerReceipts.append(submission)
+            showNotice("已加入当前运行", level: "info")
         } catch {
-            restorePendingSteer(steerID: steerID)
+            restoreSteerSubmission(steerID: submission.steerID)
             present(error, title: "无法立即介入当前运行")
         }
     }
 
-    private func settlePendingSteer(for state: SessionRunState) {
-        guard let pendingSteer = followUp.pendingSteer,
-              pendingSteer.accepted,
-              pendingSteer.sessionID == state.sessionID,
-              pendingSteer.runID == state.runID,
-              !state.phase.isActive else { return }
-        self.followUp.pendingSteer = nil
+    private func settleSteerReceipts(for state: SessionRunState) {
+        guard !state.phase.isActive else { return }
+        if let submission = followUp.steerSubmissionInFlight,
+           submission.sessionID == state.sessionID,
+           submission.runID == state.runID {
+            followUp.steerSubmissionInFlight = nil
+            restoreSteerDrafts([submission])
+        }
+        let receipts = followUp.acceptedSteerReceipts.filter {
+            $0.sessionID == state.sessionID && $0.runID == state.runID
+        }
+        guard !receipts.isEmpty else { return }
+        followUp.acceptedSteerReceipts.removeAll {
+            $0.sessionID == state.sessionID && $0.runID == state.runID
+        }
         if state.phase == .completed {
-            if let target = pendingSteer.draftTarget {
-                setDraftText("", for: target)
-                scheduleDraftSave()
+            clearSteerReceiptDrafts(receipts)
+        } else {
+            restoreSteerDrafts(receipts)
+            showNotice("当前运行未正常完成，未应用的介入正文已恢复到输入框。", level: "warning")
+        }
+    }
+
+    private func restoreSteerSubmission(steerID: String) {
+        guard let submission = followUp.steerSubmissionInFlight,
+              submission.steerID == steerID else { return }
+        followUp.steerSubmissionInFlight = nil
+        restoreSteerDrafts([submission])
+    }
+
+    private func restoreSteerDrafts(_ submissions: [SteerSubmission]) {
+        guard !submissions.isEmpty else { return }
+        var restoredText = composerText
+        var restoredImages = composerImages
+        if let sessionID = selectedSessionID {
+            for submission in submissions.reversed() where submission.sessionID == sessionID {
+                restoredText = combineDraft(submission.draft, with: restoredText)
+                restoredImages = submission.images + restoredImages
             }
-            showNotice("介入信息已由 Pi 应用。", level: "info")
-            return
+            composerText = restoredText
+            if !restoredImages.isEmpty { composerImages = restoredImages }
         }
-        restoreSteerDraft(pendingSteer)
-        showNotice("当前运行未正常完成，介入正文已恢复到输入框。", level: "warning")
+        for submission in submissions {
+            guard let target = submission.draftTarget else { continue }
+            let targetText = submission.sessionID == selectedSessionID ? restoredText : submission.draft
+            setDraftText(targetText, for: target)
+        }
+        scheduleDraftSave()
     }
 
-    private func restorePendingSteer(steerID: String) {
-        guard let pendingSteer = followUp.pendingSteer, pendingSteer.steerID == steerID else { return }
-        self.followUp.pendingSteer = nil
-        restoreSteerDraft(pendingSteer)
+    private func clearSteerReceiptDrafts(_ submissions: [SteerSubmission]) {
+        let submittedIDs = Set(submissions.map(\.steerID))
+        let stillOwned = followUp.acceptedSteerReceipts
+            + (followUp.steerSubmissionInFlight.map { [$0] } ?? [])
+        for submission in submissions {
+            guard let target = submission.draftTarget else { continue }
+            let targetStillHasReceipt = stillOwned.contains {
+                !submittedIDs.contains($0.steerID)
+                    && $0.draftTarget?.stableID == target.stableID
+            }
+            if targetStillHasReceipt { continue }
+            if currentDraftTarget?.stableID == target.stableID,
+               !composerText.isEmpty { continue }
+            let storedText = draftDocument.records.first(where: {
+                $0.target.stableID == target.stableID
+            })?.text
+            guard storedText == submission.draft else { continue }
+            setDraftText("", for: target)
+        }
+        scheduleDraftSave()
     }
 
-    private func restoreSteerDraft(_ pending: PendingSteerDraft) {
-        let restored = combineDraft(pending.draft, with: composerText)
-        if pending.sessionID == selectedSessionID {
-            composerText = restored
-            if !pending.images.isEmpty { composerImages = pending.images }
+    private func restoreSteerReceiptsForShutdown() {
+        let submissions = followUp.acceptedSteerReceipts
+            + (followUp.steerSubmissionInFlight.map { [$0] } ?? [])
+        followUp.acceptedSteerReceipts.removeAll()
+        followUp.steerSubmissionInFlight = nil
+        restoreSteerDrafts(submissions)
+    }
+
+    private func markSteerReceiptApplied(
+        sessionID: String?,
+        runID: String?,
+        message: String
+    ) {
+        guard let sessionID, let runID,
+              let index = followUp.acceptedSteerReceipts.firstIndex(where: {
+                  $0.sessionID == sessionID && $0.runID == runID && $0.message == message
+              }) else { return }
+        let receipt = followUp.acceptedSteerReceipts.remove(at: index)
+        clearSteerReceiptDrafts([receipt])
+    }
+
+    private func applySteeringQueueUpdate(
+        sessionID: String?,
+        runID: String?,
+        messages: [String]
+    ) {
+        followUp.steeringQueueMessages = messages
+        followUp.steeringQueueSessionID = sessionID
+        followUp.steeringQueueRunID = runID
+        followUp.steeringQueueRevision += 1
+        guard let sessionID, let runID else { return }
+
+        let scopedIndices = followUp.acceptedSteerReceipts.indices.filter {
+            let receipt = followUp.acceptedSteerReceipts[$0]
+            return receipt.sessionID == sessionID && receipt.runID == runID
         }
-        if let target = pending.draftTarget {
-            setDraftText(restored, for: target)
-            scheduleDraftSave()
+        var candidates: [(acceptedIndex: Int?, submission: SteerSubmission)] = scopedIndices.map {
+            ($0, followUp.acceptedSteerReceipts[$0])
         }
+        if let inFlight = followUp.steerSubmissionInFlight,
+           inFlight.sessionID == sessionID,
+           inFlight.runID == runID {
+            candidates.append((nil, inFlight))
+        }
+        var messageCursor = messages.count - 1
+        var retained = Set<Int>()
+        for candidate in candidates.reversed() {
+            var match: Int?
+            while messageCursor >= 0 {
+                let index = messageCursor
+                messageCursor -= 1
+                if messages[index] == candidate.submission.message {
+                    match = index
+                    break
+                }
+            }
+            if match != nil, let acceptedIndex = candidate.acceptedIndex {
+                retained.insert(acceptedIndex)
+            }
+        }
+        let applied = scopedIndices
+            .filter { !retained.contains($0) }
+            .map { followUp.acceptedSteerReceipts[$0] }
+        followUp.acceptedSteerReceipts = followUp.acceptedSteerReceipts.enumerated().compactMap {
+            index, receipt in
+            scopedIndices.contains(index) && !retained.contains(index) ? nil : receipt
+        }
+        clearSteerReceiptDrafts(applied)
+    }
+
+    private func steerMessageText(from entry: JSONValue?) -> String? {
+        guard entry?["type"]?.stringValue == "message",
+              entry?["message"]?["role"]?.stringValue == "user" else { return nil }
+        if let content = entry?["message"]?["content"]?.stringValue { return content }
+        return entry?["message"]?["content"]?.arrayValue?
+            .compactMap { $0["text"]?.stringValue }
+            .joined()
+    }
+
+    private func settleSteerReceiptForPersistedEntry(_ data: JSONValue?) {
+        let sessionID = data?["sessionId"]?.stringValue ?? selectedSessionID
+        let runID = data?["runId"]?.stringValue ?? currentSessionRunID
+        guard let message = steerMessageText(from: data?["entry"]) else { return }
+        markSteerReceiptApplied(sessionID: sessionID, runID: runID, message: message)
     }
 
     func retryCurrentRunSafely() async {
@@ -3893,8 +4377,10 @@ final class AppModel {
     }
 
     func setThinkingLevel(_ level: String) async {
-        guard !isPromptTransactionActive else { return }
+        guard canMutateRuntimeSettings else { return }
         guard await ensureWritable(), let client = readyClient else { return }
+        isMutatingRuntimeSettings = true
+        defer { isMutatingRuntimeSettings = false }
         do {
             let _: Acknowledgement = try await client.request("session.setThinking", params: ["level": .string(level)])
             await refreshState()
@@ -3905,6 +4391,7 @@ final class AppModel {
 
     func setComposerThinkingLevel(_ level: String) async {
         if isNewSessionDraftActive {
+            guard canMutateComposerRuntimeSettings else { return }
             selectNewSessionThinkingLevel(level)
             return
         }
@@ -3912,14 +4399,20 @@ final class AppModel {
     }
 
     func setModel(_ model: HostModel) async {
-        guard !isPromptTransactionActive else { return }
+        guard canMutateRuntimeSettings else { return }
         guard await ensureWritable(), let client = readyClient else { return }
+        isMutatingRuntimeSettings = true
+        defer { isMutatingRuntimeSettings = false }
         do {
             let _: JSONValue = try await client.request(
                 "session.setModel",
                 params: ["provider": .string(model.provider), "modelId": .string(model.id)]
             )
+            // Thinking 选项属于当前模型；切换成功后先清掉旧目录，
+            // 再与 Host state 一起重新加载，避免展示可点但会被新模型拒绝的档位。
+            modelSettings.thinkingLevels = []
             await refreshState()
+            await loadRuntimeControls(includeCommands: false)
         } catch {
             present(error, title: "无法切换模型")
         }
@@ -3927,20 +4420,24 @@ final class AppModel {
 
     func setComposerFastModeEnabled(_ enabled: Bool) async {
         if isNewSessionDraftActive {
-            guard !enabled || composerFastModeSupported else { return }
+            guard canMutateComposerRuntimeSettings,
+                  !enabled || composerFastModeSupported else { return }
             newSessionDraft?.fastModeEnabled = enabled
             persistNewSessionDraftIfMeaningful()
             return
         }
         guard !enabled || composerFastModeSupported else { return }
-        guard !isPromptTransactionActive else { return }
+        guard canMutateRuntimeSettings else { return }
         guard await ensureWritable(), let client = readyClient else { return }
+        isMutatingRuntimeSettings = true
+        defer { isMutatingRuntimeSettings = false }
         do {
             let result: FastModeState = try await client.request(
                 "session.setFastMode",
                 params: ["enabled": .bool(enabled)]
             )
-            guard result.enabled == enabled else {
+            guard result.enabled == enabled,
+                  !enabled || (result.active && result.reason == "supported") else {
                 showNotice("Pi Host 未确认速度设置，请重试。", level: "warning")
                 return
             }
@@ -4246,6 +4743,7 @@ final class AppModel {
         isShuttingDown = true
         await followUpSettlementTask?.value
         await pauseFollowUpQueuesForShutdown()
+        restoreSteerReceiptsForShutdown()
         await flushCurrentDraft()
         refreshTask?.cancel()
         search.task?.cancel()
@@ -4267,7 +4765,7 @@ final class AppModel {
     }
 
     func emergencyStop() {
-        client?.lifecycle.terminate(expected: true)
+        client?.lifecycle.terminate(expected: true, force: true)
     }
 
     @discardableResult
@@ -4368,12 +4866,27 @@ final class AppModel {
         }.value
         guard openGeneration == generation,
               snapshotCommitGeneration == commitGeneration else { return false }
-        let opensDifferentSession = selectedSessionID != result.snapshot.summary.id
+        let previouslyPresentedSessionID = inspection?.summary.id
+        let hadActiveNewSessionDraft = isNewSessionDraftActive
+        // 自动重启恢复、通知回跳等路径会直接 openSession，不经过 selectSession。
+        // 若主页的 ensureHomeDraft 恰好已激活会话前草稿，真实 Session 提交时必须
+        // 先停靠它；否则 transcript 与标题虽已恢复，Composer 仍会显示 Project
+        // 托盘并把发送误当作“创建新会话”。
+        parkNewSessionDraft()
+        let opensDifferentSession = previouslyPresentedSessionID != result.snapshot.summary.id
+        if hadActiveNewSessionDraft || opensDifferentSession {
+            // 图片附件只属于当时可见的 Composer，且从不持久化；切入真实 Session
+            // 必须清空，不能把新会话图片静默带进恢复 / 通知目标会话。
+            clearComposerImageAttachments()
+        }
         conversationTarget = nil
         workbenchDestination = .workspace
-        if opensDifferentSession { workspaceTabSelection = .conversation }
+        if opensDifferentSession {
+            workspaceTabSelection = .conversation
+            // 旧会话的构成不能暂留到新会话，避免把旧消息归因显示在新会话上。
+            contextBreakdown = nil
+        }
         selectedSessionID = result.snapshot.summary.id
-        updateSelectedSessionChangeSummary()
         inspectorScope = .session(result.snapshot.summary.id)
         inspection = result.snapshot
         sessionConflict = nil
@@ -4387,7 +4900,7 @@ final class AppModel {
         currentSessionRunID = result.state?.runState?.phase.isActive == true
             ? result.state?.runState?.runID
             : nil
-        if let runState = result.state?.runState { recordCompletedRun(runState) }
+        if let runState = result.state?.runState { recordCompletedRun(runState, notify: false) }
         clearStreamingPresentation()
         optimisticUserMessage = nil
         modelSettings.models = []
@@ -4773,25 +5286,436 @@ final class AppModel {
     }
 
     func startSelfBuild() async {
+        guard !isSelfEvolutionRestarting else {
+            showNotice("正在准备自进化重启，暂不能重新构建候选。", level: "warning")
+            return
+        }
         await selfBuild.build()
         if selfBuild.phase == .failed {
             showNotice("自构建失败；在用 App 未受影响，详情见设置 › 自构建。", level: "error")
         }
     }
 
+    var selfEvolutionRestartBlockers: [String] {
+        var blockers: [String] = []
+        guard let candidate = selfBuild.candidate,
+              candidate.isReady,
+              let manifest = candidate.manifest else {
+            return ["尚无通过来源、门禁与签名校验的候选"]
+        }
+        if !selfEvolution.loaded || selfEvolution.issue != nil {
+            blockers.append("自进化回执资料尚未安全载入")
+        }
+        if isSelfEvolutionRestarting {
+            blockers.append("正在冻结当前状态并准备自进化重启")
+        }
+        if let receipt = selfEvolution.latestReceipt, !receipt.state.isTerminal {
+            blockers.append("已有一条未终结的自进化运行")
+        }
+        guard let state = hostState,
+              let sessionID = selectedSessionID,
+              state.sessionId == sessionID else {
+            blockers.append("请先打开要继续恢复的 Pi Session")
+            return blockers
+        }
+        guard let ownership = ProjectSessionOwnershipResolver.resolve(cwd: state.cwd, projects: projects) else {
+            blockers.append("当前 Session 不属于任何 D Code Project")
+            return blockers
+        }
+        let projectPath = ownership.project.directory.url.standardizedFileURL.resolvingSymlinksInPath().path
+        let sourcePath = selfBuild.rootDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        if projectPath != sourcePath {
+            blockers.append("当前 Project 目录与 Self-build 源码 checkout 不一致")
+        }
+        guard let model = state.model else {
+            blockers.append("Host 尚未确认当前 Session 的真实模型")
+            return blockers
+        }
+        if !SelfEvolutionPreflightPolicy.isSolModel(provider: model.provider, modelID: model.id) {
+            blockers.append("本次完整自进化要求当前 Session 使用 Sol")
+        }
+        if candidate.appVersion == runningAppVersion {
+            blockers.append("候选版本与当前 App 相同")
+        }
+        if selfBuild.activeManifest?.sourceDigest == nil {
+            blockers.append("当前 App 缺少可衔接的自构建来源 digest")
+        }
+        if isPromptTransactionActive || isOpeningSession || isShuttingDown {
+            blockers.append("当前 Session 仍在运行、发送或收口")
+        }
+        if isCopyingSession || isMigratingProjectDirectory || isTrashingSession
+            || isRenamingSession || isMutatingArchive || isMutatingPins {
+            blockers.append("当前仍有会话或 Project 变更正在进行")
+        }
+        if followUp.isMutatingQueue || isSettlingFollowUpRun {
+            blockers.append("后续消息队列仍在写入或结算")
+        }
+        if let queue = currentFollowUpQueue,
+           queue.activeRunID != nil || queue.items.contains(where: { $0.state != .pending }) {
+            blockers.append("后续消息队列包含在途或结果未知项目")
+        }
+        if !extensionDialogs.isEmpty {
+            blockers.append("仍有结构化交互等待处理")
+        }
+        if !composerImages.isEmpty {
+            blockers.append("输入区仍有仅内存持有的图片附件")
+        }
+        if workspaceFileTabs.contains(where: { tab in
+            guard let draft = tab.draft else { return false }
+            return draft.isDirty || draft.isSaving || draft.isConflicted
+        }) {
+            blockers.append("仍有未保存、保存中或冲突的文件编辑缓冲区")
+        }
+        if modelProviders.isSaving || modelSettings.isLoadingModels {
+            blockers.append("模型设置仍在更新")
+        }
+        if state.conflict != nil || !state.writable {
+            blockers.append("当前 Session 未取得稳定写入所有权")
+        }
+        if state.isCompacting == true || (state.pendingMessageCount ?? 0) > 0 {
+            blockers.append("Host 仍在压缩上下文或处理待结算消息")
+        }
+        if manifest.localOnly != true {
+            blockers.append("候选没有明确标记为仅本机")
+        }
+        return Array(Set(blockers)).sorted()
+    }
+
+    private var selfEvolutionVolatileBlockers: [String] {
+        var blockers: [String] = []
+        guard let state = hostState,
+              let sessionID = selectedSessionID,
+              state.sessionId == sessionID else {
+            return ["当前 Pi Session 已变化"]
+        }
+        guard let ownership = ProjectSessionOwnershipResolver.resolve(cwd: state.cwd, projects: projects) else {
+            return ["当前 Session 已失去 Project 归属"]
+        }
+        let projectPath = ownership.project.directory.url.standardizedFileURL.resolvingSymlinksInPath().path
+        let sourcePath = selfBuild.rootDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        if projectPath != sourcePath { blockers.append("Project 与源码 checkout 已变化") }
+        if let model = state.model {
+            if !SelfEvolutionPreflightPolicy.isSolModel(provider: model.provider, modelID: model.id) {
+                blockers.append("当前 Session 模型已不再是 Sol")
+            }
+        } else {
+            blockers.append("当前 Session 模型事实不可用")
+        }
+        if isPromptTransactionActive || isOpeningSession || isShuttingDown {
+            blockers.append("当前 Session 又进入运行、发送或收口状态")
+        }
+        if isCopyingSession || isMigratingProjectDirectory || isTrashingSession
+            || isRenamingSession || isMutatingArchive || isMutatingPins {
+            blockers.append("会话或 Project 变更仍在进行")
+        }
+        if followUp.isMutatingQueue || isSettlingFollowUpRun {
+            blockers.append("后续消息队列仍在写入或结算")
+        }
+        if let queue = currentFollowUpQueue,
+           queue.activeRunID != nil || queue.items.contains(where: { $0.state != .pending }) {
+            blockers.append("后续消息队列出现新的在途或未知项目")
+        }
+        if !extensionDialogs.isEmpty { blockers.append("出现新的结构化等待") }
+        if !composerImages.isEmpty { blockers.append("输入区出现新的内存图片附件") }
+        if workspaceFileTabs.contains(where: { tab in
+            guard let draft = tab.draft else { return false }
+            return draft.isDirty || draft.isSaving || draft.isConflicted
+        }) {
+            blockers.append("出现新的未保存文件编辑缓冲区")
+        }
+        if modelProviders.isSaving || modelSettings.isLoadingModels { blockers.append("模型设置正在变化") }
+        if state.conflict != nil || !state.writable { blockers.append("Session 写入所有权已变化") }
+        if state.isCompacting == true || (state.pendingMessageCount ?? 0) > 0 {
+            blockers.append("Host 又进入压缩或消息结算状态")
+        }
+        return blockers
+    }
+
+    func restartIntoSelfEvolutionCandidate() async {
+        guard !isSelfEvolutionRestarting else { return }
+        let blockers = selfEvolutionRestartBlockers
+        guard blockers.isEmpty,
+              let candidate = selfBuild.candidate,
+              let manifest = candidate.manifest,
+              let state = hostState,
+              let model = state.model,
+              let ownership = ProjectSessionOwnershipResolver.resolve(cwd: state.cwd, projects: projects),
+              let sessionID = selectedSessionID else {
+            showNotice(blockers.first ?? "自进化重启条件尚未成立", level: "warning")
+            return
+        }
+        isSelfEvolutionRestarting = true
+        defer { isSelfEvolutionRestarting = false }
+        guard selfBuild.beginRestartPreparation() else { return }
+        guard selfBuild.sourceStillMatchesCandidate() else {
+            selfBuild.failRestartPreparation("候选生成后源码已变化；请重新验证并构建。")
+            showNotice("候选生成后源码已变化；请重新验证并构建。", level: "warning")
+            return
+        }
+        guard await flushCurrentDraft() else {
+            selfBuild.failRestartPreparation("当前会话草稿未能安全保存，已停止重启。")
+            showNotice("当前会话草稿未能安全保存，已停止重启。", level: "warning")
+            return
+        }
+        guard await flushFollowUpQueues() else {
+            selfBuild.failRestartPreparation("后续消息队列未能安全保存，已停止重启。")
+            showNotice("后续消息队列未能安全保存，已停止重启。", level: "warning")
+            return
+        }
+        let postFlushBlockers = selfEvolutionVolatileBlockers
+        guard postFlushBlockers.isEmpty, selfBuild.sourceStillMatchesCandidate() else {
+            let message = postFlushBlockers.first ?? "源码在重启准备期间发生变化"
+            selfBuild.failRestartPreparation(message)
+            showNotice(message, level: "warning")
+            return
+        }
+        do {
+            let run = try await selfEvolution.prepareFullRestart(
+                context: SelfEvolutionFullContext(
+                    sourceAppVersion: runningAppVersion,
+                    sourceBuildDigest: selfBuild.activeManifest?.sourceDigest,
+                    projectID: ownership.project.id,
+                    sessionID: sessionID,
+                    modelProvider: model.provider,
+                    modelID: model.id,
+                    goalID: activePlan?.id
+                ),
+                candidateAppVersion: candidate.appVersion,
+                candidateHostVersion: candidate.hostVersion,
+                manifest: manifest
+            )
+            let preSwapBlockers = selfEvolutionVolatileBlockers
+            let diskCandidate = SelfBuildCandidateValidator.validate(
+                candidateBundleURL: selfBuild.candidateBundleURL
+            )
+            guard preSwapBlockers.isEmpty,
+                  selfBuild.sourceStillMatchesCandidate(),
+                  diskCandidate.isReady,
+                  run.candidate.matches(
+                      appVersion: diskCandidate.appVersion,
+                      manifest: diskCandidate.manifest
+                  ) else {
+                try? await selfEvolution.markRolledBack(runID: run.id)
+                let message = preSwapBlockers.first ?? "源码或候选在写入回执后发生变化；本次未替换 App。"
+                selfBuild.failRestartPreparation(message)
+                showNotice(message, level: "warning")
+                return
+            }
+            let outcome = await selfBuild.restartIntoCandidate(
+                pendingSessionID: sessionID,
+                selfEvolutionRunID: run.id
+            )
+            switch outcome {
+            case .restarted:
+                break
+            case let .validationFailed(message), let .swapFailed(message), let .relaunchFailed(message):
+                try? await selfEvolution.markRecoveryRequired(
+                    runID: run.id,
+                    issue: String(DiagnosticSanitizer.redact(message).prefix(1_024))
+                )
+                showNotice("自进化重启失败：\(message)", level: "error")
+            }
+        } catch {
+            let message = "自进化重启请求未能安全保存：\(DiagnosticSanitizer.redact(error.localizedDescription))"
+            selfBuild.failRestartPreparation(message)
+            showNotice(message, level: "error")
+        }
+    }
+
     func restartIntoSelfBuildCandidate() async {
+        guard !isSelfEvolutionRestarting else {
+            showNotice("正在准备自进化重启，普通重启已暂停。", level: "warning")
+            return
+        }
+        guard selfEvolution.unfinishedReceipt == nil else {
+            showNotice("当前存在未终结的自进化回执；普通候选重启已暂停，以免覆盖唯一回滚备份。", level: "warning")
+            return
+        }
+        guard selfBuild.beginRestartPreparation() else { return }
+        guard await flushCurrentDraft() else {
+            selfBuild.failRestartPreparation("当前会话草稿未能安全保存，已停止重启。")
+            showNotice("当前会话草稿未能安全保存，已停止重启。", level: "warning")
+            return
+        }
+        guard await flushFollowUpQueues() else {
+            selfBuild.failRestartPreparation("后续消息队列未能安全保存，已停止重启。")
+            showNotice("后续消息队列未能安全保存，已停止重启。", level: "warning")
+            return
+        }
         let outcome = await selfBuild.restartIntoCandidate(pendingSessionID: selectedSessionID)
-        if case let .validationFailed(message) = outcome {
-            showNotice("候选校验未通过：\(message)", level: "error")
-        } else if case let .swapFailed(message) = outcome {
-            showNotice("受控替换失败：\(message)", level: "error")
+        switch outcome {
+        case .restarted:
+            break
+        case let .validationFailed(message), let .swapFailed(message), let .relaunchFailed(message):
+            showNotice("受控重启失败：\(message)", level: "error")
         }
     }
 
     func rollbackSelfBuild() async {
+        guard !isSelfEvolutionRestarting else {
+            showNotice("正在准备自进化重启，普通回滚已暂停。", level: "warning")
+            return
+        }
+        if let receipt = selfEvolution.latestReceipt, !receipt.state.isTerminal {
+            showNotice("当前存在未终结的自进化回执；请从“本次自进化”执行恢复或回滚。", level: "warning")
+            return
+        }
+        guard selfBuild.beginRestartPreparation() else { return }
+        guard await flushCurrentDraft(), await flushFollowUpQueues() else {
+            selfBuild.failRestartPreparation("会话草稿或后续消息队列未能安全保存，已停止回滚。")
+            showNotice("会话草稿或后续消息队列未能安全保存，已停止回滚。", level: "warning")
+            return
+        }
         let outcome = await selfBuild.rollbackAndRestart(pendingSessionID: selectedSessionID)
-        if case let .swapFailed(message) = outcome {
+        switch outcome {
+        case .restarted:
+            break
+        case let .validationFailed(message), let .swapFailed(message), let .relaunchFailed(message):
             showNotice("回滚失败：\(message)", level: "error")
+        }
+    }
+
+    func acceptSelfEvolutionReceipt() async {
+        guard !isSelfEvolutionRestarting else { return }
+        guard let receipt = selfEvolution.latestReceipt,
+              receipt.state == .sessionRestored else { return }
+        let activeCandidate = SelfBuildCandidateValidator.validate(
+            candidateBundleURL: Bundle.main.bundleURL
+        )
+        let ownership = hostState.flatMap { state in
+            ProjectSessionOwnershipResolver.resolve(cwd: state.cwd, projects: projects)
+        }
+        let contextMatches = receipt.assurance == .legacyBootstrap
+            || (receipt.projectID == ownership?.project.id.uuidString
+                && receipt.modelProvider == hostState?.model?.provider
+                && receipt.modelID == hostState?.model?.id)
+        let hostIsStable = SelfEvolutionAcceptancePolicy.hostIsStable(
+            connectionState: connectionState,
+            restartRequired: hostRestartRequired,
+            hasReadyClient: readyClient != nil,
+            writable: hostState?.writable == true,
+            hasConflict: hostState?.conflict != nil,
+            isCompacting: hostState?.isCompacting == true,
+            pendingMessageCount: hostState?.pendingMessageCount ?? 0
+        )
+        guard hostIsStable,
+              activeCandidate.isReady,
+              receipt.candidate.matches(
+                  appVersion: activeCandidate.appVersion,
+                  manifest: activeCandidate.manifest
+              ),
+              selectedSessionID == receipt.sessionID,
+              hostState?.sessionId == receipt.sessionID,
+              contextMatches,
+              !isPromptTransactionActive else {
+            try? await selfEvolution.markRecoveryRequired(
+                runID: receipt.id,
+                issue: "人工验收前的 App、Session、Project 或模型复核未通过"
+            )
+            showNotice("人工验收前复核未通过；回执已转入恢复状态。", level: "warning")
+            return
+        }
+        do {
+            try await selfEvolution.markManualAccepted(runID: receipt.id)
+            showNotice(
+                receipt.assurance == .legacyBootstrap
+                    ? "本机验收已记录；引导回执不计入三次完整循环。"
+                    : "本次完整自进化已验收并计入连续门禁。",
+                level: "info"
+            )
+        } catch {
+            showNotice("人工验收结果未能写入回执：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "error")
+        }
+    }
+
+    func retrySelfEvolutionRecovery() async {
+        guard !isSelfEvolutionRestarting else { return }
+        guard let receipt = selfEvolution.pendingRecoveryRun,
+              receipt.state == .recoveryRequired,
+              connectionState == .ready else { return }
+        do {
+            let activeCandidate = SelfBuildCandidateValidator.validate(
+                candidateBundleURL: Bundle.main.bundleURL
+            )
+            let integrityReady = try await selfEvolution.markAppStarted(
+                runID: receipt.id,
+                appVersion: activeCandidate.appVersion.isEmpty
+                    ? runningAppVersion
+                    : activeCandidate.appVersion,
+                manifest: activeCandidate.isReady ? activeCandidate.manifest : nil
+            )
+            guard integrityReady else {
+                showNotice("当前 App 与预期候选身份仍不一致，不能重试 Session 恢复。", level: "warning")
+                return
+            }
+            let reopened = await openSession(receipt.sessionID, writable: true, presentFailure: false)
+            await finishSelfEvolutionRecovery(runID: receipt.id, reopened: reopened)
+        } catch {
+            showNotice("自进化恢复重试失败：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "warning")
+        }
+    }
+
+    func retryBootstrapRecovery() async {
+        guard selfEvolution.bootstrapRecovery != nil,
+              let intent = SelfBuildModel.restartIntent() else { return }
+        let outcome = await selfBuild.relaunchCurrentAppForRecovery(pendingSessionID: intent.sessionID)
+        switch outcome {
+        case .restarted:
+            break
+        case let .validationFailed(message), let .swapFailed(message), let .relaunchFailed(message):
+            showNotice("Bootstrap 恢复重启失败：\(message)", level: "warning")
+        }
+    }
+
+    func rollbackSelfEvolutionReceipt() async {
+        guard !isSelfEvolutionRestarting else { return }
+        guard let receipt = selfEvolution.latestReceipt,
+              !receipt.state.isTerminal else { return }
+        guard runningAppVersion == receipt.candidate.appVersion else {
+            do {
+                try await selfEvolution.markRolledBack(runID: receipt.id)
+                showNotice("候选尚未成为当前 App；已结束本次回执，没有交换备份。", level: "info")
+            } catch {
+                showNotice("本次回执未能安全结束：\(DiagnosticSanitizer.redact(error.localizedDescription))", level: "error")
+            }
+            return
+        }
+        guard let rollbackTargetVersion = selfBuild.backupAppVersion() else {
+            showNotice("回滚备份缺少可核对的 App 版本；已停止交换。", level: "error")
+            return
+        }
+        guard selfBuild.beginRestartPreparation() else { return }
+        guard await flushCurrentDraft(), await flushFollowUpQueues() else {
+            selfBuild.failRestartPreparation("会话草稿或后续消息队列未能安全保存，已停止回滚。")
+            showNotice("会话草稿或后续消息队列未能安全保存，已停止回滚。", level: "warning")
+            return
+        }
+        guard selfBuild.prepareRollbackRestartBeforeSwap(
+            kind: .selfEvolutionRollback,
+            targetAppVersion: rollbackTargetVersion,
+            pendingSessionID: receipt.sessionID,
+            selfEvolutionRunID: nil
+        ) else {
+            showNotice(selfBuild.issue ?? "回滚重启准备失败。", level: "error")
+            return
+        }
+        let swap = selfBuild.swapToBackup()
+        guard swap.succeeded else {
+            selfBuild.cancelPreparedRestartAfterSwapFailure(swap.issue ?? "未知错误")
+            showNotice("回滚失败：\(swap.issue ?? "未知错误")", level: "error")
+            return
+        }
+        let outcome = await selfBuild.relaunchAfterPreparedSwap(
+            hadActiveBundleBeforeSwap: true,
+            finalize: { [self] in
+                try await self.selfEvolution.markRolledBack(runID: receipt.id)
+            }
+        )
+        switch outcome {
+        case .restarted:
+            break
+        case let .validationFailed(message), let .swapFailed(message), let .relaunchFailed(message):
+            showNotice("回滚重启失败：\(message)", level: "error")
         }
     }
 
@@ -4834,13 +5758,18 @@ final class AppModel {
 
     /// 圆环弹层打开时按需拉取构成占比；只读会话返回不可用原因。
     func loadContextBreakdown() async {
-        guard readyClient != nil, selectedSessionID != nil, !isLoadingContextBreakdown else { return }
+        guard readyClient != nil,
+              let sessionID = selectedSessionID,
+              !isLoadingContextBreakdown else { return }
         isLoadingContextBreakdown = true
         defer { isLoadingContextBreakdown = false }
         guard let client = readyClient else { return }
         do {
-            contextBreakdown = try await client.request("session.contextBreakdown")
+            let result: ContextBreakdownResult = try await client.request("session.contextBreakdown")
+            guard selectedSessionID == sessionID else { return }
+            contextBreakdown = result
         } catch {
+            guard selectedSessionID == sessionID else { return }
             contextBreakdown = nil
         }
     }
@@ -4854,8 +5783,8 @@ final class AppModel {
         activity.currentRunState = state
         currentSessionRunID = state.phase.isActive ? state.runID : nil
         isStreaming = state.phase.isActive
-        settlePendingSteer(for: state)
-        recordCompletedRun(state)
+        settleSteerReceipts(for: state)
+        recordCompletedRun(state, notify: true)
         scheduleFollowUpSettlement(for: state)
         if let summary = inspection?.summary, summary.id == state.sessionID {
             replaceVisibleSummary(summary)
@@ -4880,7 +5809,7 @@ final class AppModel {
         )
         currentSessionRunID = nil
         isStreaming = false
-        if let state = activity.currentRunState { settlePendingSteer(for: state) }
+        if let state = activity.currentRunState { settleSteerReceipts(for: state) }
     }
 
     func handle(_ event: HostEvent) {
@@ -4906,6 +5835,13 @@ final class AppModel {
             if let runID = data?["runId"]?.stringValue { currentSessionRunID = runID }
             isStreaming = true
             clearStreamingPresentation()
+        case "queue_update":
+            let sessionID = data?["sessionId"]?.stringValue ?? selectedSessionID
+            let runID = data?["runId"]?.stringValue ?? currentSessionRunID
+            let steering = data?["steering"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            applySteeringQueueUpdate(sessionID: sessionID, runID: runID, messages: steering)
+        case "entry_appended":
+            settleSteerReceiptForPersistedEntry(data)
         case "message_start":
             if data?["message"]?["role"]?.stringValue == "assistant" {
                 streamingText = ""

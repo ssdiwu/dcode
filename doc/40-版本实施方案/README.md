@@ -2,7 +2,7 @@
 
 本目录保存已经确认、用于指导当前版本交付与验收的 PRD 和专项规格，也是发布、实现候选、本地回归基线、人工验收与持续回归状态的唯一文档索引。具体测试与人工证据保留在对应 PRD 的 Verification Record（验证记录）中，其他 README 只链接本页，不复制动态状态。文档完成后只要仍是有效验收基准，就继续保留在本目录；仅在被取代、放弃或只供追溯时归档。
 
-`0.0.17`（`837af03`）、`0.0.18`（`617249e`）、`0.0.19`（`8f0c319`）已提交到 `main`（其后 `5ad3b06` 为首页品牌资产追加，HEAD 以实际 checkout 为准）；`0.0.20` 已按 0021 PRD 完成实现与自动门禁并提交到 `main`。`0.0.25` 的 Project 目录迁移与 Composer 收口、`0.0.26` 的 Sol 自迭代候选闭环已分别形成公开源码标签 `v0.0.25` 与 `v0.0.26`；`0.0.26` 门禁为 Swift `260/260`、Host `148/148`，Finder 风格受限 `PATH` 的本机候选构建与隔离网页 eval `3/3` 通过。真实 Pi / Sol 原生重启闭环、人工视觉与二进制发布仍未执行。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；各 PRD 未勾选的人工场景仍是当前验收边界。
+`0.0.17`（`837af03`）、`0.0.18`（`617249e`）、`0.0.19`（`8f0c319`）已提交到 `main`（其后 `5ad3b06` 为首页品牌资产追加，HEAD 以实际 checkout 为准）；`0.0.20` 已按 0021 PRD 完成实现与自动门禁并提交到 `main`。`0.0.25` 的 Project 目录迁移与 Composer 收口、`0.0.26` 的 Sol 自迭代候选闭环已分别形成公开源码标签 `v0.0.25` 与 `v0.0.26`；`0.0.26` 门禁为 Swift `260/260`、Host `148/148`，Finder 风格受限 `PATH` 的本机候选构建与隔离网页 eval `3/3` 通过。`0.0.27` 自进化运行回执与 Composer 修正当前仍是 `main@16e2897` 之上的未提交工作树：Swift `331/331`、Host `148/148`、签名 Local-only Candidate 与五轮网页 eval 已通过，12 个有效外部使用 case 收敛；Composer 自动回归覆盖模型 / 推理 / OpenAI-only Fast、原生菜单、Skill 普通名称、剪贴板图片、连续 steer、Thinking 展开、完成通知与独立重启助手；重启事务覆盖旧 active 无 Helper 的首次自举、交换前 intent、失败身份恢复、直接会话恢复草稿竞态与 LaunchServices 再拉起。真实原生菜单与真实 Cmd-V 已在隔离原生 QA 副本通过；系统通知、完整 Self-build 自动再拉起、`0.0.26 → 0.0.27` Bootstrap、后续 Full Receipt、人工深浅色 / VoiceOver 与二进制发布仍未完成。这里的 Published Source Tag（已发布源码标签）只证明源码可取回，不等于人工验收、GitHub Release、签名分发或真实设备行为已经成立；各 PRD 未勾选的人工场景仍是当前验收边界。
 
 ### 当前已知缺口
 
@@ -12,6 +12,8 @@
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
+| [0025-0.0.27 Composer 模型选择与原生能力菜单修正产品需求](0025-0.0.27-Composer-模型选择与原生能力菜单修正产品需求.md) | Local implementation on `main@16e2897`（未提交 `0.0.27` 工作树） | Automated / Candidate Passed；Native Menu + Cmd-V Manual Pending | 恢复独立模型名选择，把 `+` 改为紧凑原生 Menu，Skill 显示普通名称，并接通剪贴板图片附件。 |
+| [0024-0.0.27 自进化运行回执与安全恢复产品需求](0024-0.0.27-自进化运行回执与安全恢复产品需求.md) | Local implementation on `main@16e2897`（未提交 `0.0.27` 工作树） | Automated / Candidate / Web Eval Passed；Native Manual Pending | 自进化运行身份、Bootstrap / Full Assurance、重启恢复回执、人工验收与连续门禁。 |
 | [0023-0.0.26 Sol 自迭代候选闭环产品需求](0023-0.0.26-Sol-自迭代候选闭环产品需求.md) | Published Source Tag `v0.0.26` | Automated / Web Eval Passed；Native Manual Pending | 动态源码 checkout、脏工作树本机候选、测试门禁、候选来源清单与重启后核对。 |
 | [0022-0.0.25 项目目录迁移与 Composer 收口产品需求](0022-0.0.25-项目目录迁移与-Composer-收口产品需求.md) | Published Source Tag `v0.0.25` | Automated Passed；Manual Pending | Project 与目录一一对应、保持 Session ID 的 `cwd` 迁移、文件迁移二次选择，以及 Composer 的项目优先与能力入口收口。 |
 | [0021-0.0.20 Composer 命令面板与附件产品需求](0021-0.0.20-Composer-命令面板与附件产品需求.md) | Committed `main`（tag 待人工验收后打） | Automated Passed；Manual Pending |

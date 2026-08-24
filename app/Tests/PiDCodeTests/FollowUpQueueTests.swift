@@ -45,6 +45,27 @@ final class FollowUpQueueTests: XCTestCase {
     }
 
     @MainActor
+    func testSteerRPCInFlightKeepsTheNextDraftEditableButNotSubmittable() async throws {
+        let root = temporaryDirectory("steer-rpc-editable")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, queueURL: root.appending(path: "queues.json"))
+        model.isSendingRequest = true
+        model.followUp.steerSubmissionInFlight = SteerSubmission(
+            sessionID: "session-a",
+            runID: "run-steer-edit",
+            steerID: "steer-in-flight",
+            draft: "第一条介入",
+            draftTarget: .path(sessionID: "session-a", pathID: "root"),
+            images: []
+        )
+
+        XCTAssertTrue(model.canEditComposerText)
+        XCTAssertFalse(model.canSubmitComposerText(deliveryMode: RunningMessageDeliveryMode.steer))
+        model.updateComposerText("RPC 尚未返回时输入的下一段上下文")
+        XCTAssertEqual(model.composerText, "RPC 尚未返回时输入的下一段上下文")
+    }
+
+    @MainActor
     func testAppCanReloadQueueAfterThePreservedStoreIsRepaired() async throws {
         let root = temporaryDirectory("reload-repaired")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -231,14 +252,14 @@ final class FollowUpQueueTests: XCTestCase {
         XCTAssertTrue(metadataLoaded)
         prepareRunningSession(model, runID: "run-steer")
         let target = try XCTUnwrap(model.currentDraftTarget)
-        model.followUp.pendingSteer = PendingSteerDraft(
+        model.followUp.acceptedSteerReceipts = [SteerSubmission(
             sessionID: "session-a",
             runID: "run-steer",
             steerID: "steer-a",
             draft: "必须恢复的介入正文",
             draftTarget: target,
-            accepted: true
-        )
+            images: []
+        )]
         model.composerText = ""
 
         model.handle(HostEvent(name: "session.runStateChanged", data: .object([
@@ -252,8 +273,82 @@ final class FollowUpQueueTests: XCTestCase {
             "retryable": .bool(false),
         ])))
 
-        XCTAssertNil(model.followUp.pendingSteer)
+        XCTAssertTrue(model.followUp.acceptedSteerReceipts.isEmpty)
         XCTAssertEqual(model.composerText, "必须恢复的介入正文")
+    }
+
+    @MainActor
+    func testQueueUpdateAppliesSteersByOrderAndMultiplicityBeforeAbnormalRecovery() async throws {
+        let root = temporaryDirectory("steer-queue-update")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, queueURL: root.appending(path: "queues.json"))
+        let metadataLoaded = await model.loadSessionMetadata()
+        XCTAssertTrue(metadataLoaded)
+        prepareRunningSession(model, runID: "run-queue-update")
+        let target = try XCTUnwrap(model.currentDraftTarget)
+        model.followUp.acceptedSteerReceipts = [
+            SteerSubmission(sessionID: "session-a", runID: "run-queue-update", steerID: "a1", draft: "重复", draftTarget: target, images: []),
+            SteerSubmission(sessionID: "session-a", runID: "run-queue-update", steerID: "a2", draft: "重复", draftTarget: target, images: []),
+            SteerSubmission(sessionID: "session-a", runID: "run-queue-update", steerID: "b1", draft: "第三", draftTarget: target, images: []),
+        ]
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("queue_update"),
+            "sessionId": .string("session-a"),
+            "runId": .string("run-queue-update"),
+            "steering": .array([.string("重复"), .string("第三")]),
+            "followUp": .array([]),
+        ])))
+        XCTAssertEqual(model.followUp.acceptedSteerReceipts.map(\.steerID), ["a2", "b1"])
+
+        model.handle(HostEvent(name: "session.runStateChanged", data: .object([
+            "sessionId": .string("session-a"),
+            "runId": .string("run-queue-update"),
+            "phase": .string("aborted"),
+            "startedAt": .string(timestamp),
+            "updatedAt": .string(timestamp),
+            "completedAt": .string(timestamp),
+            "inputPersisted": .bool(true),
+            "retryable": .bool(false),
+        ])))
+        XCTAssertTrue(model.followUp.acceptedSteerReceipts.isEmpty)
+        XCTAssertEqual(model.composerText, "重复\n\n第三")
+    }
+
+    @MainActor
+    func testAppliedOldSteerDoesNotClearTheFreshComposerDraftOnDisk() async throws {
+        let root = temporaryDirectory("steer-fresh-draft")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draftURL = root.appending(path: "drafts.json")
+        let model = AppModel(
+            projectStore: ProjectStore(fileURL: root.appending(path: "projects.json")),
+            sessionDraftStore: SessionDraftStore(fileURL: draftURL),
+            sessionArchiveStore: SessionArchiveStore(fileURL: root.appending(path: "archives.json")),
+            sessionPinStore: SessionPinStore(fileURL: root.appending(path: "pins.json")),
+            sessionChangeStore: SessionChangeStore(fileURL: root.appending(path: "changes.json")),
+            followUpQueueStore: FollowUpQueueStore(fileURL: root.appending(path: "queues.json")),
+            activityAttentionStore: ActivityAttentionStore(fileURL: root.appending(path: "activity.json"))
+        )
+        let metadataLoaded = await model.loadSessionMetadata()
+        XCTAssertTrue(metadataLoaded)
+        prepareRunningSession(model, runID: "run-fresh")
+        let target = try XCTUnwrap(model.currentDraftTarget)
+        model.followUp.acceptedSteerReceipts = [SteerSubmission(
+            sessionID: "session-a", runID: "run-fresh", steerID: "old",
+            draft: "旧介入", draftTarget: target, images: []
+        )]
+
+        model.updateComposerText("新的未发送上下文")
+        model.handle(HostEvent(name: "session.event", data: .object([
+            "type": .string("queue_update"), "sessionId": .string("session-a"),
+            "runId": .string("run-fresh"), "steering": .array([]), "followUp": .array([]),
+        ])))
+        try? await Task.sleep(for: .milliseconds(300))
+
+        let restored = try await SessionDraftStore(fileURL: draftURL).load()
+        XCTAssertEqual(
+            restored.records.first(where: { $0.target.stableID == target.stableID })?.text,
+            "新的未发送上下文"
+        )
     }
 
     @MainActor
@@ -275,14 +370,14 @@ final class FollowUpQueueTests: XCTestCase {
         prepareRunningSession(model, runID: "run-steer-shutdown")
         let target = try XCTUnwrap(model.currentDraftTarget)
         model.updateComposerText("关闭前必须保留")
-        model.followUp.pendingSteer = PendingSteerDraft(
+        model.followUp.acceptedSteerReceipts = [SteerSubmission(
             sessionID: "session-a",
             runID: "run-steer-shutdown",
             steerID: "steer-shutdown",
             draft: "关闭前必须保留",
             draftTarget: target,
-            accepted: true
-        )
+            images: []
+        )]
         model.composerText = ""
 
         await model.shutdown()
@@ -600,6 +695,7 @@ final class FollowUpQueueTests: XCTestCase {
                 entries.append(assistant)
                 streaming = False
             wire_message = assistant["message"]
+            emit_event("session.event", {"type": "queue_update", "sessionId": session_id, "runId": prompt_id, "steering": [], "followUp": []})
             emit_event("session.event", {"type": "agent_end", "sessionId": session_id, "runId": prompt_id, "willRetry": False, "messages": [wire_message]})
             emit_event("session.event", {"type": "agent_settled", "sessionId": session_id, "runId": prompt_id})
             run_state = {
@@ -615,7 +711,7 @@ final class FollowUpQueueTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.26", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.27", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":
@@ -658,9 +754,18 @@ final class FollowUpQueueTests: XCTestCase {
                 threading.Thread(target=finish_run, args=(ordinal, prompt_id, user_id), daemon=True).start()
             elif method == "session.steer":
                 with state_lock:
-                    steers.append(params["message"])
-                    persist_steers()
                     active_run_id = run_state["runId"] if run_state else ""
+                    steers.append({
+                        "message": params["message"],
+                        "steerId": params["steerId"],
+                        "runId": active_run_id,
+                    })
+                    persist_steers()
+                    steering_queue = [item["message"] for item in steers if item["runId"] == active_run_id]
+                emit_event("session.event", {
+                    "type": "queue_update", "sessionId": session_id,
+                    "runId": active_run_id, "steering": steering_queue, "followUp": [],
+                })
                 result = {"accepted": True, "steerId": params["steerId"], "runId": active_run_id}
             else:
                 result = {"shuttingDown": True}
@@ -692,6 +797,7 @@ final class FollowUpQueueTests: XCTestCase {
         await model.sendPrompt()
         let firstRunStarted = await waitUntil { model.pendingPrompt == nil && model.isStreaming }
         XCTAssertTrue(firstRunStarted)
+        let firstRunID = try XCTUnwrap(model.currentSessionRunID)
 
         model.updateComposerText("  second  ")
         await model.sendPrompt()
@@ -699,9 +805,12 @@ final class FollowUpQueueTests: XCTestCase {
         await model.sendPrompt()
         XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["  second  ", "third"])
 
-        model.updateComposerText("change direction now")
-        await model.sendPrompt(deliveryMode: .steer)
-        XCTAssertTrue(model.followUp.pendingSteer?.accepted == true)
+        for text in ["change direction now", "add one more constraint", "finish with a test"] {
+            model.updateComposerText(text)
+            await model.sendPrompt(deliveryMode: .steer)
+            XCTAssertNil(model.followUp.steerSubmissionInFlight)
+        }
+        XCTAssertEqual(model.followUp.acceptedSteerReceipts.count, 3)
         XCTAssertEqual(model.currentFollowUpQueue?.items.map(\.text), ["  second  ", "third"])
 
         FileManager.default.createFile(atPath: agentDirectory.appending(path: "finish-first").path, contents: Data())
@@ -709,7 +818,7 @@ final class FollowUpQueueTests: XCTestCase {
             model.followUp.queues.isEmpty
                 && !model.isStreaming
                 && model.pendingPrompt == nil
-                && model.followUp.pendingSteer == nil
+                && model.followUp.acceptedSteerReceipts.isEmpty
         }
         XCTAssertTrue(queueDrained)
         XCTAssertEqual(model.composerText, "")
@@ -718,7 +827,10 @@ final class FollowUpQueueTests: XCTestCase {
         let prompts = try JSONDecoder().decode([String].self, from: promptData)
         XCTAssertEqual(prompts, ["first", "  second  ", "third"])
         let steerData = try Data(contentsOf: agentDirectory.appending(path: "steers.json"))
-        XCTAssertEqual(try JSONDecoder().decode([String].self, from: steerData), ["change direction now"])
+        let steerRecords = try JSONDecoder().decode([[String: String]].self, from: steerData)
+        XCTAssertEqual(steerRecords.map { $0["message"] }, ["change direction now", "add one more constraint", "finish with a test"])
+        XCTAssertEqual(Set(steerRecords.compactMap { $0["steerId"] }).count, 3)
+        XCTAssertEqual(Set(steerRecords.compactMap { $0["runId"] }), [firstRunID])
         await model.shutdown()
     }
 

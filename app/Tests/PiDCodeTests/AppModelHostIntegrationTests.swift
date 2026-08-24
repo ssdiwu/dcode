@@ -6,6 +6,356 @@ import XCTest
 /// Fake-host 集成测试：覆盖 AppModel 与宿主协议交互的核心状态机。
 @MainActor
 final class AppModelHostIntegrationTests: XCTestCase {
+    func testDirectSessionOpenParksAHomeDraftBeforeApplyingTheRealSession() async throws {
+        let harness = HostTestHarness()
+        let sessionID = "session-direct-open"
+        let timestamp = "2026-08-24T04:00:00.000Z"
+        let summary = HostTestHarness.sessionSummaryValue(id: sessionID)
+        let entries: [JSONValue] = [
+            .object([
+                "type": .string("message"), "id": .string("user-direct"), "parentId": .null,
+                "timestamp": .string(timestamp),
+                "message": .object(["role": .string("user"), "content": .string("hello")]),
+            ]),
+            .object([
+                "type": .string("message"), "id": .string("assistant-direct"),
+                "parentId": .string("user-direct"), "timestamp": .string(timestamp),
+                "message": .object([
+                    "role": .string("assistant"),
+                    "content": .array([.object(["type": .string("text"), "text": .string("done")])]),
+                    "stopReason": .string("stop"),
+                ]),
+            ]),
+        ]
+        let snapshot: JSONValue = .object([
+            "summary": summary,
+            "header": .object([
+                "type": .string("session"), "version": .number(3),
+                "id": .string(sessionID), "timestamp": .string(timestamp),
+                "cwd": .string(harness.root.path),
+            ]),
+            "parentSessionId": .null,
+            "leafId": .string("assistant-direct"),
+            "currentPathId": .string("leaf:assistant-direct"),
+            "selectedPathId": .string("leaf:assistant-direct"),
+            "paths": .array([]), "entries": .array(entries),
+            "context": .object([
+                "messageCount": .number(2), "model": .null, "thinkingLevel": .string("off"),
+            ]),
+            "activePlan": .null, "activeProposal": .null,
+        ])
+        let state: JSONValue = .object([
+            "mode": .string("writable"), "sessionId": .string(sessionID),
+            "sessionFile": .string(harness.root.appending(path: "session.jsonl").path),
+            "sessionName": .string("Direct Open"), "cwd": .string(harness.root.path),
+            "model": .null, "thinkingLevel": .string("off"), "activePlan": .null,
+            "isStreaming": .bool(false), "runState": .null,
+            "pendingMessageCount": .number(0), "contextUsage": .null, "fastMode": .null,
+            "writable": .bool(true), "conflict": .null, "isCompacting": .bool(false),
+        ])
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "session.list": .object(["sessions": .array([summary])])
+            case "session.open": .object([
+                "created": .bool(false), "mode": .string("writable"),
+                "snapshot": snapshot, "state": state, "extensions": .null,
+            ])
+            case "session.getModels": .object([
+                "models": .array([]), "defaultModel": .null,
+                "defaultThinkingLevel": .string("off"),
+            ])
+            case "session.getThinkingLevels": .object(["levels": .array([.string("off")])])
+            case "session.getCommands": .object(["commands": .array([])])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        let projectID = try await harness.model.saveProject(
+            id: nil,
+            name: "QA",
+            directoryURL: harness.root
+        )
+        await harness.model.createSession(at: harness.root, projectID: projectID)
+        XCTAssertTrue(harness.model.isNewSessionDraftActive)
+        XCTAssertNil(harness.model.addComposerImageAttachment(
+            fileName: "home-draft.png",
+            mimeType: "image/png",
+            data: Data([0x89, 0x50, 0x4E, 0x47])
+        ))
+        XCTAssertEqual(harness.model.composerImages.count, 1)
+
+        await harness.model.handleCompletionNotificationResponse([
+            AnyHashable("completionID"): "completion-direct",
+            AnyHashable("sessionID"): sessionID,
+            AnyHashable("entryID"): "assistant-direct",
+        ])
+
+        XCTAssertEqual(harness.model.selectedSessionID, sessionID)
+        XCTAssertFalse(harness.model.isNewSessionDraftActive)
+        XCTAssertNil(harness.model.newSessionDraftProject)
+        XCTAssertTrue(harness.model.composerImages.isEmpty, "新会话内存附件不得进入恢复的真实 Session")
+        XCTAssertEqual(harness.model.conversationTarget?.entryID, "assistant-direct")
+        await harness.model.shutdown()
+    }
+
+    func testActiveRunAllowsRuntimeSettingsForTheNextModelBoundary() async throws {
+        let harness = HostTestHarness()
+        let oldModel = HostModel(
+            provider: "openai-codex",
+            id: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            reasoning: true,
+            contextWindow: 272_000,
+            maxTokens: 32_000,
+            thinkingLevels: ["off", "high", "max"],
+            fastModeSupported: true
+        )
+        let nextModel = HostModel(
+            provider: "openai-codex",
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            reasoning: true,
+            contextWindow: 272_000,
+            maxTokens: 32_000,
+            thinkingLevels: ["off", "high", "max"],
+            fastModeSupported: true
+        )
+        let runState = SessionRunState(
+            sessionID: "session-runtime",
+            runID: "run-runtime",
+            phase: .running,
+            startedAt: "2026-08-24T03:00:00Z",
+            updatedAt: "2026-08-24T03:00:01Z",
+            completionID: nil,
+            completionEntryID: nil,
+            completedAt: nil,
+            inputPersisted: true,
+            retryable: false
+        )
+        let nextModelValue: JSONValue = .object([
+            "provider": .string(nextModel.provider),
+            "id": .string(nextModel.id),
+            "name": .string(nextModel.name!),
+            "reasoning": .bool(true),
+            "contextWindow": .number(272_000),
+            "maxTokens": .number(32_000),
+            "thinkingLevels": .array([.string("off"), .string("high"), .string("max")]),
+            "fastModeSupported": .bool(true),
+        ])
+        let runValue: JSONValue = try JSONValue.jsonString("""
+        {"sessionId":"session-runtime","runId":"run-runtime","phase":"running",
+         "startedAt":"2026-08-24T03:00:00Z","updatedAt":"2026-08-24T03:00:01Z",
+         "inputPersisted":true,"retryable":false}
+        """)
+        let stateValue: JSONValue = .object([
+            "mode": .string("writable"),
+            "sessionId": .string("session-runtime"),
+            "sessionFile": .string("/tmp/session-runtime.jsonl"),
+            "sessionName": .string("Runtime"),
+            "cwd": .string("/tmp"),
+            "model": nextModelValue,
+            "thinkingLevel": .string("max"),
+            "activePlan": .null,
+            "isStreaming": .bool(true),
+            "runState": runValue,
+            "pendingMessageCount": .number(0),
+            "contextUsage": .null,
+            "fastMode": .object([
+                "enabled": .bool(true), "active": .bool(true),
+                "provider": .string("openai-codex"), "model": .string("gpt-5.6-sol"),
+                "requestedServiceTier": .string("priority"), "reason": .string("supported"),
+            ]),
+            "writable": .bool(true),
+            "conflict": .null,
+        ])
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "session.list": .object(["sessions": .array([])])
+            case "session.setModel": .object(["model": nextModelValue])
+            case "session.setThinking": .object(["level": .string("max")])
+            case "session.setFastMode": .object([
+                "enabled": .bool(true), "active": .bool(true),
+                "provider": .string("openai-codex"), "model": .string("gpt-5.6-sol"),
+                "requestedServiceTier": .string("priority"), "reason": .string("supported"),
+            ])
+            case "session.getState": stateValue
+            case "session.getModels": .object([
+                "models": .array([nextModelValue]), "defaultModel": .null,
+                "defaultThinkingLevel": .string("max"),
+            ])
+            case "session.getThinkingLevels": .object([
+                "levels": .array([.string("off"), .string("high"), .string("max")]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-runtime"
+        harness.model.hostState = HostState(
+            mode: "writable", sessionId: "session-runtime",
+            sessionFile: "/tmp/session-runtime.jsonl", sessionName: "Runtime", cwd: "/tmp",
+            model: oldModel, thinkingLevel: "high", activePlan: nil,
+            isStreaming: true, runState: runState, pendingMessageCount: 0,
+            contextUsage: nil,
+            fastMode: FastModeState(
+                enabled: false, active: false, provider: "openai-codex",
+                model: "gpt-5.6-luna", requestedServiceTier: "priority", reason: "disabled"
+            ),
+            writable: true, conflict: nil, isCompacting: false
+        )
+        harness.model.activity.currentRunState = runState
+        harness.model.isStreaming = true
+        harness.model.modelSettings.models = [oldModel, nextModel]
+        harness.model.modelSettings.thinkingLevels = ["off", "high", "max"]
+
+        XCTAssertTrue(harness.model.canMutateRuntimeSettings, "普通 running 必须允许下一模型边界设置")
+        harness.model.activity.currentRunState = SessionRunState(
+            sessionID: "session-runtime",
+            runID: "run-runtime",
+            phase: .waitingForUser,
+            waitingFor: .input,
+            startedAt: "2026-08-24T03:00:00Z",
+            updatedAt: "2026-08-24T03:00:02Z",
+            completionID: nil,
+            completionEntryID: nil,
+            completedAt: nil,
+            inputPersisted: true,
+            retryable: false
+        )
+        XCTAssertFalse(harness.model.canMutateRuntimeSettings, "结构化等待期间不得改写运行参数")
+        harness.model.activity.currentRunState = runState
+        harness.model.extensionDialogs = [try XCTUnwrap(ExtensionDialog(data: .object([
+            "requestId": .string("runtime-dialog"),
+            "method": .string("input"),
+            "title": .string("需要确认"),
+        ])))]
+        XCTAssertFalse(harness.model.canMutateRuntimeSettings, "结构化对话短窗口同样必须冻结")
+        harness.model.extensionDialogs = []
+        XCTAssertTrue(harness.model.selfBuild.beginRestartPreparation())
+        XCTAssertFalse(harness.model.canMutateRuntimeSettings, "Self-build 保存与交换期间不得让模型事实漂移")
+        harness.model.selfBuild.failRestartPreparation("测试结束")
+        harness.model.selfBuild.phase = .idle
+        XCTAssertTrue(harness.model.canMutateRuntimeSettings)
+
+        await harness.model.setModel(nextModel)
+        await harness.model.setThinkingLevel("max")
+        await harness.model.setComposerFastModeEnabled(true)
+
+        let methods = await harness.client.recordedMethods()
+        XCTAssertTrue(methods.contains("session.setModel"))
+        XCTAssertTrue(methods.contains("session.setThinking"))
+        XCTAssertTrue(methods.contains("session.setFastMode"))
+    }
+
+    func testExistingSessionModelSwitchRefreshesThinkingLevels() async throws {
+        let harness = HostTestHarness()
+        let oldModel = HostModel(
+            provider: "openai-codex",
+            id: "reasoning-model",
+            name: "Reasoning Model",
+            reasoning: true,
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            thinkingLevels: ["off", "high"],
+            fastModeSupported: false
+        )
+        let newModel = HostModel(
+            provider: "local",
+            id: "off-only",
+            name: "Off Only",
+            reasoning: false,
+            contextWindow: 32_000,
+            maxTokens: 4_096,
+            thinkingLevels: ["off"],
+            fastModeSupported: false
+        )
+        let newModelValue: JSONValue = .object([
+            "provider": .string(newModel.provider),
+            "id": .string(newModel.id),
+            "name": .string(newModel.name!),
+            "reasoning": .bool(false),
+            "contextWindow": .number(32_000),
+            "maxTokens": .number(4_096),
+            "thinkingLevels": .array([.string("off")]),
+            "fastModeSupported": .bool(false),
+        ])
+        let newState: JSONValue = .object([
+            "mode": .string("writable"),
+            "sessionId": .string("session-model-switch"),
+            "sessionFile": .string("/tmp/session-model-switch.jsonl"),
+            "sessionName": .null,
+            "cwd": .string("/tmp"),
+            "model": newModelValue,
+            "thinkingLevel": .string("off"),
+            "activePlan": .null,
+            "isStreaming": .bool(false),
+            "pendingMessageCount": .number(0),
+            "contextUsage": .null,
+            "fastMode": .null,
+            "writable": .bool(true),
+            "conflict": .null,
+            "runState": .null,
+        ])
+        await harness.client.script { method, params in
+            switch method {
+            case "host.hello":
+                return HostTestHarness.helloValue()
+            case "session.list":
+                return .object(["sessions": .array([])])
+            case "session.setModel":
+                guard params["provider"] == .string("local"),
+                      params["modelId"] == .string("off-only") else {
+                    throw PiHostClientError.invalidEnvelope("模型参数不匹配")
+                }
+                return .object(["model": newModelValue])
+            case "session.getState":
+                return newState
+            case "session.getModels":
+                return .object([
+                    "models": .array([newModelValue]),
+                    "defaultModel": .null,
+                    "defaultThinkingLevel": .string("off"),
+                ])
+            case "session.getThinkingLevels":
+                return .object(["levels": .array([.string("off")])])
+            default:
+                return .object([:])
+            }
+        }
+        await harness.model.start()
+        harness.model.selectedSessionID = "session-model-switch"
+        harness.model.hostState = HostState(
+            mode: "writable",
+            sessionId: "session-model-switch",
+            sessionFile: "/tmp/session-model-switch.jsonl",
+            sessionName: nil,
+            cwd: "/tmp",
+            model: oldModel,
+            thinkingLevel: "high",
+            activePlan: nil,
+            isStreaming: false,
+            runState: nil,
+            pendingMessageCount: 0,
+            contextUsage: nil,
+            fastMode: nil,
+            writable: true,
+            conflict: nil,
+            isCompacting: nil
+        )
+        harness.model.modelSettings.models = [oldModel, newModel]
+        harness.model.modelSettings.thinkingLevels = ["off", "high"]
+
+        await harness.model.setModel(newModel)
+
+        XCTAssertEqual(harness.model.composerModel?.qualifiedName, "local/off-only")
+        XCTAssertEqual(harness.model.composerThinkingLevels, ["off"])
+        XCTAssertEqual(harness.model.composerThinkingLevel, "off")
+        let methods = await harness.client.recordedMethods()
+        XCTAssertTrue(methods.contains("session.getThinkingLevels"))
+    }
+
     func testStartPerformsHandshakeAndEntersReady() async throws {
         let harness = HostTestHarness()
         await harness.installDefaultScript()
@@ -281,6 +631,28 @@ final class AppModelHostIntegrationTests: XCTestCase {
             harness.model.hostDiagnosticLog.last?.message,
             "扩展状态提示：pi-marketplace loaded — search/audit/install pi packages"
         )
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
+                "message": .string("🛒 pi-marketplace loaded — search/audit/install pi packages"),
+                "level": .string("info"),
+            ])
+        ))
+        XCTAssertNil(harness.model.notice, "带装饰 emoji 的 marketplace 就绪广播仍不得弹横幅")
+        XCTAssertEqual(
+            harness.model.hostDiagnosticLog.last?.message,
+            "扩展状态提示：🛒 pi-marketplace loaded — search/audit/install pi packages"
+        )
+
+        await harness.client.emit(HostEvent(
+            name: "extension.notification",
+            data: .object([
+                "message": .string("pi-sense active — image handoff=off"),
+                "level": .string("info"),
+            ])
+        ))
+        XCTAssertNil(harness.model.notice, "pi-sense 能力状态广播只属于诊断")
 
         await harness.client.emit(HostEvent(
             name: "extension.notification",

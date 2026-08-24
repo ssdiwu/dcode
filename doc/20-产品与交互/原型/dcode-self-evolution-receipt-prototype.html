@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>D Code 0.0.27 自进化运行回执原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: oklch(97.8% 0.004 80);
+      --window: oklch(99.2% 0.003 80);
+      --sidebar: oklch(94.5% 0.006 255);
+      --ink: oklch(22% 0.012 255);
+      --secondary: oklch(52% 0.012 255);
+      --tertiary: oklch(65% 0.008 255);
+      --line: oklch(87% 0.008 255);
+      --soft: oklch(96.2% 0.008 255);
+      --accent: oklch(59% 0.19 252);
+      --accent-soft: oklch(95% 0.035 252);
+      --success: oklch(52% 0.135 155);
+      --success-soft: oklch(95% 0.03 155);
+      --warning: oklch(58% 0.14 62);
+      --warning-soft: oklch(95.5% 0.035 62);
+      --danger: oklch(55% 0.17 25);
+      --danger-soft: oklch(95% 0.03 25);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 980px; background: var(--canvas); color: var(--ink); }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid color-mix(in oklch, var(--accent) 30%, transparent); outline-offset: 2px; }
+    .prototype-bar { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; font-size: 12px; color: var(--secondary); }
+    .prototype-bar strong { color: var(--ink); }
+    .prototype-bar button { border: 0; background: transparent; color: var(--secondary); cursor: pointer; }
+    .window { width: min(1220px, calc(100vw - 48px)); height: calc(100vh - 58px); min-height: 660px; margin: 0 auto 24px; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--window); box-shadow: 0 18px 52px color-mix(in oklch, var(--ink) 12%, transparent); }
+    .titlebar { height: 46px; display: grid; grid-template-columns: 110px 1fr 110px; align-items: center; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .lights { display: flex; gap: 8px; padding-left: 18px; }
+    .light { width: 12px; height: 12px; border-radius: 50%; }
+    .light:nth-child(1) { background: oklch(67% 0.2 26); }
+    .light:nth-child(2) { background: oklch(79% 0.16 82); }
+    .light:nth-child(3) { background: oklch(72% 0.16 150); }
+    .titlebar strong { text-align: center; font-weight: 600; }
+    .shell { height: calc(100% - 46px); display: grid; grid-template-columns: 244px 1fr; }
+    .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 20px 12px; }
+    .sidebar-label { margin: 0 10px 10px; color: var(--tertiary); font-size: 11px; }
+    .nav-row { width: 100%; min-height: 38px; display: flex; align-items: center; gap: 11px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; cursor: default; }
+    .nav-row span { width: 18px; color: var(--secondary); text-align: center; }
+    .nav-row.active { background: var(--window); font-weight: 600; box-shadow: 0 1px 2px color-mix(in oklch, var(--ink) 8%, transparent); }
+    main { overflow: auto; padding: 32px 48px 56px; }
+    .page { max-width: 820px; margin: 0 auto; }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+    h1 { margin: 0 0 7px; font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; }
+    .page-head p { margin: 0; max-width: 62ch; color: var(--secondary); font-size: 14px; line-height: 1.55; }
+    .model-pill { white-space: nowrap; border-radius: 7px; padding: 7px 9px; background: var(--soft); color: var(--secondary); font-size: 12px; }
+    .group { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--window); margin-bottom: 16px; }
+    .primary-group { box-shadow: 0 8px 24px color-mix(in oklch, var(--ink) 7%, transparent); }
+    .group-row { padding: 16px 18px; border-top: 1px solid var(--line); }
+    .group-row:first-child { border-top: 0; }
+    .receipt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .eyebrow { margin: 0 0 4px; color: var(--secondary); font-size: 12px; font-weight: 600; }
+    .state-title { margin: 0; font-size: 18px; line-height: 1.3; }
+    .state-copy { margin: 6px 0 0; max-width: 62ch; color: var(--secondary); font-size: 13px; line-height: 1.5; }
+    .badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .badge { padding: 4px 7px; border-radius: 6px; background: var(--soft); color: var(--secondary); font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .badge.warning { background: var(--warning-soft); color: var(--warning); }
+    .badge.success { background: var(--success-soft); color: var(--success); }
+    .badge.danger { background: var(--danger-soft); color: var(--danger); }
+    .progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 4px; }
+    .step { min-width: 0; color: var(--tertiary); font-size: 11px; }
+    .step::before { content: ""; display: block; height: 3px; margin-bottom: 7px; border-radius: 2px; background: var(--line); }
+    .step.done { color: var(--success); }
+    .step.done::before { background: var(--success); }
+    .step.current { color: var(--accent); font-weight: 600; }
+    .step.current::before { background: var(--accent); }
+    .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .button { min-height: 34px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--window); color: var(--ink); cursor: pointer; }
+    .button:hover { background: var(--soft); }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: oklch(98% 0.004 252); font-weight: 600; }
+    .button.primary:hover { background: oklch(54% 0.19 252); }
+    .button.danger { color: var(--danger); }
+    .button:disabled { opacity: .48; cursor: default; }
+    .action-note { margin: 0; color: var(--secondary); font-size: 12px; line-height: 1.45; }
+    .action-note.warning { color: var(--warning); }
+    .receipt-facts { display: grid; grid-template-columns: 1fr auto; gap: 9px 20px; margin: 0; font-size: 12px; }
+    .receipt-facts dt { color: var(--secondary); }
+    .receipt-facts dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+    .details-toggle { min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--secondary); cursor: pointer; font-size: 12px; font-weight: 600; }
+    .details-toggle:hover { color: var(--ink); }
+    .technical-details[hidden] { display: none; }
+    .timeline { margin: 0; padding: 0; list-style: none; }
+    .timeline li { display: grid; grid-template-columns: 94px 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 12px; }
+    .timeline time { color: var(--tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .muted-group .group-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .muted-group strong { font-size: 13px; }
+    .muted-group small { display: block; margin-top: 3px; color: var(--secondary); line-height: 1.45; }
+    dialog { width: 470px; border: 1px solid var(--line); border-radius: 14px; padding: 0; color: var(--ink); background: var(--window); box-shadow: 0 24px 70px color-mix(in oklch, var(--ink) 20%, transparent); }
+    dialog::backdrop { background: color-mix(in oklch, var(--ink) 30%, transparent); }
+    .dialog-body { padding: 22px; }
+    .dialog-body h2 { margin: 0 0 8px; font-size: 18px; }
+    .dialog-body p { margin: 0 0 18px; color: var(--secondary); font-size: 13px; line-height: 1.55; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; }
+    .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); max-width: 520px; padding: 9px 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--ink); color: var(--window); font-size: 12px; opacity: 0; pointer-events: none; transition: opacity 180ms ease-out; }
+    .toast.show { opacity: 1; }
+    @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+  </style>
+</head>
+<body>
+  <div class="prototype-bar"><span><strong>可丢弃原型</strong> · 0.0.27 自进化运行回执</span><button id="reset" type="button">重置状态</button></div>
+  <div class="window">
+    <div class="titlebar"><div class="lights"><span class="light"></span><span class="light"></span><span class="light"></span></div><strong>D Code 设置</strong><span></span></div>
+    <div class="shell">
+      <aside class="sidebar" aria-label="设置导航">
+        <p class="sidebar-label">设置</p>
+        <button class="nav-row" type="button"><span>▦</span>模型</button>
+        <button class="nav-row" type="button"><span>⌁</span>本机资源</button>
+        <button class="nav-row" type="button"><span>◐</span>外观</button>
+        <button class="nav-row active" type="button"><span>↻</span>自进化</button>
+        <button class="nav-row" type="button"><span>ⓘ</span>关于 D Code</button>
+      </aside>
+      <main>
+        <div class="page">
+          <header class="page-head">
+            <div><h1>自进化</h1><p>安全切换到下一构建，恢复原 Session，再由你明确验收或回滚。</p></div>
+            <span class="model-pill">当前 Session · Sol</span>
+          </header>
+
+          <section class="group primary-group" aria-label="本次自进化">
+            <div class="group-row receipt-head">
+              <div><p class="eyebrow" id="assurance">完整回执</p><h2 class="state-title" id="state-title">候选已就绪</h2><p class="state-copy" id="state-copy"></p></div>
+              <div class="badges"><span class="badge warning">仅本机 · 不可分发</span><span class="badge" id="qualification">验收后 1/3</span></div>
+            </div>
+            <div class="group-row"><div class="progress" id="progress"></div></div>
+            <div class="group-row actions" id="actions"></div>
+            <div class="group-row"><button class="details-toggle" id="details-toggle" type="button" aria-expanded="false" aria-controls="technical-details">查看证据与构建详情</button></div>
+          </section>
+
+          <div class="technical-details" id="technical-details" hidden>
+            <section class="group" aria-label="证据与构建详情">
+              <div class="group-row">
+              <dl class="receipt-facts">
+                <dt>版本</dt><dd id="versions">0.0.27 → 0.0.28</dd>
+                <dt>Project / Session</dt><dd>dcode · session-a91f</dd>
+                <dt>实际模型</dt><dd>openai/gpt-5.6-sol</dd>
+                <dt>来源 digest</dt><dd>81a7f2d96b20</dd>
+                <dt>自动门禁</dt><dd>Swift ✓ · Host ✓</dd>
+                <dt>Candidate Manifest</dt><dd>匹配 · 签名有效</dd>
+              </dl>
+              <ul class="timeline" id="timeline"></ul>
+              </div>
+            </section>
+
+            <section class="group muted-group" aria-label="准备下一构建">
+              <div class="group-row"><div><strong>源码 Checkout</strong><small>/Users/diwu/Workspace/Codes/Apps/dcode · 未提交工作树 · 仅本机候选</small></div><button class="button" id="choose-source" type="button">选择…</button></div>
+              <div class="group-row"><div><strong>验证与构建</strong><small>Swift 与 Host 完整回归通过后才更新候选。</small></div><button class="button" id="rebuild-candidate" type="button">重新验证并构建</button></div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="restart-dialog"><div class="dialog-body"><h2>重启并继续本会话？</h2><p>D Code 会先保存完整重启请求，再原子替换 App。新构建恢复同一 Session 后仍需你人工验收。</p><div class="dialog-actions"><button class="button" id="restart-cancel" type="button">取消</button><button class="button primary" id="restart-confirm" type="button">重启并继续</button></div></div></dialog>
+  <dialog id="rollback-dialog"><div class="dialog-body"><h2>回滚上一构建？</h2><p>本次候选会标记为未通过，本轮不计入完整自进化循环。</p><div class="dialog-actions"><button class="button" id="rollback-cancel" type="button">取消</button><button class="button danger" id="rollback-confirm" type="button">回滚上一构建</button></div></div></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      let mode = params.get('mode') === 'bootstrap' ? 'bootstrap' : 'full';
+      let state = params.get('state') || (mode === 'bootstrap' ? 'session_restored' : 'candidate_ready');
+      const reason = params.get('reason') || 'active_run';
+      const initial = { mode, state };
+      let recoveryAfterRestore = false;
+      const restartDialog = document.querySelector('#restart-dialog');
+      const rollbackDialog = document.querySelector('#rollback-dialog');
+      const toast = document.querySelector('#toast');
+      const technicalDetails = document.querySelector('#technical-details');
+      const detailsToggle = document.querySelector('#details-toggle');
+      const fullLabels = ['重启请求', '新 App 启动', 'Session 恢复', '人工验收'];
+      const bootstrapLabels = ['重启前记录', '新 App 启动', 'Session 恢复', '人工验收'];
+
+      const data = {
+        candidate_ready: ['候选已就绪', '自动门禁与 Candidate Manifest 已核对。交换前会先保存完整重启请求。'],
+        restart_blocked: ['暂不能重启', reason === 'active_run' ? 'Sol 仍在运行或工具尚未收口。当前 App 没有被替换，本轮也不会计数。' : '当前状态尚不满足完整自进化门禁。'],
+        restart_requested: ['已记录重启请求', '完整回执已安全落盘，正在切换到候选。'],
+        app_started: ['新构建已启动', 'Candidate Manifest 已匹配，正在连接 Pi Host，尚未恢复原 Session。'],
+        session_restored: ['原 Session 已恢复', mode === 'bootstrap' ? '这是恢复后补建的引导回执。0.0.26 没有记录重启前检查，本次不计入三次完整循环。' : '完整重启链路已成立。只有你确认本机可继续使用后，本次才计入 1/3。'],
+        manual_accepted: ['本机验收完成', mode === 'bootstrap' ? '引导回执已收口，但仍不计入三次完整循环。' : '本次完整自进化循环已验收，当前为 1/3。'],
+        recovery_required: ['本次自进化需要处理', '新构建已启动，但原 Session 未恢复。回执和恢复意图仍在，可以重试或回滚。'],
+        rolled_back: ['已回滚上一构建', '候选未通过人工验收，本轮不计入完整自进化循环。']
+      };
+
+      function stageIndex() {
+        if (mode === 'bootstrap') {
+          return { app_started: 1, session_restored: 2, manual_accepted: 3, recovery_required: 2, rolled_back: -1 }[state] ?? 1;
+        }
+        return { candidate_ready: -1, restart_blocked: -1, restart_requested: 0, app_started: 1, session_restored: 2, manual_accepted: 3, recovery_required: 2, rolled_back: -1 }[state] ?? -1;
+      }
+
+      function stepClass(index, current) {
+        if (mode === 'bootstrap' && index === 0) return '';
+        if (state === 'rolled_back') {
+          if (mode === 'bootstrap') return index === 1 ? 'done' : '';
+          return index <= 1 ? 'done' : '';
+        }
+        return index < current ? 'done' : index === current ? 'current' : '';
+      }
+
+      function button(label, kind, handler) {
+        const el = document.createElement('button');
+        el.type = 'button'; el.className = `button ${kind || ''}`.trim(); el.textContent = label; el.addEventListener('click', handler); return el;
+      }
+
+      function note(text, warning = false) {
+        const el = document.createElement('p'); el.className = `action-note${warning ? ' warning' : ''}`; el.textContent = text; return el;
+      }
+
+      function showToast(message) {
+        toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 1800);
+      }
+
+      function setState(next) { state = next; render(); }
+
+      function render() {
+        const [title, copy] = data[state] || data.candidate_ready;
+        const preflightOnly = mode === 'full' && ['candidate_ready', 'restart_blocked'].includes(state);
+        document.querySelector('#assurance').textContent = mode === 'bootstrap'
+          ? '引导回执 · 恢复后补建'
+          : preflightOnly
+            ? '候选已验证 · 尚未建立运行回执'
+            : '完整回执 · 重启前已记录';
+        document.querySelector('#state-title').textContent = title;
+        document.querySelector('#state-copy').textContent = copy;
+        document.querySelector('#versions').textContent = mode === 'bootstrap' ? '0.0.26 → 0.0.27' : '0.0.27 → 0.0.28';
+        const qualification = document.querySelector('#qualification');
+        qualification.textContent = mode === 'bootstrap'
+          ? '不计入完整循环'
+          : preflightOnly
+            ? '尚未开始'
+            : state === 'recovery_required'
+              ? '待处理 · 未计数'
+              : state === 'rolled_back'
+                ? '本轮不计数'
+            : state === 'manual_accepted'
+              ? '完整循环 1/3'
+              : '验收后 1/3';
+        qualification.className = `badge ${state === 'manual_accepted' && mode === 'full' ? 'success' : ''}`.trim();
+        if (state === 'recovery_required') qualification.classList.add('danger');
+
+        const current = stageIndex();
+        const progress = document.querySelector('#progress'); progress.replaceChildren();
+        const labels = mode === 'bootstrap' ? bootstrapLabels : fullLabels;
+        labels.forEach((label, index) => { const el = document.createElement('div'); el.className = `step ${stepClass(index, current)}`.trim(); el.textContent = label; progress.append(el); });
+
+        const actions = document.querySelector('#actions'); actions.replaceChildren();
+        if (state === 'candidate_ready') {
+          actions.append(button('重启并继续本会话', 'primary', () => restartDialog.showModal()), note('主动作始终在首屏。证据细节不会把它推到折叠区之后。'));
+        } else if (state === 'restart_blocked') {
+          actions.append(button('返回会话', 'primary', () => showToast('已返回原 Session，等待当前 Run 收口')), note('当前 App 未替换，候选和会话保持原状。', true));
+        } else if (state === 'session_restored') {
+          actions.append(
+            button('确认本机可继续使用', 'primary', () => setState('manual_accepted')),
+            button('发现问题', '', () => {
+              recoveryAfterRestore = true;
+              setState('recovery_required');
+            })
+          );
+        } else if (state === 'recovery_required') {
+          actions.append(button('重试恢复', 'primary', () => setState('session_restored')), button('回滚上一构建', 'danger', () => rollbackDialog.showModal()), note('恢复失败不会清除回执，也不会自动验收。', true));
+        } else if (state === 'manual_accepted') {
+          actions.append(note(mode === 'bootstrap' ? '本次只证明引导恢复完成。下一次 Full Receipt 才能开始累计。' : '本次已计入连续门禁，但仍不是 commit、tag 或发布。'));
+        } else if (state === 'rolled_back') {
+          actions.append(note('当前已回到上一构建。失败原因和证据仍保留在回执中。'));
+        } else {
+          actions.append(note(state === 'app_started' ? '正在等待 Pi Host 与原 Session，未自动宣称恢复成功。' : '外部副作用进行中，状态只按真实观察推进。'));
+        }
+
+        const timeline = document.querySelector('#timeline'); timeline.replaceChildren();
+        let timelineData;
+        if (mode === 'bootstrap') {
+          const bootstrapStart = [['未知', '0.0.26 未记录重启前检查'], ['18:30:04', '0.0.27 启动并匹配 Candidate Manifest']];
+          if (state === 'app_started') timelineData = bootstrapStart;
+          else if (state === 'recovery_required' && recoveryAfterRestore) timelineData = [...bootstrapStart, ['18:30:09', '原 Session 恢复'], ['18:30:18', '人工发现问题，等待处理']];
+          else if (state === 'recovery_required') timelineData = [...bootstrapStart, ['18:30:09', 'Session 恢复失败，等待处理']];
+          else if (state === 'rolled_back' && recoveryAfterRestore) timelineData = [...bootstrapStart, ['18:30:09', '原 Session 恢复'], ['18:30:18', '人工发现问题'], ['18:30:24', '已回滚上一构建，失败证据保留']];
+          else if (state === 'rolled_back') timelineData = [...bootstrapStart, ['18:30:09', 'Session 恢复失败'], ['18:30:16', '已回滚上一构建，失败证据保留']];
+          else if (state === 'manual_accepted') timelineData = [...bootstrapStart, ['18:30:09', '原 Session 恢复'], ['18:30:18', '人工确认本机可继续使用；引导回执仍不计数']];
+          else timelineData = [...bootstrapStart, ['18:30:09', '原 Session 恢复']];
+        } else {
+          const restartSaved = ['18:28:41', '重启请求已原子保存'];
+          const appStarted = ['18:28:45', '新 App 启动并匹配 Candidate Manifest'];
+          if (state === 'candidate_ready') timelineData = [['待执行', '尚未记录重启请求；当前 App 未替换']];
+          else if (state === 'restart_blocked') timelineData = [['未执行', '当前 Run 未收口；重启请求未记录'], ['未执行', '当前 App 与 Session 保持原状']];
+          else if (state === 'restart_requested') timelineData = [restartSaved];
+          else if (state === 'app_started') timelineData = [restartSaved, appStarted];
+          else if (state === 'recovery_required' && recoveryAfterRestore) timelineData = [restartSaved, appStarted, ['18:28:51', '原 Session 恢复'], ['18:29:00', '人工发现问题，等待处理']];
+          else if (state === 'recovery_required') timelineData = [restartSaved, appStarted, ['18:28:51', 'Session 恢复失败，等待处理']];
+          else if (state === 'rolled_back' && recoveryAfterRestore) timelineData = [restartSaved, appStarted, ['18:28:51', '原 Session 恢复'], ['18:29:00', '人工发现问题'], ['18:29:04', '已回滚上一构建，失败证据保留']];
+          else if (state === 'rolled_back') timelineData = [restartSaved, appStarted, ['18:28:51', 'Session 恢复失败'], ['18:29:04', '已回滚上一构建，失败证据保留']];
+          else if (state === 'manual_accepted') timelineData = [restartSaved, appStarted, ['18:28:51', '原 Session 恢复'], ['18:29:00', '人工验收完成；完整循环 1/3']];
+          else timelineData = [restartSaved, appStarted, ['18:28:51', '原 Session 恢复']];
+        }
+        timelineData.forEach(([time, text]) => { const li = document.createElement('li'); li.innerHTML = `<time>${time}</time><span>${text}</span>`; timeline.append(li); });
+      }
+
+      document.querySelector('#restart-cancel').addEventListener('click', () => restartDialog.close());
+      document.querySelector('#restart-confirm').addEventListener('click', () => {
+        recoveryAfterRestore = false;
+        restartDialog.close(); setState('restart_requested');
+        setTimeout(() => setState('app_started'), 450);
+        setTimeout(() => setState('session_restored'), 1_100);
+      });
+      document.querySelector('#rollback-cancel').addEventListener('click', () => rollbackDialog.close());
+      document.querySelector('#rollback-confirm').addEventListener('click', () => { rollbackDialog.close(); setState('rolled_back'); });
+      detailsToggle.addEventListener('click', () => {
+        const willShow = technicalDetails.hidden;
+        technicalDetails.hidden = !willShow;
+        detailsToggle.setAttribute('aria-expanded', String(willShow));
+        detailsToggle.textContent = willShow ? '隐藏证据与构建详情' : '查看证据与构建详情';
+      });
+      document.querySelector('#choose-source').addEventListener('click', () => showToast('可丢弃原型不会打开真实文件选择器'));
+      document.querySelector('#rebuild-candidate').addEventListener('click', () => showToast('可丢弃原型不会执行真实测试或构建'));
+      document.querySelector('#reset').addEventListener('click', () => {
+        mode = initial.mode; state = initial.state;
+        recoveryAfterRestore = false;
+        technicalDetails.hidden = true;
+        detailsToggle.setAttribute('aria-expanded', 'false');
+        detailsToggle.textContent = '查看证据与构建详情';
+        render(); showToast('已恢复本场景初始状态');
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

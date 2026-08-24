@@ -209,7 +209,7 @@
       align-items: center;
       gap: 4px;
     }
-    .control-button, .thinking-button, .send-button, .project-button {
+    .control-button, .model-button, .thinking-button, .send-button, .project-button {
       border: 0;
       cursor: pointer;
       transition: background .15s ease, transform .15s ease;
@@ -225,11 +225,11 @@
       font-size: 13px;
       color: #565754;
     }
-    .control-button:hover, .thinking-button:hover { background: #f1f1ef; color: var(--ink); }
+    .control-button:hover, .model-button:hover, .thinking-button:hover { background: #f1f1ef; color: var(--ink); }
     .control-button svg, .project-button svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; }
     .control-button .mark { display: inline-grid; place-items: center; width: 16px; height: 16px; color: #6a51c9; }
     .spacer { flex: 1; }
-    .thinking-button {
+    .model-button, .thinking-button {
       display: inline-flex;
       align-items: center;
       min-height: 32px;
@@ -237,8 +237,9 @@
       border-radius: 9px;
       background: transparent;
       font-size: 13px;
-      color: #7357cc;
+      color: var(--ink);
     }
+    .thinking-button { color: #7357cc; }
     .send-button {
       display: grid;
       place-items: center;
@@ -316,7 +317,11 @@
     .menu-action.disabled:hover { background: transparent; }
 
     #project-menu { left: 16px; bottom: 70px; width: min(350px, calc(100vw - 96px)); }
-    #attachment-menu { left: 18px; bottom: 76px; width: 330px; }
+    #attachment-menu { left: 18px; bottom: 76px; width: 250px; }
+    #model-menu { right: 170px; bottom: 76px; width: 250px; }
+    .compact-menu { min-width: 0; padding: 5px; border-radius: 11px; }
+    .compact-menu .menu-action { padding: 7px 9px; border-radius: 7px; }
+    .compact-menu .menu-action small { display: none; }
 
     .plan-card {
       margin-top: 16px;
@@ -480,16 +485,22 @@
               <textarea id="prompt" aria-label="交给 D Code 一项工作" placeholder="交给 D Code 一项工作，/ 使用命令"></textarea>
               <section class="slash-panel" id="slash-panel" hidden aria-label="可用命令、技能与模板">
                 <div class="slash-heading"><span>可用资源</span><kbd>↑↓ 选择 · Esc 关闭</kbd></div>
-                <button class="slash-row" type="button" data-insert="/dgoal ">
+                <button class="slash-row" type="button" data-kind="command" data-insert="/dgoal ">
                   <span aria-hidden="true">◎</span><span class="command">/dgoal</span><span class="description">在当前项目会话中建立目标与可审阅计划</span><span class="type-badge">命令</span>
                 </button>
-                <button class="slash-row" type="button" data-insert="/skill:507-explore ">
-                  <span aria-hidden="true">⌁</span><span class="command">/skill:507-explore</span><span class="description">先读项目证据，再界定当前可推进的问题</span><span class="type-badge">Skill</span>
+                <button class="slash-row" type="button" data-kind="skill" data-insert="/skill:507-explore ">
+                  <span aria-hidden="true">⌁</span><span class="command">507-explore</span><span class="description">先读项目证据，再界定当前可推进的问题</span><span class="type-badge">技能</span>
                 </button>
-                <button class="slash-row" type="button" data-insert="/review ">
+                <button class="slash-row" type="button" data-kind="skill" data-insert="/skill:507-fix ">
+                  <span aria-hidden="true">⌁</span><span class="command">507-fix</span><span class="description">建立可重复反馈环并修复问题根因</span><span class="type-badge">技能</span>
+                </button>
+                <button class="slash-row" type="button" data-kind="skill" data-insert="/skill:507-prototype ">
+                  <span aria-hidden="true">⌁</span><span class="command">507-prototype</span><span class="description">用低成本可丢弃原型验证具体未知</span><span class="type-badge">技能</span>
+                </button>
+                <button class="slash-row" type="button" data-kind="command" data-insert="/review ">
                   <span aria-hidden="true">✓</span><span class="command">/review</span><span class="description">围绕明确改动进行交付审查</span><span class="type-badge">命令</span>
                 </button>
-                <button class="slash-row" type="button" data-insert="/start-with-acceptance ">
+                <button class="slash-row" type="button" data-kind="template" data-insert="/start-with-acceptance ">
                   <span aria-hidden="true">◇</span><span class="command">/start-with-acceptance</span><span class="description">从目标、边界与验收标准开始一项工作</span><span class="type-badge">模板</span>
                 </button>
               </section>
@@ -501,6 +512,9 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
               </button>
               <span class="spacer"></span>
+              <button class="model-button" type="button" id="model-trigger" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">
+                GPT-5.6 Luna
+              </button>
               <button class="thinking-button" type="button" id="thinking-trigger" aria-label="配置推理强度">
                 推理强度 · 中
               </button>
@@ -538,29 +552,37 @@
             </button>
           </section>
 
-          <section class="floating-menu" id="attachment-menu" hidden role="menu" aria-label="添加与工作操作">
-            <div class="menu-title">添加与工作操作</div>
+          <section class="floating-menu compact-menu" id="attachment-menu" hidden role="menu" aria-label="添加操作">
             <button class="menu-action" type="button" data-attachment="image">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.4"/><path d="m4 18 5-5 3 3 2-2 6 4"/></svg>
-              <span><strong>添加文件或图片…</strong><small>图片作为附件发送，其他文件仅插入路径引用</small></span><span></span>
+              <span><strong>添加文件或图片…</strong></span><span></span>
             </button>
             <div class="menu-rule"></div>
             <button class="menu-action" type="button" data-plus-action="skill">
               <span aria-hidden="true">⌁</span>
-              <span><strong>Skill</strong><small>从当前实际加载的 Skill 中选择</small></span><span>›</span>
+              <span><strong>技能</strong></span><span>›</span>
             </button>
             <button class="menu-action" type="button" data-plus-action="command">
               <span aria-hidden="true">⌘</span>
-              <span><strong>命令</strong><small>从当前实际注册的命令中选择</small></span><span>›</span>
+              <span><strong>命令</strong></span><span>›</span>
             </button>
             <div class="menu-rule"></div>
             <button class="menu-action" type="button" data-plus-action="goal">
               <span aria-hidden="true" style="color:#7357cc">◎</span>
-              <span><strong>目标</strong><small>为这项工作先设定要达成的结果</small></span><span></span>
+              <span><strong>目标</strong></span><span></span>
             </button>
             <button class="menu-action" type="button" data-plus-action="plan">
               <span aria-hidden="true" style="color:#7357cc">≡</span>
-              <span><strong>计划</strong><small>查看或建立带阶段与验收的计划</small></span><span></span>
+              <span><strong>计划</strong></span><span></span>
+            </button>
+          </section>
+
+          <section class="floating-menu compact-menu" id="model-menu" hidden role="menu" aria-label="选择模型">
+            <button class="menu-action" type="button" data-model="GPT-5.6 Sol">
+              <span aria-hidden="true"></span><span><strong>GPT-5.6 Sol</strong></span><span></span>
+            </button>
+            <button class="menu-action" type="button" data-model="GPT-5.6 Luna">
+              <span aria-hidden="true"></span><span><strong>GPT-5.6 Luna</strong></span><span class="check">✓</span>
             </button>
           </section>
         </section>
@@ -621,8 +643,10 @@
       const slashPanel = document.querySelector('#slash-panel');
       const projectMenu = document.querySelector('#project-menu');
       const attachmentMenu = document.querySelector('#attachment-menu');
+      const modelMenu = document.querySelector('#model-menu');
       const projectTrigger = document.querySelector('#project-trigger');
       const attachmentTrigger = document.querySelector('#attachment-trigger');
+      const modelTrigger = document.querySelector('#model-trigger');
       const projectName = document.querySelector('#project-name');
       const planCard = document.querySelector('#plan-card');
       const tray = document.querySelector('#attachment-tray');
@@ -640,9 +664,11 @@
       let selectedProject = 'D Code';
       let selectedProjectDirectory = '…/Workspace/Codes/Apps/dcode';
       let attachmentIndex = 0;
+      let slashRows = Array.from(document.querySelectorAll('.slash-row'));
+      let slashFilter = null;
 
-      const allMenus = [projectMenu, attachmentMenu];
-      const triggers = [projectTrigger, attachmentTrigger];
+      const allMenus = [projectMenu, attachmentMenu, modelMenu];
+      const triggers = [projectTrigger, attachmentTrigger, modelTrigger];
 
       function closeMenus() {
         allMenus.forEach(menu => menu.hidden = true);
@@ -662,7 +688,14 @@
         toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2400);
       }
       function updateSlashPanel() {
-        slashPanel.hidden = !(prompt.value.startsWith('/') && !prompt.value.includes(' '));
+        const open = prompt.value.startsWith('/') && !prompt.value.includes(' ');
+        const fragment = prompt.value.slice(1).toLowerCase();
+        slashRows.forEach(row => {
+          const filterMatches = !slashFilter || row.dataset.kind === slashFilter;
+          const fragmentMatches = !fragment || row.querySelector('.command').textContent.toLowerCase().includes(fragment);
+          row.hidden = !(filterMatches && fragmentMatches);
+        });
+        slashPanel.hidden = !open;
       }
       function setProject(name, directory) {
         selectedProject = name;
@@ -675,23 +708,34 @@
 
       projectTrigger.addEventListener('click', () => toggle(projectMenu, projectTrigger));
       attachmentTrigger.addEventListener('click', () => toggle(attachmentMenu, attachmentTrigger));
+      modelTrigger.addEventListener('click', () => toggle(modelMenu, modelTrigger));
       document.querySelector('#thinking-trigger').addEventListener('click', () => {
-        say('原型中保留独立的推理强度选择；模型设置不在 Composer 显示');
+        say('推理强度保持为模型名旁边的独立选择');
       });
 
-      prompt.addEventListener('input', () => { updateSlashPanel(); closeMenus(); });
+      prompt.addEventListener('input', () => { slashFilter = null; updateSlashPanel(); closeMenus(); });
       prompt.addEventListener('keydown', event => {
         if (event.key === 'Escape') { prompt.value = ''; updateSlashPanel(); }
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); document.querySelector('#send').click(); }
       });
       document.querySelectorAll('.slash-row').forEach(row => row.addEventListener('click', () => {
-        prompt.value = row.dataset.insert; updateSlashPanel(); prompt.focus(); say('已预填 ' + row.querySelector('.command').textContent + '，仍需你确认后发送');
+        prompt.value = row.dataset.insert; slashFilter = null; updateSlashPanel(); prompt.focus(); say('已预填 ' + row.querySelector('.command').textContent + '，仍需你确认后发送');
       }));
 
       document.querySelectorAll('[data-project]').forEach(row => row.addEventListener('click', () => {
         setProject(row.dataset.project, row.dataset.directory);
         closeMenus();
         say('已切换到项目“' + row.dataset.project + '”');
+      }));
+
+      document.querySelectorAll('[data-model]').forEach(row => row.addEventListener('click', () => {
+        const name = row.dataset.model;
+        modelTrigger.textContent = name;
+        document.querySelectorAll('[data-model]').forEach(candidate => {
+          candidate.lastElementChild.textContent = candidate.dataset.model === name ? '✓' : '';
+        });
+        closeMenus();
+        say('已选择模型“' + name + '”');
       }));
 
       document.querySelectorAll('[data-action="new-project"]').forEach(row => row.addEventListener('click', () => {
@@ -707,27 +751,43 @@
         migrationDialog.showModal();
       });
 
-      document.querySelectorAll('[data-attachment]').forEach(row => row.addEventListener('click', () => {
+      function addAttachmentChip(name, image) {
         attachmentIndex += 1;
-        const image = row.dataset.attachment === 'image';
-        const name = image ? '架构草图-' + attachmentIndex + '.png' : '需求边界-' + attachmentIndex + '.md';
         const chip = document.createElement('span');
         chip.className = 'attachment-chip';
         chip.innerHTML = (image ? '▧ ' : '▤ ') + name + '<button type="button" aria-label="移除 ' + name + '">×</button>';
         chip.querySelector('button').addEventListener('click', () => chip.remove());
         tray.append(chip);
+      }
+
+      document.querySelectorAll('[data-attachment]').forEach(row => row.addEventListener('click', () => {
+        const image = row.dataset.attachment === 'image';
+        const nextIndex = attachmentIndex + 1;
+        const name = image ? '架构草图-' + nextIndex + '.png' : '需求边界-' + nextIndex + '.md';
+        addAttachmentChip(name, image);
         closeMenus();
         say(image ? '图片会随下一条消息发送' : '文件将以路径引用写入草稿');
       }));
+
+      prompt.addEventListener('paste', event => {
+        const files = Array.from(event.clipboardData?.items || [])
+          .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+          .map(item => item.getAsFile())
+          .filter(Boolean);
+        if (!files.length) return;
+        event.preventDefault();
+        files.forEach(file => addAttachmentChip(file.name || ('粘贴图片-' + (attachmentIndex + 1) + '.png'), true));
+        say('剪贴板图片已加入下一条消息');
+      });
 
       document.querySelectorAll('[data-plus-action]').forEach(row => row.addEventListener('click', () => {
         closeMenus();
         const action = row.dataset.plusAction;
         if (action === 'skill') {
-          prompt.value = '/skill:';
-          updateSlashPanel(); prompt.focus(); say('已打开 Skill 选择；仍需你确认后发送');
+          slashFilter = 'skill'; prompt.value = '/';
+          updateSlashPanel(); prompt.focus(); say('已打开技能选择；仍需你确认后发送');
         } else if (action === 'command') {
-          prompt.value = '/';
+          slashFilter = 'command'; prompt.value = '/';
           updateSlashPanel(); prompt.focus(); say('已打开命令选择；仍需你确认后发送');
         } else if (action === 'goal') {
           prompt.value = '为“' + selectedProject + '”建立一个带范围、验收与阶段的目标：';
@@ -770,7 +830,7 @@
 
       document.querySelector('#reset').addEventListener('click', () => window.location.reload());
       document.addEventListener('click', event => {
-        if (!event.target.closest('.floating-menu') && !event.target.closest('.control-button') && !event.target.closest('.project-button')) closeMenus();
+        if (!event.target.closest('.floating-menu') && !event.target.closest('.control-button') && !event.target.closest('.model-button') && !event.target.closest('.thinking-button') && !event.target.closest('.project-button')) closeMenus();
         if (!event.target.closest('.prompt-wrap') && !event.target.closest('[data-plus-action="skill"], [data-plus-action="command"]')) slashPanel.hidden = true;
       });
       document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMenus(); slashPanel.hidden = true; } });

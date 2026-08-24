@@ -10,6 +10,10 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 HOST_RESOURCES_DIR="${RESOURCES_DIR}/host"
 LEGAL_RESOURCES_DIR="${RESOURCES_DIR}/Legal"
+RELAUNCH_HELPER_INFO_FILE="${ROOT_DIR}/app/RelaunchHelper-Info.plist"
+RELAUNCH_HELPER_APP_DIR="${RESOURCES_DIR}/DCodeRelaunchHelper.app"
+RELAUNCH_HELPER_CONTENTS_DIR="${RELAUNCH_HELPER_APP_DIR}/Contents"
+RELAUNCH_HELPER_MACOS_DIR="${RELAUNCH_HELPER_CONTENTS_DIR}/MacOS"
 APP_ICON_FILE="${ROOT_DIR}/app/Resources/AppIcon.icns"
 NODE_BIN="${PI_DCODE_NODE_BIN:-${HOME}/.hermes/node/bin/node}"
 NODE_ROOT="$(dirname "$(dirname "${NODE_BIN}")")"
@@ -40,6 +44,7 @@ require_directory() {
 }
 
 require_file "${ROOT_DIR}/app/Info.plist"
+require_file "${RELAUNCH_HELPER_INFO_FILE}"
 require_file "${APP_ICON_FILE}"
 require_file "${HOST_DIR}/package.json"
 require_file "${D_CODE_LICENSE_FILE}"
@@ -72,7 +77,7 @@ NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.26 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.27 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
@@ -133,19 +138,24 @@ printf '==> Building internal PiDCode release executable\n'
 (
     cd "${ROOT_DIR}"
     swift build -c release
+    swift build -c release --product DCodeRelaunchHelper
 )
 SWIFT_BIN_DIR="$(cd "${ROOT_DIR}" && swift build -c release --show-bin-path)"
 require_file "${SWIFT_BIN_DIR}/PiDCode"
+RELAUNCH_HELPER_BIN="${SWIFT_BIN_DIR}/DCodeRelaunchHelper"
+require_file "${RELAUNCH_HELPER_BIN}"
 require_file "${HOST_DIR}/dist/src/index.js"
 SWIFT_RESOURCE_BUNDLE="${SWIFT_BIN_DIR}/PiDCode_PiDCode.bundle"
 require_directory "${SWIFT_RESOURCE_BUNDLE}"
 
 printf '==> Assembling %s\n' "${APP_DIR}"
 rm -rf "${APP_DIR}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}/runtime" "${HOST_RESOURCES_DIR}/dist" "${LEGAL_RESOURCES_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}/runtime" "${HOST_RESOURCES_DIR}/dist" "${LEGAL_RESOURCES_DIR}" "${RELAUNCH_HELPER_MACOS_DIR}"
 ditto "${SWIFT_BIN_DIR}/PiDCode" "${MACOS_DIR}/D Code"
+ditto "${RELAUNCH_HELPER_BIN}" "${RELAUNCH_HELPER_MACOS_DIR}/DCodeRelaunchHelper"
+ditto "${RELAUNCH_HELPER_INFO_FILE}" "${RELAUNCH_HELPER_CONTENTS_DIR}/Info.plist"
 ditto "${NODE_BIN}" "${RESOURCES_DIR}/runtime/node"
-chmod 755 "${MACOS_DIR}/D Code" "${RESOURCES_DIR}/runtime/node"
+chmod 755 "${MACOS_DIR}/D Code" "${RELAUNCH_HELPER_MACOS_DIR}/DCodeRelaunchHelper" "${RESOURCES_DIR}/runtime/node"
 ditto "${HOST_DIR}/dist/src" "${HOST_RESOURCES_DIR}/dist/src"
 ditto "${HOST_DIR}/package.json" "${HOST_RESOURCES_DIR}/package.json"
 ditto "${APP_ICON_FILE}" "${RESOURCES_DIR}/AppIcon.icns"
@@ -193,6 +203,7 @@ EOF
 
 printf '==> Validating bundle metadata and embedded Host\n'
 plutil -lint "${CONTENTS_DIR}/Info.plist" >/dev/null
+plutil -lint "${RELAUNCH_HELPER_CONTENTS_DIR}/Info.plist" >/dev/null
 "${RESOURCES_DIR}/runtime/node" "${HOST_RESOURCES_DIR}/dist/src/index.js" --help >/dev/null
 
 printf '==> Applying local ad-hoc signature\n'
@@ -201,6 +212,7 @@ while IFS= read -r -d '' candidate; do
         codesign --force --sign - "${candidate}" >/dev/null
     fi
 done < <(find "${CONTENTS_DIR}" -type f \( -perm -111 -o -name '*.node' \) -print0)
+codesign --force --deep --sign - "${RELAUNCH_HELPER_APP_DIR}" >/dev/null
 codesign --force --deep --sign - "${APP_DIR}" >/dev/null
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 

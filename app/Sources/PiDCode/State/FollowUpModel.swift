@@ -9,7 +9,16 @@ final class FollowUpModel {
     var queues: [FollowUpQueueRecord] = []
     var queueIssue: String?
     var isMutatingQueue = false
-    var pendingSteer: PendingSteerDraft?
+
+    /// 当前唯一尚未返回的 `session.steer` RPC；仅用于短暂锁定本次提交。
+    var steerSubmissionInFlight: SteerSubmission?
+    /// Host/Pi 已接受但尚未取得应用证据的介入，按提交顺序保留。
+    var acceptedSteerReceipts: [SteerSubmission] = []
+    /// Pi 最近一次 `queue_update` 的完整 steering 队列快照。
+    var steeringQueueMessages: [String] = []
+    var steeringQueueSessionID: String?
+    var steeringQueueRunID: String?
+    var steeringQueueRevision = 0
 
     @ObservationIgnored var queueRevision = 0
 }

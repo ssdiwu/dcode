@@ -7,7 +7,7 @@ import Foundation
 struct ComposerCommandSuggestion: Identifiable, Equatable, Sendable {
     /// 插入输入框的调用文本（0.0.16 `composerInvocationText` 合同：只预填不发送）。
     let invocationText: String
-    /// 面板显示的调用名，如 `/mcp`、`/skill:llm-wiki`。
+    /// 面板显示名：命令保留 `/mcp`，Skill 只显示 `llm-wiki`，不暴露内部路由语法。
     let displayCommand: String
     let description: String?
     /// 行尾类型标签：命令 / Skill / 模板。
@@ -37,33 +37,44 @@ struct ComposerCommandSuggestion: Identifiable, Equatable, Sendable {
         }
         var rows: [ComposerCommandSuggestion] = commands.compactMap { command in
             guard matches(command.name) else { return nil }
+            let presentation = presentation(for: command.name, source: command.source)
             return ComposerCommandSuggestion(
                 invocationText: "/\(command.name) ",
-                displayCommand: "/\(command.name)",
+                displayCommand: presentation.displayCommand,
                 description: command.description,
-                typeLabel: "命令",
+                typeLabel: presentation.typeLabel,
                 id: "command/\(command.source)/\(command.name)"
             )
         }
         for entry in resources {
             guard !extensionNames.contains(entry.name.lowercased()) else { continue }
-            let typeLabel: String
-            if entry.name.hasPrefix("skill:") {
-                typeLabel = "Skill"
-            } else if entry.source == "prompt" {
-                typeLabel = "模板"
-            } else {
-                typeLabel = "命令"
-            }
             guard matches(entry.name) else { continue }
+            let presentation = presentation(for: entry.name, source: entry.source)
             rows.append(ComposerCommandSuggestion(
                 invocationText: entry.composerInvocationText,
-                displayCommand: "/\(entry.name)",
+                displayCommand: presentation.displayCommand,
                 description: entry.description,
-                typeLabel: typeLabel,
+                typeLabel: presentation.typeLabel,
                 id: "resource/\(entry.id)"
             ))
         }
         return rows
+    }
+
+    /// Host 的 `session.getCommands` 与 `resources.list` 都可能返回 Skill；统一在这里
+    /// 分离用户可见名称与内部 `/skill:<name>` 调用语法，避免会话态和草稿态显示不一致。
+    private static func presentation(for name: String, source: String) -> (
+        displayCommand: String,
+        typeLabel: String
+    ) {
+        let isSkill = source == "skill" || name.hasPrefix("skill:")
+        if isSkill {
+            let skillName = name.hasPrefix("skill:") ? String(name.dropFirst("skill:".count)) : name
+            return (skillName, "技能")
+        }
+        if source == "prompt" {
+            return ("/\(name)", "模板")
+        }
+        return ("/\(name)", "命令")
     }
 }

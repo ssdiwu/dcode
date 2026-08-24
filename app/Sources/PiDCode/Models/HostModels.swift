@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.26"
+    static let appVersion = "0.0.27"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -395,7 +395,7 @@ enum ContextPartKind: String, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .systemTools: "系统与工具"
+        case .systemTools: "系统、工具与加载资源（推算）"
         case .user: "用户消息"
         case .assistant: "助手回复"
         case .thinking: "思考"
@@ -410,6 +410,13 @@ struct ContextCompositionRow: Identifiable, Equatable, Sendable {
     let fraction: Double?
 
     var id: String { kind.rawValue }
+
+    /// 分项比例本身也是估算值；非零但不足 1% 时必须保持可见，不能四舍五入为 0%。
+    var percentageLabel: String? {
+        guard let fraction, fraction > 0 else { return nil }
+        if fraction < 0.01 { return "<1%" }
+        return "\(Int((fraction * 100).rounded()))%"
+    }
 }
 
 extension ContextBreakdownResult {

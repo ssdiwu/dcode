@@ -127,12 +127,18 @@ export function createDCodeFastExtension(controller: DCodeFastController): Exten
     const restore = (context: ExtensionContext): DCodeFastSnapshot => {
       currentContext = context;
       enabled = restoreFastMode(context.sessionManager.getBranch());
+      if (enabled && fastModeReason(true, context.model) !== "supported") {
+        return setEnabled(false);
+      }
       return publish(context);
     };
 
     const setEnabled = (next: boolean): DCodeFastSnapshot => {
-      pi.appendEntry<FastStateEntry>(FAST_STATE_ENTRY_TYPE, { version: 1, enabled: next });
-      enabled = next;
+      const accepted = next && fastModeReason(true, currentContext?.model) !== "supported"
+        ? false
+        : next;
+      pi.appendEntry<FastStateEntry>(FAST_STATE_ENTRY_TYPE, { version: 1, enabled: accepted });
+      enabled = accepted;
       return publish();
     };
 
@@ -178,7 +184,11 @@ export function createDCodeFastExtension(controller: DCodeFastController): Exten
     });
     pi.on("model_select", (_event, context) => {
       currentContext = context;
-      publish(context);
+      if (enabled && fastModeReason(true, context.model) !== "supported") {
+        setEnabled(false);
+      } else {
+        publish(context);
+      }
     });
     pi.on("before_provider_request", (event, context) => {
       currentContext = context;
