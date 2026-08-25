@@ -122,16 +122,24 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "Provider 认证失败；凭据未由 D Code 保存，请检查网络或重新认证。"
             case "WORKSPACE_PROJECT_SCOPE_REQUIRED":
                 "Worker 只能在 Git 项目中运行。当前 User Scope 不会被伪装成可写项目。"
+            case "WORKSPACE_TASK_SCOPE_REQUIRED":
+                "当前 Agent 必须在这个 Task 的作用域目录中运行；D Code 没有使用调用方指定的其他目录。"
             case "WORKSPACE_GIT_REPOSITORY_REQUIRED":
                 "当前项目目录不是可验证的 Git 仓库，因此没有创建 Worker worktree。"
             case "WORKSPACE_SOURCE_DIRTY":
                 "项目包含未提交或未跟踪文件。D Code 不会从 HEAD 创建遗漏这些文件的 Worker 副本。"
+            case "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED":
+                "任务选中的项目上下文文件不在当前 Git revision 中。D Code 没有创建会遗漏该文件的 Worker worktree。"
             case "WORKSPACE_GIT_UNAVAILABLE":
                 "当前环境无法调用 Git；D Code 没有创建 Worker worktree 或 Runtime。"
             case "WORKSPACE_WORKTREE_CREATE_UNKNOWN", "WORKSPACE_WORKTREE_VERIFICATION_FAILED", "WORKSPACE_TARGET_UNSAFE":
                 "Worker worktree 的外部操作结果无法安全确认。D Code 已保留 Attempt，不会自动重试或清理。"
             case "WORKSPACE_MANAGED_WORKTREE_REQUIRED", "WORKSPACE_MANAGED_WORKTREE_UNKNOWN":
                 "Worker Runtime 必须使用与同一 Agent Run 绑定的受管 worktree。"
+            case "TASK_CONTEXT_UNAVAILABLE":
+                "任务已选择的上下文文件当前不可读取。D Code 没有启动这次运行；请修复文件或更新任务上下文选择。"
+            case "TASK_CONTEXT_CREDENTIAL_REJECTED":
+                "任务已选择的上下文文件疑似包含凭据。D Code 没有启动这次运行；请移除凭据后重试。"
             case "TEAM_START_IN_PROGRESS":
                 "这个 Agent Team 正在建立受管工作树或 Runtime。D Code 没有合并另一条启动请求，请等待当前结果。"
             case "IDEMPOTENCY_KEY_REUSED":

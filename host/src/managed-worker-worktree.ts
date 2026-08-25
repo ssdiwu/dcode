@@ -16,6 +16,7 @@ export type ManagedWorkerWorktreeErrorCode =
   | "WORKSPACE_GIT_REPOSITORY_REQUIRED"
   | "WORKSPACE_SOURCE_DIRTY"
   | "WORKSPACE_SOURCE_HEAD_REQUIRED"
+  | "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED"
   | "WORKSPACE_TARGET_UNSAFE"
   | "WORKSPACE_WORKTREE_CREATE_FAILED"
   | "WORKSPACE_WORKTREE_CREATE_UNKNOWN"
@@ -255,6 +256,70 @@ export async function assertManagedWorkerWorktreeSourceStable(
   }
 }
 
+export async function assertManagedWorkerWorktreeContextSourcesMaterialize(input: {
+  source: ManagedWorkerWorktreeSource;
+  relativePaths: readonly string[];
+  includeCurrentAgents?: boolean;
+  gitRunner?: GitCommandRunner;
+}): Promise<void> {
+  const runner = input.gitRunner ?? defaultGitRunner;
+  const seen = new Set<string>();
+  const relativePaths = [...input.relativePaths];
+  if (input.includeCurrentAgents) {
+    try {
+      const agents = await lstat(join(input.source.sourceProjectDirectory, "AGENTS.md"));
+      if (agents.isFile() && !agents.isSymbolicLink()) relativePaths.push("AGENTS.md");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new ManagedWorkerWorktreeError(
+          "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+          "Worker could not inspect the required AGENTS.md source",
+        );
+      }
+    }
+  }
+  for (const relativePath of relativePaths) {
+    if (
+      typeof relativePath !== "string"
+      || relativePath.length === 0
+      || isAbsolute(relativePath)
+      || relativePath.includes("\0")
+    ) {
+      throw new ManagedWorkerWorktreeError(
+        "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+        "Worker Context Source has an invalid relative path",
+      );
+    }
+    const normalized = relative("/", resolve("/", relativePath));
+    if (!normalized || normalized === ".." || normalized.startsWith("../") || isAbsolute(normalized)) {
+      throw new ManagedWorkerWorktreeError(
+        "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+        "Worker Context Source escapes the Task Project directory",
+      );
+    }
+    const repositoryPath = input.source.projectRelativePath
+      ? `${input.source.projectRelativePath}/${normalized}`
+      : normalized;
+    if (seen.has(repositoryPath)) continue;
+    seen.add(repositoryPath);
+    const treeEntry = await runGit(
+      runner,
+      ["ls-tree", "-z", input.source.baseCommit, "--", repositoryPath],
+      input.source.repositoryRoot,
+      "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+      "Worker could not verify that the selected Context Source exists in its Git revision",
+    );
+    const entry = treeEntry.split("\0").find((item) => item.length > 0) ?? "";
+    if (!/^100(?:644|755) blob [0-9a-f]{40,64}\t/.test(entry)) {
+      throw new ManagedWorkerWorktreeError(
+        "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+        "Selected Task Context Source is not a regular file in the Worker Git revision",
+        { repositoryPath },
+      );
+    }
+  }
+}
+
 export async function planManagedWorkerWorktree(input: {
   runtimeDirectory: string;
   agentRunId: string;
@@ -390,7 +455,12 @@ export async function verifyManagedWorkerWorktree(
 
 export async function provisionManagedWorkerWorktree(
   plan: ManagedWorkerWorktreePlan,
-  options: { gitRunner?: GitCommandRunner; allowExisting?: boolean } = {},
+  options: {
+    gitRunner?: GitCommandRunner;
+    allowExisting?: boolean;
+    contextRelativePaths?: readonly string[];
+    includeCurrentAgents?: boolean;
+  } = {},
 ): Promise<ManagedWorkerWorktree> {
   const runner = options.gitRunner ?? defaultGitRunner;
   if (await pathExists(plan.worktreeRoot)) {
@@ -405,6 +475,14 @@ export async function provisionManagedWorkerWorktree(
   }
   try {
     await assertManagedWorkerWorktreeSourceStable(plan, runner);
+    if (options.contextRelativePaths) {
+      await assertManagedWorkerWorktreeContextSourcesMaterialize({
+        source: plan,
+        relativePaths: options.contextRelativePaths,
+        includeCurrentAgents: options.includeCurrentAgents,
+        gitRunner: runner,
+      });
+    }
     await runGit(
       runner,
       ["worktree", "add", "--detach", plan.worktreeRoot, plan.baseCommit],

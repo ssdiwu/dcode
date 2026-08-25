@@ -8,12 +8,12 @@
 
 Swift 负责原生呈现与用户输入；Host 负责：
 
-- 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；
+- 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；schema v1 晋升 v2 时先在 `~/.dcode/migrations/` 写入私有 SQLite 前备份，再原子补齐 Task Context Selection，不支持降级或双写；
 - 以 User Scope / Project Scope → Task → Coordination / Child Session → Team / Agent / Session Run 的稳定身份执行 query 与 mutation；
-- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree；
+- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；非 Worker Runtime 的 cwd 必须精确等于 Task Scope，Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree，且所有选中的 Scope Document 都必须能从冻结 Git revision 物化；
 - 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
 - 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；
-- 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；
+- 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；强制加载运行目录 `AGENTS.md`，其余项目文档和 Global Knowledge 只能来自 Task 的显式、带 revision Context Selection，失效选择在 Pi Session / Provider 副作用前拒绝；
 - 预览并显式单向导入外部 Pi Session，首次晋升时只自动接管带有效 D Code origin 的旧会话；
 - 发现、解析和恢复 Pi Session；
 - 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的唯一项目目录精确 `cwd` 查询全部关联 Session Summary；

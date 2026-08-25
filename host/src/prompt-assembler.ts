@@ -19,6 +19,15 @@ export interface DCodePromptDocument {
   content: string;
 }
 
+export interface DCodePromptContextSelection {
+  sources: ReadonlyArray<{
+    kind: "scope_document" | "global_knowledge";
+    relativePath: string;
+    title: string;
+    rootPath?: string;
+  }>;
+}
+
 export interface DCodePromptEnvironment {
   runtimeId: string;
   scope: { kind: "user"; userId: string } | { kind: "project"; projectId: string };
@@ -35,6 +44,7 @@ export interface DCodePromptEnvironment {
   role: string;
   roleRevision: string;
   roleContract: string;
+  contextRevision: number;
 }
 
 export interface AssembledDCodePrompt {
@@ -44,14 +54,7 @@ export interface AssembledDCodePrompt {
   tools: DCodePromptTool[];
 }
 
-const FIRST_CLASS_DOCUMENTS = [
-  "AGENTS.md",
-  "PRODUCT.md",
-  "DESIGN.md",
-  "README.md",
-  "GLOSSARY.md",
-  "doc/40-版本实施方案/README.md",
-] as const;
+const REQUIRED_AGENTS_DOCUMENT = "AGENTS.md";
 
 export class DCodePromptCredentialError extends Error {
   constructor(readonly path: string) {
@@ -60,23 +63,67 @@ export class DCodePromptCredentialError extends Error {
   }
 }
 
+export class DCodePromptContextSelectionError extends Error {
+  constructor(
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`D Code could not load the selected Context Source: ${reason}`);
+    this.name = "DCodePromptContextSelectionError";
+  }
+}
+
 function digest(value: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-export async function loadDCodePromptDocuments(cwd: string): Promise<DCodePromptDocument[]> {
+export async function loadDCodePromptDocuments(
+  cwd: string,
+  contextSelection?: DCodePromptContextSelection,
+): Promise<DCodePromptDocument[]> {
   const documents: DCodePromptDocument[] = [];
-  for (const name of FIRST_CLASS_DOCUMENTS) {
-    const path = join(cwd, name);
-    const current = await readDCodePromptSource(cwd, path);
+  const candidates = [
+    {
+      path: join(cwd, REQUIRED_AGENTS_DOCUMENT),
+      rootPath: cwd,
+      kind: "required_agents" as const,
+      title: REQUIRED_AGENTS_DOCUMENT,
+      optional: true,
+    },
+    ...(contextSelection?.sources ?? []).map((source) => ({
+      path: join(source.rootPath ?? cwd, source.relativePath),
+      rootPath: source.rootPath ?? cwd,
+      kind: source.kind,
+      title: source.title,
+      optional: false,
+    })),
+  ];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const identity = `${candidate.rootPath}\0${candidate.path}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const current = await readDCodePromptSource(
+      candidate.rootPath,
+      candidate.path,
+      candidate.kind === "global_knowledge",
+    );
     if (current.kind === "unavailable") {
-      if (["missing", "not_regular_file", "symbolic_link", "too_large"].includes(current.reason)) continue;
+      if (candidate.optional && ["missing", "not_regular_file", "symbolic_link", "too_large"].includes(current.reason)) continue;
+      if (!candidate.optional) throw new DCodePromptContextSelectionError(candidate.path, current.reason);
       throw new Error(`D Code could not safely read Prompt source: ${current.reason}`);
     }
     const content = current.bytes.toString("utf8");
-    if (redactCredentialText(content).redacted) throw new DCodePromptCredentialError(path);
+    if (redactCredentialText(content).redacted) throw new DCodePromptCredentialError(candidate.path);
     documents.push({
-      receipt: { path, digest: digest(current.bytes), bytes: current.bytes.byteLength },
+      receipt: {
+        path: candidate.path,
+        digest: digest(current.bytes),
+        bytes: current.bytes.byteLength,
+        kind: candidate.kind,
+        title: candidate.title,
+        rootPath: candidate.rootPath,
+      },
       content,
     });
   }
@@ -117,6 +164,7 @@ D Code 是产品与编排主体；Pi SDK 只是本轮 Agent Runtime（智能体�
 - cwd: ${input.environment.cwd}
 - Workspace Access: ${input.environment.workspaceAccess}
 - Model: ${input.environment.modelProvider ?? "unknown"}/${input.environment.modelId ?? "unknown"}
+- Task Context Selection Revision: ${input.environment.contextRevision}
 
 角色合同（${input.environment.roleRevision}）：
 ${input.environment.roleContract}
@@ -132,7 +180,7 @@ ${toolManifest}
 
 只有上面列出的工具会同时进入模型 API Tool schema。工具名、说明与实际执行器必须同源；未列出的能力不可假设存在。
 
-按需加载的一等项目文档：
+强制规则与本任务显式选择的 Context Projection（上下文投影）：
 ${documents}
 `;
   return {

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   DCodePromptCredentialError,
+  DCodePromptContextSelectionError,
   assembleDCodeSystemPrompt,
   loadDCodePromptDocuments,
 } from "../src/prompt-assembler.js";
@@ -15,13 +16,21 @@ import {
 
 test("D Code Prompt Assembler owns identity, environment, documents and exact active tools", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-prompt-assembler-"));
+  const globalKnowledge = await mkdtemp(join(tmpdir(), "dcode-prompt-global-knowledge-"));
   try {
     await writeFile(join(root, "AGENTS.md"), "# Project Rules\n\nUse Chinese.\n");
     await writeFile(join(root, "PRODUCT.md"), "# Product\n\nTask before Session.\n");
     await writeFile(join(root, "DESIGN.md"), "# Design\n\nTask-first.\n");
     await mkdir(join(root, "doc", "40-版本实施方案"), { recursive: true });
     await writeFile(join(root, "doc", "40-版本实施方案", "README.md"), "# PRD Index\n\nChoose the exact PRD.\n");
-    const documents = await loadDCodePromptDocuments(root);
+    await writeFile(join(globalKnowledge, "context.md"), "# Global Knowledge\n\nTask contracts are durable.\n");
+    const canonicalGlobalKnowledge = await realpath(globalKnowledge);
+    const documents = await loadDCodePromptDocuments(root, {
+      sources: [
+        { kind: "scope_document", relativePath: "DESIGN.md", title: "设计" },
+        { kind: "global_knowledge", rootPath: canonicalGlobalKnowledge, relativePath: "context.md", title: "全局知识" },
+      ],
+    });
     const assembled = assembleDCodeSystemPrompt({
       environment: {
         runtimeId: "runtime-one",
@@ -39,6 +48,7 @@ test("D Code Prompt Assembler owns identity, environment, documents and exact ac
         role: "coordinator",
         roleRevision: "builtin-coordinator:v1",
         roleContract: "Coordinate and synthesize evidence.",
+        contextRevision: 3,
       },
       documents,
       tools: [
@@ -50,9 +60,8 @@ test("D Code Prompt Assembler owns identity, environment, documents and exact ac
     assert.deepEqual(assembled.tools.map((tool) => tool.name), ["read", "write"]);
     assert.deepEqual(documents.map((document) => document.receipt.path), [
       join(root, "AGENTS.md"),
-      join(root, "PRODUCT.md"),
       join(root, "DESIGN.md"),
-      join(root, "doc", "40-版本实施方案", "README.md"),
+      join(canonicalGlobalKnowledge, "context.md"),
     ]);
     assert.ok(assembled.text.includes("你是 D Code 的 coordinator Agent"));
     assert.ok(assembled.text.includes("Pi SDK 只是本轮 Agent Runtime"));
@@ -61,9 +70,12 @@ test("D Code Prompt Assembler owns identity, environment, documents and exact ac
     assert.ok(assembled.text.includes("- read: Read a file"));
     assert.ok(assembled.text.includes("- write: Write a file"));
     assert.ok(assembled.text.includes("Use Chinese."));
+    assert.ok(assembled.text.includes("Task contracts are durable."));
+    assert.equal(assembled.text.includes("Task before Session."), false);
     assert.equal(assembled.text.includes("You are Pi"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+    await rm(globalKnowledge, { recursive: true, force: true });
   }
 });
 
@@ -77,6 +89,45 @@ test("Prompt documents containing credential material block the Provider boundar
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a selected Context Source never silently disappears from the Prompt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-prompt-selected-context-"));
+  try {
+    await writeFile(join(root, "AGENTS.md"), "# Rules\n");
+    await assert.rejects(
+      loadDCodePromptDocuments(root, {
+        sources: [{ kind: "scope_document", relativePath: "DESIGN.md", title: "设计" }],
+      }),
+      (error: unknown) => error instanceof DCodePromptContextSelectionError && error.reason === "missing",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Global Knowledge root replaced by a symbolic link is no longer trusted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-prompt-global-root-"));
+  const outside = await mkdtemp(join(tmpdir(), "dcode-prompt-global-outside-"));
+  const knowledgeRoot = join(root, "Knowledge");
+  try {
+    await mkdir(knowledgeRoot);
+    await writeFile(join(knowledgeRoot, "context.md"), "# Original global context\n");
+    await writeFile(join(outside, "context.md"), "# Replaced global context\n");
+    const canonicalKnowledgeRoot = await realpath(knowledgeRoot);
+    const documents = await loadDCodePromptDocuments(root, {
+      sources: [{ kind: "global_knowledge", rootPath: canonicalKnowledgeRoot, relativePath: "context.md", title: "全局知识" }],
+    });
+    const receipt = documents.find((document) => document.receipt.kind === "global_knowledge")!.receipt;
+    await rm(knowledgeRoot, { recursive: true, force: true });
+    await symlink(outside, knowledgeRoot);
+    const states = await inspectDCodePromptSourceReceipts(undefined, [receipt]);
+    assert.equal(states[0]?.state, "historical_unavailable");
+    assert.equal(states[0]?.unavailableReason, "source_root_unavailable");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 
@@ -111,12 +162,13 @@ test("Prompt source status distinguishes current match, hash mismatch and unavai
     assert.equal(states[0]?.state, "historical_unavailable");
     assert.equal(states[0]?.unavailableReason, "missing");
 
-    states = await inspectDCodePromptSourceReceipts(root, [{ ...receipt, path: outsidePath }]);
+    const legacyReceipt = { path: receipt.path, digest: receipt.digest, bytes: receipt.bytes };
+    states = await inspectDCodePromptSourceReceipts(root, [{ ...legacyReceipt, path: outsidePath }]);
     assert.equal(states[0]?.state, "historical_unavailable");
     assert.equal(states[0]?.unavailableReason, "outside_runtime_cwd");
 
     await symlink(outsidePath, symlinkPath);
-    states = await inspectDCodePromptSourceReceipts(root, [{ ...receipt, path: symlinkPath }]);
+    states = await inspectDCodePromptSourceReceipts(root, [{ ...legacyReceipt, path: symlinkPath }]);
     assert.equal(states[0]?.state, "historical_unavailable");
     assert.equal(states[0]?.unavailableReason, "symbolic_link");
 

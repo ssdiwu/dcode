@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, parse, relative, resolve } from "node:path";
+import { basename, isAbsolute, parse, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   assertSafeProductStoreTarget,
@@ -14,6 +14,7 @@ import {
   PRODUCT_STORE_SCHEMA_VERSION,
   configureWritableProductStore,
   initializeProductStoreAtomically,
+  migrateProductStoreSchemaIfNeeded,
   validateProductStoreSchema,
 } from "./product-store-schema.js";
 import { buildLegacyMigrationPlan, type LegacyStoreKind } from "./legacy-migration.js";
@@ -74,6 +75,35 @@ export interface TaskRecord {
   cwd: string;
   state: "draft" | "active" | "waiting" | "completed" | "rejected" | "archived";
   revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TaskContextSourceKind = "scope_document" | "global_knowledge";
+
+export interface TaskContextSourceInput {
+  kind: TaskContextSourceKind;
+  relativePath: string;
+  title?: string;
+  rootPath?: string;
+}
+
+export interface TaskContextSourceRecord {
+  id: string;
+  taskId: string;
+  kind: TaskContextSourceKind;
+  relativePath: string;
+  title: string;
+  ordinal: number;
+  rootPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskContextSetRecord {
+  taskId: string;
+  revision: number;
+  sources: TaskContextSourceRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -452,6 +482,7 @@ export interface FoundationSnapshot {
   projects: ProjectRecord[];
   agentProfiles: AgentProfileRecord[];
   tasks: TaskRecord[];
+  taskContextSets: TaskContextSetRecord[];
   sessions: DCodeSessionRecord[];
   sessionPaths: SessionPathRecord[];
   sessionProvenance: SessionProvenanceRecord[];
@@ -640,6 +671,121 @@ function normalizedTaskScope(value: unknown): TaskScope {
   throw new ProductStoreError("INVALID_ARGUMENT", "scope must be an explicit User or Project scope");
 }
 
+function strictlyInside(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return relativePath !== "" && relativePath !== ".." && !relativePath.startsWith("../") && !isAbsolute(relativePath);
+}
+
+function normalizedContextRelativePath(value: unknown, field: string): string {
+  const source = requiredString(value, field, 4_096);
+  if (isAbsolute(source) || source.includes("\0")) {
+    throw new ProductStoreError("INVALID_ARGUMENT", `${field} must be a relative path`);
+  }
+  const normalized = relative(parse(resolve("/")).root, resolve("/", source));
+  if (!normalized || normalized === ".." || normalized.startsWith("../") || isAbsolute(normalized)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", `${field} escapes its declared context root`);
+  }
+  return normalized;
+}
+
+async function normalizeTaskContextSources(
+  value: unknown,
+  userHome: string,
+  taskCwd: string,
+): Promise<TaskContextSourceInput[]> {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "context sources must be an array of at most 32 entries");
+  }
+  const normalized: TaskContextSourceInput[] = [];
+  const seen = new Set<string>();
+  let canonicalUserHome: string;
+  try {
+    canonicalUserHome = await realpath(userHome);
+    if (!(await stat(canonicalUserHome)).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Current D Code user home is unavailable for Global Knowledge selection");
+  }
+  let canonicalTaskCwd: string;
+  try {
+    canonicalTaskCwd = await realpath(taskCwd);
+    if (!(await stat(canonicalTaskCwd)).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Scope directory is unavailable for Context Selection");
+  }
+  const requiredAgentsPath = resolve(canonicalTaskCwd, "AGENTS.md");
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `context sources[${index}] must be an object`);
+    }
+    const source = item as Record<string, unknown>;
+    const kind = source.kind;
+    if (kind !== "scope_document" && kind !== "global_knowledge") {
+      throw new ProductStoreError("INVALID_ARGUMENT", `context sources[${index}].kind is invalid`);
+    }
+    const allowedKeys = kind === "scope_document"
+      ? new Set(["kind", "relativePath", "title"])
+      : new Set(["kind", "rootPath", "relativePath", "title"]);
+    if (Object.keys(source).some((key) => !allowedKeys.has(key))) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `context sources[${index}] has unsupported fields`);
+    }
+    const relativePath = normalizedContextRelativePath(source.relativePath, `context sources[${index}].relativePath`);
+    if (kind === "scope_document" && relativePath === "AGENTS.md") {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "AGENTS.md is a required context source and must not be selected redundantly",
+      );
+    }
+    const title = source.title === undefined
+      ? basename(relativePath)
+      : requiredCredentialFreeString(source.title, `context sources[${index}].title`, 200);
+    let rootPath: string | undefined;
+    if (kind === "global_knowledge") {
+      const rawRoot = requiredString(source.rootPath, `context sources[${index}].rootPath`, 4_096);
+      if (!isAbsolute(rawRoot) || rawRoot.includes("\0")) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `context sources[${index}].rootPath must be absolute`);
+      }
+      let canonicalRoot: string;
+      try {
+        canonicalRoot = await realpath(resolve(rawRoot));
+        if (!(await stat(canonicalRoot)).isDirectory()) throw new Error("not a directory");
+      } catch {
+        throw new ProductStoreError(
+          "INVALID_ARGUMENT",
+          `context sources[${index}].rootPath must be an accessible Global Knowledge directory`,
+        );
+      }
+      if (!strictlyInside(canonicalUserHome, canonicalRoot)) {
+        throw new ProductStoreError(
+          "INVALID_ARGUMENT",
+          `context sources[${index}].rootPath must resolve inside the current user home`,
+        );
+      }
+      rootPath = canonicalRoot;
+    }
+    const sourcePath = source.kind === "scope_document"
+      ? resolve(canonicalTaskCwd, relativePath)
+      : resolve(rootPath as string, relativePath);
+    if (sourcePath === requiredAgentsPath) {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "AGENTS.md is a required context source and must not be selected through another root",
+      );
+    }
+    const identity = `${kind}\0${rootPath ?? ""}\0${relativePath}`;
+    if (seen.has(identity)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "context sources must not select the same source twice");
+    }
+    seen.add(identity);
+    normalized.push({
+      kind,
+      relativePath,
+      ...(title ? { title } : {}),
+      ...(rootPath ? { rootPath } : {}),
+    });
+  }
+  return normalized;
+}
+
 function text(row: SQLiteRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`Invalid Product Store row: ${key}`);
@@ -704,6 +850,32 @@ function task(row: SQLiteRow): TaskRecord {
     cwd: text(row, "cwd"),
     state: text(row, "state") as TaskRecord["state"],
     revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function taskContextSource(row: SQLiteRow): TaskContextSourceRecord {
+  const kind = text(row, "source_kind") as TaskContextSourceKind;
+  const rootPath = text(row, "root_path");
+  return {
+    id: text(row, "id"),
+    taskId: text(row, "task_id"),
+    kind,
+    relativePath: text(row, "relative_path"),
+    title: text(row, "title"),
+    ordinal: integer(row, "ordinal"),
+    ...(kind === "global_knowledge" ? { rootPath } : {}),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function taskContextSet(row: SQLiteRow, sources: TaskContextSourceRecord[]): TaskContextSetRecord {
+  return {
+    taskId: text(row, "task_id"),
+    revision: integer(row, "revision"),
+    sources,
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
   };
@@ -1252,12 +1424,14 @@ export class ProductStore {
             : {}),
         })
         : undefined;
+      const now = options.now ?? (() => new Date().toISOString());
       await initializeProductStoreAtomically(layout, {
         userId: `user-${randomUUID()}`,
         userHome,
-      }, (options.now ?? (() => new Date().toISOString()))(), migrationPlan);
+      }, now(), migrationPlan);
       await assertSafeProductStoreTarget(layout.productStorePath);
       database = new DatabaseSync(layout.productStorePath);
+      await migrateProductStoreSchemaIfNeeded(database, layout, now());
       validateProductStoreSchema(database);
       configureWritableProductStore(database);
       await chmod(layout.productStorePath, 0o600);
@@ -1265,7 +1439,7 @@ export class ProductStore {
         layout,
         database,
         lease,
-        options.now ?? (() => new Date().toISOString()),
+        now,
         options.faultInjector,
       );
       await store.recoverInterruptedRuns();
@@ -1406,6 +1580,18 @@ export class ProductStore {
         ORDER BY sequence
       `).all() as SQLiteRow[]
     ).map(event));
+    const taskContextSources = (
+      this.database.prepare("SELECT * FROM task_context_sources ORDER BY task_id, ordinal").all() as SQLiteRow[]
+    ).map(taskContextSource);
+    const taskContextSourcesByTask = new Map<string, TaskContextSourceRecord[]>();
+    for (const source of taskContextSources) {
+      const sources = taskContextSourcesByTask.get(source.taskId) ?? [];
+      sources.push(source);
+      taskContextSourcesByTask.set(source.taskId, sources);
+    }
+    const taskContextSets = (
+      this.database.prepare("SELECT * FROM task_context_sets ORDER BY task_id").all() as SQLiteRow[]
+    ).map((row) => taskContextSet(row, taskContextSourcesByTask.get(text(row, "task_id")) ?? []));
     return {
       schemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
       storeRevision: this.metaInteger("store_revision"),
@@ -1414,6 +1600,7 @@ export class ProductStore {
       projects: (this.database.prepare("SELECT * FROM projects ORDER BY created_at, id").all() as SQLiteRow[]).map(project),
       agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
       tasks: (this.database.prepare("SELECT * FROM tasks ORDER BY created_at, id").all() as SQLiteRow[]).map(task),
+      taskContextSets,
       sessions: (this.database.prepare("SELECT * FROM sessions ORDER BY created_at, id").all() as SQLiteRow[]).map(session),
       sessionPaths: (
         this.database.prepare("SELECT * FROM session_paths ORDER BY session_id, is_current DESC, id").all() as SQLiteRow[]
@@ -1733,6 +1920,10 @@ export class ProductStore {
           now,
           now,
         );
+        this.database.prepare(`
+          INSERT INTO task_context_sets(task_id, revision, created_at, updated_at)
+          VALUES (?, 1, ?, ?)
+        `).run(taskRecord.id, now, now);
         this.faultInjector?.("task.afterTask");
 
         const coordinationSession: DCodeSessionRecord = {
@@ -1800,6 +1991,117 @@ export class ProductStore {
               coordinationSession,
               coordinatorAssignment: assignment,
             },
+          },
+        };
+      },
+    );
+  }
+
+  async replaceTaskContext(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    expectedContextRevision: number;
+    sources: TaskContextSourceInput[];
+  }): Promise<{ storeRevision: number; contextSet: TaskContextSetRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const expectedContextRevision = requiredRevision(input.expectedContextRevision, "expectedContextRevision");
+    if (expectedContextRevision < 1) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "expectedContextRevision must be at least 1");
+    }
+    const params = {
+      taskId,
+      scope,
+      expectedContextRevision,
+      sources: stableValue(input.sources),
+    };
+    const replayed = await this.replayReceipt<{ storeRevision: number; contextSet: TaskContextSetRecord }>(
+      "task.context.replace",
+      input.requestId,
+      params,
+    );
+    if (replayed) return replayed;
+    const currentUser = this.currentUser();
+    const preflightTaskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+    if (!preflightTaskRow) throw new ProductStoreError("NOT_FOUND", "Task context target does not exist", { taskId });
+    const sources = await normalizeTaskContextSources(input.sources, currentUser.homeDirectory, task(preflightTaskRow).cwd);
+    return await this.mutate(
+      "task.context.replace",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+        if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Task context target does not exist", { taskId });
+        const taskRecord = task(taskRow);
+        if (JSON.stringify(taskRecord.scope) !== JSON.stringify(scope)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Scope changed before its Context Selection could be saved");
+        }
+        const setRow = this.database.prepare("SELECT * FROM task_context_sets WHERE task_id = ?").get(taskId) as SQLiteRow | undefined;
+        if (!setRow) {
+          throw new ProductStoreError("NOT_FOUND", "Task has no durable Context Selection set", { taskId });
+        }
+        const currentSet = taskContextSet(setRow, []);
+        if (currentSet.revision !== expectedContextRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Context Selection changed before this update", {
+            expectedContextRevision,
+            currentContextRevision: currentSet.revision,
+          });
+        }
+        this.database.prepare("DELETE FROM task_context_sources WHERE task_id = ?").run(taskId);
+        const insert = this.database.prepare(`
+          INSERT INTO task_context_sources(
+            id, task_id, source_kind, root_path, relative_path,
+            title, ordinal, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        const records = sources.map((source, ordinal): TaskContextSourceRecord => {
+          const record: TaskContextSourceRecord = {
+            id: `context-source-${randomUUID()}`,
+            taskId,
+            kind: source.kind,
+            relativePath: source.relativePath,
+            title: source.title ?? basename(source.relativePath),
+            ordinal,
+            ...(source.rootPath ? { rootPath: source.rootPath } : {}),
+            createdAt: now,
+            updatedAt: now,
+          };
+          insert.run(
+            record.id,
+            record.taskId,
+            record.kind,
+            record.rootPath ?? "",
+            record.relativePath,
+            record.title,
+            record.ordinal,
+            now,
+            now,
+          );
+          return record;
+        });
+        const revision = currentSet.revision + 1;
+        this.database.prepare(`
+          UPDATE task_context_sets SET revision = ?, updated_at = ?
+          WHERE task_id = ? AND revision = ?
+        `).run(revision, now, taskId, currentSet.revision);
+        const contextSet: TaskContextSetRecord = {
+          taskId,
+          revision,
+          sources: records,
+          createdAt: currentSet.createdAt,
+          updatedAt: now,
+        };
+        return {
+          value: { contextSet },
+          event: {
+            kind: "task.contextSelection.replaced",
+            entityKind: "taskContextSet",
+            entityId: taskId,
+            taskId,
+            payload: contextSet,
           },
         };
       },
@@ -2001,6 +2303,10 @@ export class ProductStore {
           now,
           now,
         );
+        this.database.prepare(`
+          INSERT INTO task_context_sets(task_id, revision, created_at, updated_at)
+          VALUES (?, 1, ?, ?)
+        `).run(taskRecord.id, now, now);
         this.faultInjector?.("piImport.afterTask");
 
         const coordinationSession: DCodeSessionRecord = {
@@ -2186,6 +2492,7 @@ export class ProductStore {
     modelProvider?: string;
     modelId?: string;
     roleRevision: string;
+    contextRevision: number;
     profileSnapshot: Record<string, unknown>;
     tools: Array<{ name: string; description: string; parameters: unknown }>;
     toolsWritable: boolean;
@@ -2200,6 +2507,10 @@ export class ProductStore {
       ? undefined
       : requiredString(input.agentRunId, "agentRunId", 200);
     const workspaceId = requiredString(input.workspaceId, "workspaceId", 200);
+    const contextRevision = requiredRevision(input.contextRevision, "contextRevision");
+    if (contextRevision < 1) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "contextRevision must be at least 1");
+    }
     const message = requiredCredentialFreeString(input.message, "message", 200_000);
     if (!isAbsolute(input.cwd)) throw new ProductStoreError("INVALID_ARGUMENT", "Runtime cwd must be absolute");
     if (input.workspaceAccess !== "sharedReadOnly" && input.workspaceAccess !== "exclusiveWrite") {
@@ -2229,8 +2540,18 @@ export class ProductStore {
     assertCredentialFreeValue(input.profileSnapshot, "profileSnapshot");
     assertCredentialFreeValue(input.tools, "tools");
     const resolvedCwd = resolve(input.cwd);
+    let canonicalUserHome: string;
+    try {
+      canonicalUserHome = await realpath(this.currentUser().homeDirectory);
+    } catch {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Current D Code user home is unavailable for Prompt Source validation");
+    }
     for (const [index, source] of promptSources.entries()) {
-      const sourceRelativePath = relative(resolvedCwd, resolve(source.path));
+      const sourceRoot = resolve(source.rootPath ?? resolvedCwd);
+      if (source.rootPath && !strictlyInside(canonicalUserHome, sourceRoot) && sourceRoot !== resolvedCwd) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `promptSources[${index}] source root is outside the current user home`);
+      }
+      const sourceRelativePath = relative(sourceRoot, resolve(source.path));
       if (
         sourceRelativePath === ""
         || sourceRelativePath === ".."
@@ -2248,6 +2569,7 @@ export class ProductStore {
       ...(agentRunId ? { agentRunId } : {}),
       message,
       attachmentRefs: input.attachmentRefs,
+      contextRevision,
       systemPromptDigest: input.systemPromptDigest,
       toolNames: input.tools.map((tool) => tool.name),
     };
@@ -2266,6 +2588,19 @@ export class ProductStore {
         }
         if (JSON.stringify(task(taskRow).scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Session Run Task Scope changed before preparation");
+        }
+        const contextSetRow = this.database.prepare(`
+          SELECT revision FROM task_context_sets WHERE task_id = ?
+        `).get(taskId) as SQLiteRow | undefined;
+        if (!contextSetRow) {
+          throw new ProductStoreError("NOT_FOUND", "Session Run Task has no Context Selection set", { taskId });
+        }
+        if (integer(contextSetRow, "revision") !== contextRevision) {
+          throw new ProductStoreError(
+            "REVISION_CONFLICT",
+            "Task Context Selection changed before Session Run preparation",
+            { expectedContextRevision: contextRevision, currentContextRevision: integer(contextSetRow, "revision") },
+          );
         }
         if (agentRunId) {
           const agentRun = this.database.prepare(`
@@ -2367,7 +2702,7 @@ export class ProductStore {
           sessionId,
           rawInputId,
           canonicalJSON({ message, attachmentRefs: input.attachmentRefs }),
-          canonicalJSON({ version: 1, promptSources }),
+          canonicalJSON({ version: 2, taskContextRevision: contextRevision, promptSources }),
           now,
         );
         this.database.prepare(`

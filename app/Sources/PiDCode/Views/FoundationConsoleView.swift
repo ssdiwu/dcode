@@ -177,6 +177,7 @@ struct FoundationConsoleView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     taskHeader(task, snapshot: snapshot)
+                    taskContextSelection(task, snapshot: snapshot)
                     taskSessions(task, snapshot: snapshot)
                     taskExecutionFacts(task, snapshot: snapshot)
                     taskOutputs(task, snapshot: snapshot)
@@ -453,6 +454,49 @@ struct FoundationConsoleView: View {
         }
     }
 
+    private func taskContextSelection(_ task: FoundationTask, snapshot: FoundationSnapshot) -> some View {
+        let contextSet = snapshot.taskContextSets.first(where: { $0.taskId == task.id })
+        return FoundationSection(
+            title: "任务上下文",
+            subtitle: "AGENTS.md 始终按当前运行目录加载；其他项目文档与全局知识只在这里被显式选择后进入下一次运行。"
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("AGENTS.md · 必需规则", systemImage: "checkmark.seal")
+                    Spacer()
+                    Text("rev (contextSet?.revision ?? 0)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                if let contextSet, !contextSet.sources.isEmpty {
+                    ForEach(contextSet.sources.sorted(by: { $0.ordinal < $1.ordinal })) { source in
+                        HStack(spacing: 8) {
+                            Image(systemName: source.kind == "global_knowledge" ? "books.vertical" : "doc.text")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.title)
+                                Text(source.relativePath)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Text(source.kind == "global_knowledge" ? "全局知识" : "项目文档")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                } else {
+                    Text("尚未额外选择上下文；D Code 不会自动把 PRODUCT、DESIGN、GLOSSARY 或整个 doc/ 注入模型。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private func taskExecutionFacts(_ task: FoundationTask, snapshot: FoundationSnapshot) -> some View {
         let runs = snapshot.sessionRuns.filter { $0.taskId == task.id }
         let attempts = snapshot.operationAttempts.filter { $0.taskId == task.id }
@@ -499,7 +543,7 @@ struct FoundationConsoleView: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: promptSourceIcon(source.state))
                                         .foregroundStyle(promptSourceColor(source.state))
-                                    Text((source.path as NSString).lastPathComponent)
+                                    Text(source.title ?? (source.path as NSString).lastPathComponent)
                                         .lineLimit(1)
                                     Spacer()
                                     Text(promptSourceLabel(source))
@@ -611,6 +655,8 @@ struct FoundationConsoleView: View {
         switch reason {
         case "runtime_cwd_unavailable": "运行目录不可用"
         case "outside_runtime_cwd": "来源越界"
+        case "source_root_unavailable": "知识根目录不可用"
+        case "outside_source_root": "来源越出知识根目录"
         case "missing": "文件缺失"
         case "not_regular_file": "不是普通文件"
         case "symbolic_link": "符号链接不安全"

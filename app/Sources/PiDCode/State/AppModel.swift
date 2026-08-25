@@ -713,6 +713,7 @@ final class AppModel {
                 "foundationSnapshot",
                 "piSessionImport",
                 "sessionPathFacts",
+                "taskContextSelection",
             ]
             if (hostConfiguration == nil || forceFoundationModeForTests),
                foundationCapabilities.allSatisfy({ hello.capabilities[$0]?.boolValue == true }) {
@@ -805,6 +806,32 @@ final class AppModel {
             return true
         } catch {
             present(error, title: "任务未能创建")
+            return false
+        }
+    }
+
+    func replaceFoundationTaskContext(
+        task: FoundationTask,
+        contextSet: FoundationTaskContextSet,
+        sources: [FoundationTaskContextSourceInput]
+    ) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationTaskContextReplacement = try await client.request(
+                "task.context.replace",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "taskId": .string(task.id),
+                    "scope": task.scope.jsonValue,
+                    "expectedContextRevision": .number(Double(contextSet.revision)),
+                    "sources": .array(sources.map(\.jsonValue)),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "任务上下文未能保存")
             return false
         }
     }

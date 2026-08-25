@@ -124,6 +124,7 @@ struct FoundationSnapshot: Codable, Sendable {
     let projects: [FoundationProject]
     let agentProfiles: [FoundationAgentProfile]
     let tasks: [FoundationTask]
+    let taskContextSets: [FoundationTaskContextSet]
     let sessions: [FoundationSession]
     let sessionPaths: [FoundationSessionPath]
     let coordinatorAssignments: [FoundationCoordinatorAssignment]
@@ -143,6 +144,49 @@ struct FoundationSnapshot: Codable, Sendable {
     let artifacts: [FoundationArtifact]
     let managedWorkerWorktrees: [FoundationManagedWorkerWorktree]
     let evidence: [FoundationEvidence]
+}
+
+struct FoundationTaskContextSource: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let taskId: String
+    let kind: String
+    let relativePath: String
+    let title: String
+    let ordinal: Int
+    let rootPath: String?
+    let createdAt: String
+    let updatedAt: String
+}
+
+struct FoundationTaskContextSet: Codable, Identifiable, Hashable, Sendable {
+    var id: String { taskId }
+    let taskId: String
+    let revision: Int
+    let sources: [FoundationTaskContextSource]
+    let createdAt: String
+    let updatedAt: String
+}
+
+struct FoundationTaskContextReplacement: Codable, Sendable {
+    let storeRevision: Int
+    let contextSet: FoundationTaskContextSet
+}
+
+struct FoundationTaskContextSourceInput: Hashable, Sendable {
+    let kind: String
+    let relativePath: String
+    let title: String?
+    let rootPath: String?
+
+    var jsonValue: JSONValue {
+        var value: [String: JSONValue] = [
+            "kind": .string(kind),
+            "relativePath": .string(relativePath),
+        ]
+        if let title { value["title"] = .string(title) }
+        if let rootPath { value["rootPath"] = .string(rootPath) }
+        return .object(value)
+    }
 }
 
 struct FoundationSessionRun: Codable, Identifiable, Hashable, Sendable {
@@ -205,6 +249,8 @@ struct FoundationActiveToolSet: Codable, Identifiable, Sendable {
 struct FoundationPromptSourceState: Codable, Identifiable, Sendable {
     var id: String { "\(path)#\(receiptDigest)" }
     let path: String
+    let kind: String?
+    let title: String?
     let receiptDigest: String
     let receiptBytes: Int
     let state: String

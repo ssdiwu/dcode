@@ -11,8 +11,35 @@ import {
   type LegacySourceManifestEntry,
 } from "./legacy-migration.js";
 
-export const PRODUCT_STORE_SCHEMA_VERSION = 1;
+export const PRODUCT_STORE_SCHEMA_VERSION = 2;
 export const PRODUCT_STORE_APPLICATION_ID = 0x44434f44; // "DCOD"
+
+const TASK_CONTEXT_SCHEMA_SQL = `
+  CREATE TABLE task_context_sets (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE task_context_sources (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL CHECK(source_kind IN ('scope_document', 'global_knowledge')),
+    root_path TEXT NOT NULL,
+    relative_path TEXT NOT NULL CHECK(length(relative_path) BETWEEN 1 AND 4096),
+    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(
+      (source_kind = 'scope_document' AND root_path = '')
+      OR (source_kind = 'global_knowledge' AND root_path <> '')
+    ),
+    UNIQUE(task_id, source_kind, root_path, relative_path),
+    UNIQUE(task_id, ordinal)
+  ) STRICT;
+`;
 
 export class ProductStoreSchemaError extends Error {
   constructor(
@@ -1153,6 +1180,8 @@ function createSchema(
       )
     ) STRICT;
 
+    ${TASK_CONTEXT_SCHEMA_SQL}
+
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1837,6 +1866,10 @@ function createSchema(
       applyLegacyMigrationPlan(database, identity, migrationPlan, now);
       insertMeta.run("migration_id", migrationPlan.id);
     }
+    database.prepare(`
+      INSERT OR IGNORE INTO task_context_sets(task_id, revision, created_at, updated_at)
+      SELECT id, 1, ?, ? FROM tasks
+    `).run(now, now);
     database.exec("COMMIT");
   } catch (error) {
     rollback(database);
@@ -1872,7 +1905,7 @@ function assertIntegrity(database: DatabaseSync): void {
   }
 }
 
-export function validateProductStoreSchema(database: DatabaseSync): void {
+function validateProductStoreSchemaVersion(database: DatabaseSync, expectedSchemaVersion: number): void {
   database.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 3000;
@@ -1880,7 +1913,7 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
   `);
   const applicationId = Number(scalarPragma(database, "PRAGMA application_id"));
   const schemaVersion = Number(scalarPragma(database, "PRAGMA user_version"));
-  if (applicationId !== PRODUCT_STORE_APPLICATION_ID || schemaVersion !== PRODUCT_STORE_SCHEMA_VERSION) {
+  if (applicationId !== PRODUCT_STORE_APPLICATION_ID || schemaVersion !== expectedSchemaVersion) {
     throw new ProductStoreSchemaError(
       "PRODUCT_STORE_SCHEMA_UNSUPPORTED",
       "D Code cannot open this Product Store schema without a supported migration",
@@ -1888,7 +1921,7 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
         applicationId,
         schemaVersion,
         expectedApplicationId: PRODUCT_STORE_APPLICATION_ID,
-        expectedSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
+        expectedSchemaVersion,
       },
     );
   }
@@ -1951,6 +1984,9 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
       "legacy_sources",
       "pi_import_sources",
     ];
+    if (expectedSchemaVersion >= 2) {
+      requiredTables.push("task_context_sets", "task_context_sources");
+    }
     const tables = new Set((database.prepare(`
       SELECT name FROM sqlite_master WHERE type = 'table'
     `).all() as Array<{ name?: unknown }>).flatMap((row) => (
@@ -1967,7 +2003,7 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
 
     const migration = database.prepare(`
       SELECT product_version FROM schema_migrations WHERE version = ?
-    `).get(PRODUCT_STORE_SCHEMA_VERSION) as { product_version?: unknown } | undefined;
+    `).get(expectedSchemaVersion) as { product_version?: unknown } | undefined;
     const metaRows = database.prepare("SELECT key, value FROM dcode_meta").all() as Array<{
       key?: unknown;
       value?: unknown;
@@ -1991,8 +2027,8 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
     if (
       !migration
       || migration.product_version !== "0.0.28"
-      || meta.get("schema_version") !== String(PRODUCT_STORE_SCHEMA_VERSION)
-      || meta.get("minimum_reader_schema_version") !== String(PRODUCT_STORE_SCHEMA_VERSION)
+      || meta.get("schema_version") !== String(expectedSchemaVersion)
+      || meta.get("minimum_reader_schema_version") !== String(expectedSchemaVersion)
       || meta.get("product_version") !== "0.0.28"
       || meta.get("migration_state") !== "complete"
       || meta.get("schema_fingerprint") !== schemaFingerprint(database)
@@ -2036,6 +2072,33 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
         "PRODUCT_STORE_SCHEMA_INVALID",
         "D Code Product Store built-in Agent Profiles are incomplete",
       );
+    }
+
+    if (expectedSchemaVersion >= 2) {
+      const missingContextSet = database.prepare(`
+        SELECT t.id
+        FROM tasks t
+        LEFT JOIN task_context_sets c ON c.task_id = t.id
+        WHERE c.task_id IS NULL
+        LIMIT 1
+      `).get() as { id?: unknown } | undefined;
+      const orphanContextSource = database.prepare(`
+        SELECT s.id
+        FROM task_context_sources s
+        LEFT JOIN task_context_sets c ON c.task_id = s.task_id
+        WHERE c.task_id IS NULL
+        LIMIT 1
+      `).get() as { id?: unknown } | undefined;
+      if (missingContextSet || orphanContextSource) {
+        throw new ProductStoreSchemaError(
+          "PRODUCT_STORE_SCHEMA_INVALID",
+          "D Code Product Store Task Context Selection facts are incomplete",
+          {
+            ...(typeof missingContextSet?.id === "string" ? { missingTaskId: missingContextSet.id } : {}),
+            ...(typeof orphanContextSource?.id === "string" ? { orphanContextSourceId: orphanContextSource.id } : {}),
+          },
+        );
+      }
     }
 
     const invalidJSONChecks = [
@@ -2097,6 +2160,10 @@ export function validateProductStoreSchema(database: DatabaseSync): void {
     );
   }
   assertIntegrity(database);
+}
+
+export function validateProductStoreSchema(database: DatabaseSync): void {
+  validateProductStoreSchemaVersion(database, PRODUCT_STORE_SCHEMA_VERSION);
 }
 
 export function configureWritableProductStore(database: DatabaseSync): void {
@@ -2185,6 +2252,136 @@ async function writeMigrationBackups(
     );
     backupOrdinal += 1;
   }
+}
+
+async function writeSchemaPromotionBackup(
+  database: DatabaseSync,
+  layout: DCodeDataRootLayout,
+  fromVersion: number,
+  toVersion: number,
+): Promise<{ migrationId: string; digest: string }> {
+  const checkpoint = database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+    busy?: unknown;
+    log?: unknown;
+    checkpointed?: unknown;
+  } | undefined;
+  if (
+    !checkpoint
+    || checkpoint.busy !== 0
+    || typeof checkpoint.log !== "number"
+    || typeof checkpoint.checkpointed !== "number"
+    || checkpoint.log !== checkpoint.checkpointed
+  ) {
+    throw new ProductStoreSchemaError(
+      "PRODUCT_STORE_SCHEMA_INVALID",
+      "D Code could not checkpoint every Product Store WAL page before schema migration backup",
+      { checkpoint },
+    );
+  }
+  await syncFile(layout.productStorePath);
+  const bytes = await readFile(layout.productStorePath);
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const migrationId = `schema-v${fromVersion}-to-v${toVersion}-${digest.slice("sha256:".length, "sha256:".length + 16)}`;
+  const migrationDirectory = join(layout.migrationsDirectory, migrationId);
+  await prepareManagedDCodeDirectory(migrationDirectory);
+  await publishMigrationBackup(join(migrationDirectory, "product-store-before.sqlite3"), bytes);
+  await publishMigrationBackup(
+    join(migrationDirectory, "manifest.json"),
+    Buffer.from(`${JSON.stringify({
+      migrationId,
+      fromSchemaVersion: fromVersion,
+      toSchemaVersion: toVersion,
+      sourceDigest: digest,
+    }, null, 2)}\n`),
+  );
+  await syncDirectory(migrationDirectory);
+  await syncDirectory(layout.migrationsDirectory);
+  return { migrationId, digest };
+}
+
+export async function migrateProductStoreSchemaIfNeeded(
+  database: DatabaseSync,
+  layout: DCodeDataRootLayout,
+  now = new Date().toISOString(),
+): Promise<void> {
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 3000;
+    PRAGMA trusted_schema = OFF;
+  `);
+  const applicationId = Number(scalarPragma(database, "PRAGMA application_id"));
+  const schemaVersion = Number(scalarPragma(database, "PRAGMA user_version"));
+  if (applicationId !== PRODUCT_STORE_APPLICATION_ID) {
+    throw new ProductStoreSchemaError(
+      "PRODUCT_STORE_SCHEMA_UNSUPPORTED",
+      "D Code cannot migrate a Product Store with an unknown application identity",
+      { applicationId, expectedApplicationId: PRODUCT_STORE_APPLICATION_ID, schemaVersion },
+    );
+  }
+  if (schemaVersion === PRODUCT_STORE_SCHEMA_VERSION) return;
+  if (schemaVersion !== 1) {
+    throw new ProductStoreSchemaError(
+      "PRODUCT_STORE_SCHEMA_UNSUPPORTED",
+      "D Code has no safe migration path for this Product Store schema",
+      { schemaVersion, expectedSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION },
+    );
+  }
+
+  validateProductStoreSchemaVersion(database, 1);
+  const backup = await writeSchemaPromotionBackup(database, layout, 1, PRODUCT_STORE_SCHEMA_VERSION);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(TASK_CONTEXT_SCHEMA_SQL);
+    database.prepare(`
+      INSERT INTO task_context_sets(task_id, revision, created_at, updated_at)
+      SELECT id, 1, ?, ? FROM tasks
+    `).run(now, now);
+    const currentRevision = Number((database.prepare(
+      "SELECT value FROM dcode_meta WHERE key = 'store_revision'",
+    ).get() as { value?: unknown } | undefined)?.value);
+    if (!Number.isSafeInteger(currentRevision) || currentRevision < 0) {
+      throw new ProductStoreSchemaError(
+        "PRODUCT_STORE_SCHEMA_INVALID",
+        "D Code Product Store has an invalid store revision before schema migration",
+      );
+    }
+    const nextStoreRevision = currentRevision + 1;
+    database.prepare(`
+      INSERT INTO schema_migrations(version, applied_at, product_version)
+      VALUES (?, ?, '0.0.28')
+    `).run(PRODUCT_STORE_SCHEMA_VERSION, now);
+    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_version'")
+      .run(String(PRODUCT_STORE_SCHEMA_VERSION));
+    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'minimum_reader_schema_version'")
+      .run(String(PRODUCT_STORE_SCHEMA_VERSION));
+    database.prepare("UPDATE dcode_meta SET value = 'complete' WHERE key = 'migration_state'").run();
+    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")
+      .run(String(nextStoreRevision));
+    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
+      .run(schemaFingerprint(database));
+    database.exec(`PRAGMA user_version = ${PRODUCT_STORE_SCHEMA_VERSION}`);
+    database.prepare(`
+      INSERT INTO store_events(
+        event_id, store_revision, kind, entity_kind, entity_id,
+        task_id, payload_json, created_at
+      ) VALUES (?, ?, 'schema.promoted', 'productStore', 'product-store', NULL, ?, ?)
+    `).run(
+      randomUUID(),
+      nextStoreRevision,
+      JSON.stringify({
+        migrationId: backup.migrationId,
+        fromSchemaVersion: schemaVersion,
+        toSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
+        sourceDigest: backup.digest,
+      }),
+      now,
+    );
+    database.exec("COMMIT");
+  } catch (error) {
+    rollback(database);
+    throw error;
+  }
+  validateProductStoreSchema(database);
 }
 
 export async function initializeProductStoreAtomically(

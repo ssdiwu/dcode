@@ -62,6 +62,8 @@ import {
   ProductStore,
   type AgentRunRecord,
   type ManagedWorkerWorktreeRecord,
+  type TaskContextSourceRecord,
+  type TaskContextSourceInput,
   type TaskRecord,
   type TaskScope,
 } from "./product-store.js";
@@ -72,6 +74,7 @@ import {
 import { redactCredentialText } from "./credential-material.js";
 import {
   ManagedWorkerWorktreeError,
+  assertManagedWorkerWorktreeContextSourcesMaterialize,
   inspectManagedWorkerWorktreeSource,
   planManagedWorkerWorktree,
   provisionManagedWorkerWorktree,
@@ -80,6 +83,8 @@ import {
 import type { LegacyStoreKind } from "./legacy-migration.js";
 import {
   assembleDCodeSystemPrompt,
+  DCodePromptContextSelectionError,
+  DCodePromptCredentialError,
   loadDCodePromptDocuments,
   type AssembledDCodePrompt,
   type DCodePromptEnvironment,
@@ -255,6 +260,8 @@ interface RuntimeIdentity {
     isolationKey?: string;
   };
 }
+
+type RuntimePromptIdentity = Omit<RuntimeIdentity, "adapterSessionId">;
 
 interface WorkspaceClaim {
   access: "sharedReadOnly" | "exclusiveWrite";
@@ -759,6 +766,24 @@ export class PiHost {
     if (JSON.stringify(task.scope) !== JSON.stringify(identity.scope)) {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Task Scope does not match the Product Store");
     }
+    const declaredAgentRun = identity.agentRunId
+      ? snapshot.agentRuns.find((candidate) => candidate.id === identity.agentRunId)
+      : undefined;
+    if (!identity.agentRunId || declaredAgentRun?.role !== "worker") {
+      let canonicalTaskCwd: string;
+      try {
+        canonicalTaskCwd = await realpath(task.cwd);
+      } catch {
+        throw new PiHostError("WORKSPACE_TASK_SCOPE_REQUIRED", "Task Scope directory is unavailable for this Runtime");
+      }
+      if (identity.workspace.cwd !== canonicalTaskCwd) {
+        throw new PiHostError(
+          "WORKSPACE_TASK_SCOPE_REQUIRED",
+          "Non-Worker Runtime workspace must exactly match its Task Scope directory",
+          { taskCwd: canonicalTaskCwd, workspaceCwd: identity.workspace.cwd },
+        );
+      }
+    }
     if (identity.agentRunId) {
       const agentRun = snapshot.agentRuns.find((candidate) => candidate.id === identity.agentRunId);
       if (!agentRun || agentRun.taskId !== task.id || agentRun.sessionId !== session.id) {
@@ -897,12 +922,61 @@ export class PiHost {
     }
   }
 
-  private async runtimePromptContext(identity: RuntimeIdentity): Promise<{
+  private async assertNonWorkerRuntimeWorkspaceBeforeBinding(input: {
+    store: ProductStore;
+    taskId: string;
+    dcodeSessionId: string;
+    agentRunId?: string;
+    scope: TaskScope;
+    workspace: { workspaceId: string; cwd: string; access: "sharedReadOnly" | "exclusiveWrite" };
+  }): Promise<void> {
+    const snapshot = await input.store.snapshot();
+    const task = snapshot.tasks.find((candidate) => candidate.id === input.taskId);
+    const session = snapshot.sessions.find((candidate) => candidate.id === input.dcodeSessionId);
+    const agentRun = input.agentRunId
+      ? snapshot.agentRuns.find((candidate) => candidate.id === input.agentRunId)
+      : undefined;
+    if (
+      !task
+      || !session
+      || session.taskId !== task.id
+      || JSON.stringify(task.scope) !== JSON.stringify(input.scope)
+      || (input.agentRunId !== undefined && (
+        !agentRun || agentRun.taskId !== task.id || agentRun.sessionId !== session.id
+      ))
+    ) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Task, Session, or Agent Run does not match the Product Store");
+    }
+    if (agentRun?.role === "worker") return;
+    let canonicalTaskCwd: string;
+    let canonicalWorkspaceCwd: string;
+    try {
+      [canonicalTaskCwd, canonicalWorkspaceCwd] = await Promise.all([
+        realpath(task.cwd),
+        realpath(input.workspace.cwd),
+      ]);
+      if (!(await stat(canonicalTaskCwd)).isDirectory() || !(await stat(canonicalWorkspaceCwd)).isDirectory()) {
+        throw new Error("not a directory");
+      }
+    } catch {
+      throw new PiHostError("WORKSPACE_TASK_SCOPE_REQUIRED", "Task Scope directory or Runtime workspace is unavailable");
+    }
+    if (canonicalWorkspaceCwd !== canonicalTaskCwd) {
+      throw new PiHostError(
+        "WORKSPACE_TASK_SCOPE_REQUIRED",
+        "Non-Worker Runtime workspace must exactly match its Task Scope before Pi Session creation",
+        { taskCwd: canonicalTaskCwd, workspaceCwd: canonicalWorkspaceCwd },
+      );
+    }
+  }
+
+  private async runtimePromptContext(identity: RuntimePromptIdentity): Promise<{
     environment: DCodePromptEnvironment;
     documents: Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
   }> {
     const snapshot = await (await this.getProductStore()).snapshot();
     const task = snapshot.tasks.find((candidate) => candidate.id === identity.taskId);
+    const taskContextSet = snapshot.taskContextSets.find((candidate) => candidate.taskId === identity.taskId);
     const session = snapshot.sessions.find((candidate) => candidate.id === identity.dcodeSessionId);
     const assignment = snapshot.coordinatorAssignments.find((candidate) => (
       candidate.taskId === identity.taskId && candidate.sessionId === identity.dcodeSessionId
@@ -932,8 +1006,28 @@ export class PiHost {
     const profileVersion = typeof storedProfile?.profileVersion === "number"
       ? storedProfile.profileVersion
       : liveProfile?.profileVersion;
-    if (!task || !session || !role || !roleContract || !storedProfileId || profileVersion === undefined) {
+    if (!task || !taskContextSet || !session || !role || !roleContract || !storedProfileId || profileVersion === undefined) {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime prompt facts are incomplete in the Product Store");
+    }
+    let documents: Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
+    try {
+      documents = await loadDCodePromptDocuments(identity.workspace.cwd, taskContextSet);
+    } catch (error) {
+      if (error instanceof DCodePromptContextSelectionError) {
+        throw new PiHostError(
+          "TASK_CONTEXT_UNAVAILABLE",
+          "A selected Task Context Source is unavailable; D Code did not start this Runtime",
+          { path: error.path, reason: error.reason },
+        );
+      }
+      if (error instanceof DCodePromptCredentialError) {
+        throw new PiHostError(
+          "TASK_CONTEXT_CREDENTIAL_REJECTED",
+          "A Task Context Source appears to contain credential material; D Code did not start this Runtime",
+          { path: error.path },
+        );
+      }
+      throw error;
     }
     return {
       environment: {
@@ -950,8 +1044,9 @@ export class PiHost {
         role,
         roleRevision: `${storedProfileId}:v${profileVersion}`,
         roleContract,
+        contextRevision: taskContextSet.revision,
       },
-      documents: await loadDCodePromptDocuments(identity.workspace.cwd),
+      documents,
     };
   }
 
@@ -1138,6 +1233,7 @@ export class PiHost {
             runtimeEventSequence: true,
             workspaceIsolation: true,
             managedWorkerWorktree: true,
+            taskContextSelection: true,
             agentRequests: true,
           },
         };
@@ -1193,6 +1289,24 @@ export class PiHost {
           entityId: result.task.id,
           taskId: result.task.id,
           scope: result.task.scope,
+        });
+        return result;
+      }
+      case "task.context.replace": {
+        const result = await (await this.getProductStore()).replaceTaskContext({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          expectedContextRevision: params.expectedContextRevision as number,
+          sources: params.sources as TaskContextSourceInput[],
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "task.contextSelection.replaced",
+          entityKind: "taskContextSet",
+          entityId: result.contextSet.taskId,
+          taskId: result.contextSet.taskId,
         });
         return result;
       }
@@ -1753,6 +1867,22 @@ export class PiHost {
         scope,
         workspace,
       });
+      await this.assertNonWorkerRuntimeWorkspaceBeforeBinding({
+        store,
+        taskId,
+        dcodeSessionId,
+        ...(agentRunId ? { agentRunId } : {}),
+        scope,
+        workspace,
+      });
+      await this.runtimePromptContext({
+        runtimeId,
+        scope,
+        taskId,
+        dcodeSessionId,
+        ...(agentRunId ? { agentRunId } : {}),
+        workspace,
+      });
       let binding = await store.sessionRuntimeBinding(dcodeSessionId);
       if (!binding) {
         const created = await this.createSession(workspace.cwd) as {
@@ -1857,8 +1987,12 @@ export class PiHost {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task Scope does not match the stored Task");
     }
     const agentRuns = snapshot.agentRuns.filter((candidate) => candidate.teamRunId === teamRunId);
+    const taskContextSet = snapshot.taskContextSets.find((candidate) => candidate.taskId === taskId);
     if (agentRuns.length < 2) {
       throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run requires a Coordinator and at least one member");
+    }
+    if (!taskContextSet) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task has no durable Context Selection set");
     }
     const runtimeDescriptors = agentRuns.map((agentRun) => ({
       runtimeId: `runtime-${agentRun.id}`,
@@ -1891,6 +2025,7 @@ export class PiHost {
         expectedStoreRevision: claimed.storeRevision,
         requestId: params.requestId as string,
         projects: snapshot.projects,
+        taskContextSources: taskContextSet.sources,
       });
     } catch (error) {
       const reasonCode = error instanceof PiHostError ? error.code : "WORKSPACE_WORKTREE_CREATE_UNKNOWN";
@@ -2034,6 +2169,7 @@ export class PiHost {
     expectedStoreRevision: number;
     requestId: string;
     projects: Array<{ id: string; directory: string }>;
+    taskContextSources: TaskContextSourceRecord[];
   }): Promise<Map<string, ManagedWorkerWorktreeRecord>> {
     const workers = input.agentRuns.filter((agentRun) => agentRun.role === "worker");
     if (workers.length === 0) return new Map();
@@ -2048,9 +2184,17 @@ export class PiHost {
     if (!project) {
       throw new PiHostError("WORKSPACE_GIT_REPOSITORY_REQUIRED", "Worker Project Scope has no Project directory");
     }
+    const selectedScopeDocumentPaths = input.taskContextSources
+      .filter((contextSource) => contextSource.kind === "scope_document")
+      .map((contextSource) => contextSource.relativePath);
     let plans;
     try {
       const source = await inspectManagedWorkerWorktreeSource({ projectDirectory: project.directory });
+      await assertManagedWorkerWorktreeContextSourcesMaterialize({
+        source,
+        relativePaths: selectedScopeDocumentPaths,
+        includeCurrentAgents: true,
+      });
       plans = [];
       for (const worker of workers) {
         plans.push(await planManagedWorkerWorktree({
@@ -2093,7 +2237,10 @@ export class PiHost {
       }
       let provisioned;
       try {
-        provisioned = await provisionManagedWorkerWorktree(plan);
+        provisioned = await provisionManagedWorkerWorktree(plan, {
+          contextRelativePaths: selectedScopeDocumentPaths,
+          includeCurrentAgents: true,
+        });
       } catch (error) {
         const code = error instanceof ManagedWorkerWorktreeError
           ? error.code
@@ -2104,6 +2251,7 @@ export class PiHost {
           "WORKSPACE_GIT_REPOSITORY_REQUIRED",
           "WORKSPACE_SOURCE_DIRTY",
           "WORKSPACE_SOURCE_HEAD_REQUIRED",
+          "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
         ].includes(code)
           ? "failed" as const
           : "unknown" as const;
@@ -3567,6 +3715,7 @@ export class PiHost {
           ? { modelProvider: active.session.model.provider, modelId: active.session.model.id }
           : {}),
         roleRevision: promptEnvironment.roleRevision,
+        contextRevision: promptEnvironment.contextRevision,
         profileSnapshot: {
           role: promptEnvironment.role,
           roleRevision: promptEnvironment.roleRevision,

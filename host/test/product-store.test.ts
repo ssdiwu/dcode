@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { DCodeDataRootError } from "../src/dcode-data-root.js";
 import { ProductStoreLeaseError } from "../src/product-store-lease.js";
-import { ProductStoreSchemaError } from "../src/product-store-schema.js";
+import { PRODUCT_STORE_SCHEMA_VERSION, ProductStoreSchemaError } from "../src/product-store-schema.js";
 import { managedWorkerWorktreeArtifactId } from "../src/managed-worker-worktree.js";
 import {
   ProductStore,
   ProductStoreError,
   type ProductStoreFaultPoint,
+  type TaskContextSourceInput,
 } from "../src/product-store.js";
 
 interface Fixture {
@@ -41,12 +42,69 @@ function open(f: Fixture, options: { faultInjector?: (point: ProductStoreFaultPo
   });
 }
 
+function schemaFingerprintForTest(database: DatabaseSync): string {
+  const definitions = database.prepare(`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_master
+    WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+    ORDER BY type, name
+  `).all();
+  return `sha256:${createHash("sha256").update(JSON.stringify(definitions)).digest("hex")}`;
+}
+
+function rewriteAsSchemaV1Fixture(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE task_context_sources;
+    DROP TABLE task_context_sets;
+    DELETE FROM schema_migrations;
+    INSERT INTO schema_migrations(version, applied_at, product_version)
+    VALUES (1, '2026-08-24T00:00:00.000Z', '0.0.28');
+    PRAGMA user_version = 1;
+  `);
+  database.prepare("UPDATE dcode_meta SET value = '1' WHERE key IN ('schema_version', 'minimum_reader_schema_version')").run();
+  database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
+    .run(schemaFingerprintForTest(database));
+  database.exec("PRAGMA foreign_keys = ON");
+}
+
+async function prewriteSchemaV1PromotionBackup(f: Fixture): Promise<void> {
+  const path = join(f.dataRoot, "product-store.sqlite3");
+  const checkpoint = new DatabaseSync(path);
+  try {
+    const result = checkpoint.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+      busy?: unknown;
+      log?: unknown;
+      checkpointed?: unknown;
+    } | undefined;
+    assert.equal(result?.busy, 0);
+    assert.equal(result?.log, result?.checkpointed);
+  } finally {
+    checkpoint.close();
+  }
+  const bytes = await readFile(path);
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const migrationID = `schema-v1-to-v2-${digest.slice("sha256:".length, "sha256:".length + 16)}`;
+  const directory = join(f.dataRoot, "migrations", migrationID);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "product-store-before.sqlite3"), bytes);
+  await writeFile(
+    join(directory, "manifest.json"),
+    `${JSON.stringify({
+      migrationId: migrationID,
+      fromSchemaVersion: 1,
+      toSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
+      sourceDigest: digest,
+    }, null, 2)}\n`,
+  );
+}
+
 test("fresh Product Store creates private managed storage and four built-in Agent Profiles", async () => {
   const f = await fixture();
   const store = await open(f);
   try {
     const snapshot = await store.snapshot();
-    assert.equal(snapshot.schemaVersion, 1);
+    assert.equal(snapshot.schemaVersion, PRODUCT_STORE_SCHEMA_VERSION);
     assert.equal(snapshot.storeRevision, 0);
     assert.equal(snapshot.dataRoot, f.dataRoot);
     assert.equal(snapshot.currentUser.homeDirectory, f.home);
@@ -55,6 +113,7 @@ test("fresh Product Store creates private managed storage and four built-in Agen
       ["coordinator", "explore", "verifier", "worker"],
     );
     assert.deepEqual(snapshot.tasks, []);
+    assert.deepEqual(snapshot.taskContextSets, []);
     assert.equal((await stat(f.dataRoot)).mode & 0o777, 0o700);
     assert.equal((await stat(join(f.dataRoot, "product-store.sqlite3"))).mode & 0o777, 0o600);
     for (const directory of ["artifacts", "indexes", "logs", "migrations", "recovery", "runtime"]) {
@@ -117,6 +176,8 @@ test("task.create atomically creates a User Scope Task, Coordination Session and
     assert.equal(restored.storeRevision, 1);
     assert.equal(restored.tasks[0]?.id, taskId);
     assert.equal(restored.sessions[0]?.id, sessionId);
+    assert.equal(restored.taskContextSets[0]?.taskId, taskId);
+    assert.equal(restored.taskContextSets[0]?.revision, 1);
     assert.equal(restored.events[0]?.kind, "task.created");
   } finally {
     await store.close();
@@ -178,6 +239,221 @@ test("Project Scope resolves to a real Project and never uses a nullable owner",
     );
   } finally {
     await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("Task Context Selection is explicit, ordered, revisioned, and bounded to Task Scope or user knowledge", async () => {
+  const f = await fixture();
+  const store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    const created = await store.createTask({
+      requestId: "create-context-task",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Select context",
+      goal: "Use only explicit source files",
+    });
+    const firstSet = (await store.snapshot()).taskContextSets.find((set) => set.taskId === created.task.id);
+    assert.equal(firstSet?.revision, 1);
+    const globalKnowledgeRoot = join(f.home, "Workspace", "Write", "Content");
+    await mkdir(globalKnowledgeRoot, { recursive: true });
+    const canonicalGlobalKnowledgeRoot = await realpath(globalKnowledgeRoot);
+    const selectedSources: TaskContextSourceInput[] = [
+      { kind: "scope_document", relativePath: "DESIGN.md", title: "设计" },
+      {
+        kind: "global_knowledge",
+        rootPath: canonicalGlobalKnowledgeRoot,
+        relativePath: "AI/上下文.md",
+        title: "全局知识",
+      },
+    ];
+    const updated = await store.replaceTaskContext({
+      requestId: "replace-task-context",
+      expectedStoreRevision: created.storeRevision,
+      taskId: created.task.id,
+      scope: created.task.scope,
+      expectedContextRevision: firstSet!.revision,
+      sources: selectedSources,
+    });
+    assert.equal(updated.contextSet.revision, 2);
+    assert.deepEqual(
+      updated.contextSet.sources.map((source) => ({
+        kind: source.kind,
+        relativePath: source.relativePath,
+        rootPath: source.rootPath,
+        title: source.title,
+      })),
+      [
+        { kind: "scope_document", relativePath: "DESIGN.md", rootPath: undefined, title: "设计" },
+        {
+          kind: "global_knowledge",
+          relativePath: "AI/上下文.md",
+          rootPath: canonicalGlobalKnowledgeRoot,
+          title: "全局知识",
+        },
+      ],
+    );
+    await rm(globalKnowledgeRoot, { recursive: true, force: true });
+    const replayed = await store.replaceTaskContext({
+      requestId: "replace-task-context",
+      expectedStoreRevision: updated.storeRevision,
+      taskId: created.task.id,
+      scope: created.task.scope,
+      expectedContextRevision: firstSet!.revision,
+      sources: selectedSources,
+    });
+    assert.deepEqual(replayed, updated);
+    await assert.rejects(
+      store.replaceTaskContext({
+        requestId: "stale-context-replace",
+        expectedStoreRevision: updated.storeRevision,
+        taskId: created.task.id,
+        scope: created.task.scope,
+        expectedContextRevision: 1,
+        sources: [],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "REVISION_CONFLICT",
+    );
+    await assert.rejects(
+      store.replaceTaskContext({
+        requestId: "context-outside-home",
+        expectedStoreRevision: updated.storeRevision,
+        taskId: created.task.id,
+        scope: created.task.scope,
+        expectedContextRevision: 2,
+        sources: [{
+          kind: "global_knowledge",
+          rootPath: f.root,
+          relativePath: "secret.md",
+        }],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
+    const outsideKnowledgeRoot = join(f.root, "outside-knowledge");
+    const linkedKnowledgeRoot = join(f.home, "linked-knowledge");
+    await mkdir(outsideKnowledgeRoot);
+    await symlink(outsideKnowledgeRoot, linkedKnowledgeRoot);
+    await assert.rejects(
+      store.replaceTaskContext({
+        requestId: "context-symlinked-root",
+        expectedStoreRevision: updated.storeRevision,
+        taskId: created.task.id,
+        scope: created.task.scope,
+        expectedContextRevision: 2,
+        sources: [{
+          kind: "global_knowledge",
+          rootPath: linkedKnowledgeRoot,
+          relativePath: "outside.md",
+        }],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
+    const sharedKnowledgeRoot = join(f.home, "SharedKnowledge");
+    const nestedProjectDirectory = join(sharedKnowledgeRoot, "Project");
+    await mkdir(nestedProjectDirectory, { recursive: true });
+    const project = await store.createProject({
+      requestId: "context-project",
+      expectedStoreRevision: updated.storeRevision,
+      title: "Context Project",
+      directory: nestedProjectDirectory,
+    });
+    const projectTask = await store.createTask({
+      requestId: "context-project-task",
+      expectedStoreRevision: project.storeRevision,
+      scope: { kind: "project", projectId: project.project.id },
+      title: "Context Project Task",
+      goal: "Keep AGENTS mandatory",
+    });
+    const projectContext = (await store.snapshot()).taskContextSets.find((set) => set.taskId === projectTask.task.id);
+    await assert.rejects(
+      store.replaceTaskContext({
+        requestId: "context-global-agents-duplicate",
+        expectedStoreRevision: projectTask.storeRevision,
+        taskId: projectTask.task.id,
+        scope: projectTask.task.scope,
+        expectedContextRevision: projectContext!.revision,
+        sources: [{
+          kind: "global_knowledge",
+          rootPath: sharedKnowledgeRoot,
+          relativePath: "Project/AGENTS.md",
+        }],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
+    await assert.rejects(
+      store.replaceTaskContext({
+        requestId: "context-redundant-agents",
+        expectedStoreRevision: updated.storeRevision,
+        taskId: created.task.id,
+        scope: created.task.scope,
+        expectedContextRevision: 2,
+        sources: [{ kind: "scope_document", relativePath: "AGENTS.md" }],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("opening a schema v1 Product Store creates a private backup then promotes every Task Context Selection atomically", async () => {
+  const f = await fixture("dcode-schema-v1-promotion-");
+  let store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    const created = await store.createTask({
+      requestId: "create-v1-task",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Migrate me",
+      goal: "Keep a durable empty selection set",
+    });
+    await store.close();
+    const path = join(f.dataRoot, "product-store.sqlite3");
+    const legacy = new DatabaseSync(path);
+    rewriteAsSchemaV1Fixture(legacy);
+    legacy.close();
+
+    store = await open(f);
+    const promoted = await store.snapshot();
+    assert.equal(promoted.schemaVersion, PRODUCT_STORE_SCHEMA_VERSION);
+    assert.equal(promoted.storeRevision, created.storeRevision + 1);
+    assert.deepEqual(
+      promoted.taskContextSets.map((set) => ({ taskId: set.taskId, revision: set.revision, sourceCount: set.sources.length })),
+      [{ taskId: created.task.id, revision: 1, sourceCount: 0 }],
+    );
+    assert.equal(promoted.events.some((event) => event.kind === "schema.promoted"), true);
+    const directories = await readdir(join(f.dataRoot, "migrations"));
+    const migrationDirectory = directories.find((entry) => entry.startsWith("schema-v1-to-v2-"));
+    assert.ok(migrationDirectory);
+    assert.equal((await stat(join(f.dataRoot, "migrations", migrationDirectory!, "product-store-before.sqlite3"))).isFile(), true);
+    assert.equal((await stat(join(f.dataRoot, "migrations", migrationDirectory!, "manifest.json"))).isFile(), true);
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a schema v1 promotion resumes after its stable backup already exists", async () => {
+  const f = await fixture("dcode-schema-v1-resume-");
+  let store = await open(f);
+  try {
+    await store.close();
+    const path = join(f.dataRoot, "product-store.sqlite3");
+    const legacy = new DatabaseSync(path);
+    rewriteAsSchemaV1Fixture(legacy);
+    legacy.close();
+    await prewriteSchemaV1PromotionBackup(f);
+
+    store = await open(f);
+    const snapshot = await store.snapshot();
+    assert.equal(snapshot.schemaVersion, PRODUCT_STORE_SCHEMA_VERSION);
+    assert.equal(snapshot.events.filter((event) => event.kind === "schema.promoted").length, 1);
+  } finally {
+    await store.close().catch(() => undefined);
     await rm(f.root, { recursive: true, force: true });
   }
 });
@@ -349,6 +625,7 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
         message: "api_key: fixture_value",
         attachmentRefs: [],
         roleRevision: "builtin-coordinator:v1",
+        contextRevision: 1,
         profileSnapshot: { role: "coordinator" },
         tools: [],
         toolsWritable: false,
@@ -370,6 +647,7 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
         message: "safe input",
         attachmentRefs: [],
         roleRevision: "builtin-coordinator:v1",
+        contextRevision: 1,
         profileSnapshot: { role: "coordinator" },
         tools: [],
         toolsWritable: false,
@@ -392,6 +670,7 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
       modelProvider: "test",
       modelId: "model",
       roleRevision: "builtin-coordinator:v1",
+      contextRevision: 1,
       profileSnapshot: { role: "coordinator" },
       tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
       toolsWritable: false,
@@ -432,6 +711,7 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
       message: "crash before result",
       attachmentRefs: [],
       roleRevision: "builtin-coordinator:v1",
+      contextRevision: 1,
       profileSnapshot: { role: "coordinator" },
       tools: [],
       toolsWritable: false,
@@ -637,6 +917,7 @@ test("Agent Request waits only its member, resumes from a valid choice, and canc
         message: `run ${runtimeId}`,
         attachmentRefs: [],
         roleRevision: `${agentRun.role}:v1`,
+        contextRevision: 1,
         profileSnapshot: { role: agentRun.role },
         tools: [{ name: "dcode_request", description: "Request a choice", parameters: { type: "object" } }],
         toolsWritable: false,

@@ -6,15 +6,22 @@ import { isAbsolute, relative, resolve } from "node:path";
 export const MAX_DCODE_PROMPT_DOCUMENT_BYTES = 64 * 1024;
 const MAX_PROMPT_SOURCE_RECEIPTS = 32;
 
+export type DCodePromptSourceKind = "required_agents" | "scope_document" | "global_knowledge";
+
 export interface DCodePromptSourceReceipt {
   path: string;
   digest: string;
   bytes: number;
+  kind?: DCodePromptSourceKind;
+  title?: string;
+  rootPath?: string;
 }
 
 export type DCodePromptSourceUnavailableReason =
   | "runtime_cwd_unavailable"
   | "outside_runtime_cwd"
+  | "source_root_unavailable"
+  | "outside_source_root"
   | "missing"
   | "not_regular_file"
   | "symbolic_link"
@@ -30,6 +37,8 @@ export type DCodePromptSourceReadCache = Map<string, Promise<DCodePromptSourceRe
 
 export interface DCodePromptSourceState {
   path: string;
+  kind?: DCodePromptSourceKind;
+  title?: string;
   receiptDigest: string;
   receiptBytes: number;
   state: "current_match" | "hash_mismatch" | "historical_unavailable";
@@ -76,6 +85,9 @@ export function normalizeDCodePromptSourceReceipts(value: unknown): DCodePromptS
     const path = item.path;
     const receiptDigest = item.digest;
     const bytes = item.bytes;
+    const kind = item.kind;
+    const title = item.title;
+    const rootPath = item.rootPath;
     if (typeof path !== "string" || path.length === 0 || path.length > 4_096 || !isAbsolute(path) || path.includes("\0")) {
       throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} has an invalid path`);
     }
@@ -85,13 +97,36 @@ export function normalizeDCodePromptSourceReceipts(value: unknown): DCodePromptS
     if (!Number.isSafeInteger(bytes) || (bytes as number) < 0 || (bytes as number) > MAX_DCODE_PROMPT_DOCUMENT_BYTES) {
       throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} has an invalid byte count`);
     }
-    return { path, digest: receiptDigest, bytes: bytes as number };
+    if (kind !== undefined && kind !== "required_agents" && kind !== "scope_document" && kind !== "global_knowledge") {
+      throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} has an invalid source kind`);
+    }
+    if (title !== undefined && (typeof title !== "string" || title.length === 0 || title.length > 200)) {
+      throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} has an invalid title`);
+    }
+    if (rootPath !== undefined) {
+      if (typeof rootPath !== "string" || rootPath.length === 0 || rootPath.length > 4_096 || !isAbsolute(rootPath) || rootPath.includes("\0")) {
+        throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} has an invalid source root`);
+      }
+      if (!isContainedPath(resolve(rootPath), resolve(path))) {
+        throw new DCodePromptSourceReceiptError(`Prompt source receipt ${index} is outside its declared source root`);
+      }
+    }
+    return {
+      path,
+      digest: receiptDigest,
+      bytes: bytes as number,
+      ...(kind ? { kind } : {}),
+      ...(title ? { title } : {}),
+      ...(rootPath ? { rootPath: resolve(rootPath) } : {}),
+    };
   });
 }
 
-async function canonicalRuntimeRoot(cwd: string): Promise<string | undefined> {
+async function canonicalRuntimeRoot(cwd: string, requireCanonicalIdentity = false): Promise<string | undefined> {
   try {
-    const root = await realpath(resolve(cwd));
+    const lexicalRoot = resolve(cwd);
+    const root = await realpath(lexicalRoot);
+    if (requireCanonicalIdentity && root !== lexicalRoot) return undefined;
     const metadata = await lstat(root);
     return metadata.isDirectory() ? root : undefined;
   } catch {
@@ -103,11 +138,12 @@ async function readFromCanonicalRoot(
   cwd: string,
   canonicalRoot: string,
   sourcePath: string,
+  outsideReason: "outside_runtime_cwd" | "outside_source_root" = "outside_runtime_cwd",
 ): Promise<DCodePromptSourceReadResult> {
   const lexicalRoot = resolve(cwd);
   const lexicalTarget = resolve(sourcePath);
   if (!isContainedPath(lexicalRoot, lexicalTarget)) {
-    return { kind: "unavailable", reason: "outside_runtime_cwd" };
+    return { kind: "unavailable", reason: outsideReason };
   }
   let metadata;
   try {
@@ -133,7 +169,7 @@ async function readFromCanonicalRoot(
     return { kind: "unavailable", reason: "symbolic_link" };
   }
   if (!isContainedPath(canonicalRoot, canonicalTarget)) {
-    return { kind: "unavailable", reason: "outside_runtime_cwd" };
+    return { kind: "unavailable", reason: outsideReason };
   }
 
   let handle;
@@ -187,10 +223,14 @@ async function readFromCanonicalRoot(
   }
 }
 
-export async function readDCodePromptSource(cwd: string, sourcePath: string): Promise<DCodePromptSourceReadResult> {
-  const root = await canonicalRuntimeRoot(cwd);
-  if (!root) return { kind: "unavailable", reason: "runtime_cwd_unavailable" };
-  return await readFromCanonicalRoot(cwd, root, sourcePath);
+export async function readDCodePromptSource(
+  cwd: string,
+  sourcePath: string,
+  sourceRoot = false,
+): Promise<DCodePromptSourceReadResult> {
+  const root = await canonicalRuntimeRoot(cwd, sourceRoot);
+  if (!root) return { kind: "unavailable", reason: sourceRoot ? "source_root_unavailable" : "runtime_cwd_unavailable" };
+  return await readFromCanonicalRoot(cwd, root, sourcePath, sourceRoot ? "outside_source_root" : "outside_runtime_cwd");
 }
 
 export async function inspectDCodePromptSourceReceipts(
@@ -199,32 +239,43 @@ export async function inspectDCodePromptSourceReceipts(
   readCache?: DCodePromptSourceReadCache,
 ): Promise<DCodePromptSourceState[]> {
   const receipts = normalizeDCodePromptSourceReceipts(value);
-  if (cwd === undefined) {
-    return receipts.map((receipt) => ({
-      path: receipt.path,
-      receiptDigest: receipt.digest,
-      receiptBytes: receipt.bytes,
-      state: "historical_unavailable",
-      contentStored: false,
-      unavailableReason: "runtime_cwd_unavailable",
-    }));
-  }
-  const root = await canonicalRuntimeRoot(cwd);
-  if (!root) {
-    return receipts.map((receipt) => ({
-      path: receipt.path,
-      receiptDigest: receipt.digest,
-      receiptBytes: receipt.bytes,
-      state: "historical_unavailable",
-      contentStored: false,
-      unavailableReason: "runtime_cwd_unavailable",
-    }));
-  }
   return await Promise.all(receipts.map(async (receipt) => {
+    const allowedRoot = receipt.rootPath ?? cwd;
+    const sourceRoot = receipt.kind === "global_knowledge";
+    if (allowedRoot === undefined) {
+      return {
+        path: receipt.path,
+        ...(receipt.kind ? { kind: receipt.kind } : {}),
+        ...(receipt.title ? { title: receipt.title } : {}),
+        receiptDigest: receipt.digest,
+        receiptBytes: receipt.bytes,
+        state: "historical_unavailable" as const,
+        contentStored: false as const,
+        unavailableReason: "runtime_cwd_unavailable" as const,
+      };
+    }
+    const root = await canonicalRuntimeRoot(allowedRoot, sourceRoot);
+    if (!root) {
+      return {
+        path: receipt.path,
+        ...(receipt.kind ? { kind: receipt.kind } : {}),
+        ...(receipt.title ? { title: receipt.title } : {}),
+        receiptDigest: receipt.digest,
+        receiptBytes: receipt.bytes,
+        state: "historical_unavailable" as const,
+        contentStored: false as const,
+        unavailableReason: sourceRoot ? "source_root_unavailable" as const : "runtime_cwd_unavailable" as const,
+      };
+    }
     const cacheKey = `${root}\0${receipt.path}`;
     let currentPromise = readCache?.get(cacheKey);
     if (!currentPromise) {
-      currentPromise = readFromCanonicalRoot(cwd, root, receipt.path);
+      currentPromise = readFromCanonicalRoot(
+        allowedRoot,
+        root,
+        receipt.path,
+        sourceRoot ? "outside_source_root" : "outside_runtime_cwd",
+      );
       readCache?.set(cacheKey, currentPromise);
     }
     const current = await currentPromise;
@@ -232,6 +283,8 @@ export async function inspectDCodePromptSourceReceipts(
       const currentDigest = digest(current.bytes);
       return {
         path: receipt.path,
+        ...(receipt.kind ? { kind: receipt.kind } : {}),
+        ...(receipt.title ? { title: receipt.title } : {}),
         receiptDigest: receipt.digest,
         receiptBytes: receipt.bytes,
         state: currentDigest === receipt.digest ? "current_match" as const : "hash_mismatch" as const,
@@ -243,6 +296,8 @@ export async function inspectDCodePromptSourceReceipts(
     if (current.reason === "too_large" && current.currentBytes !== undefined && current.currentBytes !== receipt.bytes) {
       return {
         path: receipt.path,
+        ...(receipt.kind ? { kind: receipt.kind } : {}),
+        ...(receipt.title ? { title: receipt.title } : {}),
         receiptDigest: receipt.digest,
         receiptBytes: receipt.bytes,
         state: "hash_mismatch" as const,
@@ -252,6 +307,8 @@ export async function inspectDCodePromptSourceReceipts(
     }
     return {
       path: receipt.path,
+      ...(receipt.kind ? { kind: receipt.kind } : {}),
+      ...(receipt.title ? { title: receipt.title } : {}),
       receiptDigest: receipt.digest,
       receiptBytes: receipt.bytes,
       state: "historical_unavailable" as const,

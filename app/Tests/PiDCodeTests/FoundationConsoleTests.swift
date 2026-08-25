@@ -53,6 +53,13 @@ final class FoundationConsoleTests: XCTestCase {
                 ]),
             ]),
             "tasks": .array(withOpenRequest ? [task] : []),
+            "taskContextSets": .array(withOpenRequest ? [.object([
+                "taskId": .string("task-one"),
+                "revision": .number(1),
+                "sources": .array([]),
+                "createdAt": .string("2026-08-25T00:00:00Z"),
+                "updatedAt": .string("2026-08-25T00:00:00Z"),
+            ])] : []),
             "sessions": .array(withOpenRequest ? [session] : []),
             "sessionPaths": .array([]),
             "sessionProvenance": .array([]),
@@ -328,6 +335,53 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertEqual(answer.params["sessionRunId"]?.stringValue, "session-run-one")
         XCTAssertEqual(answer.params["agentRequestId"]?.stringValue, "request-one")
         XCTAssertEqual(answer.params["answer"]?["optionId"]?.stringValue, "one")
+    }
+
+    func testFoundationTaskContextUsesRevisionedHostMutation() async throws {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 12, withOpenRequest: true)
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "task.context.replace": .object([
+                "storeRevision": .number(13),
+                "contextSet": .object([
+                    "taskId": .string("task-one"),
+                    "revision": .number(2),
+                    "sources": .array([]),
+                    "createdAt": .string("2026-08-25T00:00:00Z"),
+                    "updatedAt": .string("2026-08-25T00:00:00Z"),
+                ]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        let task = try XCTUnwrap(harness.model.foundationSnapshot?.tasks.first)
+        let contextSet = try XCTUnwrap(harness.model.foundationSnapshot?.taskContextSets.first)
+        let saved = await harness.model.replaceFoundationTaskContext(
+            task: task,
+            contextSet: contextSet,
+            sources: [
+                .init(kind: "scope_document", relativePath: "DESIGN.md", title: "设计", rootPath: nil),
+                .init(
+                    kind: "global_knowledge",
+                    relativePath: "context.md",
+                    title: "全局知识",
+                    rootPath: "/Users/tester/Workspace/Write/Content"
+                ),
+            ]
+        )
+        XCTAssertTrue(saved)
+        let calls = await harness.client.requests
+        let call = try XCTUnwrap(calls.first(where: { $0.method == "task.context.replace" }))
+        XCTAssertEqual(call.params["taskId"]?.stringValue, "task-one")
+        XCTAssertEqual(call.params["expectedStoreRevision"]?.intValue, 12)
+        XCTAssertEqual(call.params["expectedContextRevision"]?.intValue, 1)
+        XCTAssertEqual(call.params["sources"]?.arrayValue?.count, 2)
+        XCTAssertEqual(call.params["sources"]?.arrayValue?[1]["rootPath"]?.stringValue, "/Users/tester/Workspace/Write/Content")
     }
 
     func testWorkerTeamUsesHostDerivedWorkspaceAndRefusesUserScope() async throws {

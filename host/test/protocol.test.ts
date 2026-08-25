@@ -58,6 +58,25 @@ test("method parameter validation rejects invalid values", () => {
     goal: "Create the native Task bundle",
     acceptance: ["Task exists"],
   }));
+  const taskContextReplace = {
+    requestId: "task-context-replace",
+    expectedStoreRevision: 2,
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    expectedContextRevision: 1,
+    sources: [
+      { kind: "scope_document", relativePath: "DESIGN.md", title: "设计" },
+      { kind: "global_knowledge", rootPath: "/Users/tester/Workspace/Write/Content", relativePath: "context.md" },
+    ],
+  };
+  assert.doesNotThrow(() => validateMethodParams("task.context.replace", taskContextReplace));
+  assert.throws(
+    () => validateMethodParams("task.context.replace", {
+      ...taskContextReplace,
+      sources: [{ kind: "global_knowledge", rootPath: "/Users/tester/Knowledge", relativePath: "a.md", extra: true }],
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("task.create", {
       requestId: "mixed-scope",

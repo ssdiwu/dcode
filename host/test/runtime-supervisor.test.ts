@@ -61,6 +61,7 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
   const dataRoot = join(root, ".dcode");
   const workspaceA = join(root, "workspace-a");
   const workspaceB = join(root, "workspace-b");
+  const workspaceC = join(root, "workspace-c");
   let providerArrivals = 0;
   const providerRequestBodies: string[] = [];
   let childProviderArrivals = 0;
@@ -107,6 +108,7 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
   await mkdir(agentDir, { recursive: true });
   await mkdir(workspaceA);
   await mkdir(workspaceB);
+  await mkdir(workspaceC);
   await writeFile(join(agentDir, "settings.json"), `${JSON.stringify({
     defaultProvider: "barrier",
     defaultModel: "barrier-model",
@@ -181,6 +183,94 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       task: { id: string };
       coordinationSession: { id: string };
     };
+    const globalKnowledgeRoot = join(root, "Knowledge");
+    await mkdir(globalKnowledgeRoot);
+    await writeFile(join(workspaceB, "DESIGN.md"), "# Task Context Design\n\nSELECTED_PROJECT_CONTEXT\n");
+    await writeFile(join(globalKnowledgeRoot, "runtime-context.md"), "# Global Context\n\nSELECTED_GLOBAL_CONTEXT\n");
+    const contextSnapshot = await host.handle("foundation.snapshot", {}) as {
+      storeRevision: number;
+      taskContextSets: Array<{ taskId: string; revision: number }>;
+    };
+    const taskBContext = contextSnapshot.taskContextSets.find((set) => set.taskId === taskB.task.id);
+    assert.ok(taskBContext);
+    const selectedContext = await host.handle("task.context.replace", {
+      requestId: "task-b-context",
+      expectedStoreRevision: contextSnapshot.storeRevision,
+      taskId: taskB.task.id,
+      scope: { kind: "project", projectId: projectB.project.id },
+      expectedContextRevision: taskBContext!.revision,
+      sources: [
+        { kind: "scope_document", relativePath: "DESIGN.md", title: "设计" },
+        {
+          kind: "global_knowledge",
+          rootPath: globalKnowledgeRoot,
+          relativePath: "runtime-context.md",
+          title: "全局知识",
+        },
+      ],
+    }) as { storeRevision: number; contextSet: { revision: number; sources: Array<{ relativePath: string }> } };
+    assert.equal(selectedContext.contextSet.revision, 2);
+    assert.deepEqual(selectedContext.contextSet.sources.map((source) => source.relativePath), ["DESIGN.md", "runtime-context.md"]);
+    const adapterSessionsBeforeWrongWorkspace = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
+    await assert.rejects(
+      host.handle("runtime.start", {
+        requestId: "task-a-wrong-workspace",
+        runtimeId: "runtime-a-wrong-workspace",
+        taskId: taskA.task.id,
+        dcodeSessionId: taskA.coordinationSession.id,
+        scope: { kind: "project", projectId: projectA.project.id },
+        workspace: { workspaceId: "wrong-workspace", cwd: workspaceB, access: "exclusiveWrite" },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_TASK_SCOPE_REQUIRED",
+    );
+    const adapterSessionsAfterWrongWorkspace = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
+    assert.deepEqual(adapterSessionsAfterWrongWorkspace.sessions.map((session) => session.id), adapterSessionsBeforeWrongWorkspace.sessions.map((session) => session.id));
+    const projectC = await host.handle("project.create", {
+      requestId: "project-c",
+      expectedStoreRevision: selectedContext.storeRevision,
+      title: "Project C",
+      directory: workspaceC,
+    }) as { storeRevision: number; project: { id: string } };
+    const taskC = await host.handle("task.create", {
+      requestId: "task-c",
+      expectedStoreRevision: projectC.storeRevision,
+      scope: { kind: "project", projectId: projectC.project.id },
+      title: "Task C",
+      goal: "Refuse missing selected Context before Runtime binding",
+    }) as {
+      storeRevision: number;
+      task: { id: string; scope: { kind: "project"; projectId: string } };
+      coordinationSession: { id: string };
+    };
+    const taskCSnapshot = await host.handle("foundation.snapshot", {}) as {
+      storeRevision: number;
+      taskContextSets: Array<{ taskId: string; revision: number }>;
+    };
+    const taskCContext = taskCSnapshot.taskContextSets.find((set) => set.taskId === taskC.task.id);
+    assert.ok(taskCContext);
+    const taskCMissingContext = await host.handle("task.context.replace", {
+      requestId: "task-c-missing-context",
+      expectedStoreRevision: taskCSnapshot.storeRevision,
+      taskId: taskC.task.id,
+      scope: taskC.task.scope,
+      expectedContextRevision: taskCContext!.revision,
+      sources: [{ kind: "scope_document", relativePath: "MISSING-DESIGN.md", title: "缺失设计" }],
+    }) as { storeRevision: number };
+    const adapterSessionsBeforeRejectedStart = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
+    await assert.rejects(
+      host.handle("runtime.start", {
+        requestId: "task-c-missing-context-runtime",
+        runtimeId: "runtime-c-missing-context",
+        taskId: taskC.task.id,
+        dcodeSessionId: taskC.coordinationSession.id,
+        scope: taskC.task.scope,
+        workspace: { workspaceId: "workspace-c", cwd: workspaceC, access: "exclusiveWrite" },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "TASK_CONTEXT_UNAVAILABLE",
+    );
+    const adapterSessionsAfterRejectedStart = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
+    assert.deepEqual(adapterSessionsAfterRejectedStart.sessions.map((session) => session.id), adapterSessionsBeforeRejectedStart.sessions.map((session) => session.id));
+    assert.equal((await host.handle("foundation.snapshot", {}) as { storeRevision: number }).storeRevision, taskCMissingContext.storeRevision);
     const identityA = {
       runtimeId: "runtime-a",
       taskId: taskA.task.id,
@@ -296,33 +386,36 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.ok(providerRequestBodies.slice(bodiesBeforeRefresh).some((body) => body.includes("FRESH_NEXT_RUN_RULE")));
+    assert.ok(providerRequestBodies.some((body) => body.includes("SELECTED_PROJECT_CONTEXT")));
+    assert.ok(providerRequestBodies.some((body) => body.includes("SELECTED_GLOBAL_CONTEXT")));
 
     const matchingSourceSnapshot = await host.handle("foundation.snapshot", {}) as {
       promptReceipts: Array<{
         id: string;
         sessionId: string;
         sourceReceipts: unknown;
-        sourceStates: Array<{ state: string; contentStored: boolean; unavailableReason?: string }>;
+        sourceStates: Array<{ kind?: string; state: string; contentStored: boolean; unavailableReason?: string }>;
       }>;
     };
-    const trackedReceipt = matchingSourceSnapshot.promptReceipts.find((receipt) => (
-      receipt.sessionId === taskB.coordinationSession.id && receipt.sourceStates.length > 0
-    ));
+    const trackedReceipt = matchingSourceSnapshot.promptReceipts
+      .filter((receipt) => receipt.sessionId === taskB.coordinationSession.id && receipt.sourceStates.length > 0)
+      .at(-1);
     assert.ok(trackedReceipt, "the next Run must expose its Prompt Source state");
-    assert.equal(trackedReceipt.sourceStates[0]?.state, "current_match");
-    assert.equal(trackedReceipt.sourceStates[0]?.contentStored, false);
+    const agentsSource = trackedReceipt.sourceStates.find((source) => source.kind === "required_agents");
+    assert.equal(agentsSource?.state, "current_match");
+    assert.equal(agentsSource?.contentStored, false);
     assert.equal(JSON.stringify(trackedReceipt.sourceReceipts).includes("FRESH_NEXT_RUN_RULE"), false);
 
     await writeFile(join(workspaceB, "AGENTS.md"), "# Changed After Receipt\n");
     const mismatchSnapshot = await host.handle("foundation.snapshot", {}) as typeof matchingSourceSnapshot;
     const mismatchedReceipt = mismatchSnapshot.promptReceipts.find((receipt) => receipt.id === trackedReceipt.id);
-    assert.equal(mismatchedReceipt?.sourceStates[0]?.state, "hash_mismatch");
+    assert.equal(mismatchedReceipt?.sourceStates.find((source) => source.kind === "required_agents")?.state, "hash_mismatch");
 
     await rm(join(workspaceB, "AGENTS.md"));
     const unavailableSnapshot = await host.handle("foundation.snapshot", {}) as typeof matchingSourceSnapshot;
     const unavailableReceipt = unavailableSnapshot.promptReceipts.find((receipt) => receipt.id === trackedReceipt.id);
-    assert.equal(unavailableReceipt?.sourceStates[0]?.state, "historical_unavailable");
-    assert.equal(unavailableReceipt?.sourceStates[0]?.unavailableReason, "missing");
+    assert.equal(unavailableReceipt?.sourceStates.find((source) => source.kind === "required_agents")?.state, "historical_unavailable");
+    assert.equal(unavailableReceipt?.sourceStates.find((source) => source.kind === "required_agents")?.unavailableReason, "missing");
 
     await host.handle("session.close", { runtimeId: "runtime-a", expectedSessionId: "adapter-a" });
     const afterClose = await host.handle("runtime.list", {}) as {
@@ -845,6 +938,83 @@ test("stopping the Coordinator aborts the Team before Child dispatch and replays
       "WORKSPACE_GIT_REPOSITORY_REQUIRED",
     );
     assert.equal((await host.handle("runtime.list", {}) as { runtimes: unknown[] }).runtimes.length, 0);
+
+    const ignoredContextRepository = join(root, "worker-ignored-context-repository");
+    await mkdir(ignoredContextRepository);
+    await git(["init", "--initial-branch=main"], ignoredContextRepository);
+    await git(["config", "user.email", "dcode-test@example.invalid"], ignoredContextRepository);
+    await git(["config", "user.name", "D Code Test"], ignoredContextRepository);
+    await writeFile(join(ignoredContextRepository, "README.md"), "Ignored context source\n");
+    await writeFile(join(ignoredContextRepository, ".gitignore"), "DESIGN.md\n");
+    await git(["add", "."], ignoredContextRepository);
+    await git(["commit", "-m", "initial"], ignoredContextRepository);
+    await writeFile(join(ignoredContextRepository, "DESIGN.md"), "# Ignored source-only design\n");
+    const ignoredContextBase = await host.handle("foundation.snapshot", {}) as {
+      storeRevision: number;
+    };
+    const ignoredContextProject = await host.handle("project.create", {
+      requestId: "worker-ignored-context-project",
+      expectedStoreRevision: ignoredContextBase.storeRevision,
+      title: "Ignored Context Worker Project",
+      directory: ignoredContextRepository,
+    }) as { storeRevision: number; project: { id: string } };
+    const ignoredContextTask = await host.handle("task.create", {
+      requestId: "worker-ignored-context-task",
+      expectedStoreRevision: ignoredContextProject.storeRevision,
+      scope: { kind: "project", projectId: ignoredContextProject.project.id },
+      title: "Ignored Context Worker",
+      goal: "Reject a selected source absent from the frozen commit",
+    }) as {
+      storeRevision: number;
+      task: { id: string; scope: { kind: "project"; projectId: string } };
+    };
+    const ignoredContextSnapshot = await host.handle("foundation.snapshot", {}) as {
+      storeRevision: number;
+      taskContextSets: Array<{ taskId: string; revision: number }>;
+    };
+    const ignoredContextSet = ignoredContextSnapshot.taskContextSets.find((set) => set.taskId === ignoredContextTask.task.id);
+    assert.ok(ignoredContextSet);
+    const ignoredContextSelection = await host.handle("task.context.replace", {
+      requestId: "worker-ignored-context-selection",
+      expectedStoreRevision: ignoredContextSnapshot.storeRevision,
+      taskId: ignoredContextTask.task.id,
+      scope: ignoredContextTask.task.scope,
+      expectedContextRevision: ignoredContextSet!.revision,
+      sources: [{ kind: "scope_document", relativePath: "DESIGN.md", title: "忽略的设计" }],
+    }) as { storeRevision: number };
+    const ignoredContextTeam = await host.handle("team.create", {
+      requestId: "worker-ignored-context-team",
+      expectedStoreRevision: ignoredContextSelection.storeRevision,
+      scope: ignoredContextTask.task.scope,
+      taskId: ignoredContextTask.task.id,
+      members: [
+        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
+        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
+      ],
+    }) as { storeRevision: number; teamRun: { id: string; revision: number } };
+    const providerRequestsBeforeIgnoredContext = providerRequests;
+    const ignoredContextStart = await host.handle("team.start", {
+      requestId: "worker-ignored-context-start",
+      expectedStoreRevision: ignoredContextTeam.storeRevision,
+      expectedTeamRunRevision: ignoredContextTeam.teamRun.revision,
+      scope: ignoredContextTask.task.scope,
+      taskId: ignoredContextTask.task.id,
+      teamRunId: ignoredContextTeam.teamRun.id,
+      message: "Do not create an incomplete Worker worktree",
+    }) as { started: boolean; reasonCode?: string };
+    assert.equal(ignoredContextStart.started, false);
+    assert.equal(ignoredContextStart.reasonCode, "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED");
+    const ignoredContextAfter = await host.handle("foundation.snapshot", {}) as {
+      managedWorkerWorktrees: Array<{ taskId: string }>;
+      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
+    };
+    assert.equal(ignoredContextAfter.managedWorkerWorktrees.some((worktree) => worktree.taskId === ignoredContextTask.task.id), false);
+    assert.equal(
+      ignoredContextAfter.teamFailures.find((failure) => failure.teamRunId === ignoredContextTeam.teamRun.id)?.reasonCode,
+      "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+    );
+    assert.equal((await host.handle("runtime.list", {}) as { runtimes: unknown[] }).runtimes.length, 0);
+    assert.equal(providerRequests, providerRequestsBeforeIgnoredContext);
 
     globalThis.fetch = (async () => new Response([
       `data: ${JSON.stringify({

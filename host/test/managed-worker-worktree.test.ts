@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import {
   ManagedWorkerWorktreeError,
+  assertManagedWorkerWorktreeContextSourcesMaterialize,
   planManagedWorkerWorktree,
   provisionManagedWorkerWorktree,
   verifyManagedWorkerWorktree,
@@ -128,6 +129,58 @@ test("Managed Worker worktree rejects replacement by an attached branch at the s
       verifyManagedWorkerWorktree(plan, gitRunner),
       (error: unknown) => error instanceof ManagedWorkerWorktreeError
         && error.code === "WORKSPACE_WORKTREE_VERIFICATION_FAILED",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Managed Worker worktree requires every selected Scope Document to materialize from its frozen Git revision", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-managed-worker-context-source-"));
+  const runtimeDirectory = join(root, ".dcode", "runtime");
+  try {
+    await mkdir(runtimeDirectory, { recursive: true });
+    const { repository, project } = await createRepository(root);
+    await writeFile(join(project, "DESIGN.md"), "# Tracked design\n");
+    await writeFile(join(repository, ".gitignore"), "ignored-context.md\nAGENTS.md\n");
+    await gitRunner(["add", "."], repository);
+    await gitRunner(["commit", "-m", "tracked context"], repository);
+    const plan = await planManagedWorkerWorktree({
+      runtimeDirectory,
+      projectDirectory: project,
+      agentRunId: "agent-run-worker-context-source",
+      gitRunner,
+    });
+    await assertManagedWorkerWorktreeContextSourcesMaterialize({
+      source: plan,
+      relativePaths: ["DESIGN.md"],
+      gitRunner,
+    });
+    await writeFile(join(project, "ignored-context.md"), "# Ignored current-only context\n");
+    await assertManagedWorkerWorktreeContextSourcesMaterialize({
+      source: plan,
+      relativePaths: ["DESIGN.md"],
+      gitRunner,
+    });
+    await assert.rejects(
+      assertManagedWorkerWorktreeContextSourcesMaterialize({
+        source: plan,
+        relativePaths: ["ignored-context.md"],
+        gitRunner,
+      }),
+      (error: unknown) => error instanceof ManagedWorkerWorktreeError
+        && error.code === "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
+    );
+    await writeFile(join(project, "AGENTS.md"), "# Ignored required rules\n");
+    await assert.rejects(
+      assertManagedWorkerWorktreeContextSourcesMaterialize({
+        source: plan,
+        relativePaths: ["DESIGN.md"],
+        includeCurrentAgents: true,
+        gitRunner,
+      }),
+      (error: unknown) => error instanceof ManagedWorkerWorktreeError
+        && error.code === "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

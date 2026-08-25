@@ -187,7 +187,7 @@ _Avoid_: Prompt 模板编辑器、字符串追加器、Pi SYSTEM loader、上下
 _Avoid_: Runtime Settings、System Prompt 全文、Context Projection、环境变量正文
 
 **Managed Worker Worktree（受管 Worker 工作树）**：
-由 D Code Host 在一条 Worker Agent Run 启动前，为符合条件的 Git Project Scope 在 `~/.dcode/runtime/` 下创建、验证并保留的 detached Git worktree（分离 Git 工作树）。它与稳定 Agent Run、受管 Artifact 和预写 External Side-effect Attempt（外部副作用尝试）一一关联；Worker 只能在该工作树中以 `exclusiveWrite` 运行。User Scope、非 Git 或源目录未提交时必须显式拒绝，系统不会自动删除、提交、合并、推送或重试 unknown（结果未知）工作树操作。
+由 D Code Host 在一条 Worker Agent Run 启动前，为符合条件的 Git Project Scope 在 `~/.dcode/runtime/` 下创建、验证并保留的 detached Git worktree（分离 Git 工作树）。它与稳定 Agent Run、受管 Artifact 和预写 External Side-effect Attempt（外部副作用尝试）一一关联；Worker 只能在该工作树中以 `exclusiveWrite` 运行。User Scope、非 Git、源目录未提交，或 Task 选中的 Scope Document 未能从冻结 Git revision 物化时必须显式拒绝；系统不会自动删除、提交、合并、推送或重试 unknown（结果未知）工作树操作。
 _Avoid_: 原项目目录共享写入、临时复制目录、Worker Profile 设置、Git 自动提交
 
 **Agent Environment（智能体环境）**：
@@ -221,6 +221,10 @@ _Avoid_: 工具注册表、固定白名单、工具 schema 副本、已安装能
 **Context Projection（上下文投影）**：
 某次 Session Run 或 Agent Run 实际读取的有界材料组合，可以包含摘要、近期消息、一等项目文档、知识引用和任务事实。投影可以压缩和重建，但不得覆盖来源，也必须能够回查原始事实。
 _Avoid_: 权威历史、全部项目文件、隐式全量注入
+
+**Task Context Selection（任务上下文选择）**：
+某个 Task 当前显式选择的、带 revision 的有序 Context Source 集合。`AGENTS.md` 是强制规则来源，不在其中取消；其余 Scope Document（作用域文档）和 Global Knowledge（全局知识）必须逐个选择具体文件。选择记录来源类型、根、相对路径、展示名与顺序，不保存正文；每个 Session Run 将当时 revision 和来源回执冻结到 Effective Input 与 Prompt Receipt，后续修改不会覆盖历史。
+_Avoid_: 全部 doc/、Content Vault 全量注入、Task Goal 文本、Pi 自动项目上下文
 
 **Pre-session Draft（会话前草稿）**（历史实现术语）：
 旧会话优先实现中，用户点击“新建会话”后、首次提交非空正文前由 D Code 本机拥有的临时输入对象。项目—任务模型使用 Task Draft 承接新工作；旧资料仍按本定义读取，不把空白草稿伪装成 D Code Session。

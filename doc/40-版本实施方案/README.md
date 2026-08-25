@@ -4,7 +4,7 @@
 
 > Target reset（目标架构重置）：ADR 0035–0040 已确认 User Scope / Project Scope → Task 主干、`~/.dcode/` 原生产品数据权威、Pi 单向导入、全局创造模式、一等项目文档以及 D Code System Prompt / Active Tool Set 边界。版本顺序固定为 `0.0.28` 先交付 Product Store、原生 Task / Session / Run、多 Runtime、Coordinator / Child Agent 与 Prompt / Tool 等基础设施；`0.0.29` 再消费这些真实事实完成任务工作台 UI/UX。当前 `0.0.28` 已形成 Implementation Candidate（实现候选）、通过自动门禁并生成 ad-hoc Local Dirty Candidate；原生人工验收、干净候选构建、tag 与发布仍未成立；`0.0.29` 尚未实现。
 
-`0.0.17`（`837af03`）、`0.0.18`（`617249e`）、`0.0.19`（`8f0c319`）与 `0.0.20` 已进入 `main`；`0.0.25`、`0.0.26`、`0.0.27` 已分别形成公开源码标签。Published Source 基线仍是 `v0.0.27` / `main@68237c3` / `origin/main`，其实现提交为 `8403710`。当前 checkout manifest 已统一为 `0.0.28`；2026-08-25 记录 Host `197/197`、Swift `336/336` 自动测试通过，并完成同一 Team 两个 Child Provider 请求真实重叠、Provider 失败耐久状态、Coordinator Stop、Team Start / Stop 幂等重放、Git worktree 隔离与实收 Prompt / Receipt 同源验证。它不等于干净 App 候选、真实已认证 Provider 交接、原生界面人工验收、tag、GitHub Release、签名分发或发布。
+`0.0.17`（`837af03`）、`0.0.18`（`617249e`）、`0.0.19`（`8f0c319`）与 `0.0.20` 已进入 `main`；`0.0.25`、`0.0.26`、`0.0.27` 已分别形成公开源码标签。Published Source 基线仍是 `v0.0.27` / `main@68237c3` / `origin/main`，其实现提交为 `8403710`。当前 checkout manifest 已统一为 `0.0.28`；2026-08-25 记录 Host `210/210` 连续两次、Swift `338/338` 自动测试通过，并完成同一 Team 两个 Child Provider 请求真实重叠、Provider 失败耐久状态、Coordinator Stop、Team Start / Stop 幂等重放、Git worktree 隔离、Task Context Selection 的 v1 → v2 私有备份晋升、选中项目 / 全局知识来源的 Prompt 回执与实收 Prompt / Receipt 同源验证，以及被选 Scope Document 无法由冻结 Git revision 物化时零 worktree / 零 Runtime 拒绝。它不等于干净 App 候选、真实已认证 Provider 交接、原生界面人工验收、tag、GitHub Release、签名分发或发布。
 
 ### 当前已知缺口
 

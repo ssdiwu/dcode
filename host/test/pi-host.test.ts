@@ -135,6 +135,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
     assert.equal(hello.capabilities.modelAuthentication, true);
     assert.equal((hello.capabilities as Record<string, boolean>).sessionRepair, true, "修复能力必须在 hello 能力位可发现");
     assert.equal((hello.capabilities as Record<string, boolean>).promptImages, true, "图片附件能力必须在 hello 能力位可发现");
+    assert.equal((hello.capabilities as Record<string, boolean>).taskContextSelection, true, "任务上下文选择必须在 hello 能力位可发现");
     const listed = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(listed.sessions.map((session) => session.id), [f.sessionId]);
     const opened = await host.handle("session.open", { sessionId: f.sessionId }) as { mode: string };

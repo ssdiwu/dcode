@@ -7,6 +7,7 @@ export const HOST_METHODS = [
   "foundation.snapshot",
   "project.create",
   "task.create",
+  "task.context.replace",
   "task.acceptance",
   "team.create",
   "team.start",
@@ -298,6 +299,38 @@ function validateTaskScope(params: Record<string, unknown>): void {
   );
 }
 
+function validateTaskContextSources(params: Record<string, unknown>): void {
+  const sources = params.sources;
+  if (!Array.isArray(sources) || sources.length > 32) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.sources to contain at most 32 Context Sources");
+  }
+  for (const [index, value] of sources.entries()) {
+    if (!isRecord(value)) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `Expected params.sources[${index}] to be an object`);
+    }
+    const kind = value.kind;
+    const allowedKeys = kind === "scope_document"
+      ? ["kind", "relativePath", "title"]
+      : kind === "global_knowledge"
+        ? ["kind", "rootPath", "relativePath", "title"]
+        : undefined;
+    if (!allowedKeys || Object.keys(value).some((key) => !allowedKeys.includes(key))) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `params.sources[${index}] has an invalid Context Source shape`);
+    }
+    if (typeof value.relativePath !== "string" || value.relativePath.length === 0 || value.relativePath.length > 4_096) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `params.sources[${index}].relativePath is invalid`);
+    }
+    if (value.title !== undefined && (typeof value.title !== "string" || value.title.length === 0 || value.title.length > 200)) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `params.sources[${index}].title is invalid`);
+    }
+    if (kind === "global_knowledge" && (
+      typeof value.rootPath !== "string" || value.rootPath.length === 0 || value.rootPath.length > 4_096
+    )) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `params.sources[${index}].rootPath is invalid`);
+    }
+  }
+}
+
 function validateRuntimeOpenIdentity(params: Record<string, unknown>): void {
   if (params.runtimeId === undefined) return;
   const runtimeId = requireBoundedString(params, "runtimeId", 128);
@@ -508,6 +541,14 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "title", 200);
       requireBoundedString(params, "goal", 4_000);
       requireStringArray(params, "acceptance", 100, true);
+      return;
+    case "task.context.replace":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      requireInteger(params, "expectedContextRevision", 1, Number.MAX_SAFE_INTEGER);
+      validateTaskContextSources(params);
       return;
     case "task.acceptance":
       requireBoundedString(params, "requestId", 128);
