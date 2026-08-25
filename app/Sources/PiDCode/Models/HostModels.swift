@@ -60,6 +60,7 @@ enum HostCompatibility {
         "multiRuntime",
         "runtimeIdentity",
         "workspaceIsolation",
+        "managedWorkerWorktree",
         "agentRequests",
     ]
 

@@ -239,6 +239,9 @@ struct FoundationConsoleView: View {
         let observedRuns = snapshot.sessionRuns.filter { $0.sessionId == observedSession?.id }
         let observedRun = observedRuns.first(where: { $0.id == selectedSessionRunID }) ?? observedRuns.last
         let team = snapshot.teamRuns.last(where: { $0.taskId == task.id })
+        let teamFailure = team.flatMap { team in
+            snapshot.teamFailures.last(where: { $0.teamRunId == team.id })
+        }
         let agents = snapshot.agentRuns.filter { $0.taskId == task.id && $0.teamRunId == team?.id }
         let requests = snapshot.agentRequests.filter {
             $0.taskId == task.id && $0.teamRunId == team?.id && $0.status == "open"
@@ -328,6 +331,16 @@ struct FoundationConsoleView: View {
                             .buttonStyle(.borderedProminent)
                         }
                     }
+                    if let teamFailure {
+                        Label(
+                            teamFailure.reason,
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help(teamFailure.reasonCode ?? teamFailure.reason)
+                        .padding(.top, 8)
+                    }
                     ForEach(agents) { agent in
                         HStack(spacing: 9) {
                             Circle()
@@ -392,8 +405,12 @@ struct FoundationConsoleView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ForEach(snapshot.agentProfiles.filter {
-                            $0.enabled && !["coordinator", "worker"].contains($0.role)
+                            $0.enabled && $0.role != "coordinator"
                         }) { profile in
+                            let workerNeedsProject = profile.role == "worker" && {
+                                if case .user = task.scope { return true }
+                                return false
+                            }()
                             Toggle(isOn: Binding(
                                 get: { selectedTeamProfileIDs.contains(profile.id) },
                                 set: { selected in
@@ -401,8 +418,16 @@ struct FoundationConsoleView: View {
                                     else { selectedTeamProfileIDs.remove(profile.id) }
                                 }
                             )) {
-                                Text("\(profile.name) · \(profile.role)")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(profile.name) · \(profile.role)")
+                                    if profile.role == "worker" {
+                                        Text(workerNeedsProject ? "Worker 仅支持 Git Project Scope" : "将获得独立受管 worktree")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
+                            .disabled(workerNeedsProject)
                         }
                         HStack {
                         VStack(alignment: .leading, spacing: 3) {
@@ -432,6 +457,7 @@ struct FoundationConsoleView: View {
         let runs = snapshot.sessionRuns.filter { $0.taskId == task.id }
         let attempts = snapshot.operationAttempts.filter { $0.taskId == task.id }
         let uncertain = attempts.filter { ["prepared", "unknown"].contains($0.status) }
+        let managedWorktrees = snapshot.managedWorkerWorktrees.filter { $0.taskId == task.id }
         let latestRun = runs.last
         let environment = latestRun?.runtimeEnvironmentId.flatMap { id in
             snapshot.runtimeEnvironments.first(where: { $0.id == id })
@@ -491,6 +517,35 @@ struct FoundationConsoleView: View {
                     .foregroundStyle(.secondary)
                     .padding(8)
                     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+                if !managedWorktrees.isEmpty {
+                    Divider()
+                    Text("受管 Worker worktree").font(.subheadline.weight(.semibold))
+                    ForEach(managedWorktrees) { worktree in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Label(worktree.state, systemImage: worktree.state == "ready" ? "point.3.connected.trianglepath.dotted" : "questionmark.diamond")
+                                    .foregroundStyle(worktree.state == "ready" ? Color.green : Color.orange)
+                                Spacer()
+                                Text(String(worktree.baseCommit.prefix(12)))
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(worktree.workspaceCwd)
+                                .font(.caption2.monospaced())
+                                .lineLimit(1)
+                            if let failureCode = worktree.failureCode {
+                                Text(failureCode)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .padding(8)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    Text("工作树由 Host 创建并保留；D Code 不会自动删除、提交或重试 unknown Attempt。")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
                 if attempts.isEmpty {
                     Text("尚无 Provider 或工具执行记录")
@@ -604,7 +659,9 @@ struct FoundationConsoleView: View {
 
     private func taskOutputs(_ task: FoundationTask, snapshot: FoundationSnapshot) -> some View {
         let reports = snapshot.agentReports.filter { $0.taskId == task.id }
-        let artifacts = snapshot.artifacts.filter { $0.taskId == task.id }
+        let artifacts = snapshot.artifacts.filter {
+            $0.taskId == task.id && $0.kind != "managed_worker_worktree_v1"
+        }
         let evidence = snapshot.evidence.filter { $0.taskId == task.id }
         let findings = snapshot.findings.filter { $0.taskId == task.id }
         return FoundationSection(

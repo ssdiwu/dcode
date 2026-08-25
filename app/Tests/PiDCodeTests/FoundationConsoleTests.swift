@@ -3,8 +3,12 @@ import XCTest
 
 @MainActor
 final class FoundationConsoleTests: XCTestCase {
-    private func snapshotValue(revision: Int = 0, withOpenRequest: Bool = false) -> JSONValue {
-        let task = taskValue()
+    private func snapshotValue(
+        revision: Int = 0,
+        withOpenRequest: Bool = false,
+        projectScope: Bool = false
+    ) -> JSONValue {
+        let task = taskValue(projectScope: projectScope)
         let session = sessionValue()
         return .object([
             "schemaVersion": .number(1),
@@ -22,6 +26,26 @@ final class FoundationConsoleTests: XCTestCase {
                     "role": .string("coordinator"),
                     "name": .string("Coordinator"),
                     "roleContract": .string("Coordinate the Task"),
+                    "enabled": .bool(true),
+                    "builtin": .bool(true),
+                    "profileVersion": .number(1),
+                    "revision": .number(1),
+                ]),
+                .object([
+                    "id": .string("builtin-explore"),
+                    "role": .string("explore"),
+                    "name": .string("Explore"),
+                    "roleContract": .string("Explore the Task"),
+                    "enabled": .bool(true),
+                    "builtin": .bool(true),
+                    "profileVersion": .number(1),
+                    "revision": .number(1),
+                ]),
+                .object([
+                    "id": .string("builtin-worker"),
+                    "role": .string("worker"),
+                    "name": .string("Worker"),
+                    "roleContract": .string("Implement the Task"),
                     "enabled": .bool(true),
                     "builtin": .bool(true),
                     "profileVersion": .number(1),
@@ -103,6 +127,7 @@ final class FoundationConsoleTests: XCTestCase {
                 "status": .string("waiting"),
                 "revision": .number(2),
             ])] : []),
+            "teamFailures": .array([]),
             "agentRuns": .array(withOpenRequest ? [.object([
                 "id": .string("agent-one"),
                 "taskId": .string("task-one"),
@@ -150,15 +175,18 @@ final class FoundationConsoleTests: XCTestCase {
             "agentReports": .array([]),
             "findings": .array([]),
             "artifacts": .array([]),
+            "managedWorkerWorktrees": .array([]),
             "evidence": .array([]),
             "events": .array([]),
         ])
     }
 
-    private func taskValue() -> JSONValue {
+    private func taskValue(projectScope: Bool = false) -> JSONValue {
         .object([
             "id": .string("task-one"),
-            "scope": .object(["kind": .string("user"), "userId": .string("current-user")]),
+            "scope": projectScope
+                ? .object(["kind": .string("project"), "projectId": .string("project-one")])
+                : .object(["kind": .string("user"), "userId": .string("current-user")]),
             "title": .string("Native Task"),
             "goal": .string("Exercise Foundation"),
             "acceptance": .array([]),
@@ -300,5 +328,82 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertEqual(answer.params["sessionRunId"]?.stringValue, "session-run-one")
         XCTAssertEqual(answer.params["agentRequestId"]?.stringValue, "request-one")
         XCTAssertEqual(answer.params["answer"]?["optionId"]?.stringValue, "one")
+    }
+
+    func testWorkerTeamUsesHostDerivedWorkspaceAndRefusesUserScope() async throws {
+        let userHarness = HostTestHarness(foundationMode: true)
+        let userSnapshot = snapshotValue(revision: 4)
+        await userHarness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": userSnapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            default: .object([:])
+            }
+        }
+        await userHarness.model.start()
+        let refused = await userHarness.model.createFoundationTeam(
+            taskId: "task-one",
+            memberProfileIDs: ["builtin-explore", "builtin-worker"]
+        )
+        XCTAssertFalse(refused)
+        let userMethods = await userHarness.client.recordedMethods()
+        XCTAssertFalse(userMethods.contains("team.create"))
+
+        let projectHarness = HostTestHarness(foundationMode: true)
+        let projectSnapshot = snapshotValue(revision: 8, withOpenRequest: true, projectScope: true)
+        await projectHarness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": projectSnapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "team.create": .object([
+                "storeRevision": .number(9),
+                "teamRun": .object([
+                    "id": .string("team-one"),
+                    "taskId": .string("task-one"),
+                    "coordinatorAgentRunId": .string("agent-one"),
+                    "status": .string("active"),
+                    "revision": .number(2),
+                ]),
+                "coordinatorAgentRun": .object([
+                    "id": .string("agent-one"),
+                    "taskId": .string("task-one"),
+                    "teamRunId": .string("team-one"),
+                    "sessionId": .string("session-one"),
+                    "profileId": .string("builtin-coordinator"),
+                    "profileSnapshot": .object([:]),
+                    "role": .string("coordinator"),
+                    "status": .string("prepared"),
+                    "revision": .number(1),
+                ]),
+                "childSessions": .array([]),
+                "childAgentRuns": .array([]),
+                "assignments": .array([]),
+            ])
+            case "team.start": .object([
+                "taskId": .string("task-one"),
+                "teamRunId": .string("team-one"),
+                "coordinatorManaged": .bool(true),
+                "started": .bool(true),
+            ])
+            default: .object([:])
+            }
+        }
+        await projectHarness.model.start()
+        let created = await projectHarness.model.createFoundationTeam(
+            taskId: "task-one",
+            memberProfileIDs: ["builtin-explore", "builtin-worker"]
+        )
+        XCTAssertTrue(created)
+        let task = try XCTUnwrap(projectHarness.model.foundationSnapshot?.tasks.first)
+        let started = await projectHarness.model.startFoundationTeam(task: task, teamRunId: "team-one")
+        XCTAssertTrue(started)
+        let calls = await projectHarness.client.requests
+        let create = try XCTUnwrap(calls.first(where: { $0.method == "team.create" }))
+        let members = create.params["members"]?.arrayValue ?? []
+        XCTAssertTrue(members.contains { $0["profileId"]?.stringValue == "builtin-worker" })
+        let start = try XCTUnwrap(calls.first(where: { $0.method == "team.start" }))
+        XCTAssertNil(start.params["workspace"])
     }
 }

@@ -623,7 +623,7 @@ final class FollowUpQueueTests: XCTestCase {
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
-            "workspaceIsolation": True, "agentRequests": True,
+            "workspaceIsolation": True, "managedWorkerWorktree": True, "agentRequests": True,
         }
 
         def emit_event(name, data=None):

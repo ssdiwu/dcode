@@ -120,6 +120,22 @@ enum PiHostClientError: LocalizedError, Sendable, Equatable {
                 "该 Provider 需要在 Pi 或系统环境中配置，不能在 D Code 内直接认证。"
             case "MODEL_AUTH_FAILED":
                 "Provider 认证失败；凭据未由 D Code 保存，请检查网络或重新认证。"
+            case "WORKSPACE_PROJECT_SCOPE_REQUIRED":
+                "Worker 只能在 Git 项目中运行。当前 User Scope 不会被伪装成可写项目。"
+            case "WORKSPACE_GIT_REPOSITORY_REQUIRED":
+                "当前项目目录不是可验证的 Git 仓库，因此没有创建 Worker worktree。"
+            case "WORKSPACE_SOURCE_DIRTY":
+                "项目包含未提交或未跟踪文件。D Code 不会从 HEAD 创建遗漏这些文件的 Worker 副本。"
+            case "WORKSPACE_GIT_UNAVAILABLE":
+                "当前环境无法调用 Git；D Code 没有创建 Worker worktree 或 Runtime。"
+            case "WORKSPACE_WORKTREE_CREATE_UNKNOWN", "WORKSPACE_WORKTREE_VERIFICATION_FAILED", "WORKSPACE_TARGET_UNSAFE":
+                "Worker worktree 的外部操作结果无法安全确认。D Code 已保留 Attempt，不会自动重试或清理。"
+            case "WORKSPACE_MANAGED_WORKTREE_REQUIRED", "WORKSPACE_MANAGED_WORKTREE_UNKNOWN":
+                "Worker Runtime 必须使用与同一 Agent Run 绑定的受管 worktree。"
+            case "TEAM_START_IN_PROGRESS":
+                "这个 Agent Team 正在建立受管工作树或 Runtime。D Code 没有合并另一条启动请求，请等待当前结果。"
+            case "IDEMPOTENCY_KEY_REUSED":
+                "同一个启动请求标识被用于不同参数。请刷新任务状态后再发起新的操作。"
             default:
                 "\(error.message)（\(error.code)）"
             }

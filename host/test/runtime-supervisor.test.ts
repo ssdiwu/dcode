@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 import { PiHost, PiHostError } from "../src/pi-host.js";
+
+const execFile = promisify(execFileCallback);
+
+async function git(args: string[], cwd: string): Promise<void> {
+  await execFile("git", args, { cwd, encoding: "utf8" });
+}
 
 async function writeSession(
   sessionsDirectory: string,
@@ -394,7 +402,6 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       scope: identityA.scope,
       teamRunId: team.teamRun.id,
       message: "Coordinate the Task",
-      workspace: { workspaceId: "team-a", cwd: workspaceA, access: "sharedReadOnly" },
     };
     const startedTeam = await host.handle("team.start", teamStartParams) as {
       runtimes: Array<{ runtimeId: string; agentRunId: string }>;
@@ -684,7 +691,6 @@ test("stopping the Coordinator aborts the Team before Child dispatch and replays
       taskId: task.task.id,
       teamRunId: team.teamRun.id,
       message: "Plan before dispatch",
-      workspace: { workspaceId: "stop-team", cwd: home, access: "sharedReadOnly" },
     });
     const deadline = Date.now() + 5_000;
     let stopSnapshot: {
@@ -759,25 +765,29 @@ test("stopping the Coordinator aborts the Team before Child dispatch and replays
       ],
     }) as { teamRun: { id: string; revision: number }; storeRevision: number };
     const workerStartParams = {
-        requestId: "worker-team-start",
+      requestId: "worker-team-start",
         expectedStoreRevision: workerTeam.storeRevision,
         expectedTeamRunRevision: workerTeam.teamRun.revision,
         scope: workerTask.task.scope,
-        taskId: workerTask.task.id,
-        teamRunId: workerTeam.teamRun.id,
-        message: "Must reject before opening",
-        workspace: { workspaceId: "worker-team", cwd: home, access: "sharedReadOnly" },
-      };
+      taskId: workerTask.task.id,
+      teamRunId: workerTeam.teamRun.id,
+      message: "Must reject before opening",
+    };
     const refusedWorkerStart = await host.handle("team.start", workerStartParams) as {
       started: boolean;
       reasonCode?: string;
     };
     assert.equal(refusedWorkerStart.started, false);
-    assert.equal(refusedWorkerStart.reasonCode, "WORKSPACE_ISOLATION_REQUIRED");
+    assert.equal(refusedWorkerStart.reasonCode, "WORKSPACE_PROJECT_SCOPE_REQUIRED");
     const workerAfter = await host.handle("foundation.snapshot", {}) as {
       teamRuns: Array<{ id: string; status: string }>;
+      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
     };
     assert.equal(workerAfter.teamRuns.find((run) => run.id === workerTeam.teamRun.id)?.status, "failed");
+    assert.equal(
+      workerAfter.teamFailures.find((failure) => failure.teamRunId === workerTeam.teamRun.id)?.reasonCode,
+      "WORKSPACE_PROJECT_SCOPE_REQUIRED",
+    );
     const activeAfterWorkerFailure = await host.handle("runtime.list", {}) as { runtimes: unknown[] };
     assert.equal(activeAfterWorkerFailure.runtimes.length, 0);
     assert.equal(providerRequests, 1);
@@ -789,6 +799,249 @@ test("stopping the Coordinator aborts the Team before Child dispatch and replays
     assert.equal(replayedWorkerStart.started, false);
     assert.equal(replayedWorkerStart.terminalStatus, "failed");
     assert.equal(replayedWorkerStart.replayed, true);
+
+    const nonGitDirectory = join(root, "worker-non-git-project");
+    await mkdir(nonGitDirectory);
+    const nonGitBase = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
+    const nonGitProject = await host.handle("project.create", {
+      requestId: "worker-non-git-project",
+      expectedStoreRevision: nonGitBase.storeRevision,
+      title: "Non Git Worker Project",
+      directory: nonGitDirectory,
+    }) as { storeRevision: number; project: { id: string } };
+    const nonGitTask = await host.handle("task.create", {
+      requestId: "worker-non-git-task",
+      expectedStoreRevision: nonGitProject.storeRevision,
+      scope: { kind: "project", projectId: nonGitProject.project.id },
+      title: "Non Git Worker",
+      goal: "Reject before any runtime opens",
+    }) as { task: { id: string; scope: { kind: "project"; projectId: string } }; storeRevision: number };
+    const nonGitTeam = await host.handle("team.create", {
+      requestId: "worker-non-git-team",
+      expectedStoreRevision: nonGitTask.storeRevision,
+      scope: nonGitTask.task.scope,
+      taskId: nonGitTask.task.id,
+      members: [
+        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
+        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
+      ],
+    }) as { teamRun: { id: string; revision: number }; storeRevision: number };
+    const nonGitStart = await host.handle("team.start", {
+      requestId: "worker-non-git-start",
+      expectedStoreRevision: nonGitTeam.storeRevision,
+      expectedTeamRunRevision: nonGitTeam.teamRun.revision,
+      scope: nonGitTask.task.scope,
+      taskId: nonGitTask.task.id,
+      teamRunId: nonGitTeam.teamRun.id,
+      message: "Must reject non Git Project",
+    }) as { started: boolean; reasonCode?: string };
+    assert.equal(nonGitStart.started, false);
+    assert.equal(nonGitStart.reasonCode, "WORKSPACE_GIT_REPOSITORY_REQUIRED");
+    const nonGitAfter = await host.handle("foundation.snapshot", {}) as {
+      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
+    };
+    assert.equal(
+      nonGitAfter.teamFailures.find((failure) => failure.teamRunId === nonGitTeam.teamRun.id)?.reasonCode,
+      "WORKSPACE_GIT_REPOSITORY_REQUIRED",
+    );
+    assert.equal((await host.handle("runtime.list", {}) as { runtimes: unknown[] }).runtimes.length, 0);
+
+    globalThis.fetch = (async () => new Response([
+      `data: ${JSON.stringify({
+        id: "managed-worker-completion",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1_000),
+        model: "barrier-model",
+        choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        id: "managed-worker-completion",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1_000),
+        model: "barrier-model",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+
+    const workerRepository = join(root, "worker-repository");
+    await mkdir(workerRepository);
+    await git(["init", "--initial-branch=main"], workerRepository);
+    await git(["config", "user.email", "dcode-test@example.invalid"], workerRepository);
+    await git(["config", "user.name", "D Code Test"], workerRepository);
+    await writeFile(join(workerRepository, "README.md"), "Worker source\n");
+    await git(["add", "."], workerRepository);
+    await git(["commit", "-m", "initial"], workerRepository);
+    const workerProjectBase = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
+    const workerProject = await host.handle("project.create", {
+      requestId: "worker-project-create",
+      expectedStoreRevision: workerProjectBase.storeRevision,
+      title: "Worker Project",
+      directory: workerRepository,
+    }) as { storeRevision: number; project: { id: string } };
+    const managedWorkerTask = await host.handle("task.create", {
+      requestId: "managed-worker-task",
+      expectedStoreRevision: workerProject.storeRevision,
+      scope: { kind: "project", projectId: workerProject.project.id },
+      title: "Managed Worker isolation",
+      goal: "Give Worker an exclusive Git worktree",
+    }) as { task: { id: string; scope: { kind: "project"; projectId: string } }; storeRevision: number };
+    const managedWorkerTeam = await host.handle("team.create", {
+      requestId: "managed-worker-team-create",
+      expectedStoreRevision: managedWorkerTask.storeRevision,
+      scope: managedWorkerTask.task.scope,
+      taskId: managedWorkerTask.task.id,
+      members: [
+        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read source" } },
+        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write isolated change" } },
+      ],
+    }) as { teamRun: { id: string; revision: number }; storeRevision: number };
+    const beforeManagedStart = await host.handle("foundation.snapshot", {}) as {
+      agentRuns: Array<{ id: string; taskId: string; sessionId: string; role: string }>;
+    };
+    const unprovisionedWorker = beforeManagedStart.agentRuns.find((run) => (
+      run.taskId === managedWorkerTask.task.id && run.role === "worker"
+    ));
+    assert.ok(unprovisionedWorker);
+    await assert.rejects(
+      host.handle("runtime.start", {
+        requestId: "managed-worker-preflight-bypass",
+        runtimeId: "runtime-managed-worker-preflight-bypass",
+        taskId: managedWorkerTask.task.id,
+        dcodeSessionId: unprovisionedWorker.sessionId,
+        agentRunId: unprovisionedWorker.id,
+        scope: managedWorkerTask.task.scope,
+        workspace: { workspaceId: "caller-controlled", cwd: workerRepository, access: "exclusiveWrite" },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+    );
+    const managedWorkerStarted = await host.handle("team.start", {
+      requestId: "managed-worker-team-start",
+      expectedStoreRevision: managedWorkerTeam.storeRevision,
+      expectedTeamRunRevision: managedWorkerTeam.teamRun.revision,
+      scope: managedWorkerTask.task.scope,
+      taskId: managedWorkerTask.task.id,
+      teamRunId: managedWorkerTeam.teamRun.id,
+      message: "Coordinate an isolated Worker",
+    }) as { started: boolean; runtimes: Array<{ agentRunId: string; runtimeId: string }> };
+    assert.equal(managedWorkerStarted.started, true);
+    const workerRuntimeList = await host.handle("runtime.list", {}) as {
+      runtimes: Array<{
+        identity: { agentRunId?: string; workspace: { cwd: string; access: string } };
+        activeToolNames: string[];
+      }>;
+    };
+    const managedWorkerRuntime = workerRuntimeList.runtimes.find((runtime) => runtime.identity.agentRunId
+      && managedWorkerStarted.runtimes.some((started) => started.agentRunId === runtime.identity.agentRunId)
+      && runtime.identity.workspace.access === "exclusiveWrite");
+    assert.ok(managedWorkerRuntime, "Worker must open with an exclusive Runtime workspace");
+    assert.ok(managedWorkerRuntime.activeToolNames.includes("bash"), "Worker must retain bash in its real Active Tool Set");
+    const managedWorkerSnapshot = await host.handle("foundation.snapshot", {}) as {
+      managedWorkerWorktrees: Array<{
+        taskId: string;
+        state: string;
+        workspaceCwd: string;
+        managedPath: string;
+        baseCommit: string;
+      }>;
+    };
+    const managedWorktree = managedWorkerSnapshot.managedWorkerWorktrees.find((worktree) => (
+      worktree.taskId === managedWorkerTask.task.id
+    ));
+    assert.equal(managedWorktree?.state, "ready");
+    assert.notEqual(managedWorktree?.workspaceCwd, workerRepository);
+    await writeFile(join(managedWorktree!.workspaceCwd, "worker-marker.txt"), "isolated\n");
+    await assert.rejects(lstat(join(workerRepository, "worker-marker.txt")), { code: "ENOENT" });
+    const managedTeamDeadline = Date.now() + 5_000;
+    let completedWorkerAgentRun: { id: string; sessionId: string } | undefined;
+    while (true) {
+      const snapshot = await host.handle("foundation.snapshot", {}) as {
+        teamRuns: Array<{ id: string; status: string }>;
+        agentRuns: Array<{ id: string; taskId: string; sessionId: string; role: string }>;
+      };
+      if (snapshot.teamRuns.find((run) => run.id === managedWorkerTeam.teamRun.id)?.status === "completed") {
+        const workerAgentRun = snapshot.agentRuns.find((run) => (
+          run.taskId === managedWorkerTask.task.id && run.role === "worker"
+        ));
+        assert.ok(workerAgentRun);
+        completedWorkerAgentRun = workerAgentRun;
+        break;
+      }
+      if (Date.now() >= managedTeamDeadline) throw new Error("Managed Worker Team did not complete");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    while ((await host.handle("runtime.list", {}) as { runtimes: Array<{ identity: { agentRunId?: string } }> }).runtimes
+      .some((runtime) => runtime.identity.agentRunId === completedWorkerAgentRun?.id)) {
+      if (Date.now() >= managedTeamDeadline) throw new Error("Managed Worker Runtime did not close after Team completion");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await assert.rejects(
+      host.handle("runtime.start", {
+        requestId: "managed-worker-bypass",
+        runtimeId: "runtime-managed-worker-bypass",
+        taskId: managedWorkerTask.task.id,
+        dcodeSessionId: completedWorkerAgentRun!.sessionId,
+        agentRunId: completedWorkerAgentRun!.id,
+        scope: managedWorkerTask.task.scope,
+        workspace: { workspaceId: "caller-controlled", cwd: workerRepository, access: "exclusiveWrite" },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
+    );
+    await host.close();
+    const restoredHost = new PiHost({
+      agentDir,
+      sessionsDirectory,
+      dataRoot,
+      userHome: root,
+      leaseQuietWindowMs: 1,
+      emit: () => undefined,
+    });
+    await restoredHost.start();
+    const restoredManagedSnapshot = await restoredHost.handle("foundation.snapshot", {}) as {
+      managedWorkerWorktrees: Array<{
+        taskId: string;
+        state: string;
+        workspaceId: string;
+        workspaceCwd: string;
+        managedPath: string;
+      }>;
+    };
+    const restoredManagedWorktree = restoredManagedSnapshot.managedWorkerWorktrees.find((worktree) => (
+      worktree.taskId === managedWorkerTask.task.id
+    ));
+    assert.equal(restoredManagedWorktree?.state, "ready");
+    assert.equal(restoredManagedWorktree?.workspaceCwd, managedWorktree!.workspaceCwd);
+    await rm(restoredManagedWorktree!.managedPath, { recursive: true, force: true });
+    await mkdir(restoredManagedWorktree!.workspaceCwd, { recursive: true });
+    await assert.rejects(
+      restoredHost.handle("runtime.start", {
+        requestId: "managed-worker-replaced-worktree",
+        runtimeId: "runtime-managed-worker-replaced-worktree",
+        taskId: managedWorkerTask.task.id,
+        dcodeSessionId: completedWorkerAgentRun!.sessionId,
+        agentRunId: completedWorkerAgentRun!.id,
+        scope: managedWorkerTask.task.scope,
+        workspace: {
+          workspaceId: restoredManagedWorktree!.workspaceId,
+          cwd: restoredManagedWorktree!.workspaceCwd,
+          access: "exclusiveWrite",
+        },
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+    );
+    const invalidatedSnapshot = await restoredHost.handle("foundation.snapshot", {}) as {
+      managedWorkerWorktrees: Array<{ taskId: string; state: string; failureCode?: string }>;
+    };
+    const invalidatedWorktree = invalidatedSnapshot.managedWorkerWorktrees.find((worktree) => (
+      worktree.taskId === managedWorkerTask.task.id
+    ));
+    assert.equal(invalidatedWorktree?.state, "unknown");
+    assert.equal(invalidatedWorktree?.failureCode, "WORKSPACE_WORKTREE_VERIFICATION_FAILED");
+    await restoredHost.close();
   } finally {
     await host.close();
     globalThis.fetch = originalFetch;

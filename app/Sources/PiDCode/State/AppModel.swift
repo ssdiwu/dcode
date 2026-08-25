@@ -911,11 +911,18 @@ final class AppModel {
         let selectedIDs = memberProfileIDs ?? defaultIDs
         let members = selectedIDs.compactMap { id in
             snapshot.agentProfiles.first(where: {
-                $0.id == id && $0.enabled && !["coordinator", "worker"].contains($0.role)
+                $0.id == id && $0.enabled && $0.role != "coordinator"
             })
         }
+        if case .user = task.scope, members.contains(where: { $0.role == "worker" }) {
+            issue = AppIssue(
+                title: "Worker 需要项目目录",
+                message: "当前 Worker 只能在 Git Project Scope 中创建独立受管 worktree；User Scope 不会伪装成可写项目。"
+            )
+            return false
+        }
         guard members.count >= 2, members.count == selectedIDs.count else {
-            issue = AppIssue(title: "无法建立 Agent Team", message: "请选择至少两个已启用的只读成员 Profile；Worker 需要独立 worktree，当前 Foundation Team 不会冒险共享源码目录。")
+            issue = AppIssue(title: "无法建立 Agent Team", message: "请选择至少两个已启用的成员 Profile。Worker 会由 D Code 在 Git Project Scope 中创建独立受管 worktree。")
             return false
         }
         do {
@@ -984,20 +991,13 @@ final class AppModel {
                     "scope": task.scope.jsonValue,
                     "teamRunId": .string(teamRunId),
                     "message": .string("请作为 Coordinator 推进 Task：\(task.title)\nGoal：\(task.goal)"),
-                    "workspace": .object([
-                        "workspaceId": .string("team-\(teamRunId)"),
-                        "cwd": .string(task.cwd),
-                        "access": .string("sharedReadOnly"),
-                    ]),
                 ]
             )
             await reloadFoundation()
             if !result.started {
                 issue = AppIssue(
                     title: "Agent Team 未能启动",
-                    message: result.reasonCode == "WORKSPACE_ISOLATION_REQUIRED"
-                        ? "所选成员需要独立可写 worktree；D Code 已在打开任何 Runtime 前停止，没有留下孤儿运行。"
-                        : "Agent Team 未能安全打开全部 Runtime；已清理部分启动并记录失败状态。"
+                    message: foundationTeamStartFailureMessage(result.reasonCode)
                 )
             }
             return result.started
@@ -1005,6 +1005,23 @@ final class AppModel {
             present(error, title: "Agent Team 未能启动")
             await reloadFoundation()
             return false
+        }
+    }
+
+    private func foundationTeamStartFailureMessage(_ reasonCode: String?) -> String {
+        switch reasonCode {
+        case "WORKSPACE_PROJECT_SCOPE_REQUIRED":
+            "Worker 只能在 Git Project Scope 中运行；D Code 没有把 User Scope 伪装成可写项目。"
+        case "WORKSPACE_GIT_REPOSITORY_REQUIRED":
+            "当前 Project 不是可验证的 Git 仓库，无法创建隔离 worktree。"
+        case "WORKSPACE_SOURCE_DIRTY":
+            "Project 有未提交或未跟踪文件。D Code 不会从 HEAD 创建一个悄悄遗漏这些文件的 Worker 副本。"
+        case "WORKSPACE_GIT_UNAVAILABLE":
+            "当前环境无法调用 Git，因此没有创建任何 Worker worktree 或 Runtime。"
+        case "WORKSPACE_WORKTREE_CREATE_UNKNOWN", "WORKSPACE_WORKTREE_VERIFICATION_FAILED", "WORKSPACE_TARGET_UNSAFE":
+            "Worker worktree 的外部操作结果无法安全确认。D Code 已保留 Attempt，不会自动重试或清理。"
+        default:
+            "Agent Team 未能安全打开全部 Runtime；已保留结构化失败事实，不会静默重试外部操作。"
         }
     }
 

@@ -10,7 +10,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 
 - 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；
 - 以 User Scope / Project Scope → Task → Coordination / Child Session → Team / Agent / Session Run 的稳定身份执行 query 与 mutation；
-- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；
+- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree；
 - 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
 - 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；
 - 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；
@@ -104,8 +104,8 @@ open "dist/D Code.app"
 | `project.create`、`task.create`、`task.acceptance` | 以 request ID、expected revision 和精确 User / Project Scope 创建或验收 D Code 原生对象 |
 | `agentProfile.create`、`agentProfile.update` | 创建自定义 Profile 或版本化修改内建 / 自定义 Profile；已启动 Agent Run 保留启动快照 |
 | `piImport.listCandidates`、`piImport.preview`、`piImport.importAsTask` | 发现外部 Pi Session、生成 digest / omission 预览，并在用户确认 Scope 后原子转换为新 Task；不修改源 JSONL |
-| `runtime.list`、`runtime.start` | 返回活动 Runtime 与上限，或为指定 Task / D Code Session / Agent Run 建立独立 Pi AgentSession 和 workspace 所有权 |
-| `team.create`、`team.start` | 建立 Coordinator 与成员身份；Coordinator 先规划，成员 Provider 请求并行，报告持久化后再综合 |
+| `runtime.list`、`runtime.start` | 返回活动 Runtime 与上限，或为指定 Task / D Code Session / Agent Run 建立独立 Pi AgentSession 和 workspace 所有权；Worker 只能匹配同一 Agent Run 的 ready 受管 worktree，调用方不能伪造 cwd |
+| `team.create`、`team.start` | 建立 Coordinator 与成员身份；Host 从 Task Scope 派生只读源目录，并为合格的 Project Git Worker 预写 Artifact / Attempt、创建和核验独立 worktree 后才打开 Runtime；Coordinator 先规划，成员 Provider 请求并行，报告持久化后再综合 |
 | `agentRequest.answer` | 以完整 Task / Team / Agent / Session Run / Runtime 身份回答耐久单选请求，答案回到原工具调用 |
 | `agentRun.stop` | 先持久化 Stop Attempt，再中止指定成员并将 Session / Agent / Team 状态诚实收口；不使用含糊的全局停止目标 |
 | `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照和路径摘要；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配项目目录，`excludedSessionIds` 在分页前排除归档对象；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |

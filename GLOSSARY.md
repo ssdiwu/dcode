@@ -186,6 +186,10 @@ _Avoid_: Prompt 模板编辑器、字符串追加器、Pi SYSTEM loader、上下
 某次 Session Run 开始时冻结的可核对运行事实集合，包含当前 User / Project Scope、Task、Session、Agent Run、cwd / worktree、模型 / Provider、模式、平台、已加载规则和能力来源。它不是设置期望、Agent 自述或跨 Run 自动更新的全局状态。
 _Avoid_: Runtime Settings、System Prompt 全文、Context Projection、环境变量正文
 
+**Managed Worker Worktree（受管 Worker 工作树）**：
+由 D Code Host 在一条 Worker Agent Run 启动前，为符合条件的 Git Project Scope 在 `~/.dcode/runtime/` 下创建、验证并保留的 detached Git worktree（分离 Git 工作树）。它与稳定 Agent Run、受管 Artifact 和预写 External Side-effect Attempt（外部副作用尝试）一一关联；Worker 只能在该工作树中以 `exclusiveWrite` 运行。User Scope、非 Git 或源目录未提交时必须显式拒绝，系统不会自动删除、提交、合并、推送或重试 unknown（结果未知）工作树操作。
+_Avoid_: 原项目目录共享写入、临时复制目录、Worker Profile 设置、Git 自动提交
+
 **Agent Environment（智能体环境）**：
 D Code 面向用户呈现某次 Agent / Session Run 实际身份与输入边界的只读结构化投影，组合 Runtime Environment、Agent Role Contract、Context Projection 来源、Active Tool Set 与 Effective Prompt Receipt。它不显示完整 System Prompt、凭据或隐藏 Thinking，也不成为这些事实的第二权威。
 _Avoid_: Runtime Environment 本身、Prompt 查看器、设置页面、Agent 自述

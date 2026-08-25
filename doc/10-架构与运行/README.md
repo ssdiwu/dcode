@@ -30,7 +30,7 @@ flowchart LR
 | Product Store（产品数据库） | 版本化 SQLite schema、单写入租约、原子迁移、幂等 mutation、Task / Session / Run / Attempt / Request / Report / Evidence 权威与恢复 | [`product-store.ts`](../../host/src/product-store.ts)、[`product-store-schema.ts`](../../host/src/product-store-schema.ts) |
 | Foundation Console（基础控制台） | 使用正式 query / mutation contract 创建 Project / Task / Profile、预览导入、启动团队、切换观察、回答请求、停止成员和验收；不是 `0.0.29` 最终界面 | [`FoundationConsoleView.swift`](../../app/Sources/PiDCode/Views/FoundationConsoleView.swift) |
 | Host Bridge（宿主桥） | 定位并启动配置指定的 Node/Host 进程，通过 Protocol v1 关联请求、响应和事件；App Bundle 默认使用包内运行时 | [`HostLocator.swift`](../../app/Sources/PiDCode/Host/HostLocator.swift)、[`PiHostClient.swift`](../../app/Sources/PiDCode/Host/PiHostClient.swift)、[`HostProtocol.swift`](../../app/Sources/PiDCode/Host/HostProtocol.swift) |
-| Runtime Supervisor（运行时监督器） | 多 Runtime 路由、并发上限、单 Session / workspace 写入隔离、Coordinator 两阶段调度、Agent Request 等待与单成员停止 | [`pi-host.ts`](../../host/src/pi-host.ts)、[`runtime-supervisor.test.ts`](../../host/test/runtime-supervisor.test.ts) |
+| Runtime Supervisor（运行时监督器） | 多 Runtime 路由、并发上限、单 Session / workspace 写入隔离、Project Git Worker 的受管 detached worktree、Coordinator 两阶段调度、Agent Request 等待与单成员停止 | [`pi-host.ts`](../../host/src/pi-host.ts)、[`managed-worker-worktree.ts`](../../host/src/managed-worker-worktree.ts)、[`runtime-supervisor.test.ts`](../../host/test/runtime-supervisor.test.ts) |
 | Pi Adapter（Pi 适配层） | 通过固定 Pi SDK 运行独立 AgentSession，提供模型、工具与流式事件；外部 Pi Session 只作为显式导入来源 | [`host/src/`](../../host/src/)、[Node/Pi 宿主与 IPC](0001-Node-Pi-宿主与-IPC.md) |
 | Native Presentation（原生呈现） | 把消息、Plan、Mermaid、工具结果和受支持扩展交互投影成 D Code 自有组件 | [`Views/`](../../app/Sources/PiDCode/Views/)、[原生界面设计系统](0002-D-Code-原生界面设计系统.md) |
 

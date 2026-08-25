@@ -58,12 +58,25 @@ import { SessionCopier } from "./session-copy.js";
 import { ProjectDirectoryMigrator, ProjectDirectoryMigrationError } from "./project-directory-migration.js";
 import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
-import { ProductStore, type TaskScope } from "./product-store.js";
+import {
+  ProductStore,
+  type AgentRunRecord,
+  type ManagedWorkerWorktreeRecord,
+  type TaskRecord,
+  type TaskScope,
+} from "./product-store.js";
 import {
   listPiImportCandidates,
   preparePiSessionImport,
 } from "./pi-session-import.js";
 import { redactCredentialText } from "./credential-material.js";
+import {
+  ManagedWorkerWorktreeError,
+  inspectManagedWorkerWorktreeSource,
+  planManagedWorkerWorktree,
+  provisionManagedWorkerWorktree,
+  verifyManagedWorkerWorktree,
+} from "./managed-worker-worktree.js";
 import type { LegacyStoreKind } from "./legacy-migration.js";
 import {
   assembleDCodeSystemPrompt,
@@ -255,6 +268,12 @@ interface PendingAgentRequestResolution {
   removeAbortListener?: () => void;
 }
 
+interface TeamStartFlight {
+  requestId: string;
+  fingerprint: string;
+  promise: Promise<unknown>;
+}
+
 interface PromptCallContext {
   active: WritableSession;
   promptId: string;
@@ -427,6 +446,23 @@ function errorRecord(error: unknown): { code: string; message: string; details?:
   return { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
 }
 
+function teamStartFingerprint(params: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify({
+    requestId: params.requestId,
+    expectedStoreRevision: params.expectedStoreRevision,
+    expectedTeamRunRevision: params.expectedTeamRunRevision,
+    scope: params.scope,
+    taskId: params.taskId,
+    teamRunId: params.teamRunId,
+    message: params.message,
+    ...(params.workspace === undefined ? {} : { workspace: params.workspace }),
+  })).digest("hex");
+}
+
+function derivedRequestId(prefix: string, values: Record<string, unknown>): string {
+  return `${prefix}-${createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 48)}`;
+}
+
 function leaseVerificationFailureReason(error: unknown): unknown {
   if (typeof error !== "object" || error === null) return undefined;
   const details = (error as { details?: unknown }).details;
@@ -456,6 +492,7 @@ export class PiHost {
   private readonly runtimeQueues = new Map<string, Promise<void>>();
   private readonly pendingAgentRequests = new Map<string, PendingAgentRequestResolution>();
   private readonly teamLifecycles = new Map<string, Promise<void>>();
+  private readonly teamStartFlights = new Map<string, TeamStartFlight>();
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
   private writePoison?: { sessionId: string; reason: string };
@@ -727,6 +764,136 @@ export class PiHost {
       if (!agentRun || agentRun.taskId !== task.id || agentRun.sessionId !== session.id) {
         throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Agent Run does not match its Task and Session");
       }
+      if (agentRun.role === "worker") {
+        const managedWorktree = snapshot.managedWorkerWorktrees.find((candidate) => (
+          candidate.agentRunId === agentRun.id && candidate.taskId === task.id
+        ));
+        if (!managedWorktree || managedWorktree.state !== "ready") {
+          throw new PiHostError(
+            "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+            "Worker Runtime requires a ready managed worktree owned by the same Agent Run",
+          );
+        }
+        if (
+          identity.workspace.access !== "exclusiveWrite"
+          || identity.workspace.workspaceId !== managedWorktree.workspaceId
+          || identity.workspace.cwd !== managedWorktree.workspaceCwd
+        ) {
+          throw new PiHostError(
+            "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
+            "Worker Runtime workspace must exactly match its managed worktree Artifact",
+          );
+        }
+      }
+    }
+  }
+
+  private async assertWorkerRuntimeWorkspaceBeforeBinding(input: {
+    store: ProductStore;
+    runtimeId: string;
+    taskId: string;
+    dcodeSessionId: string;
+    agentRunId?: string;
+    scope: TaskScope;
+    workspace: { workspaceId: string; cwd: string; access: "sharedReadOnly" | "exclusiveWrite" };
+  }): Promise<void> {
+    if (!input.agentRunId) return;
+    const snapshot = await input.store.snapshot();
+    const task = snapshot.tasks.find((candidate) => candidate.id === input.taskId);
+    const session = snapshot.sessions.find((candidate) => candidate.id === input.dcodeSessionId);
+    const agentRun = snapshot.agentRuns.find((candidate) => candidate.id === input.agentRunId);
+    if (
+      !task
+      || !session
+      || !agentRun
+      || session.taskId !== task.id
+      || agentRun.taskId !== task.id
+      || agentRun.sessionId !== session.id
+      || JSON.stringify(task.scope) !== JSON.stringify(input.scope)
+    ) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Agent Run does not match its Task or D Code Session");
+    }
+    if (agentRun.role !== "worker") return;
+    const managedWorktree = snapshot.managedWorkerWorktrees.find((candidate) => (
+      candidate.agentRunId === agentRun.id && candidate.taskId === task.id
+    ));
+    if (!managedWorktree || managedWorktree.state !== "ready") {
+      throw new PiHostError(
+        "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+        "Worker Runtime requires a ready managed worktree before any Pi Session can be created",
+      );
+    }
+    if (
+      input.workspace.access !== "exclusiveWrite"
+      || input.workspace.workspaceId !== managedWorktree.workspaceId
+    ) {
+      throw new PiHostError(
+        "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
+        "Worker Runtime workspace identity must match its managed worktree before Session creation",
+      );
+    }
+    let canonicalCwd: string;
+    try {
+      canonicalCwd = await realpath(input.workspace.cwd);
+    } catch {
+      throw new PiHostError(
+        "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
+        "Worker Runtime workspace directory is not the ready managed worktree",
+      );
+    }
+    if (canonicalCwd !== managedWorktree.workspaceCwd) {
+      throw new PiHostError(
+        "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
+        "Worker Runtime cwd must exactly match its managed worktree before Session creation",
+      );
+    }
+    try {
+      await verifyManagedWorkerWorktree({
+        agentRunId: managedWorktree.agentRunId,
+        artifactId: managedWorktree.artifactId,
+        workspaceId: managedWorktree.workspaceId,
+        worktreeRoot: managedWorktree.managedPath,
+        workspaceCwd: managedWorktree.workspaceCwd,
+        sourceProjectDirectory: managedWorktree.sourceProjectDirectory,
+        repositoryRoot: managedWorktree.repositoryRoot,
+        commonGitDirectory: managedWorktree.commonGitDirectory,
+        baseCommit: managedWorktree.baseCommit,
+        projectRelativePath: managedWorktree.projectRelativePath,
+      });
+    } catch (error) {
+      const failureCode = error instanceof ManagedWorkerWorktreeError
+        ? error.code
+        : "WORKSPACE_WORKTREE_VERIFICATION_FAILED";
+      let invalidated;
+      try {
+        invalidated = await input.store.invalidateManagedWorkerWorktree({
+          requestId: `worktree-invalidate-${createHash("sha256")
+            .update(`${managedWorktree.artifactId}\0${failureCode}`)
+            .digest("hex")
+            .slice(0, 48)}`,
+          artifactId: managedWorktree.artifactId,
+          failureCode,
+        });
+      } catch (invalidationError) {
+        throw new PiHostError(
+          "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+          "Worker worktree verification failed and D Code could not persist its unknown state",
+          { failureCode, persistence: errorRecord(invalidationError).code },
+        );
+      }
+      this.options.emit("foundation.changed", {
+        storeRevision: invalidated.storeRevision,
+        kind: "managedWorkerWorktree.invalidated",
+        entityKind: "artifact",
+        entityId: invalidated.worktree.artifactId,
+        taskId: invalidated.worktree.taskId,
+        agentRunId: invalidated.worktree.agentRunId,
+      });
+      throw new PiHostError(
+        "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+        "Worker managed worktree no longer passes Git identity verification; D Code did not create a Pi Session",
+        { failureCode },
+      );
     }
   }
 
@@ -970,6 +1137,7 @@ export class PiHost {
             runtimeIdentity: true,
             runtimeEventSequence: true,
             workspaceIsolation: true,
+            managedWorkerWorktree: true,
             agentRequests: true,
           },
         };
@@ -1542,7 +1710,7 @@ export class PiHost {
     const workspace = params.workspace as {
       workspaceId: string;
       cwd: string;
-      access: "exclusiveWrite";
+      access: "sharedReadOnly" | "exclusiveWrite";
     };
     const active = this.active;
     if (active) {
@@ -1576,6 +1744,15 @@ export class PiHost {
     this.openingDCodeSessionIds.set(dcodeSessionId, runtimeId);
     try {
       const store = await this.getProductStore();
+      await this.assertWorkerRuntimeWorkspaceBeforeBinding({
+        store,
+        runtimeId,
+        taskId,
+        dcodeSessionId,
+        ...(agentRunId ? { agentRunId } : {}),
+        scope,
+        workspace,
+      });
       let binding = await store.sessionRuntimeBinding(dcodeSessionId);
       if (!binding) {
         const created = await this.createSession(workspace.cwd) as {
@@ -1619,12 +1796,41 @@ export class PiHost {
   private async startTeamRun(params: Record<string, unknown>): Promise<unknown> {
     const taskId = params.taskId as string;
     const teamRunId = params.teamRunId as string;
+    const requestId = params.requestId as string;
+    const key = `${taskId}\0${teamRunId}`;
+    const fingerprint = teamStartFingerprint(params);
+    const existing = this.teamStartFlights.get(key);
+    if (existing) {
+      if (existing.requestId !== requestId) {
+        throw new PiHostError(
+          "TEAM_START_IN_PROGRESS",
+          "Another Team start request is still provisioning this Team; D Code did not merge their inputs",
+          { taskId, teamRunId },
+        );
+      }
+      if (existing.fingerprint !== fingerprint) {
+        throw new PiHostError(
+          "IDEMPOTENCY_KEY_REUSED",
+          "The same Team start requestId was reused with different parameters",
+          { taskId, teamRunId, requestId },
+        );
+      }
+      return await existing.promise;
+    }
+    const promise = this.startTeamRunOnce(params);
+    const flight: TeamStartFlight = { requestId, fingerprint, promise };
+    this.teamStartFlights.set(key, flight);
+    try {
+      return await promise;
+    } finally {
+      if (this.teamStartFlights.get(key) === flight) this.teamStartFlights.delete(key);
+    }
+  }
+
+  private async startTeamRunOnce(params: Record<string, unknown>): Promise<unknown> {
+    const taskId = params.taskId as string;
+    const teamRunId = params.teamRunId as string;
     const message = params.message as string;
-    const workspace = params.workspace as {
-      workspaceId: string;
-      cwd: string;
-      access: "sharedReadOnly";
-    };
     const store = await this.getProductStore();
     const claimed = await store.claimTeamRunStart({
       requestId: params.requestId as string,
@@ -1675,13 +1881,26 @@ export class PiHost {
     if (this.teamLifecycles.has(teamRunId)) {
       return { taskId, teamRunId, runtimes: runtimeDescriptors, coordinatorManaged: true, started: true, replayed: true };
     }
-    if (agentRuns.some((agentRun) => agentRun.role === "worker")) {
+    let managedWorkerWorktrees: Map<string, ManagedWorkerWorktreeRecord>;
+    try {
+      managedWorkerWorktrees = await this.provisionTeamWorkerWorktrees({
+        store,
+        task,
+        teamRunId,
+        agentRuns,
+        expectedStoreRevision: claimed.storeRevision,
+        requestId: params.requestId as string,
+        projects: snapshot.projects,
+      });
+    } catch (error) {
+      const reasonCode = error instanceof PiHostError ? error.code : "WORKSPACE_WORKTREE_CREATE_UNKNOWN";
       await this.finishTeamRunDurably({
-        requestId: `team-start-failed:${teamRunId}:worker-worktree-required`,
+        requestId: `team-start-failed:${teamRunId}:${reasonCode}`,
         taskId,
         teamRunId,
         status: "failed",
-        reason: "Worker requires an isolated writable worktree; sharedReadOnly Team start was refused",
+        reason: error instanceof Error ? error.message : "Worker worktree provisioning failed before Runtime start",
+        reasonCode,
       });
       return {
         taskId,
@@ -1690,16 +1909,28 @@ export class PiHost {
         coordinatorManaged: true,
         started: false,
         terminalStatus: "failed",
-        reasonCode: "WORKSPACE_ISOLATION_REQUIRED",
+        reasonCode,
       };
     }
+    const sourceWorkspace = {
+      workspaceId: `source:${task.id}`,
+      cwd: task.cwd,
+      access: "sharedReadOnly" as const,
+    };
     const settlements = await Promise.allSettled(agentRuns.map(async (agentRun) => {
       const runtimeId = `runtime-${agentRun.id}`;
-      const runtimeWorkspace = {
-        workspaceId: `${workspace.workspaceId}:${agentRun.id}`,
-        cwd: workspace.cwd,
-        access: workspace.access,
-      };
+      const workerWorktree = managedWorkerWorktrees.get(agentRun.id);
+      const runtimeWorkspace = workerWorktree
+        ? {
+          workspaceId: workerWorktree.workspaceId,
+          cwd: workerWorktree.workspaceCwd,
+          access: "exclusiveWrite" as const,
+        }
+        : {
+          workspaceId: `${sourceWorkspace.workspaceId}:${agentRun.id}`,
+          cwd: sourceWorkspace.cwd,
+          access: sourceWorkspace.access,
+        };
       const result = await this.runtimeContext.run(runtimeId, async () => await this.startDCodeRuntime({
         requestId: `${params.requestId as string}:${agentRun.id}`,
         runtimeId,
@@ -1783,6 +2014,7 @@ export class PiHost {
     teamRunId: string;
     status: "failed" | "aborted";
     reason: string;
+    reasonCode?: string;
   }): Promise<void> {
     const result = await (await this.getProductStore()).finishTeamRun(input);
     this.options.emit("foundation.changed", {
@@ -1792,6 +2024,161 @@ export class PiHost {
       entityId: result.teamRun.id,
       taskId: result.teamRun.taskId,
     });
+  }
+
+  private async provisionTeamWorkerWorktrees(input: {
+    store: ProductStore;
+    task: TaskRecord;
+    teamRunId: string;
+    agentRuns: AgentRunRecord[];
+    expectedStoreRevision: number;
+    requestId: string;
+    projects: Array<{ id: string; directory: string }>;
+  }): Promise<Map<string, ManagedWorkerWorktreeRecord>> {
+    const workers = input.agentRuns.filter((agentRun) => agentRun.role === "worker");
+    if (workers.length === 0) return new Map();
+    const scope = input.task.scope;
+    if (scope.kind !== "project") {
+      throw new PiHostError(
+        "WORKSPACE_PROJECT_SCOPE_REQUIRED",
+        "Worker requires a Project Scope with a Git repository; User Scope remains read-only in this release",
+      );
+    }
+    const project = input.projects.find((candidate) => candidate.id === scope.projectId);
+    if (!project) {
+      throw new PiHostError("WORKSPACE_GIT_REPOSITORY_REQUIRED", "Worker Project Scope has no Project directory");
+    }
+    let plans;
+    try {
+      const source = await inspectManagedWorkerWorktreeSource({ projectDirectory: project.directory });
+      plans = [];
+      for (const worker of workers) {
+        plans.push(await planManagedWorkerWorktree({
+          runtimeDirectory: input.store.layout.runtimeDirectory,
+          agentRunId: worker.id,
+          source,
+        }));
+      }
+    } catch (error) {
+      if (error instanceof ManagedWorkerWorktreeError) {
+        throw new PiHostError(error.code, error.message);
+      }
+      throw error;
+    }
+    const prepared = await input.store.prepareManagedWorkerWorktrees({
+      requestId: derivedRequestId("managed-worktree-prepare", {
+        requestId: input.requestId,
+        taskId: input.task.id,
+        teamRunId: input.teamRunId,
+      }),
+      expectedStoreRevision: input.expectedStoreRevision,
+      scope: input.task.scope,
+      taskId: input.task.id,
+      teamRunId: input.teamRunId,
+      plans,
+    });
+    this.options.emit("foundation.changed", {
+      storeRevision: prepared.storeRevision,
+      kind: "managedWorkerWorktree.prepared",
+      entityKind: "artifact",
+      entityId: input.teamRunId,
+      taskId: input.task.id,
+    });
+    const preparedByAgentRun = new Map(prepared.worktrees.map((worktree) => [worktree.agentRunId, worktree]));
+    const ready = new Map<string, ManagedWorkerWorktreeRecord>();
+    for (const plan of plans) {
+      const preparedWorktree = preparedByAgentRun.get(plan.agentRunId);
+      if (!preparedWorktree) {
+        throw new PiHostError("WORKSPACE_MANAGED_WORKTREE_UNKNOWN", "Worker worktree preparation returned no durable mapping");
+      }
+      let provisioned;
+      try {
+        provisioned = await provisionManagedWorkerWorktree(plan);
+      } catch (error) {
+        const code = error instanceof ManagedWorkerWorktreeError
+          ? error.code
+          : "WORKSPACE_WORKTREE_CREATE_UNKNOWN";
+        const state = [
+          "WORKSPACE_WORKTREE_CREATE_FAILED",
+          "WORKSPACE_GIT_UNAVAILABLE",
+          "WORKSPACE_GIT_REPOSITORY_REQUIRED",
+          "WORKSPACE_SOURCE_DIRTY",
+          "WORKSPACE_SOURCE_HEAD_REQUIRED",
+        ].includes(code)
+          ? "failed" as const
+          : "unknown" as const;
+        const resultDigest = `sha256:${createHash("sha256").update(`${code}\0${plan.artifactId}`).digest("hex")}`;
+        let finished;
+        try {
+          finished = await input.store.finishManagedWorkerWorktree({
+            requestId: derivedRequestId("managed-worktree-failure", {
+              requestId: input.requestId,
+              artifactId: preparedWorktree.artifactId,
+              state,
+              code,
+            }),
+            artifactId: preparedWorktree.artifactId,
+            provisionAttemptId: preparedWorktree.provisionAttemptId,
+            state,
+            resultDigest,
+            failureCode: code,
+          });
+        } catch (persistenceError) {
+          throw new PiHostError(
+            "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+            "Worker worktree operation failed and D Code could not persist its terminal state",
+            { failureCode: code, persistence: errorRecord(persistenceError).code },
+          );
+        }
+        this.options.emit("foundation.changed", {
+          storeRevision: finished.storeRevision,
+          kind: `managedWorkerWorktree.${state}`,
+          entityKind: "artifact",
+          entityId: finished.worktree.artifactId,
+          taskId: input.task.id,
+          agentRunId: plan.agentRunId,
+        });
+        throw new PiHostError(
+          code,
+          error instanceof Error ? error.message : "Worker worktree could not be provisioned safely",
+        );
+      }
+      const resultDigest = `sha256:${createHash("sha256").update(JSON.stringify({
+        workspaceId: provisioned.workspaceId,
+        worktreeRoot: provisioned.worktreeRoot,
+        workspaceCwd: provisioned.workspaceCwd,
+        baseCommit: provisioned.baseCommit,
+      })).digest("hex")}`;
+      let finished;
+      try {
+        finished = await input.store.finishManagedWorkerWorktree({
+          requestId: derivedRequestId("managed-worktree-ready", {
+            requestId: input.requestId,
+            artifactId: preparedWorktree.artifactId,
+          }),
+          artifactId: preparedWorktree.artifactId,
+          provisionAttemptId: preparedWorktree.provisionAttemptId,
+          state: "ready",
+          resultDigest,
+        });
+      } catch (persistenceError) {
+        throw new PiHostError(
+          "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
+          "Worker worktree was created but D Code could not persist its ready state",
+          { persistence: errorRecord(persistenceError).code },
+        );
+      }
+      ready.set(plan.agentRunId, finished.worktree);
+      this.options.emit("foundation.changed", {
+        storeRevision: finished.storeRevision,
+        kind: "managedWorkerWorktree.ready",
+        entityKind: "artifact",
+        entityId: finished.worktree.artifactId,
+        taskId: input.task.id,
+        agentRunId: plan.agentRunId,
+      });
+    }
+    return ready;
   }
 
   private async runCoordinatedTeamLifecycle(input: {

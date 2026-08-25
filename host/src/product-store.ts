@@ -23,6 +23,12 @@ import {
   normalizeDCodePromptSourceReceipts,
   type DCodePromptSourceReceipt,
 } from "./prompt-source-status.js";
+import {
+  MANAGED_WORKER_WORKTREE_ARTIFACT_KIND,
+  MANAGED_WORKER_WORKTREE_TARGET_PREFIX,
+  managedWorkerWorktreeArtifactId,
+  type ManagedWorkerWorktreePlan,
+} from "./managed-worker-worktree.js";
 
 export type TaskScope =
   | { kind: "user"; userId: string }
@@ -379,6 +385,36 @@ export interface ArtifactRecord {
   revision: number;
 }
 
+export interface ManagedWorkerWorktreeRecord {
+  artifactId: string;
+  taskId: string;
+  teamRunId: string;
+  agentRunId: string;
+  projectId: string;
+  workspaceId: string;
+  managedPath: string;
+  workspaceCwd: string;
+  sourceProjectDirectory: string;
+  repositoryRoot: string;
+  commonGitDirectory: string;
+  baseCommit: string;
+  projectRelativePath: string;
+  provisionAttemptId: string;
+  state: "preparing" | "ready" | "failed" | "unknown";
+  failureCode?: string;
+  revision: number;
+}
+
+export interface TeamFailureRecord {
+  teamRunId: string;
+  taskId: string;
+  status: "failed" | "aborted";
+  reason: string;
+  reasonCode?: string;
+  eventSequence: number;
+  createdAt: string;
+}
+
 export interface EvidenceRecord {
   id: string;
   taskId: string;
@@ -427,12 +463,14 @@ export interface FoundationSnapshot {
   activeToolSets: ActiveToolSetRecord[];
   promptReceipts: PromptReceiptRecord[];
   teamRuns: TeamRunRecord[];
+  teamFailures: TeamFailureRecord[];
   agentRuns: AgentRunRecord[];
   agentAssignments: AgentAssignmentRecord[];
   agentRequests: AgentRequestRecord[];
   agentReports: AgentReportRecord[];
   findings: FindingRecord[];
   artifacts: ArtifactRecord[];
+  managedWorkerWorktrees: ManagedWorkerWorktreeRecord[];
   evidence: EvidenceRecord[];
   events: StoreEventRecord[];
 }
@@ -791,6 +829,29 @@ function event(row: SQLiteRow): StoreEventRecord {
   };
 }
 
+function teamFailuresFromEvents(events: StoreEventRecord[]): TeamFailureRecord[] {
+  const latest = new Map<string, TeamFailureRecord>();
+  for (const item of events) {
+    if (item.kind !== "teamRun.failed" && item.kind !== "teamRun.aborted") continue;
+    if (typeof item.taskId !== "string" || typeof item.payload !== "object" || item.payload === null || Array.isArray(item.payload)) {
+      continue;
+    }
+    const payload = item.payload as Record<string, unknown>;
+    const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+    if (!reason) continue;
+    latest.set(item.entityId, {
+      teamRunId: item.entityId,
+      taskId: item.taskId,
+      status: item.kind === "teamRun.failed" ? "failed" : "aborted",
+      reason,
+      ...(typeof payload.reasonCode === "string" ? { reasonCode: payload.reasonCode } : {}),
+      eventSequence: item.sequence,
+      createdAt: item.createdAt,
+    });
+  }
+  return [...latest.values()].sort((left, right) => left.eventSequence - right.eventSequence);
+}
+
 function sessionRun(row: SQLiteRow): SessionRunRecord {
   const startedAt = typeof row.started_at === "string" ? row.started_at : undefined;
   const completedAt = typeof row.completed_at === "string" ? row.completed_at : undefined;
@@ -991,6 +1052,131 @@ function artifact(row: SQLiteRow): ArtifactRecord {
   };
 }
 
+interface ManagedWorkerWorktreeMetadata {
+  version: 1;
+  state: ManagedWorkerWorktreeRecord["state"];
+  teamRunId: string;
+  agentRunId: string;
+  projectId: string;
+  workspaceId: string;
+  sourceProjectDirectory: string;
+  repositoryRoot: string;
+  commonGitDirectory: string;
+  baseCommit: string;
+  projectRelativePath: string;
+  workspaceCwd: string;
+  provisionAttemptId: string;
+  failureCode?: string;
+}
+
+function managedWorkerWorktree(artifactRecord: ArtifactRecord): ManagedWorkerWorktreeRecord {
+  const metadata = artifactRecord.metadata;
+  if (
+    artifactRecord.kind !== MANAGED_WORKER_WORKTREE_ARTIFACT_KIND
+    || !artifactRecord.agentRunId
+    || !artifactRecord.managedPath
+    || typeof metadata !== "object"
+    || metadata === null
+    || Array.isArray(metadata)
+  ) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Managed Worker worktree Artifact is incomplete", {
+      artifactId: artifactRecord.id,
+    });
+  }
+  const value = metadata as Record<string, unknown>;
+  const read = (key: keyof ManagedWorkerWorktreeMetadata, maximum = 4_096): string => (
+    requiredString(value[key], `managedWorktree.${key}`, maximum)
+  );
+  const state = value.state;
+  if (value.version !== 1 || !["preparing", "ready", "failed", "unknown"].includes(String(state))) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Managed Worker worktree Artifact metadata is invalid", {
+      artifactId: artifactRecord.id,
+    });
+  }
+  const projectRelativePath = value.projectRelativePath;
+  if (typeof projectRelativePath !== "string" || projectRelativePath.length > 4_096) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Managed Worker worktree relative path is invalid", {
+      artifactId: artifactRecord.id,
+    });
+  }
+  const baseCommit = read("baseCommit", 64);
+  if (!/^[0-9a-f]{40,64}$/i.test(baseCommit)) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Managed Worker worktree base commit is invalid", {
+      artifactId: artifactRecord.id,
+    });
+  }
+  if (artifactRecord.agentRunId !== read("agentRunId", 200)) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Managed Worker worktree Agent Run identity is invalid", {
+      artifactId: artifactRecord.id,
+    });
+  }
+  return {
+    artifactId: artifactRecord.id,
+    taskId: artifactRecord.taskId,
+    teamRunId: read("teamRunId", 200),
+    agentRunId: artifactRecord.agentRunId,
+    projectId: read("projectId", 200),
+    workspaceId: read("workspaceId", 200),
+    managedPath: artifactRecord.managedPath,
+    workspaceCwd: read("workspaceCwd"),
+    sourceProjectDirectory: read("sourceProjectDirectory"),
+    repositoryRoot: read("repositoryRoot"),
+    commonGitDirectory: read("commonGitDirectory"),
+    baseCommit,
+    projectRelativePath,
+    provisionAttemptId: read("provisionAttemptId", 200),
+    state: state as ManagedWorkerWorktreeRecord["state"],
+    ...(typeof value.failureCode === "string" ? { failureCode: value.failureCode } : {}),
+    revision: artifactRecord.revision,
+  };
+}
+
+function markPreparingManagedWorkerWorktreesUnknown(
+  database: DatabaseSync,
+  now: string,
+  failureCode: string,
+  teamRunId?: string,
+): number {
+  const rows = database.prepare(`
+    SELECT * FROM artifacts
+    WHERE kind = ? ${teamRunId ? "AND task_id IN (SELECT task_id FROM team_runs WHERE id = ?)" : ""}
+  `).all(
+    ...(teamRunId ? [MANAGED_WORKER_WORKTREE_ARTIFACT_KIND, teamRunId] : [MANAGED_WORKER_WORKTREE_ARTIFACT_KIND]),
+  ) as SQLiteRow[];
+  let changed = 0;
+  const attemptStatus = database.prepare("SELECT status FROM operation_attempts WHERE id = ?");
+  const updateArtifact = database.prepare(`
+    UPDATE artifacts
+    SET metadata_json = ?, revision = ?, updated_at = ?
+    WHERE id = ? AND revision = ?
+  `);
+  for (const row of rows) {
+    const current = managedWorkerWorktree(artifact(row));
+    if (teamRunId !== undefined && current.teamRunId !== teamRunId) continue;
+    const attempt = attemptStatus.get(current.provisionAttemptId) as { status?: unknown } | undefined;
+    if (current.state !== "preparing" || attempt?.status !== "prepared") continue;
+    const metadata: ManagedWorkerWorktreeMetadata = {
+      version: 1,
+      state: "unknown",
+      teamRunId: current.teamRunId,
+      agentRunId: current.agentRunId,
+      projectId: current.projectId,
+      workspaceId: current.workspaceId,
+      sourceProjectDirectory: current.sourceProjectDirectory,
+      repositoryRoot: current.repositoryRoot,
+      commonGitDirectory: current.commonGitDirectory,
+      baseCommit: current.baseCommit,
+      projectRelativePath: current.projectRelativePath,
+      workspaceCwd: current.workspaceCwd,
+      provisionAttemptId: current.provisionAttemptId,
+      failureCode,
+    };
+    updateArtifact.run(canonicalJSON(metadata), current.revision + 1, now, current.artifactId, current.revision);
+    changed += 1;
+  }
+  return changed;
+}
+
 function evidenceRecord(row: SQLiteRow): EvidenceRecord {
   const optional = (key: string): string | undefined => typeof row[key] === "string" ? row[key] as string : undefined;
   return {
@@ -1128,6 +1314,11 @@ export class ProductStore {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const now = this.now();
+      const unknownManagedWorktrees = markPreparingManagedWorkerWorktreesUnknown(
+        this.database,
+        now,
+        "RUNTIME_INTERRUPTED",
+      );
       this.database.prepare(`
         UPDATE operation_attempts
         SET status = 'unknown', updated_at = ?
@@ -1171,6 +1362,7 @@ export class ProductStore {
           interruptedAgentRuns: typeof agentRunning?.count === "number" ? agentRunning.count : 0,
           interruptedTeamRuns: typeof teamRunning?.count === "number" ? teamRunning.count : 0,
           cancelledAgentRequests: typeof openRequests?.count === "number" ? openRequests.count : 0,
+          unknownManagedWorktrees,
         }),
         now,
       );
@@ -1201,6 +1393,19 @@ export class ProductStore {
   async snapshot(afterEventSequence = 0): Promise<FoundationSnapshot> {
     this.assertOpen();
     requiredRevision(afterEventSequence, "afterEventSequence");
+    const artifacts = (
+      this.database.prepare("SELECT * FROM artifacts ORDER BY created_at, id").all() as SQLiteRow[]
+    ).map(artifact);
+    const managedWorkerWorktrees = artifacts
+      .filter((item) => item.kind === MANAGED_WORKER_WORKTREE_ARTIFACT_KIND)
+      .map(managedWorkerWorktree);
+    const teamFailures = teamFailuresFromEvents((
+      this.database.prepare(`
+        SELECT * FROM store_events
+        WHERE kind IN ('teamRun.failed', 'teamRun.aborted')
+        ORDER BY sequence
+      `).all() as SQLiteRow[]
+    ).map(event));
     return {
       schemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
       storeRevision: this.metaInteger("store_revision"),
@@ -1240,6 +1445,7 @@ export class ProductStore {
       teamRuns: (
         this.database.prepare("SELECT * FROM team_runs ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(teamRun),
+      teamFailures,
       agentRuns: (
         this.database.prepare("SELECT * FROM agent_runs ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(agentRun),
@@ -1255,9 +1461,8 @@ export class ProductStore {
       findings: (
         this.database.prepare("SELECT * FROM findings ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(finding),
-      artifacts: (
-        this.database.prepare("SELECT * FROM artifacts ORDER BY created_at, id").all() as SQLiteRow[]
-      ).map(artifact),
+      artifacts,
+      managedWorkerWorktrees,
       evidence: (
         this.database.prepare("SELECT * FROM evidence_records ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(evidenceRecord),
@@ -2000,6 +2205,12 @@ export class ProductStore {
     if (input.workspaceAccess !== "sharedReadOnly" && input.workspaceAccess !== "exclusiveWrite") {
       throw new ProductStoreError("INVALID_ARGUMENT", "Runtime workspaceAccess is invalid");
     }
+    if (input.toolsWritable && input.workspaceAccess !== "exclusiveWrite") {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "Writable Active Tool Set requires an exclusiveWrite Runtime workspace",
+      );
+    }
     if (!/^sha256:[a-f0-9]{64}$/.test(input.systemPromptDigest)) {
       throw new ProductStoreError("INVALID_ARGUMENT", "systemPromptDigest must be SHA-256");
     }
@@ -2588,21 +2799,388 @@ export class ProductStore {
     );
   }
 
+  async prepareManagedWorkerWorktrees(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    scope: TaskScope;
+    taskId: string;
+    teamRunId: string;
+    plans: ManagedWorkerWorktreePlan[];
+  }): Promise<{ storeRevision: number; worktrees: ManagedWorkerWorktreeRecord[] }> {
+    const scope = normalizedTaskScope(input.scope);
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const teamRunId = requiredString(input.teamRunId, "teamRunId", 200);
+    if (scope.kind !== "project") {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktrees require a Project Scope");
+    }
+    if (!Array.isArray(input.plans) || input.plans.length < 1 || input.plans.length > 8) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree plans must contain 1...8 members");
+    }
+    const seenAgentRuns = new Set<string>();
+    const plans = input.plans.map((plan, index) => {
+      const agentRunId = requiredString(plan.agentRunId, `plans[${index}].agentRunId`, 200);
+      if (seenAgentRuns.has(agentRunId)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree plans repeat an Agent Run", { agentRunId });
+      }
+      seenAgentRuns.add(agentRunId);
+      const artifactId = requiredString(plan.artifactId, `plans[${index}].artifactId`, 200);
+      if (artifactId !== managedWorkerWorktreeArtifactId(agentRunId)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree Artifact identity is invalid", { agentRunId });
+      }
+      const workspaceId = requiredString(plan.workspaceId, `plans[${index}].workspaceId`, 200);
+      if (!workspaceId.endsWith(artifactId)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker workspace identity is invalid", { agentRunId });
+      }
+      const requiredPath = (value: unknown, field: string): string => {
+        const path = requiredString(value, field, 4_096);
+        if (!isAbsolute(path)) throw new ProductStoreError("INVALID_ARGUMENT", `${field} must be absolute`);
+        return resolve(path);
+      };
+      const worktreeRoot = requiredPath(plan.worktreeRoot, `plans[${index}].worktreeRoot`);
+      const workspaceCwd = requiredPath(plan.workspaceCwd, `plans[${index}].workspaceCwd`);
+      const workspaceRelative = relative(worktreeRoot, workspaceCwd);
+      if (workspaceRelative === ".." || workspaceRelative.startsWith("../") || isAbsolute(workspaceRelative)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree cwd escapes its root", { agentRunId });
+      }
+      const sourceProjectDirectory = requiredPath(plan.sourceProjectDirectory, `plans[${index}].sourceProjectDirectory`);
+      const repositoryRoot = requiredPath(plan.repositoryRoot, `plans[${index}].repositoryRoot`);
+      const commonGitDirectory = requiredPath(plan.commonGitDirectory, `plans[${index}].commonGitDirectory`);
+      const baseCommit = requiredString(plan.baseCommit, `plans[${index}].baseCommit`, 64);
+      if (!/^[0-9a-f]{40,64}$/i.test(baseCommit)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree base commit is invalid", { agentRunId });
+      }
+      if (typeof plan.projectRelativePath !== "string" || plan.projectRelativePath.length > 4_096) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree relative path is invalid", { agentRunId });
+      }
+      return {
+        agentRunId,
+        artifactId,
+        workspaceId,
+        worktreeRoot,
+        workspaceCwd,
+        sourceProjectDirectory,
+        repositoryRoot,
+        commonGitDirectory,
+        baseCommit,
+        projectRelativePath: plan.projectRelativePath,
+      };
+    });
+    return await this.mutate(
+      "managedWorkerWorktree.prepare",
+      input.requestId,
+      input.expectedStoreRevision,
+      { scope, taskId, teamRunId, plans },
+      (_storeRevision, now) => {
+        const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+        const teamRow = this.database.prepare("SELECT * FROM team_runs WHERE id = ? AND task_id = ?")
+          .get(teamRunId, taskId) as SQLiteRow | undefined;
+        if (!taskRow || !teamRow) {
+          throw new ProductStoreError("NOT_FOUND", "Managed Worker worktree target does not exist", { taskId, teamRunId });
+        }
+        const taskRecord = task(taskRow);
+        if (JSON.stringify(taskRecord.scope) !== JSON.stringify(scope)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree Task Scope changed", { taskId });
+        }
+        if (teamRun(teamRow).status !== "active") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree Team Run is not active", { teamRunId });
+        }
+        const worktrees: ManagedWorkerWorktreeRecord[] = [];
+        const insertArtifact = this.database.prepare(`
+          INSERT INTO artifacts(
+            id, task_id, session_id, agent_run_id, kind, title,
+            managed_path, external_path, digest, metadata_json,
+            revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, ?, ?)
+        `);
+        const insertAttempt = this.database.prepare(`
+          INSERT INTO operation_attempts(
+            id, task_id, session_id, session_run_id, agent_run_id,
+            operation_kind, target_identity, parameter_digest, replay_policy,
+            status, outcome_json, prepared_at, completed_at, updated_at
+          ) VALUES (?, ?, ?, NULL, ?, 'external_side_effect', ?, ?, 'never',
+            'prepared', NULL, ?, NULL, ?)
+        `);
+        for (const plan of plans) {
+          const agentRow = this.database.prepare(`
+            SELECT id, session_id, role, status FROM agent_runs
+            WHERE id = ? AND task_id = ? AND team_run_id = ?
+          `).get(plan.agentRunId, taskId, teamRunId) as SQLiteRow | undefined;
+          if (!agentRow || text(agentRow, "role") !== "worker" || text(agentRow, "status") !== "prepared") {
+            throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker Agent Run is not ready", {
+              agentRunId: plan.agentRunId,
+            });
+          }
+          const existing = this.database.prepare("SELECT id FROM artifacts WHERE id = ?").get(plan.artifactId);
+          if (existing) {
+            throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree already has an Artifact", {
+              artifactId: plan.artifactId,
+            });
+          }
+          const attemptId = `attempt-${randomUUID()}`;
+          const metadata: ManagedWorkerWorktreeMetadata = {
+            version: 1,
+            state: "preparing",
+            teamRunId,
+            agentRunId: plan.agentRunId,
+            projectId: scope.projectId,
+            workspaceId: plan.workspaceId,
+            sourceProjectDirectory: plan.sourceProjectDirectory,
+            repositoryRoot: plan.repositoryRoot,
+            commonGitDirectory: plan.commonGitDirectory,
+            baseCommit: plan.baseCommit,
+            projectRelativePath: plan.projectRelativePath,
+            workspaceCwd: plan.workspaceCwd,
+            provisionAttemptId: attemptId,
+          };
+          insertArtifact.run(
+            plan.artifactId,
+            taskId,
+            text(agentRow, "session_id"),
+            plan.agentRunId,
+            MANAGED_WORKER_WORKTREE_ARTIFACT_KIND,
+            "受管 Worker 工作树",
+            plan.worktreeRoot,
+            `sha256:${payloadHash({ ...metadata, managedPath: plan.worktreeRoot })}`,
+            canonicalJSON(metadata),
+            now,
+            now,
+          );
+          insertAttempt.run(
+            attemptId,
+            taskId,
+            text(agentRow, "session_id"),
+            plan.agentRunId,
+            `${MANAGED_WORKER_WORKTREE_TARGET_PREFIX}${plan.artifactId}`,
+            `sha256:${payloadHash({ artifactId: plan.artifactId, ...metadata, managedPath: plan.worktreeRoot })}`,
+            now,
+            now,
+          );
+          worktrees.push({
+            artifactId: plan.artifactId,
+            taskId,
+            teamRunId,
+            agentRunId: plan.agentRunId,
+            projectId: scope.projectId,
+            workspaceId: plan.workspaceId,
+            managedPath: plan.worktreeRoot,
+            workspaceCwd: plan.workspaceCwd,
+            sourceProjectDirectory: plan.sourceProjectDirectory,
+            repositoryRoot: plan.repositoryRoot,
+            commonGitDirectory: plan.commonGitDirectory,
+            baseCommit: plan.baseCommit,
+            projectRelativePath: plan.projectRelativePath,
+            provisionAttemptId: attemptId,
+            state: "preparing",
+            revision: 1,
+          });
+        }
+        return {
+          value: { worktrees },
+          event: {
+            kind: "managedWorkerWorktree.prepared",
+            entityKind: "artifact",
+            entityId: teamRunId,
+            taskId,
+            payload: { teamRunId, worktrees },
+          },
+        };
+      },
+    );
+  }
+
+  async finishManagedWorkerWorktree(input: {
+    requestId: string;
+    artifactId: string;
+    provisionAttemptId: string;
+    state: "ready" | "failed" | "unknown";
+    resultDigest?: string;
+    failureCode?: string;
+  }): Promise<{ storeRevision: number; worktree: ManagedWorkerWorktreeRecord }> {
+    const artifactId = requiredString(input.artifactId, "artifactId", 200);
+    const provisionAttemptId = requiredString(input.provisionAttemptId, "provisionAttemptId", 200);
+    if (input.resultDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(input.resultDigest)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Managed Worker worktree resultDigest must be SHA-256");
+    }
+    const failureCode = input.failureCode === undefined
+      ? undefined
+      : requiredString(input.failureCode, "failureCode", 200);
+    return await this.mutate(
+      "managedWorkerWorktree.finish",
+      input.requestId,
+      undefined,
+      { artifactId, provisionAttemptId, state: input.state, resultDigest: input.resultDigest ?? null, failureCode: failureCode ?? null },
+      (_storeRevision, now) => {
+        const row = this.database.prepare("SELECT * FROM artifacts WHERE id = ?").get(artifactId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Managed Worker worktree Artifact does not exist", { artifactId });
+        const current = managedWorkerWorktree(artifact(row));
+        if (current.provisionAttemptId !== provisionAttemptId) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree Attempt does not match its Artifact", {
+            artifactId,
+          });
+        }
+        if (current.state !== "preparing") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree is already terminal", {
+            artifactId,
+            state: current.state,
+          });
+        }
+        const attempt = this.database.prepare(`
+          SELECT status, task_id FROM operation_attempts WHERE id = ? AND target_identity = ?
+        `).get(provisionAttemptId, `${MANAGED_WORKER_WORKTREE_TARGET_PREFIX}${artifactId}`) as SQLiteRow | undefined;
+        if (!attempt || text(attempt, "status") !== "prepared") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree Attempt is not prepared", {
+            provisionAttemptId,
+          });
+        }
+        const nextMetadata: ManagedWorkerWorktreeMetadata = {
+          version: 1,
+          state: input.state,
+          teamRunId: current.teamRunId,
+          agentRunId: current.agentRunId,
+          projectId: current.projectId,
+          workspaceId: current.workspaceId,
+          sourceProjectDirectory: current.sourceProjectDirectory,
+          repositoryRoot: current.repositoryRoot,
+          commonGitDirectory: current.commonGitDirectory,
+          baseCommit: current.baseCommit,
+          projectRelativePath: current.projectRelativePath,
+          workspaceCwd: current.workspaceCwd,
+          provisionAttemptId: current.provisionAttemptId,
+          ...(failureCode ? { failureCode } : {}),
+        };
+        const nextRevision = current.revision + 1;
+        this.database.prepare(`
+          UPDATE artifacts
+          SET metadata_json = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND revision = ?
+        `).run(canonicalJSON(nextMetadata), nextRevision, now, artifactId, current.revision);
+        const outcome = input.state === "ready" ? "succeeded" : input.state;
+        this.database.prepare(`
+          UPDATE operation_attempts
+          SET status = ?, outcome_json = ?, completed_at = ?, updated_at = ?
+          WHERE id = ? AND status = 'prepared'
+        `).run(
+          outcome,
+          canonicalJSON({ resultDigest: input.resultDigest ?? null, workspaceId: current.workspaceId, state: input.state }),
+          now,
+          now,
+          provisionAttemptId,
+        );
+        const worktree: ManagedWorkerWorktreeRecord = {
+          ...current,
+          state: input.state,
+          ...(failureCode ? { failureCode } : {}),
+          revision: nextRevision,
+        };
+        return {
+          value: { worktree },
+          event: {
+            kind: `managedWorkerWorktree.${input.state}`,
+            entityKind: "artifact",
+            entityId: artifactId,
+            taskId: current.taskId,
+            payload: { worktree },
+          },
+        };
+      },
+    );
+  }
+
+  async invalidateManagedWorkerWorktree(input: {
+    requestId: string;
+    artifactId: string;
+    failureCode: string;
+  }): Promise<{ storeRevision: number; worktree: ManagedWorkerWorktreeRecord }> {
+    const artifactId = requiredString(input.artifactId, "artifactId", 200);
+    const failureCode = requiredString(input.failureCode, "failureCode", 200);
+    return await this.mutate(
+      "managedWorkerWorktree.invalidate",
+      input.requestId,
+      undefined,
+      { artifactId, failureCode },
+      (_storeRevision, now) => {
+        const row = this.database.prepare("SELECT * FROM artifacts WHERE id = ?").get(artifactId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Managed Worker worktree Artifact does not exist", { artifactId });
+        const current = managedWorkerWorktree(artifact(row));
+        if (current.state === "unknown") {
+          return {
+            value: { worktree: current },
+            event: {
+              kind: "managedWorkerWorktree.unknownReused",
+              entityKind: "artifact",
+              entityId: artifactId,
+              taskId: current.taskId,
+              payload: { worktree: current },
+            },
+          };
+        }
+        if (current.state !== "ready") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Managed Worker worktree cannot be invalidated from its current state", {
+            artifactId,
+            state: current.state,
+          });
+        }
+        const metadata: ManagedWorkerWorktreeMetadata = {
+          version: 1,
+          state: "unknown",
+          teamRunId: current.teamRunId,
+          agentRunId: current.agentRunId,
+          projectId: current.projectId,
+          workspaceId: current.workspaceId,
+          sourceProjectDirectory: current.sourceProjectDirectory,
+          repositoryRoot: current.repositoryRoot,
+          commonGitDirectory: current.commonGitDirectory,
+          baseCommit: current.baseCommit,
+          projectRelativePath: current.projectRelativePath,
+          workspaceCwd: current.workspaceCwd,
+          provisionAttemptId: current.provisionAttemptId,
+          failureCode,
+        };
+        const nextRevision = current.revision + 1;
+        this.database.prepare(`
+          UPDATE artifacts
+          SET metadata_json = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND revision = ?
+        `).run(canonicalJSON(metadata), nextRevision, now, artifactId, current.revision);
+        const worktree: ManagedWorkerWorktreeRecord = {
+          ...current,
+          state: "unknown",
+          failureCode,
+          revision: nextRevision,
+        };
+        return {
+          value: { worktree },
+          event: {
+            kind: "managedWorkerWorktree.invalidated",
+            entityKind: "artifact",
+            entityId: artifactId,
+            taskId: current.taskId,
+            payload: { worktree },
+          },
+        };
+      },
+    );
+  }
+
   async finishTeamRun(input: {
     requestId: string;
     taskId: string;
     teamRunId: string;
     status: "failed" | "aborted";
     reason: string;
+    reasonCode?: string;
   }): Promise<{ storeRevision: number; teamRun: TeamRunRecord }> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const teamRunId = requiredString(input.teamRunId, "teamRunId", 200);
     const reason = requiredCredentialFreeString(input.reason, "reason", 2_000);
+    const reasonCode = input.reasonCode === undefined
+      ? undefined
+      : requiredString(input.reasonCode, "reasonCode", 200);
     return await this.mutate(
       "teamRun.finish",
       input.requestId,
       undefined,
-      { taskId, teamRunId, status: input.status, reason },
+      { taskId, teamRunId, status: input.status, reason, reasonCode: reasonCode ?? null },
       (_storeRevision, now) => {
         const row = this.database.prepare("SELECT * FROM team_runs WHERE id = ? AND task_id = ?")
           .get(teamRunId, taskId) as SQLiteRow | undefined;
@@ -2616,7 +3194,7 @@ export class ProductStore {
               entityKind: "teamRun",
               entityId: teamRunId,
               taskId,
-              payload: { teamRun: previous, reason },
+              payload: { teamRun: previous, reason, ...(reasonCode ? { reasonCode } : {}) },
             },
           };
         }
@@ -2646,6 +3224,12 @@ export class ProductStore {
           WHERE id IN (SELECT session_id FROM agent_runs WHERE team_run_id = ?)
             AND state != 'archived'
         `).run(now, teamRunId);
+        markPreparingManagedWorkerWorktreesUnknown(
+          this.database,
+          now,
+          input.status === "failed" ? "TEAM_RUN_FAILED" : "TEAM_RUN_ABORTED",
+          teamRunId,
+        );
         this.database.prepare(`
           UPDATE operation_attempts SET status = 'unknown', updated_at = ?
           WHERE agent_run_id IN (SELECT id FROM agent_runs WHERE team_run_id = ?)
@@ -2664,7 +3248,7 @@ export class ProductStore {
             entityKind: "teamRun",
             entityId: teamRunId,
             taskId,
-            payload: { teamRun: updated, reason },
+            payload: { teamRun: updated, reason, ...(reasonCode ? { reasonCode } : {}) },
           },
         };
       },

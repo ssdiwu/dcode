@@ -8,6 +8,7 @@ import test from "node:test";
 import { DCodeDataRootError } from "../src/dcode-data-root.js";
 import { ProductStoreLeaseError } from "../src/product-store-lease.js";
 import { ProductStoreSchemaError } from "../src/product-store-schema.js";
+import { managedWorkerWorktreeArtifactId } from "../src/managed-worker-worktree.js";
 import {
   ProductStore,
   ProductStoreError,
@@ -506,6 +507,91 @@ test("Team Run creates one Coordinator and two child Agent Sessions without comp
         }],
       }),
       (error: unknown) => error instanceof ProductStoreError && error.code === "REVISION_CONFLICT",
+    );
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("Managed Worker worktree writes Artifact and external Attempt before Git, then preserves both across recovery", async () => {
+  const f = await fixture("dcode-managed-worktree-store-");
+  let store = await open(f);
+  try {
+    const project = await store.createProject({
+      requestId: "managed-worktree-project",
+      expectedStoreRevision: 0,
+      title: "Worker Project",
+      directory: f.projectDirectory,
+    });
+    const task = await store.createTask({
+      requestId: "managed-worktree-task",
+      expectedStoreRevision: project.storeRevision,
+      scope: { kind: "project", projectId: project.project.id },
+      title: "Isolate Worker",
+      goal: "Create a durable Worker worktree mapping",
+    });
+    const team = await store.createTeamRun({
+      requestId: "managed-worktree-team",
+      expectedStoreRevision: task.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      members: [
+        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
+        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
+      ],
+    });
+    const worker = team.childAgentRuns.find((run) => run.role === "worker");
+    assert.ok(worker);
+    const claimed = await store.claimTeamRunStart({
+      requestId: "managed-worktree-claim",
+      expectedStoreRevision: team.storeRevision,
+      expectedTeamRunRevision: team.teamRun.revision,
+      scope: task.task.scope,
+      taskId: task.task.id,
+      teamRunId: team.teamRun.id,
+    });
+    const artifactId = managedWorkerWorktreeArtifactId(worker.id);
+    const worktreeRoot = join(f.dataRoot, "runtime", "workspaces", "worker", "agent-test");
+    const workspaceCwd = join(worktreeRoot, "packages", "app");
+    const prepared = await store.prepareManagedWorkerWorktrees({
+      requestId: "managed-worktree-prepare",
+      expectedStoreRevision: claimed.storeRevision,
+      scope: task.task.scope,
+      taskId: task.task.id,
+      teamRunId: team.teamRun.id,
+      plans: [{
+        agentRunId: worker.id,
+        artifactId,
+        workspaceId: `managed-worker-worktree:${artifactId}`,
+        worktreeRoot,
+        workspaceCwd,
+        sourceProjectDirectory: f.projectDirectory,
+        repositoryRoot: f.projectDirectory,
+        commonGitDirectory: join(f.projectDirectory, ".git"),
+        baseCommit: "a".repeat(40),
+        projectRelativePath: "packages/app",
+      }],
+    });
+    assert.equal(prepared.worktrees[0]?.state, "preparing");
+    let snapshot = await store.snapshot();
+    const preparedWorktree = snapshot.managedWorkerWorktrees.find((item) => item.agentRunId === worker.id);
+    assert.equal(preparedWorktree?.state, "preparing");
+    assert.equal(
+      snapshot.operationAttempts.find((attempt) => attempt.id === preparedWorktree?.provisionAttemptId)?.status,
+      "prepared",
+    );
+
+    await store.close();
+    store = await open(f);
+    snapshot = await store.snapshot();
+    const recoveredWorktree = snapshot.managedWorkerWorktrees.find((item) => item.agentRunId === worker.id);
+    assert.equal(recoveredWorktree?.state, "unknown");
+    assert.equal(recoveredWorktree?.failureCode, "RUNTIME_INTERRUPTED");
+    assert.equal(
+      snapshot.operationAttempts.find((attempt) => attempt.id === recoveredWorktree?.provisionAttemptId)?.status,
+      "unknown",
+      "a prepared Git worktree Attempt must never auto-replay after restart",
     );
   } finally {
     await store.close();

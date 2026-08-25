@@ -123,9 +123,15 @@ test("method parameter validation rejects invalid values", () => {
     taskId: "task-a",
     teamRunId: "team-a",
     message: "Coordinate this Task",
-    workspace: { workspaceId: "team-workspace", cwd: "/work/project", access: "sharedReadOnly" },
   };
   assert.doesNotThrow(() => validateMethodParams("team.start", teamStart));
+  assert.throws(
+    () => validateMethodParams("team.start", {
+      ...teamStart,
+      workspace: { workspaceId: "caller-controlled", cwd: "/work/project", access: "sharedReadOnly" },
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("team.start", { ...teamStart, expectedTeamRunRevision: undefined }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",

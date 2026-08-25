@@ -134,12 +134,14 @@ struct FoundationSnapshot: Codable, Sendable {
     let activeToolSets: [FoundationActiveToolSet]
     let promptReceipts: [FoundationPromptReceipt]
     let teamRuns: [FoundationTeamRun]
+    let teamFailures: [FoundationTeamFailure]
     let agentRuns: [FoundationAgentRun]
     let agentAssignments: [FoundationAgentAssignment]
     let agentRequests: [FoundationAgentRequest]
     let agentReports: [FoundationAgentReport]
     let findings: [FoundationFinding]
     let artifacts: [FoundationArtifact]
+    let managedWorkerWorktrees: [FoundationManagedWorkerWorktree]
     let evidence: [FoundationEvidence]
 }
 
@@ -298,6 +300,17 @@ struct FoundationTeamRun: Codable, Identifiable, Hashable, Sendable {
     let revision: Int
 }
 
+struct FoundationTeamFailure: Codable, Identifiable, Sendable {
+    var id: String { teamRunId }
+    let teamRunId: String
+    let taskId: String
+    let status: String
+    let reason: String
+    let reasonCode: String?
+    let eventSequence: Int
+    let createdAt: String
+}
+
 struct FoundationAgentRun: Codable, Identifiable, Sendable {
     let id: String
     let taskId: String
@@ -404,6 +417,27 @@ struct FoundationArtifact: Codable, Identifiable, Sendable {
     let externalPath: String?
     let digest: String?
     let metadata: JSONValue
+    let revision: Int
+}
+
+struct FoundationManagedWorkerWorktree: Codable, Identifiable, Sendable {
+    var id: String { artifactId }
+    let artifactId: String
+    let taskId: String
+    let teamRunId: String
+    let agentRunId: String
+    let projectId: String
+    let workspaceId: String
+    let managedPath: String
+    let workspaceCwd: String
+    let sourceProjectDirectory: String
+    let repositoryRoot: String
+    let commonGitDirectory: String
+    let baseCommit: String
+    let projectRelativePath: String
+    let provisionAttemptId: String
+    let state: String
+    let failureCode: String?
     let revision: Int
 }
 

@@ -555,15 +555,8 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "taskId", 200);
       requireBoundedString(params, "teamRunId", 200);
       requireBoundedString(params, "message", 200_000);
-      if (!isRecord(params.workspace)) {
-        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.workspace to be an object");
-      }
-      if (
-        typeof params.workspace.workspaceId !== "string"
-        || typeof params.workspace.cwd !== "string"
-        || params.workspace.access !== "sharedReadOnly"
-      ) {
-        throw new ProtocolValidationError("INVALID_PARAMS", "team.start requires a sharedReadOnly workspace");
+      if (params.workspace !== undefined) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "team.start workspace is derived by the D Code Host");
       }
       return;
     case "agentRequest.answer": {
