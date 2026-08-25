@@ -289,6 +289,33 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
     }
     assert.ok(providerRequestBodies.slice(bodiesBeforeRefresh).some((body) => body.includes("FRESH_NEXT_RUN_RULE")));
 
+    const matchingSourceSnapshot = await host.handle("foundation.snapshot", {}) as {
+      promptReceipts: Array<{
+        id: string;
+        sessionId: string;
+        sourceReceipts: unknown;
+        sourceStates: Array<{ state: string; contentStored: boolean; unavailableReason?: string }>;
+      }>;
+    };
+    const trackedReceipt = matchingSourceSnapshot.promptReceipts.find((receipt) => (
+      receipt.sessionId === taskB.coordinationSession.id && receipt.sourceStates.length > 0
+    ));
+    assert.ok(trackedReceipt, "the next Run must expose its Prompt Source state");
+    assert.equal(trackedReceipt.sourceStates[0]?.state, "current_match");
+    assert.equal(trackedReceipt.sourceStates[0]?.contentStored, false);
+    assert.equal(JSON.stringify(trackedReceipt.sourceReceipts).includes("FRESH_NEXT_RUN_RULE"), false);
+
+    await writeFile(join(workspaceB, "AGENTS.md"), "# Changed After Receipt\n");
+    const mismatchSnapshot = await host.handle("foundation.snapshot", {}) as typeof matchingSourceSnapshot;
+    const mismatchedReceipt = mismatchSnapshot.promptReceipts.find((receipt) => receipt.id === trackedReceipt.id);
+    assert.equal(mismatchedReceipt?.sourceStates[0]?.state, "hash_mismatch");
+
+    await rm(join(workspaceB, "AGENTS.md"));
+    const unavailableSnapshot = await host.handle("foundation.snapshot", {}) as typeof matchingSourceSnapshot;
+    const unavailableReceipt = unavailableSnapshot.promptReceipts.find((receipt) => receipt.id === trackedReceipt.id);
+    assert.equal(unavailableReceipt?.sourceStates[0]?.state, "historical_unavailable");
+    assert.equal(unavailableReceipt?.sourceStates[0]?.unavailableReason, "missing");
+
     await host.handle("session.close", { runtimeId: "runtime-a", expectedSessionId: "adapter-a" });
     const afterClose = await host.handle("runtime.list", {}) as {
       runtimes: Array<{ identity: { runtimeId: string } }>;

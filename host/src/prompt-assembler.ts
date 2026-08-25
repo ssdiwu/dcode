@@ -1,18 +1,17 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redactCredentialText } from "./credential-material.js";
+import {
+  readDCodePromptSource,
+  type DCodePromptSourceReceipt,
+} from "./prompt-source-status.js";
+
+export type { DCodePromptSourceReceipt } from "./prompt-source-status.js";
 
 export interface DCodePromptTool {
   name: string;
   description: string;
   parameters: unknown;
-}
-
-export interface DCodePromptSourceReceipt {
-  path: string;
-  digest: string;
-  bytes: number;
 }
 
 export interface DCodePromptDocument {
@@ -45,7 +44,6 @@ export interface AssembledDCodePrompt {
   tools: DCodePromptTool[];
 }
 
-const MAX_DOCUMENT_BYTES = 64 * 1024;
 const FIRST_CLASS_DOCUMENTS = [
   "AGENTS.md",
   "PRODUCT.md",
@@ -70,20 +68,17 @@ export async function loadDCodePromptDocuments(cwd: string): Promise<DCodePrompt
   const documents: DCodePromptDocument[] = [];
   for (const name of FIRST_CLASS_DOCUMENTS) {
     const path = join(cwd, name);
-    try {
-      const metadata = await lstat(path);
-      if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_DOCUMENT_BYTES) continue;
-      const bytes = await readFile(path);
-      const content = bytes.toString("utf8");
-      if (redactCredentialText(content).redacted) throw new DCodePromptCredentialError(path);
-      documents.push({
-        receipt: { path, digest: digest(bytes), bytes: bytes.byteLength },
-        content,
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
+    const current = await readDCodePromptSource(cwd, path);
+    if (current.kind === "unavailable") {
+      if (["missing", "not_regular_file", "symbolic_link", "too_large"].includes(current.reason)) continue;
+      throw new Error(`D Code could not safely read Prompt source: ${current.reason}`);
     }
+    const content = current.bytes.toString("utf8");
+    if (redactCredentialText(content).redacted) throw new DCodePromptCredentialError(path);
+    documents.push({
+      receipt: { path, digest: digest(current.bytes), bytes: current.bytes.byteLength },
+      content,
+    });
   }
   return documents;
 }

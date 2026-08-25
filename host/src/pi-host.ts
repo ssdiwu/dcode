@@ -73,6 +73,10 @@ import {
   type DCodePromptTool,
 } from "./prompt-assembler.js";
 import {
+  inspectDCodePromptSourceReceipts,
+  type DCodePromptSourceReadCache,
+} from "./prompt-source-status.js";
+import {
   DCodeOperationAttemptController,
   createDCodeOperationAttemptExtension,
 } from "./operation-attempt-extension.js";
@@ -621,6 +625,25 @@ export class PiHost {
     }
   }
 
+  private async foundationSnapshot(afterEventSequence: number): Promise<unknown> {
+    const snapshot = await (await this.getProductStore()).snapshot(afterEventSequence);
+    const runtimeEnvironments = new Map(
+      snapshot.runtimeEnvironments.map((environment) => [environment.id, environment]),
+    );
+    const promptSourceReadCache: DCodePromptSourceReadCache = new Map();
+    return {
+      ...snapshot,
+      promptReceipts: await Promise.all(snapshot.promptReceipts.map(async (receipt) => ({
+        ...receipt,
+        sourceStates: await inspectDCodePromptSourceReceipts(
+          runtimeEnvironments.get(receipt.runtimeEnvironmentId)?.cwd,
+          receipt.sourceReceipts,
+          promptSourceReadCache,
+        ),
+      }))),
+    };
+  }
+
   private runtimeIdentityFromParams(params: Record<string, unknown>): RuntimeIdentity | undefined {
     if (params.runtimeId === undefined) return undefined;
     const runtimeId = params.runtimeId;
@@ -968,7 +991,7 @@ export class PiHost {
       case "runtime.start":
         return await this.startDCodeRuntime(params);
       case "foundation.snapshot":
-        return await (await this.getProductStore()).snapshot(
+        return await this.foundationSnapshot(
           typeof params.afterEventSequence === "number" ? params.afterEventSequence : 0,
         );
       case "project.create": {

@@ -80,7 +80,20 @@ final class FoundationConsoleTests: XCTestCase {
                 "systemPromptDigest": .string("sha256:prompt"),
                 "identityRevision": .string("dcode-identity-v1"),
                 "roleRevision": .string("builtin-coordinator:v1"),
-                "sourceReceipts": .array([]),
+                "sourceReceipts": .array([.object([
+                    "path": .string("/Users/tester/AGENTS.md"),
+                    "digest": .string("sha256:receipt"),
+                    "bytes": .number(120),
+                ])]),
+                "sourceStates": .array([.object([
+                    "path": .string("/Users/tester/AGENTS.md"),
+                    "receiptDigest": .string("sha256:receipt"),
+                    "receiptBytes": .number(120),
+                    "state": .string("hash_mismatch"),
+                    "contentStored": .bool(false),
+                    "currentDigest": .string("sha256:current"),
+                    "currentBytes": .number(128),
+                ])]),
                 "createdAt": .string("2026-08-25T00:00:00Z"),
             ])] : []),
             "teamRuns": .array(withOpenRequest ? [.object([
@@ -271,6 +284,10 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertEqual(harness.model.foundationSnapshot?.runtimeEnvironments.first?.runtimeId, "runtime-agent-one")
         XCTAssertEqual(harness.model.foundationSnapshot?.activeToolSets.first?.id, "tools-one")
         XCTAssertEqual(harness.model.foundationSnapshot?.promptReceipts.first?.sessionRunId, "session-run-one")
+        let promptSource = try XCTUnwrap(harness.model.foundationSnapshot?.promptReceipts.first?.sourceStates.first)
+        XCTAssertEqual(promptSource.state, "hash_mismatch")
+        XCTAssertFalse(promptSource.contentStored)
+        XCTAssertEqual(promptSource.currentBytes, 128)
         let option = try XCTUnwrap(request.options.first)
         let answeredSuccessfully = await harness.model.answerFoundationAgentRequest(request, option: option)
         XCTAssertTrue(answeredSuccessfully)

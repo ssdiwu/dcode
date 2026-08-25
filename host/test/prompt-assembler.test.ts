@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,10 @@ import {
   assembleDCodeSystemPrompt,
   loadDCodePromptDocuments,
 } from "../src/prompt-assembler.js";
+import {
+  inspectDCodePromptSourceReceipts,
+  MAX_DCODE_PROMPT_DOCUMENT_BYTES,
+} from "../src/prompt-source-status.js";
 
 test("D Code Prompt Assembler owns identity, environment, documents and exact active tools", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-prompt-assembler-"));
@@ -73,5 +77,70 @@ test("Prompt documents containing credential material block the Provider boundar
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Prompt source status distinguishes current match, hash mismatch and unavailable history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-prompt-source-status-"));
+  const outside = await mkdtemp(join(tmpdir(), "dcode-prompt-source-outside-"));
+  const sourcePath = join(root, "AGENTS.md");
+  const outsidePath = join(outside, "outside.md");
+  const symlinkPath = join(root, "linked.md");
+  try {
+    await writeFile(sourcePath, "# Rules\n\nOriginal bytes.\n");
+    await writeFile(outsidePath, "# Outside\n");
+    const documents = await loadDCodePromptDocuments(root);
+    const receipt = documents[0]!.receipt;
+
+    const snapshotReadCache = new Map();
+    let states = await inspectDCodePromptSourceReceipts(root, [receipt], snapshotReadCache);
+    assert.equal(states[0]?.state, "current_match");
+    assert.equal(states[0]?.currentDigest, receipt.digest);
+    assert.equal(states[0]?.contentStored, false);
+
+    await writeFile(sourcePath, "# Rules\n\nChanged bytes.\n");
+    const sameSnapshotStates = await inspectDCodePromptSourceReceipts(root, [receipt], snapshotReadCache);
+    assert.equal(sameSnapshotStates[0]?.state, "current_match", "one snapshot reuses one stable current-file read");
+    states = await inspectDCodePromptSourceReceipts(root, [receipt]);
+    assert.equal(states[0]?.state, "hash_mismatch");
+    assert.notEqual(states[0]?.currentDigest, receipt.digest);
+    assert.equal(JSON.stringify(states).includes("Original bytes"), false, "projection never returns historical body");
+
+    await rm(sourcePath);
+    states = await inspectDCodePromptSourceReceipts(root, [receipt]);
+    assert.equal(states[0]?.state, "historical_unavailable");
+    assert.equal(states[0]?.unavailableReason, "missing");
+
+    states = await inspectDCodePromptSourceReceipts(root, [{ ...receipt, path: outsidePath }]);
+    assert.equal(states[0]?.state, "historical_unavailable");
+    assert.equal(states[0]?.unavailableReason, "outside_runtime_cwd");
+
+    await symlink(outsidePath, symlinkPath);
+    states = await inspectDCodePromptSourceReceipts(root, [{ ...receipt, path: symlinkPath }]);
+    assert.equal(states[0]?.state, "historical_unavailable");
+    assert.equal(states[0]?.unavailableReason, "symbolic_link");
+
+    await writeFile(sourcePath, "x".repeat(MAX_DCODE_PROMPT_DOCUMENT_BYTES + 1));
+    states = await inspectDCodePromptSourceReceipts(root, [receipt]);
+    assert.equal(states[0]?.state, "hash_mismatch", "a changed byte count proves the historical digest cannot match");
+    assert.equal(states[0]?.currentBytes, MAX_DCODE_PROMPT_DOCUMENT_BYTES + 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("Prompt loading refuses a document reached through an intermediate symlink", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-prompt-symlink-root-"));
+  const outside = await mkdtemp(join(tmpdir(), "dcode-prompt-symlink-outside-"));
+  try {
+    await mkdir(join(outside, "40-版本实施方案"), { recursive: true });
+    await writeFile(join(outside, "40-版本实施方案", "README.md"), "outside project instructions\n");
+    await symlink(outside, join(root, "doc"));
+    const documents = await loadDCodePromptDocuments(root);
+    assert.equal(documents.some((document) => document.content.includes("outside project instructions")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });

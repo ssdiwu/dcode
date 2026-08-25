@@ -465,6 +465,27 @@ struct FoundationConsoleView: View {
                         Text("Prompt \(receipt.systemPromptDigest) · \(receipt.roleRevision)")
                             .font(.caption2.monospaced())
                             .lineLimit(1)
+                        if receipt.sourceStates.isEmpty {
+                            Text("本轮没有 Prompt Source（提示词来源）")
+                                .font(.caption2)
+                        } else {
+                            ForEach(receipt.sourceStates) { source in
+                                HStack(spacing: 6) {
+                                    Image(systemName: promptSourceIcon(source.state))
+                                        .foregroundStyle(promptSourceColor(source.state))
+                                    Text((source.path as NSString).lastPathComponent)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(promptSourceLabel(source))
+                                        .foregroundStyle(promptSourceColor(source.state))
+                                }
+                                .font(.caption2)
+                                .accessibilityElement(children: .combine)
+                            }
+                            Text("Receipt 只保存路径、hash 与字节数；不保存历史正文。")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -501,6 +522,46 @@ struct FoundationConsoleView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func promptSourceIcon(_ state: String) -> String {
+        switch state {
+        case "current_match": "checkmark.circle.fill"
+        case "hash_mismatch": "exclamationmark.triangle.fill"
+        default: "questionmark.diamond.fill"
+        }
+    }
+
+    private func promptSourceColor(_ state: String) -> Color {
+        switch state {
+        case "current_match": .green
+        case "hash_mismatch": .orange
+        default: .secondary
+        }
+    }
+
+    private func promptSourceLabel(_ source: FoundationPromptSourceState) -> String {
+        switch source.state {
+        case "current_match":
+            "当前匹配"
+        case "hash_mismatch":
+            "hash 不匹配 · 历史正文不可用"
+        default:
+            "历史正文不可用 · \(promptSourceUnavailableReason(source.unavailableReason))"
+        }
+    }
+
+    private func promptSourceUnavailableReason(_ reason: String?) -> String {
+        switch reason {
+        case "runtime_cwd_unavailable": "运行目录不可用"
+        case "outside_runtime_cwd": "来源越界"
+        case "missing": "文件缺失"
+        case "not_regular_file": "不是普通文件"
+        case "symbolic_link": "符号链接不安全"
+        case "too_large": "文件过大"
+        case "changed_during_read": "读取时发生变化"
+        default: "当前不可读"
         }
     }
 

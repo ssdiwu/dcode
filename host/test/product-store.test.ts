@@ -356,6 +356,27 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
       }),
       (error: unknown) => error instanceof ProductStoreError && error.code === "CREDENTIAL_MATERIAL_REJECTED",
     );
+    await assert.rejects(
+      store.prepareSessionRun({
+        requestId: "reject-invalid-prompt-source",
+        taskId: task.task.id,
+        scope: task.task.scope,
+        sessionId: task.coordinationSession.id,
+        runtimeId: "runtime-invalid-source",
+        workspaceId: "workspace-invalid-source",
+        cwd: f.home,
+        workspaceAccess: "exclusiveWrite",
+        message: "safe input",
+        attachmentRefs: [],
+        roleRevision: "builtin-coordinator:v1",
+        profileSnapshot: { role: "coordinator" },
+        tools: [],
+        toolsWritable: false,
+        systemPromptDigest: `sha256:${"b".repeat(64)}`,
+        promptSources: [{ path: join(f.home, "AGENTS.md"), digest: `sha256:${"d".repeat(64)}`, bytes: -1 }],
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
     const prepared = await store.prepareSessionRun({
       requestId: "prepare-run-one",
       taskId: task.task.id,
@@ -374,7 +395,7 @@ test("Session Run preparation persists Raw/Effective input, Prompt receipt and P
       tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
       toolsWritable: false,
       systemPromptDigest: `sha256:${"c".repeat(64)}`,
-      promptSources: [{ path: "/repo/AGENTS.md", digest: `sha256:${"d".repeat(64)}` }],
+      promptSources: [{ path: join(f.home, "AGENTS.md"), digest: `sha256:${"d".repeat(64)}`, bytes: 0 }],
     });
     let snapshot = await store.snapshot();
     assert.equal(snapshot.sessionRuns.find((run) => run.id === prepared.sessionRunId)?.status, "prepared");

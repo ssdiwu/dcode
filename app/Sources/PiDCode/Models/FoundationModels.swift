@@ -200,6 +200,18 @@ struct FoundationActiveToolSet: Codable, Identifiable, Sendable {
     let createdAt: String
 }
 
+struct FoundationPromptSourceState: Codable, Identifiable, Sendable {
+    var id: String { "\(path)#\(receiptDigest)" }
+    let path: String
+    let receiptDigest: String
+    let receiptBytes: Int
+    let state: String
+    let contentStored: Bool
+    let currentDigest: String?
+    let currentBytes: Int?
+    let unavailableReason: String?
+}
+
 struct FoundationPromptReceipt: Codable, Identifiable, Sendable {
     let id: String
     let taskId: String
@@ -212,6 +224,7 @@ struct FoundationPromptReceipt: Codable, Identifiable, Sendable {
     let identityRevision: String
     let roleRevision: String
     let sourceReceipts: JSONValue
+    let sourceStates: [FoundationPromptSourceState]
     let createdAt: String
 }
 

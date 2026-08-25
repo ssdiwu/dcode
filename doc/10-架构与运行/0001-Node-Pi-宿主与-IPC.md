@@ -100,7 +100,7 @@ open "dist/D Code.app"
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
-| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence 与迁移来源投影 |
+| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence 与迁移来源投影；Prompt Receipt 只返回路径 / hash / 字节数，并在单次快照内复用当前文件读取，派生 `current_match` / `hash_mismatch` / `historical_unavailable` 状态，不返回历史 Prompt 或项目正文 |
 | `project.create`、`task.create`、`task.acceptance` | 以 request ID、expected revision 和精确 User / Project Scope 创建或验收 D Code 原生对象 |
 | `agentProfile.create`、`agentProfile.update` | 创建自定义 Profile 或版本化修改内建 / 自定义 Profile；已启动 Agent Run 保留启动快照 |
 | `piImport.listCandidates`、`piImport.preview`、`piImport.importAsTask` | 发现外部 Pi Session、生成 digest / omission 预览，并在用户确认 Scope 后原子转换为新 Task；不修改源 JSONL |

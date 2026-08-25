@@ -6,6 +6,7 @@
 - Pi Session 单向导入：D Code 已管理的旧会话在首次晋升时自动转换为 Legacy Task；其他 Pi Session 只有经 Foundation Console（基础控制台）预览、选择 Scope 并确认后才原子导入，保留 source digest / provenance / unknown lineage，不修改或双写源 JSONL。
 - 多 Runtime Supervisor（运行时监督器）：同一 Task 可同时拥有 Coordinator 与多个独立 Pi AgentSession；Coordinator 先规划、两个只读成员 Provider 请求真实并行、成员 Report 落库后再由同一 Coordination Session 综合。Agent Request 可耐久等待和恢复，单成员 Stop 先写 Attempt 再执行，Provider / Tool / Stop 结果未知时禁止自动重放。
 - D Code System Prompt（系统提示词）与 Active Tool Manifest（活动工具清单）：每个 Session Run 重新读取一等项目文档与当前工具，Provider 实收 Prompt / API Tools / Product Store Receipt 使用同一 digest；Foundation Console 可查看 Project / Task / Profile、Pi 导入、Session / Run、Environment / Tools、Request、Attempt、Report、Artifact / Evidence 与 Task Acceptance。
+- Prompt Source Health（提示词来源健康状态）：Foundation Snapshot 与 Agent Environment 只用 Receipt 中的路径、hash 和字节数安全核对当前文件，明确区分“当前匹配 / hash 不匹配 / 历史正文不可用”；不保存或回传历史 Prompt / 项目正文，并拒绝越界、符号链接、读取竞态与超限文件。
 
 ### Changed
 

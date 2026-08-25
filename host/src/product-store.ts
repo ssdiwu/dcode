@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, parse, resolve } from "node:path";
+import { isAbsolute, parse, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   assertSafeProductStoreTarget,
@@ -18,6 +18,11 @@ import {
 } from "./product-store-schema.js";
 import { buildLegacyMigrationPlan, type LegacyStoreKind } from "./legacy-migration.js";
 import { redactCredentialText } from "./credential-material.js";
+import {
+  DCodePromptSourceReceiptError,
+  normalizeDCodePromptSourceReceipts,
+  type DCodePromptSourceReceipt,
+} from "./prompt-source-status.js";
 
 export type TaskScope =
   | { kind: "user"; userId: string }
@@ -296,7 +301,7 @@ export interface PromptReceiptRecord {
   systemPromptDigest: string;
   identityRevision: string;
   roleRevision: string;
-  sourceReceipts: unknown;
+  sourceReceipts: DCodePromptSourceReceipt[];
   createdAt: string;
 }
 
@@ -462,6 +467,7 @@ export class ProductStoreError extends Error {
   constructor(
     readonly code:
       | "PRODUCT_STORE_CLOSED"
+      | "PRODUCT_STORE_CORRUPT"
       | "INVALID_ARGUMENT"
       | "NOT_FOUND"
       | "REVISION_CONFLICT"
@@ -881,6 +887,15 @@ function activeToolSet(row: SQLiteRow): ActiveToolSetRecord {
 }
 
 function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
+  let sourceReceipts: DCodePromptSourceReceipt[];
+  try {
+    sourceReceipts = normalizeDCodePromptSourceReceipts(JSON.parse(text(row, "source_receipts_json")));
+  } catch (error) {
+    throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Stored Prompt Receipt metadata is invalid", {
+      receiptId: text(row, "id"),
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
   return {
     id: text(row, "id"),
     taskId: text(row, "task_id"),
@@ -892,7 +907,7 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
     systemPromptDigest: text(row, "system_prompt_digest"),
     identityRevision: text(row, "identity_revision"),
     roleRevision: text(row, "role_revision"),
-    sourceReceipts: JSON.parse(text(row, "source_receipts_json")),
+    sourceReceipts,
     createdAt: text(row, "created_at"),
   };
 }
@@ -1970,7 +1985,7 @@ export class ProductStore {
     tools: Array<{ name: string; description: string; parameters: unknown }>;
     toolsWritable: boolean;
     systemPromptDigest: string;
-    promptSources: unknown[];
+    promptSources: DCodePromptSourceReceipt[];
   }): Promise<PreparedSessionRun> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const scope = normalizedTaskScope(input.scope);
@@ -1991,9 +2006,29 @@ export class ProductStore {
     stableValue(input.attachmentRefs);
     stableValue(input.profileSnapshot);
     stableValue(input.tools);
-    stableValue(input.promptSources);
+    let promptSources: DCodePromptSourceReceipt[];
+    try {
+      promptSources = normalizeDCodePromptSourceReceipts(input.promptSources);
+    } catch (error) {
+      if (error instanceof DCodePromptSourceReceiptError) {
+        throw new ProductStoreError("INVALID_ARGUMENT", error.message);
+      }
+      throw error;
+    }
     assertCredentialFreeValue(input.profileSnapshot, "profileSnapshot");
     assertCredentialFreeValue(input.tools, "tools");
+    const resolvedCwd = resolve(input.cwd);
+    for (const [index, source] of promptSources.entries()) {
+      const sourceRelativePath = relative(resolvedCwd, resolve(source.path));
+      if (
+        sourceRelativePath === ""
+        || sourceRelativePath === ".."
+        || sourceRelativePath.startsWith("../")
+        || isAbsolute(sourceRelativePath)
+      ) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `promptSources[${index}] is outside Runtime cwd`);
+      }
+    }
     const params = {
       taskId,
       scope,
@@ -2121,7 +2156,7 @@ export class ProductStore {
           sessionId,
           rawInputId,
           canonicalJSON({ message, attachmentRefs: input.attachmentRefs }),
-          canonicalJSON({ version: 1, promptSources: input.promptSources }),
+          canonicalJSON({ version: 1, promptSources }),
           now,
         );
         this.database.prepare(`
@@ -2136,7 +2171,7 @@ export class ProductStore {
           sessionId,
           runtimeId,
           workspaceId,
-          resolve(input.cwd),
+          resolvedCwd,
           input.workspaceAccess,
           input.modelProvider ?? null,
           input.modelId ?? null,
@@ -2205,7 +2240,7 @@ export class ProductStore {
           activeToolSetId,
           input.systemPromptDigest,
           input.roleRevision,
-          canonicalJSON(input.promptSources),
+          canonicalJSON(promptSources),
           now,
         );
         this.database.prepare(`
