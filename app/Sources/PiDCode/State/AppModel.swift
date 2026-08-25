@@ -714,6 +714,7 @@ final class AppModel {
                 "piSessionImport",
                 "sessionPathFacts",
                 "taskContextSelection",
+                "taskPlanWorkList",
             ]
             if (hostConfiguration == nil || forceFoundationModeForTests),
                foundationCapabilities.allSatisfy({ hello.capabilities[$0]?.boolValue == true }) {

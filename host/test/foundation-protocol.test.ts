@@ -65,6 +65,25 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     assert.equal(created.task.cwd, userHome);
     assert.ok(events.some(({ event, data }) => event === "foundation.changed"
       && (data as { taskId?: unknown }).taskId === created.task.id));
+    const plan = await host.handle("task.plan.create", {
+      requestId: "host-create-plan",
+      expectedStoreRevision: created.storeRevision,
+      scope: created.task.scope,
+      taskId: created.task.id,
+      document: { version: 1, title: "Foundation plan" },
+    }) as { storeRevision: number; taskPlan: { id: string; taskId: string } };
+    const workItem = await host.handle("task.workItem.create", {
+      requestId: "host-create-work-item",
+      expectedStoreRevision: plan.storeRevision,
+      scope: created.task.scope,
+      taskId: created.task.id,
+      title: "Read the foundation facts",
+      details: { planId: plan.taskPlan.id },
+    }) as { storeRevision: number; taskWorkItem: { id: string; taskId: string } };
+    assert.equal(plan.taskPlan.taskId, created.task.id);
+    assert.equal(workItem.taskWorkItem.taskId, created.task.id);
+    assert.ok(events.some(({ event, data }) => event === "foundation.changed"
+      && (data as { kind?: unknown }).kind === "taskWorkItem.created"));
 
     const candidates = await host.handle("piImport.listCandidates", {}) as {
       candidates: Array<{ sourceSessionId: string }>;
@@ -80,11 +99,11 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     assert.equal(preview.importedEntryCount, 1);
     const imported = await host.handle("piImport.importAsTask", {
       requestId: "host-import-pi",
-      expectedStoreRevision: 1,
+      expectedStoreRevision: workItem.storeRevision,
       scope: { kind: "user", userId: initial.currentUser.id },
       sourceSessionId: "pi-session",
     }) as PiImportTaskResult;
-    assert.equal(imported.storeRevision, 2);
+    assert.equal(imported.storeRevision, workItem.storeRevision + 1);
     assert.equal(imported.coordinationSession.lineageStatus, "unknown");
     const importedEntries = await host.handle("session.importedEntries", {
       sessionId: imported.coordinationSession.id,
@@ -100,7 +119,7 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     })}\n`);
     const replayed = await host.handle("piImport.importAsTask", {
       requestId: "host-import-pi",
-      expectedStoreRevision: 1,
+      expectedStoreRevision: workItem.storeRevision,
       scope: { kind: "user", userId: initial.currentUser.id },
       sourceSessionId: "pi-session",
     }) as PiImportTaskResult;
@@ -110,11 +129,13 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     host = new PiHost({ agentDir, dataRoot, userHome, emit: () => {} });
     await host.start();
     const restored = await host.handle("foundation.snapshot", { afterEventSequence: 0 }) as FoundationSnapshot;
-    assert.equal(restored.storeRevision, 2);
+    assert.equal(restored.storeRevision, imported.storeRevision);
     assert.ok(restored.tasks.some((task) => task.id === created.task.id));
     assert.ok(restored.sessions.some((session) => session.id === created.coordinationSession.id));
     assert.ok(restored.coordinatorAssignments.some((assignment) => assignment.id === created.coordinatorAssignment.id));
     assert.equal(restored.tasks.length, 2);
+    assert.ok(restored.taskPlans.some((candidate) => candidate.id === plan.taskPlan.id));
+    assert.ok(restored.taskWorkItems.some((candidate) => candidate.id === workItem.taskWorkItem.id));
     assert.equal(restored.piImports[0]?.sourceSessionId, "pi-session");
   } finally {
     await host.close();

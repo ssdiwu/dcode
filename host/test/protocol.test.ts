@@ -77,6 +77,42 @@ test("method parameter validation rejects invalid values", () => {
     }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  const taskPlanCreate = {
+    requestId: "task-plan-create",
+    expectedStoreRevision: 3,
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    state: "active",
+    document: { version: 1, title: "Plan" },
+  };
+  assert.doesNotThrow(() => validateMethodParams("task.plan.create", taskPlanCreate));
+  assert.doesNotThrow(() => validateMethodParams("task.workItem.create", {
+    requestId: "task-work-create",
+    expectedStoreRevision: 4,
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    title: "Implement",
+    state: "pending",
+    details: { dependsOn: [] },
+  }));
+  assert.doesNotThrow(() => validateMethodParams("task.workItem.reorder", {
+    requestId: "task-work-reorder",
+    expectedStoreRevision: 5,
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    items: [{ id: "work-a", expectedRevision: 1 }],
+  }));
+  assert.throws(
+    () => validateMethodParams("task.workItem.update", {
+      requestId: "task-work-empty-update",
+      expectedStoreRevision: 5,
+      scope: { kind: "project", projectId: "project-a" },
+      taskId: "task-a",
+      workItemId: "work-a",
+      expectedWorkItemRevision: 1,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("task.create", {
       requestId: "mixed-scope",

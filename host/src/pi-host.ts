@@ -64,8 +64,10 @@ import {
   type ManagedWorkerWorktreeRecord,
   type TaskContextSourceRecord,
   type TaskContextSourceInput,
+  type TaskPlanState,
   type TaskRecord,
   type TaskScope,
+  type TaskWorkItemState,
 } from "./product-store.js";
 import {
   listPiImportCandidates,
@@ -1234,6 +1236,7 @@ export class PiHost {
             workspaceIsolation: true,
             managedWorkerWorktree: true,
             taskContextSelection: true,
+            taskPlanWorkList: true,
             agentRequests: true,
           },
         };
@@ -1307,6 +1310,103 @@ export class PiHost {
           entityKind: "taskContextSet",
           entityId: result.contextSet.taskId,
           taskId: result.contextSet.taskId,
+        });
+        return result;
+      }
+      case "task.plan.create": {
+        const result = await (await this.getProductStore()).createTaskPlan({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          ...(params.state === undefined ? {} : { state: params.state as TaskPlanState }),
+          document: params.document as Record<string, unknown>,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskPlan.created",
+          entityKind: "taskPlan",
+          entityId: result.taskPlan.id,
+          taskId: result.taskPlan.taskId,
+        });
+        return result;
+      }
+      case "task.plan.update": {
+        const result = await (await this.getProductStore()).updateTaskPlan({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          planId: params.planId as string,
+          expectedPlanRevision: params.expectedPlanRevision as number,
+          state: params.state as TaskPlanState,
+          document: params.document as Record<string, unknown>,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskPlan.updated",
+          entityKind: "taskPlan",
+          entityId: result.taskPlan.id,
+          taskId: result.taskPlan.taskId,
+        });
+        return result;
+      }
+      case "task.workItem.create": {
+        const result = await (await this.getProductStore()).createTaskWorkItem({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          title: params.title as string,
+          ...(params.state === undefined ? {} : { state: params.state as TaskWorkItemState }),
+          ...(params.ownerAssignmentId === undefined ? {} : { ownerAssignmentId: params.ownerAssignmentId as string | null }),
+          ...(params.details === undefined ? {} : { details: params.details }),
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskWorkItem.created",
+          entityKind: "taskWorkItem",
+          entityId: result.taskWorkItem.id,
+          taskId: result.taskWorkItem.taskId,
+        });
+        return result;
+      }
+      case "task.workItem.update": {
+        const result = await (await this.getProductStore()).updateTaskWorkItem({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          workItemId: params.workItemId as string,
+          expectedWorkItemRevision: params.expectedWorkItemRevision as number,
+          ...(params.title === undefined ? {} : { title: params.title as string }),
+          ...(params.state === undefined ? {} : { state: params.state as TaskWorkItemState }),
+          ...(params.ownerAssignmentId === undefined ? {} : { ownerAssignmentId: params.ownerAssignmentId as string | null }),
+          ...(params.details === undefined ? {} : { details: params.details }),
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskWorkItem.updated",
+          entityKind: "taskWorkItem",
+          entityId: result.taskWorkItem.id,
+          taskId: result.taskWorkItem.taskId,
+        });
+        return result;
+      }
+      case "task.workItem.reorder": {
+        const result = await (await this.getProductStore()).reorderTaskWorkItems({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          items: params.items as Array<{ id: string; expectedRevision: number }>,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskWorkItem.reordered",
+          entityKind: "task",
+          entityId: params.taskId as string,
+          taskId: params.taskId as string,
         });
         return result;
       }

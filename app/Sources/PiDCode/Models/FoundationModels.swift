@@ -125,6 +125,8 @@ struct FoundationSnapshot: Codable, Sendable {
     let agentProfiles: [FoundationAgentProfile]
     let tasks: [FoundationTask]
     let taskContextSets: [FoundationTaskContextSet]
+    let taskPlans: [FoundationTaskPlan]
+    let taskWorkItems: [FoundationTaskWorkItem]
     let sessions: [FoundationSession]
     let sessionPaths: [FoundationSessionPath]
     let coordinatorAssignments: [FoundationCoordinatorAssignment]
@@ -187,6 +189,29 @@ struct FoundationTaskContextSourceInput: Hashable, Sendable {
         if let rootPath { value["rootPath"] = .string(rootPath) }
         return .object(value)
     }
+}
+
+struct FoundationTaskPlan: Codable, Identifiable, Sendable {
+    let id: String
+    let taskId: String
+    let state: String
+    let document: JSONValue
+    let revision: Int
+    let createdAt: String
+    let updatedAt: String
+}
+
+struct FoundationTaskWorkItem: Codable, Identifiable, Sendable {
+    let id: String
+    let taskId: String
+    let ordinal: Int
+    let title: String
+    let state: String
+    let ownerAssignmentId: String?
+    let details: JSONValue
+    let revision: Int
+    let createdAt: String
+    let updatedAt: String
 }
 
 struct FoundationSessionRun: Codable, Identifiable, Hashable, Sendable {

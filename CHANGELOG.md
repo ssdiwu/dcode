@@ -8,6 +8,7 @@
 - D Code System Prompt（系统提示词）与 Active Tool Manifest（活动工具清单）：每个 Session Run 重新读取一等项目文档与当前工具，Provider 实收 Prompt / API Tools / Product Store Receipt 使用同一 digest；Foundation Console 可查看 Project / Task / Profile、Pi 导入、Session / Run、Environment / Tools、Request、Attempt、Report、Artifact / Evidence 与 Task Acceptance。
 - Prompt Source Health（提示词来源健康状态）：Foundation Snapshot 与 Agent Environment 只用 Receipt 中的路径、hash 和字节数安全核对当前文件，明确区分“当前匹配 / hash 不匹配 / 历史正文不可用”；不保存或回传历史 Prompt / 项目正文，并拒绝越界、符号链接、读取竞态与超限文件。
 - Task Context Selection（任务上下文选择，ADR 0041）：每个 Task 原生拥有 revisioned 的有序具体来源；`AGENTS.md` 强制加载，项目文档与 Global Knowledge（全局知识）必须逐个显式选择。Prompt 只消费该集合并冻结来源回执；选择文件缺失、越界、符号链接或含凭据时，在 Pi Session / Provider 副作用前拒绝运行。Product Store schema v1 可先私有备份、再原子单向晋升 v2，存量 Task 得到空选择集合，不支持降级或双写。
+- Task Plan / Work List（任务计划 / 工作清单）：既有 Product Store 表现在成为原生、可查询事实。Plan 创建或激活时保留旧 Plan 并标为 superseded；Work Item 创建、更新、取消、归属与完整重排均使用目标 ID、revision 与 durable request ID。重排在同一 SQLite 事务中先占用临时序号再落到最终序号，避免唯一顺序约束被交换操作击穿；Foundation Snapshot / Console 投影同一份 Plan 与 Work List，不从对话文案推导进度。
 - Managed Worker Worktree（受管 Worker 工作树）：Project Scope 中的 Worker 由 Host 在 `~/.dcode/runtime/` 创建并验证独立 detached Git worktree；Artifact、External Side-effect Attempt 与稳定 Agent Run 先于 Git 操作持久化，工作树成功后保留。User Scope、非 Git、源目录未提交或结果未知时诚实拒绝，不自动删除、提交、合并、推送或重试。
 
 ### Changed

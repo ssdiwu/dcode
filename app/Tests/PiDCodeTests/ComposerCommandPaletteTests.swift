@@ -500,7 +500,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
-            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "agentRequests": True,
+            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "taskPlanWorkList": True, "agentRequests": True,
         }
 
         def snapshot():

@@ -8,6 +8,11 @@ export const HOST_METHODS = [
   "project.create",
   "task.create",
   "task.context.replace",
+  "task.plan.create",
+  "task.plan.update",
+  "task.workItem.create",
+  "task.workItem.update",
+  "task.workItem.reorder",
   "task.acceptance",
   "team.create",
   "team.start",
@@ -331,6 +336,30 @@ function validateTaskContextSources(params: Record<string, unknown>): void {
   }
 }
 
+function validateTaskMutationTarget(params: Record<string, unknown>): void {
+  requireBoundedString(params, "requestId", 128);
+  requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+  validateTaskScope(params);
+  requireBoundedString(params, "taskId", 200);
+}
+
+function validateTaskPlanState(value: unknown, field: string): void {
+  if (!["draft", "active", "paused", "completed", "superseded"].includes(value as string)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", `${field} is not a valid Task Plan state`);
+  }
+}
+
+function validateTaskWorkItemState(value: unknown, field: string): void {
+  if (!["pending", "in_progress", "completed", "blocked", "cancelled"].includes(value as string)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", `${field} is not a valid Work Item state`);
+  }
+}
+
+function validateOptionalOwnerAssignment(params: Record<string, unknown>): void {
+  const owner = params.ownerAssignmentId;
+  if (owner !== undefined && owner !== null) requireBoundedString(params, "ownerAssignmentId", 200);
+}
+
 function validateRuntimeOpenIdentity(params: Record<string, unknown>): void {
   if (params.runtimeId === undefined) return;
   const runtimeId = requireBoundedString(params, "runtimeId", 128);
@@ -549,6 +578,58 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "taskId", 200);
       requireInteger(params, "expectedContextRevision", 1, Number.MAX_SAFE_INTEGER);
       validateTaskContextSources(params);
+      return;
+    case "task.plan.create":
+      validateTaskMutationTarget(params);
+      if (params.state !== undefined) validateTaskPlanState(params.state, "params.state");
+      if (!isRecord(params.document)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "params.document must be a structured Plan object");
+      }
+      return;
+    case "task.plan.update":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "planId", 200);
+      requireInteger(params, "expectedPlanRevision", 1, Number.MAX_SAFE_INTEGER);
+      validateTaskPlanState(params.state, "params.state");
+      if (!isRecord(params.document)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "params.document must be a structured Plan object");
+      }
+      return;
+    case "task.workItem.create":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "title", 500);
+      if (params.state !== undefined) validateTaskWorkItemState(params.state, "params.state");
+      validateOptionalOwnerAssignment(params);
+      return;
+    case "task.workItem.update":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "workItemId", 200);
+      requireInteger(params, "expectedWorkItemRevision", 1, Number.MAX_SAFE_INTEGER);
+      if (params.title !== undefined) requireBoundedString(params, "title", 500);
+      if (params.state !== undefined) validateTaskWorkItemState(params.state, "params.state");
+      validateOptionalOwnerAssignment(params);
+      if (params.title === undefined && params.state === undefined && params.ownerAssignmentId === undefined && params.details === undefined) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Task Work Item update needs at least one mutable field");
+      }
+      return;
+    case "task.workItem.reorder":
+      validateTaskMutationTarget(params);
+      if (!Array.isArray(params.items) || params.items.length > 200) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "params.items must contain at most 200 Work Item identities");
+      }
+      for (const [index, item] of params.items.entries()) {
+        if (
+          !isRecord(item)
+          || Object.keys(item).length !== 2
+          || typeof item.id !== "string"
+          || item.id.length === 0
+          || typeof item.expectedRevision !== "number"
+          || !Number.isInteger(item.expectedRevision)
+          || item.expectedRevision < 1
+        ) {
+          throw new ProtocolValidationError("INVALID_PARAMS", `params.items[${index}] must contain id and expectedRevision`);
+        }
+      }
       return;
     case "task.acceptance":
       requireBoundedString(params, "requestId", 128);

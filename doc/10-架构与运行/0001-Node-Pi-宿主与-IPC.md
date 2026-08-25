@@ -10,6 +10,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 
 - 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；schema v1 晋升 v2 时先在 `~/.dcode/migrations/` 写入私有 SQLite 前备份，再原子补齐 Task Context Selection，不支持降级或双写；
 - 以 User Scope / Project Scope → Task → Coordination / Child Session → Team / Agent / Session Run 的稳定身份执行 query 与 mutation；
+- 原生持久化 Task Plan 与 Work List：Plan 激活保留 superseded 历史，Work Item 的状态、归属、详情与顺序通过 revision / request ID mutation 维护，重排在单一 SQLite 事务中避免 ordinal 唯一约束冲突；
 - 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；非 Worker Runtime 的 cwd 必须精确等于 Task Scope，Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree，且所有选中的 Scope Document 都必须能从冻结 Git revision 物化；
 - 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
 - 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；

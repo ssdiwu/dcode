@@ -437,6 +437,136 @@ test("opening a schema v1 Product Store creates a private backup then promotes e
   }
 });
 
+test("Task Plan and Work List retain history, revisions, order, and durable request receipts", async () => {
+  const f = await fixture("dcode-task-plan-work-list-");
+  let store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    const task = await store.createTask({
+      requestId: "plan-work-task",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Plan and work list",
+      goal: "Keep Task planning facts outside Session prose",
+    });
+    const firstPlan = await store.createTaskPlan({
+      requestId: "plan-one",
+      expectedStoreRevision: task.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      state: "active",
+      document: { version: 1, title: "First plan", phases: [{ title: "Explore" }] },
+    });
+    const secondPlan = await store.createTaskPlan({
+      requestId: "plan-two",
+      expectedStoreRevision: firstPlan.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      state: "active",
+      document: { version: 1, title: "Revised plan", phases: [{ title: "Implement" }] },
+    });
+    let snapshot = await store.snapshot();
+    const superseded = snapshot.taskPlans.find((plan) => plan.id === firstPlan.taskPlan.id);
+    assert.equal(superseded?.state, "superseded");
+    assert.equal(superseded?.revision, 2);
+    assert.equal(snapshot.taskPlans.find((plan) => plan.id === secondPlan.taskPlan.id)?.state, "active");
+
+    const pausedPlan = await store.updateTaskPlan({
+      requestId: "plan-two-pause",
+      expectedStoreRevision: secondPlan.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      planId: secondPlan.taskPlan.id,
+      expectedPlanRevision: secondPlan.taskPlan.revision,
+      state: "paused",
+      document: { version: 1, title: "Paused plan", reason: "Need a decision" },
+    });
+    assert.equal(pausedPlan.taskPlan.revision, 2);
+
+    const firstWork = await store.createTaskWorkItem({
+      requestId: "work-one",
+      expectedStoreRevision: pausedPlan.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      title: "Explore facts",
+      details: { evidenceNeeded: ["source"] },
+    });
+    const replayedFirstWork = await store.createTaskWorkItem({
+      requestId: "work-one",
+      expectedStoreRevision: firstWork.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      title: "Explore facts",
+      details: { evidenceNeeded: ["source"] },
+    });
+    assert.deepEqual(replayedFirstWork, firstWork);
+    const secondWork = await store.createTaskWorkItem({
+      requestId: "work-two",
+      expectedStoreRevision: firstWork.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      title: "Implement change",
+      state: "in_progress",
+      details: { dependsOn: [firstWork.taskWorkItem.id] },
+    });
+    const blockedWork = await store.updateTaskWorkItem({
+      requestId: "work-two-blocked",
+      expectedStoreRevision: secondWork.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      workItemId: secondWork.taskWorkItem.id,
+      expectedWorkItemRevision: secondWork.taskWorkItem.revision,
+      state: "blocked",
+      details: { reason: "Need API confirmation" },
+    });
+    const reordered = await store.reorderTaskWorkItems({
+      requestId: "work-reorder",
+      expectedStoreRevision: blockedWork.storeRevision,
+      taskId: task.task.id,
+      scope: task.task.scope,
+      items: [
+        { id: blockedWork.taskWorkItem.id, expectedRevision: blockedWork.taskWorkItem.revision },
+        { id: firstWork.taskWorkItem.id, expectedRevision: firstWork.taskWorkItem.revision },
+      ],
+    });
+    assert.deepEqual(reordered.taskWorkItems.map((item) => item.id), [blockedWork.taskWorkItem.id, firstWork.taskWorkItem.id]);
+    assert.deepEqual(reordered.taskWorkItems.map((item) => item.ordinal), [0, 1]);
+    await assert.rejects(
+      store.updateTaskWorkItem({
+        requestId: "work-stale",
+        expectedStoreRevision: reordered.storeRevision,
+        taskId: task.task.id,
+        scope: task.task.scope,
+        workItemId: firstWork.taskWorkItem.id,
+        expectedWorkItemRevision: firstWork.taskWorkItem.revision,
+        state: "completed",
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "REVISION_CONFLICT",
+    );
+
+    await store.close();
+    store = await open(f);
+    snapshot = await store.snapshot();
+    assert.deepEqual(
+      snapshot.taskPlans.filter((plan) => plan.taskId === task.task.id).map((plan) => [plan.id, plan.state, plan.revision]),
+      [
+        [firstPlan.taskPlan.id, "superseded", 2],
+        [secondPlan.taskPlan.id, "paused", 2],
+      ],
+    );
+    assert.deepEqual(
+      snapshot.taskWorkItems.filter((item) => item.taskId === task.task.id).map((item) => [item.id, item.state, item.ordinal]),
+      [
+        [blockedWork.taskWorkItem.id, "blocked", 0],
+        [firstWork.taskWorkItem.id, "pending", 1],
+      ],
+    );
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("a schema v1 promotion resumes after its stable backup already exists", async () => {
   const f = await fixture("dcode-schema-v1-resume-");
   let store = await open(f);

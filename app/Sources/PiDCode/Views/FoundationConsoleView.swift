@@ -178,6 +178,7 @@ struct FoundationConsoleView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     taskHeader(task, snapshot: snapshot)
                     taskContextSelection(task, snapshot: snapshot)
+                    taskPlanAndWorkList(task, snapshot: snapshot)
                     taskSessions(task, snapshot: snapshot)
                     taskExecutionFacts(task, snapshot: snapshot)
                     taskOutputs(task, snapshot: snapshot)
@@ -494,6 +495,78 @@ struct FoundationConsoleView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private func taskPlanAndWorkList(_ task: FoundationTask, snapshot: FoundationSnapshot) -> some View {
+        let plans = snapshot.taskPlans.filter { $0.taskId == task.id }
+        let currentPlan = plans.last(where: { $0.state == "active" })
+            ?? plans.last(where: { $0.state == "paused" })
+        let workItems = snapshot.taskWorkItems
+            .filter { $0.taskId == task.id }
+            .sorted { $0.ordinal < $1.ordinal }
+        return FoundationSection(
+            title: "计划与工作清单",
+            subtitle: "Plan 保存可修订的推进方案；Work Item 保存当前步骤。二者属于 Task，不属于某段会话。"
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let currentPlan {
+                    HStack(spacing: 8) {
+                        Image(systemName: currentPlan.state == "active" ? "point.3.connected.trianglepath.dotted" : "pause.circle")
+                            .foregroundStyle(currentPlan.state == "active" ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(currentPlan.document["title"]?.stringValue ?? "未命名计划")
+                            Text("\(currentPlan.state) · rev \(currentPlan.revision)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Text("当前没有 active / paused Plan。计划由后续 Task 工作台编辑，不从对话文案猜测。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Divider()
+                if workItems.isEmpty {
+                    Text("工作清单为空。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(workItems) { item in
+                        HStack(spacing: 8) {
+                            Image(systemName: workItemIcon(item.state))
+                                .foregroundStyle(workItemColor(item.state))
+                            Text(item.title)
+                            Spacer()
+                            Text(item.state)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(workItemColor(item.state))
+                        }
+                        .font(.caption)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+    }
+
+    private func workItemIcon(_ state: String) -> String {
+        switch state {
+        case "completed": "checkmark.circle.fill"
+        case "in_progress": "arrow.triangle.2.circlepath.circle.fill"
+        case "blocked": "exclamationmark.triangle.fill"
+        case "cancelled": "xmark.circle.fill"
+        default: "circle"
+        }
+    }
+
+    private func workItemColor(_ state: String) -> Color {
+        switch state {
+        case "completed": .green
+        case "in_progress": .blue
+        case "blocked": .orange
+        case "cancelled": .secondary
+        default: .secondary
         }
     }
 

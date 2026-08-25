@@ -60,6 +60,26 @@ final class FoundationConsoleTests: XCTestCase {
                 "createdAt": .string("2026-08-25T00:00:00Z"),
                 "updatedAt": .string("2026-08-25T00:00:00Z"),
             ])] : []),
+            "taskPlans": .array(withOpenRequest ? [.object([
+                "id": .string("plan-one"),
+                "taskId": .string("task-one"),
+                "state": .string("active"),
+                "document": .object(["title": .string("Foundation Plan")]),
+                "revision": .number(1),
+                "createdAt": .string("2026-08-25T00:00:00Z"),
+                "updatedAt": .string("2026-08-25T00:00:00Z"),
+            ])] : []),
+            "taskWorkItems": .array(withOpenRequest ? [.object([
+                "id": .string("work-one"),
+                "taskId": .string("task-one"),
+                "ordinal": .number(0),
+                "title": .string("Read Foundation facts"),
+                "state": .string("pending"),
+                "details": .object([:]),
+                "revision": .number(1),
+                "createdAt": .string("2026-08-25T00:00:00Z"),
+                "updatedAt": .string("2026-08-25T00:00:00Z"),
+            ])] : []),
             "sessions": .array(withOpenRequest ? [session] : []),
             "sessionPaths": .array([]),
             "sessionProvenance": .array([]),
@@ -318,6 +338,8 @@ final class FoundationConsoleTests: XCTestCase {
         let request = try XCTUnwrap(harness.model.foundationSnapshot?.agentRequests.first)
         XCTAssertEqual(harness.model.foundationSnapshot?.runtimeEnvironments.first?.runtimeId, "runtime-agent-one")
         XCTAssertEqual(harness.model.foundationSnapshot?.activeToolSets.first?.id, "tools-one")
+        XCTAssertEqual(harness.model.foundationSnapshot?.taskPlans.first?.document["title"]?.stringValue, "Foundation Plan")
+        XCTAssertEqual(harness.model.foundationSnapshot?.taskWorkItems.first?.title, "Read Foundation facts")
         XCTAssertEqual(harness.model.foundationSnapshot?.promptReceipts.first?.sessionRunId, "session-run-one")
         let promptSource = try XCTUnwrap(harness.model.foundationSnapshot?.promptReceipts.first?.sourceStates.first)
         XCTAssertEqual(promptSource.state, "hash_mismatch")

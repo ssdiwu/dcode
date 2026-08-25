@@ -108,6 +108,33 @@ export interface TaskContextSetRecord {
   updatedAt: string;
 }
 
+export type TaskPlanState = "draft" | "active" | "paused" | "completed" | "superseded";
+
+export interface TaskPlanRecord {
+  id: string;
+  taskId: string;
+  state: TaskPlanState;
+  document: unknown;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TaskWorkItemState = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
+
+export interface TaskWorkItemRecord {
+  id: string;
+  taskId: string;
+  ordinal: number;
+  title: string;
+  state: TaskWorkItemState;
+  ownerAssignmentId?: string;
+  details: unknown;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DCodeSessionRecord {
   id: string;
   taskId: string;
@@ -483,6 +510,8 @@ export interface FoundationSnapshot {
   agentProfiles: AgentProfileRecord[];
   tasks: TaskRecord[];
   taskContextSets: TaskContextSetRecord[];
+  taskPlans: TaskPlanRecord[];
+  taskWorkItems: TaskWorkItemRecord[];
   sessions: DCodeSessionRecord[];
   sessionPaths: SessionPathRecord[];
   sessionProvenance: SessionProvenanceRecord[];
@@ -786,6 +815,35 @@ async function normalizeTaskContextSources(
   return normalized;
 }
 
+function normalizedTaskPlanState(value: unknown, field: string): TaskPlanState {
+  if (value === "draft" || value === "active" || value === "paused" || value === "completed" || value === "superseded") {
+    return value;
+  }
+  throw new ProductStoreError("INVALID_ARGUMENT", `${field} is not a valid Task Plan state`);
+}
+
+function normalizedTaskWorkItemState(value: unknown, field: string): TaskWorkItemState {
+  if (value === "pending" || value === "in_progress" || value === "completed" || value === "blocked" || value === "cancelled") {
+    return value;
+  }
+  throw new ProductStoreError("INVALID_ARGUMENT", `${field} is not a valid Work Item state`);
+}
+
+function normalizedPlanDocument(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", `${field} must be a structured object`);
+  }
+  const document = stableValue(value) as Record<string, unknown>;
+  assertCredentialFreeValue(document, field);
+  return document;
+}
+
+function normalizedWorkItemDetails(value: unknown, field: string): unknown {
+  const details = stableValue(value);
+  assertCredentialFreeValue(details, field);
+  return details;
+}
+
 function text(row: SQLiteRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`Invalid Product Store row: ${key}`);
@@ -876,6 +934,34 @@ function taskContextSet(row: SQLiteRow, sources: TaskContextSourceRecord[]): Tas
     taskId: text(row, "task_id"),
     revision: integer(row, "revision"),
     sources,
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function taskPlan(row: SQLiteRow): TaskPlanRecord {
+  return {
+    id: text(row, "id"),
+    taskId: text(row, "task_id"),
+    state: text(row, "state") as TaskPlanState,
+    document: JSON.parse(text(row, "document_json")),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function taskWorkItem(row: SQLiteRow): TaskWorkItemRecord {
+  const ownerAssignmentId = row.owner_assignment_id;
+  return {
+    id: text(row, "id"),
+    taskId: text(row, "task_id"),
+    ordinal: integer(row, "ordinal"),
+    title: text(row, "title"),
+    state: text(row, "state") as TaskWorkItemState,
+    ...(typeof ownerAssignmentId === "string" ? { ownerAssignmentId } : {}),
+    details: JSON.parse(text(row, "details_json")),
+    revision: integer(row, "revision"),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
   };
@@ -1601,6 +1687,12 @@ export class ProductStore {
       agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
       tasks: (this.database.prepare("SELECT * FROM tasks ORDER BY created_at, id").all() as SQLiteRow[]).map(task),
       taskContextSets,
+      taskPlans: (
+        this.database.prepare("SELECT * FROM task_plans ORDER BY task_id, created_at, rowid").all() as SQLiteRow[]
+      ).map(taskPlan),
+      taskWorkItems: (
+        this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
+      ).map(taskWorkItem),
       sessions: (this.database.prepare("SELECT * FROM sessions ORDER BY created_at, id").all() as SQLiteRow[]).map(session),
       sessionPaths: (
         this.database.prepare("SELECT * FROM session_paths ORDER BY session_id, is_current DESC, id").all() as SQLiteRow[]
@@ -1667,6 +1759,28 @@ export class ProductStore {
         SELECT * FROM session_entries WHERE session_id = ? ORDER BY source_ordinal, id
       `).all(sessionId) as SQLiteRow[]
     ).map(sessionEntry);
+  }
+
+  private taskForScope(taskId: string, scope: TaskScope): TaskRecord {
+    const row = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+    if (!row) throw new ProductStoreError("NOT_FOUND", "Task does not exist", { taskId });
+    const record = task(row);
+    if (JSON.stringify(record.scope) !== JSON.stringify(scope)) {
+      throw new ProductStoreError("REVISION_CONFLICT", "Task Scope changed before this mutation", { taskId });
+    }
+    return record;
+  }
+
+  private validateWorkItemOwner(taskId: string, ownerAssignmentId?: string | null): string | null {
+    if (ownerAssignmentId === undefined || ownerAssignmentId === null) return null;
+    const id = requiredString(ownerAssignmentId, "ownerAssignmentId", 200);
+    const assignment = this.database.prepare(`
+      SELECT id FROM agent_assignments WHERE id = ? AND task_id = ?
+    `).get(id, taskId) as SQLiteRow | undefined;
+    if (!assignment) {
+      throw new ProductStoreError("NOT_FOUND", "Work Item owner assignment does not belong to its Task", { taskId, ownerAssignmentId: id });
+    }
+    return id;
   }
 
   private receipt<T>(requestId: string, method: string, hash: string): T | undefined {
@@ -2102,6 +2216,392 @@ export class ProductStore {
             entityId: taskId,
             taskId,
             payload: contextSet,
+          },
+        };
+      },
+    );
+  }
+
+  async createTaskPlan(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    state?: TaskPlanState;
+    document: Record<string, unknown>;
+  }): Promise<{ storeRevision: number; taskPlan: TaskPlanRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const state = normalizedTaskPlanState(input.state ?? "active", "state");
+    const document = normalizedPlanDocument(input.document, "document");
+    const params = { taskId, scope, state, document };
+    return await this.mutate(
+      "task.plan.create",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        if (state === "active") {
+          this.database.prepare(`
+            UPDATE task_plans
+            SET state = 'superseded', revision = revision + 1, updated_at = ?
+            WHERE task_id = ? AND state = 'active'
+          `).run(now, taskId);
+        }
+        const createdPlan: TaskPlanRecord = {
+          id: `task-plan-${randomUUID()}`,
+          taskId,
+          state,
+          document,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.database.prepare(`
+          INSERT INTO task_plans(
+            id, task_id, state, document_json, revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        `).run(createdPlan.id, taskId, state, canonicalJSON(document), now, now);
+        return {
+          value: { taskPlan: createdPlan },
+          event: {
+            kind: "taskPlan.created",
+            entityKind: "taskPlan",
+            entityId: createdPlan.id,
+            taskId,
+            payload: createdPlan,
+          },
+        };
+      },
+    );
+  }
+
+  async updateTaskPlan(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    planId: string;
+    expectedPlanRevision: number;
+    state: TaskPlanState;
+    document: Record<string, unknown>;
+  }): Promise<{ storeRevision: number; taskPlan: TaskPlanRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const planId = requiredString(input.planId, "planId", 200);
+    const expectedPlanRevision = requiredRevision(input.expectedPlanRevision, "expectedPlanRevision");
+    if (expectedPlanRevision < 1) throw new ProductStoreError("INVALID_ARGUMENT", "expectedPlanRevision must be at least 1");
+    const state = normalizedTaskPlanState(input.state, "state");
+    const document = normalizedPlanDocument(input.document, "document");
+    const params = { taskId, scope, planId, expectedPlanRevision, state, document };
+    return await this.mutate(
+      "task.plan.update",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const row = this.database.prepare("SELECT * FROM task_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Task Plan does not belong to this Task", { taskId, planId });
+        const current = taskPlan(row);
+        if (current.revision !== expectedPlanRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Plan changed before this update", {
+            expectedPlanRevision,
+            currentPlanRevision: current.revision,
+          });
+        }
+        if (state === "active") {
+          this.database.prepare(`
+            UPDATE task_plans
+            SET state = 'superseded', revision = revision + 1, updated_at = ?
+            WHERE task_id = ? AND state = 'active' AND id <> ?
+          `).run(now, taskId, planId);
+        }
+        const updatedPlan: TaskPlanRecord = {
+          ...current,
+          state,
+          document,
+          revision: current.revision + 1,
+          updatedAt: now,
+        };
+        this.database.prepare(`
+          UPDATE task_plans
+          SET state = ?, document_json = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND task_id = ? AND revision = ?
+        `).run(state, canonicalJSON(document), updatedPlan.revision, now, planId, taskId, current.revision);
+        return {
+          value: { taskPlan: updatedPlan },
+          event: {
+            kind: "taskPlan.updated",
+            entityKind: "taskPlan",
+            entityId: planId,
+            taskId,
+            payload: updatedPlan,
+          },
+        };
+      },
+    );
+  }
+
+  async createTaskWorkItem(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    title: string;
+    state?: TaskWorkItemState;
+    ownerAssignmentId?: string | null;
+    details?: unknown;
+  }): Promise<{ storeRevision: number; taskWorkItem: TaskWorkItemRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const title = requiredCredentialFreeString(input.title, "title", 500).trim();
+    const state = normalizedTaskWorkItemState(input.state ?? "pending", "state");
+    const details = normalizedWorkItemDetails(input.details ?? {}, "details");
+    const ownerAssignmentId = input.ownerAssignmentId === undefined
+      ? undefined
+      : input.ownerAssignmentId === null
+        ? null
+        : requiredString(input.ownerAssignmentId, "ownerAssignmentId", 200);
+    const params = { taskId, scope, title, state, ...(ownerAssignmentId === undefined ? {} : { ownerAssignmentId }), details };
+    return await this.mutate(
+      "task.workItem.create",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const owner = this.validateWorkItemOwner(taskId, ownerAssignmentId);
+        const ordinalRow = this.database.prepare(`
+          SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM task_work_items WHERE task_id = ?
+        `).get(taskId) as { ordinal?: unknown } | undefined;
+        const ordinal = typeof ordinalRow?.ordinal === "number" ? ordinalRow.ordinal : 0;
+        const createdWorkItem: TaskWorkItemRecord = {
+          id: `task-work-item-${randomUUID()}`,
+          taskId,
+          ordinal,
+          title,
+          state,
+          ...(owner ? { ownerAssignmentId: owner } : {}),
+          details,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.database.prepare(`
+          INSERT INTO task_work_items(
+            id, task_id, ordinal, title, state, owner_assignment_id,
+            details_json, revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(
+          createdWorkItem.id,
+          taskId,
+          ordinal,
+          title,
+          state,
+          owner,
+          canonicalJSON(details),
+          now,
+          now,
+        );
+        return {
+          value: { taskWorkItem: createdWorkItem },
+          event: {
+            kind: "taskWorkItem.created",
+            entityKind: "taskWorkItem",
+            entityId: createdWorkItem.id,
+            taskId,
+            payload: createdWorkItem,
+          },
+        };
+      },
+    );
+  }
+
+  async updateTaskWorkItem(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    workItemId: string;
+    expectedWorkItemRevision: number;
+    title?: string;
+    state?: TaskWorkItemState;
+    ownerAssignmentId?: string | null;
+    details?: unknown;
+  }): Promise<{ storeRevision: number; taskWorkItem: TaskWorkItemRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const workItemId = requiredString(input.workItemId, "workItemId", 200);
+    const expectedWorkItemRevision = requiredRevision(input.expectedWorkItemRevision, "expectedWorkItemRevision");
+    if (expectedWorkItemRevision < 1) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "expectedWorkItemRevision must be at least 1");
+    }
+    const title = input.title === undefined ? undefined : requiredCredentialFreeString(input.title, "title", 500).trim();
+    const state = input.state === undefined ? undefined : normalizedTaskWorkItemState(input.state, "state");
+    const details = input.details === undefined ? undefined : normalizedWorkItemDetails(input.details, "details");
+    const ownerAssignmentId = input.ownerAssignmentId === undefined
+      ? undefined
+      : input.ownerAssignmentId === null
+        ? null
+        : requiredString(input.ownerAssignmentId, "ownerAssignmentId", 200);
+    if (title === undefined && state === undefined && details === undefined && ownerAssignmentId === undefined) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Task Work Item update must change at least one field");
+    }
+    const params = {
+      taskId,
+      scope,
+      workItemId,
+      expectedWorkItemRevision,
+      ...(title === undefined ? {} : { title }),
+      ...(state === undefined ? {} : { state }),
+      ...(ownerAssignmentId === undefined ? {} : { ownerAssignmentId }),
+      ...(details === undefined ? {} : { details }),
+    };
+    return await this.mutate(
+      "task.workItem.update",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const row = this.database.prepare(`
+          SELECT * FROM task_work_items WHERE id = ? AND task_id = ?
+        `).get(workItemId, taskId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Task Work Item does not belong to this Task", { taskId, workItemId });
+        const current = taskWorkItem(row);
+        if (current.revision !== expectedWorkItemRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Work Item changed before this update", {
+            expectedWorkItemRevision,
+            currentWorkItemRevision: current.revision,
+          });
+        }
+        const owner = ownerAssignmentId === undefined
+          ? current.ownerAssignmentId ?? null
+          : this.validateWorkItemOwner(taskId, ownerAssignmentId);
+        const updatedWorkItem: TaskWorkItemRecord = {
+          ...current,
+          ...(title === undefined ? {} : { title }),
+          ...(state === undefined ? {} : { state }),
+          ...(owner ? { ownerAssignmentId: owner } : {}),
+          ...(owner ? {} : { ownerAssignmentId: undefined }),
+          ...(details === undefined ? {} : { details }),
+          revision: current.revision + 1,
+          updatedAt: now,
+        };
+        this.database.prepare(`
+          UPDATE task_work_items
+          SET title = ?, state = ?, owner_assignment_id = ?, details_json = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND task_id = ? AND revision = ?
+        `).run(
+          updatedWorkItem.title,
+          updatedWorkItem.state,
+          owner,
+          canonicalJSON(updatedWorkItem.details),
+          updatedWorkItem.revision,
+          now,
+          workItemId,
+          taskId,
+          current.revision,
+        );
+        return {
+          value: { taskWorkItem: updatedWorkItem },
+          event: {
+            kind: "taskWorkItem.updated",
+            entityKind: "taskWorkItem",
+            entityId: workItemId,
+            taskId,
+            payload: updatedWorkItem,
+          },
+        };
+      },
+    );
+  }
+
+  async reorderTaskWorkItems(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    items: Array<{ id: string; expectedRevision: number }>;
+  }): Promise<{ storeRevision: number; taskWorkItems: TaskWorkItemRecord[] }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    if (!Array.isArray(input.items) || input.items.length > 200) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "items must contain at most 200 Work Items");
+    }
+    const items = input.items.map((item, index) => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `items[${index}] is invalid`);
+      }
+      return {
+        id: requiredString(item.id, `items[${index}].id`, 200),
+        expectedRevision: requiredRevision(item.expectedRevision, `items[${index}].expectedRevision`),
+      };
+    });
+    if (items.some((item) => item.expectedRevision < 1) || new Set(items.map((item) => item.id)).size !== items.length) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Work Item order requires unique IDs with revisions of at least 1");
+    }
+    const params = { taskId, scope, items };
+    return await this.mutate(
+      "task.workItem.reorder",
+      input.requestId,
+      input.expectedStoreRevision,
+      params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const current = (
+          this.database.prepare("SELECT * FROM task_work_items WHERE task_id = ? ORDER BY ordinal, id").all(taskId) as SQLiteRow[]
+        ).map(taskWorkItem);
+        if (current.length !== items.length || new Set(current.map((item) => item.id)).size !== items.length) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Work Item set changed before this reorder", { taskId });
+        }
+        const currentByID = new Map(current.map((item) => [item.id, item]));
+        for (const item of items) {
+          const existing = currentByID.get(item.id);
+          if (!existing || existing.revision !== item.expectedRevision) {
+            throw new ProductStoreError("REVISION_CONFLICT", "Work Item changed before this reorder", {
+              workItemId: item.id,
+              expectedWorkItemRevision: item.expectedRevision,
+              currentWorkItemRevision: existing?.revision,
+            });
+          }
+        }
+        const changing = items.flatMap((item, ordinal) => {
+          const currentItem = currentByID.get(item.id)!;
+          return currentItem.ordinal === ordinal ? [] : [{ currentItem, ordinal }];
+        });
+        const reserveOrdinal = this.database.prepare(`
+          UPDATE task_work_items
+          SET ordinal = ?
+          WHERE id = ? AND task_id = ? AND revision = ?
+        `);
+        const temporaryBase = current.length + items.length + 1;
+        for (const [index, change] of changing.entries()) {
+          reserveOrdinal.run(temporaryBase + index, change.currentItem.id, taskId, change.currentItem.revision);
+        }
+        const update = this.database.prepare(`
+          UPDATE task_work_items
+          SET ordinal = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND task_id = ? AND revision = ?
+        `);
+        const changedByID = new Map(changing.map((change) => [change.currentItem.id, change]));
+        const taskWorkItems = items.map((item, ordinal) => {
+          const currentItem = currentByID.get(item.id)!;
+          if (!changedByID.has(currentItem.id)) return currentItem;
+          const updated: TaskWorkItemRecord = { ...currentItem, ordinal, revision: currentItem.revision + 1, updatedAt: now };
+          update.run(ordinal, updated.revision, now, updated.id, taskId, currentItem.revision);
+          return updated;
+        });
+        return {
+          value: { taskWorkItems },
+          event: {
+            kind: "taskWorkItem.reordered",
+            entityKind: "task",
+            entityId: taskId,
+            taskId,
+            payload: { taskId, taskWorkItems },
           },
         };
       },

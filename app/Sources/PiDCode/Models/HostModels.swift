@@ -62,6 +62,7 @@ enum HostCompatibility {
         "workspaceIsolation",
         "managedWorkerWorktree",
         "taskContextSelection",
+        "taskPlanWorkList",
         "agentRequests",
     ]
 

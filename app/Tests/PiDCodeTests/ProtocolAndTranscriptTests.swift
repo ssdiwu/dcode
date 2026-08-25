@@ -1471,6 +1471,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("workspaceIsolation"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("managedWorkerWorktree"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("taskContextSelection"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("taskPlanWorkList"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("agentRequests"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
@@ -1809,7 +1810,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
-            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "agentRequests": True,
+            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "taskPlanWorkList": True, "agentRequests": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -1931,7 +1932,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
-            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "agentRequests": True,
+            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "taskPlanWorkList": True, "agentRequests": True,
         }
         agent_dir = sys.argv[2]
         create_marker = os.path.join(agent_dir, "create-requested")
@@ -2302,7 +2303,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
-            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "agentRequests": True,
+            "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "taskPlanWorkList": True, "agentRequests": True,
         }
         agent_dir = sys.argv[2]
         created = None
