@@ -595,8 +595,8 @@ final class SelfEvolutionTests: XCTestCase {
                 modelID: "gpt-5.6-sol",
                 goalID: nil
             ),
-            candidateAppVersion: "0.0.29",
-            candidateHostVersion: "0.0.29",
+            candidateAppVersion: "0.0.30",
+            candidateHostVersion: "0.0.30",
             manifest: manifest()
         )
         try await evolution.markRecoveryRequired(runID: run.id, issue: "swap failed before install")
@@ -751,8 +751,8 @@ final class SelfEvolutionTests: XCTestCase {
         let selfBuild = SelfBuildModel(rootDirectory: root, activeManifestOverride: manifest())
         selfBuild.candidate = SelfBuildCandidateInfo(
             bundlePath: "/tmp/candidate",
-            appVersion: "0.0.29",
-            hostVersion: "0.0.29",
+            appVersion: "0.0.30",
+            hostVersion: "0.0.30",
             codesignValid: true,
             manifest: manifest(),
             issue: nil

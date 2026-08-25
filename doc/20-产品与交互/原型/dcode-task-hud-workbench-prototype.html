@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>D Code · 0.0.29 任务工作台与 Task HUD 原型</title>
+  <style>
+    /* 深色取自当前 App 实际观感；语义与几何遵循《原生界面设计系统》：
+       36pt 行高、8pt 水平 padding、compactRadius 8 / controlRadius 10 / messageRadius 14、
+       阅读区最大 820pt、导航面从顶到底延续、主画布左圆角覆盖、无贯穿硬分割线。 */
+    :root {
+      color-scheme: dark;
+      --sidebar-base: #1c1c1e;
+      --canvas: #242427;
+      --raised: #2c2c30;
+      --raised-strong: #323236;
+      --ink: #e8e8ec;
+      --muted: rgba(235, 235, 245, .62);
+      --hint: rgba(235, 235, 245, .28);
+      --line: rgba(255, 255, 255, .09);
+      --line-strong: rgba(255, 255, 255, .16);
+      --accent: #0a84ff;
+      --accent-tint: rgba(10, 132, 255, .22);
+      --positive: #30d158;
+      --warn: #ff9f0a;
+      --danger: #ff453a;
+      --shadow: 0 16px 44px rgba(0, 0, 0, .45), 0 2px 8px rgba(0, 0, 0, .35);
+      --soft-shadow: 0 8px 24px rgba(0, 0, 0, .38), 0 1px 3px rgba(0, 0, 0, .3);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body { margin: 0; background: #131315; color: var(--ink); font-size: 13px; }
+    button, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(10,132,255,.7); outline-offset: 2px; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+    .prototype-note {
+      width: min(1400px, calc(100% - 40px));
+      margin: 20px auto 0;
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+      color: rgba(235,235,245,.55); font-size: 12.5px; line-height: 1.6;
+    }
+    .prototype-note strong { color: var(--ink); }
+    .note-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+    .width-switch { display: flex; gap: 2px; padding: 3px; background: rgba(255,255,255,.08); border-radius: 9px; }
+    .width-switch button { border: 0; background: transparent; border-radius: 7px; padding: 5px 12px; font-size: 12px; color: var(--muted); }
+    .width-switch button[aria-pressed="true"] { background: #3a3a3e; color: var(--ink); }
+    .reset { border: 0; background: transparent; color: var(--muted); padding: 6px 8px; border-radius: 7px; }
+    .reset:hover { background: rgba(255,255,255,.08); }
+
+    /* ── 窗口框架：导航面从顶到底，主画布左圆角覆盖其上 ── */
+    .frame {
+      margin: 12px auto 40px;
+      background: var(--sidebar-base);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      height: 880px;
+      transition: width .25s ease;
+    }
+    .frame[data-width="wide"]    { width: min(1400px, calc(100% - 40px)); }
+    .frame[data-width="medium"]  { width: min(1080px, calc(100% - 40px)); }
+    .frame[data-width="compact"] { width: min(760px,  calc(100% - 40px)); }
+
+    /* ── 左：导航栏（含红黄绿；同一底色贯穿） ── */
+    .sidebar {
+      width: 268px; flex-shrink: 0;
+      display: flex; flex-direction: column;
+      padding: 0 8px 10px;
+      overflow-y: auto;
+    }
+    .frame[data-width="compact"] .sidebar { display: none; }
+    .traffic { display: flex; gap: 8px; padding: 16px 8px 10px; align-items: center; }
+    .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .identity { display: flex; align-items: center; gap: 8px; padding: 2px 8px 10px; }
+    .identity .app { font-weight: 700; font-size: 14px; }
+    .identity .who { color: var(--hint); font-size: 11.5px; }
+    .identity .spacer { flex: 1; }
+    .glyph-btn {
+      width: 28px; height: 28px; border: 0; background: transparent; border-radius: 8px;
+      color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .glyph-btn:hover { background: rgba(255,255,255,.09); }
+
+    .verb-row, .side-row {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%; height: 36px;
+      border: 0; background: transparent; text-align: left;
+      padding: 0 8px; border-radius: 8px; color: var(--ink); font-size: 13px;
+    }
+    .verb-row { color: var(--muted); }
+    .verb-row:hover, .side-row:hover { background: rgba(255,255,255,.07); }
+    .side-row[aria-current="true"] { background: rgba(255,255,255,.12); }
+    .verb-row .kbd { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--hint); }
+    .side-label { font-size: 11px; font-weight: 600; letter-spacing: .05em; color: var(--hint); padding: 14px 8px 4px; }
+    .side-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-row .twist { width: 12px; color: var(--hint); font-size: 9px; flex-shrink: 0; }
+    .side-row .time { width: 64px; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--hint); flex-shrink: 0; }
+    .side-sub { margin-left: 16px; }
+    .side-sub .side-row { height: 32px; font-size: 12.5px; }
+    .side-hint { font-size: 11px; color: var(--hint); padding: 4px 8px 0; line-height: 1.5; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot.running   { background: var(--accent); box-shadow: 0 0 0 3px rgba(10,132,255,.18); }
+    .dot.waiting   { background: var(--warn); }
+    .dot.completed { background: var(--positive); }
+    .dot.stopped   { background: rgba(235,235,245,.35); }
+    .sidebar-bottom { margin-top: auto; padding-top: 10px; display: flex; }
+
+    /* ── 中 + 右：主画布（左圆角覆盖在导航面上） ── */
+    .canvas {
+      flex: 1; min-width: 0;
+      background: var(--canvas);
+      border-radius: 12px 0 0 12px;
+      display: flex; flex-direction: column;
+      position: relative;
+    }
+    .frame[data-width="compact"] .canvas { border-radius: 0; }
+
+    /* 窗口控制带：同一画布底色，无独立顶栏色块 */
+    .control-band {
+      height: 44px; flex-shrink: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 0 14px;
+    }
+    .control-band .obj-title { font-weight: 600; font-size: 13px; }
+    .control-band .right { margin-left: auto; display: flex; gap: 4px; }
+    .session-tag {
+      font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 20px;
+      background: var(--accent-tint); color: #7cbcff;
+    }
+    .session-tag.child { background: rgba(191,90,242,.22); color: #d0a3f5; }
+    .tabstrip { display: flex; gap: 4px; }
+    .tab {
+      border: 1px solid var(--line); background: transparent;
+      border-radius: 8px; padding: 3px 10px; font-size: 12px;
+      display: flex; align-items: center; gap: 6px; color: var(--muted);
+    }
+    .tab[aria-current="true"] { border-color: rgba(10,132,255,.6); color: #7cbcff; }
+    .tab .x { border: 0; background: transparent; padding: 0 2px; color: var(--hint); font-size: 10px; }
+
+    /* 阅读画布：横向 28pt 呼吸 */
+    .reading { flex: 1; overflow-y: auto; display: flex; justify-content: center; padding: 12px 28px 16px; }
+    .reading-inner { width: min(720px, 100%); }
+    /* 宽屏：为浮窗预留右侧安全宽度（浮窗只落在留白上） */
+    .frame[data-width="wide"] .reading  { padding-right: 372px; }
+    .frame[data-width="wide"] .composer-area { padding-right: 372px; }
+
+    .msg { margin-bottom: 16px; display: flex; flex-direction: column; }
+    .msg .who { font-size: 11px; color: var(--hint); margin-bottom: 4px; }
+    .msg.user { align-items: flex-end; }
+    .msg .bubble { border-radius: 14px; padding: 10px 14px; line-height: 1.65; font-size: 13px; max-width: 92%; }
+    .msg.user .bubble { background: var(--accent-tint); }
+    .msg.assistant .bubble { padding: 0; max-width: 100%; }
+
+    /* 原生任务对象卡：安静抬升面 */
+    .obj-card {
+      border: 1px solid var(--line); border-radius: 10px;
+      background: var(--raised); margin: 12px 0 16px; overflow: hidden;
+      box-shadow: var(--soft-shadow);
+    }
+    .obj-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 11.5px; font-weight: 600; }
+    .obj-kind { padding: 2px 8px; border-radius: 6px; font-size: 10.5px; }
+    .obj-kind.assign  { background: rgba(10,132,255,.2); color: #7cbcff; }
+    .obj-kind.request { background: rgba(255,159,10,.18); color: var(--warn); }
+    .obj-kind.report  { background: rgba(48,209,88,.16); color: var(--positive); }
+    .obj-kind.accept  { background: rgba(191,90,242,.2); color: #d0a3f5; }
+    .obj-head .from { color: var(--muted); font-weight: 500; }
+    .obj-body { padding: 2px 12px 10px; font-size: 12.5px; line-height: 1.6; color: var(--ink); }
+    .obj-actions { display: flex; gap: 8px; padding: 0 12px 12px; flex-wrap: wrap; align-items: center; }
+    .btn { border: 1px solid var(--line-strong); background: transparent; border-radius: 8px; padding: 4px 13px; font-size: 12px; }
+    .btn:hover { background: rgba(255,255,255,.07); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: #2f96ff; }
+    .btn.danger { color: var(--danger); border-color: rgba(255,69,58,.4); }
+    .resolved-line { font-size: 12px; color: var(--positive); padding: 0 12px 12px; }
+
+    /* 验收卡内嵌反馈输入：controlRadius 10 */
+    .feedback-box {
+      margin-top: 8px; border: 1px solid var(--line); border-radius: 10px;
+      background: rgba(0,0,0,.22); padding: 8px 10px;
+    }
+    .feedback-box textarea {
+      width: 100%; border: 0; background: transparent; resize: none; outline: none;
+      font-size: 12.5px; line-height: 1.55; color: var(--ink); min-height: 34px;
+    }
+    .feedback-box textarea::placeholder { color: var(--hint); }
+
+    .child-banner {
+      border: 1px solid rgba(191,90,242,.3); background: rgba(191,90,242,.1);
+      border-radius: 10px; padding: 9px 12px; font-size: 12px; color: #d0a3f5;
+      margin: 4px 0 16px; line-height: 1.6;
+    }
+
+    /* Composer：抬升面 */
+    .composer-area { padding: 8px 28px 16px; display: flex; justify-content: center; flex-shrink: 0; }
+    .composer { width: min(720px, 100%); }
+    .composer-target { font-size: 11px; color: var(--hint); margin: 0 4px 6px; }
+    .composer-target b { color: var(--muted); font-weight: 600; }
+    .composer-box {
+      border: 1px solid var(--line); border-radius: 12px; background: var(--raised);
+      box-shadow: var(--soft-shadow); padding: 10px 12px 8px;
+    }
+    .composer-box textarea {
+      width: 100%; border: 0; background: transparent; resize: none; outline: none;
+      min-height: 44px; font-size: 13px; line-height: 1.5; color: var(--ink);
+    }
+    .composer-box textarea::placeholder { color: var(--hint); }
+    .composer-ctl { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+    .composer-ctl .plus { width: 28px; height: 28px; border: 0; background: transparent; border-radius: 8px; color: var(--muted); font-size: 15px; }
+    .composer-ctl .plus:hover { background: rgba(255,255,255,.08); }
+    .composer-ctl .model { color: var(--ink); }
+    .composer-ctl .effort { color: #7cbcff; }
+    .composer-ctl .send {
+      margin-left: auto; width: 28px; height: 28px; border: 0; border-radius: 50%;
+      background: var(--accent); color: #fff; font-size: 13px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+
+    /* ── Task HUD：任何宽度都是独立浮窗 ── */
+    .hud {
+      position: absolute; top: 52px; right: 16px;
+      width: 316px; max-height: calc(100% - 150px);
+      border: 1px solid var(--line-strong); border-radius: 14px;
+      background: rgba(44,44,48,.97);
+      box-shadow: var(--shadow);
+      z-index: 30; overflow-y: auto; padding: 12px 12px 16px;
+    }
+    .frame[data-hud="collapsed"] .hud { display: none; }
+    .frame[data-inspector="open"] .hud { display: none; }
+    .hud-title { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: .05em; color: var(--hint); margin: 0 2px 8px; }
+    .hud-title .collapse-btn { margin-left: auto; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; padding: 3px 8px; border-radius: 6px; }
+    .hud-title .collapse-btn:hover { background: rgba(255,255,255,.08); }
+    .frame[data-width="wide"] .hud-title .collapse-btn { display: none; } /* 宽屏无整体关闭 */
+
+    .hud-sec { border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.16); margin-bottom: 8px; overflow: hidden; }
+    .hud-sec-head { width: 100%; border: 0; background: transparent; display: flex; align-items: center; gap: 7px; padding: 8px 11px; font-size: 12px; font-weight: 650; text-align: left; color: var(--ink); }
+    .hud-sec-head .count { font-size: 10px; background: rgba(255,255,255,.1); color: var(--muted); border-radius: 20px; padding: 1px 7px; font-family: ui-monospace, Menlo, monospace; }
+    .hud-sec-head .count.warn { background: rgba(255,159,10,.2); color: var(--warn); }
+    .hud-sec-head .chev { margin-left: auto; color: var(--hint); font-size: 9px; }
+    .hud-sec-body { padding: 0 11px 10px; font-size: 12px; }
+    .hud-sec[data-open="false"] .hud-sec-body { display: none; }
+
+    .goal { font-size: 12.5px; font-weight: 600; line-height: 1.5; margin-bottom: 6px; }
+    .phase { font-size: 11.5px; color: var(--muted); margin-bottom: 7px; }
+    .worklist { list-style: none; margin: 0 0 7px; padding: 0; }
+    .worklist li { display: flex; gap: 7px; align-items: baseline; padding: 2.5px 0; line-height: 1.45; color: var(--muted); }
+    .wl-mark { width: 14px; flex-shrink: 0; text-align: center; font-size: 10.5px; }
+    .wl-done .wl-mark { color: var(--positive); }
+    .wl-doing .wl-mark { color: var(--accent); }
+    .wl-blocked .wl-mark { color: var(--danger); }
+    .wl-done .wl-text { color: var(--hint); text-decoration: line-through; }
+    .evidence-line { font-size: 11px; color: var(--muted); }
+    .evidence-line a { color: #7cbcff; text-decoration: none; cursor: pointer; }
+    .await-accept { margin-top: 7px; font-size: 11.5px; padding: 6px 9px; border-radius: 8px; background: rgba(255,159,10,.14); color: var(--warn); line-height: 1.5; }
+
+    .member { border-top: 1px solid var(--line); padding: 8px 0; }
+    .member:first-child { border-top: 0; }
+    .member-row1 { display: flex; align-items: center; gap: 7px; }
+    .member-name { font-weight: 650; font-size: 12.5px; }
+    .member-model { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--hint); margin-left: auto; }
+    .member-act { font-size: 11px; color: var(--muted); margin: 3px 0 5px 14px; line-height: 1.45; }
+    .member-ops { display: flex; gap: 6px; margin-left: 14px; flex-wrap: wrap; }
+    .mini-btn { border: 1px solid var(--line); background: transparent; border-radius: 7px; padding: 2px 9px; font-size: 10.5px; color: var(--muted); }
+    .mini-btn:hover { background: rgba(255,255,255,.07); color: var(--ink); }
+    .mini-btn.danger { color: var(--danger); border-color: rgba(255,69,58,.35); }
+
+    .wait-item { border: 1px solid rgba(255,159,10,.3); background: rgba(255,159,10,.1); border-radius: 9px; padding: 8px 10px; margin-bottom: 7px; line-height: 1.5; font-size: 11.5px; }
+    .wait-item .wi-from { font-size: 10.5px; color: var(--warn); font-weight: 650; margin-bottom: 2px; }
+    .wait-item .wi-ops { display: flex; gap: 6px; margin-top: 6px; }
+    .wait-empty { color: var(--hint); font-size: 11.5px; padding: 3px 0; }
+
+    .deliv { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+    .deliv:first-child { border-top: 0; }
+    .deliv .d-name { flex: 1; border: 0; background: transparent; text-align: left; font-size: 12px; color: var(--ink); padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .deliv .d-name:hover { color: #7cbcff; }
+    .deliv .d-type { font-size: 10px; color: var(--hint); font-family: ui-monospace, Menlo, monospace; }
+
+    .hud-pill {
+      display: none;
+      position: absolute; top: 54px; right: 16px; z-index: 29;
+      border: 1px solid var(--line-strong); background: var(--raised);
+      border-radius: 20px; padding: 6px 14px; font-size: 12px; font-weight: 600; color: var(--ink);
+      box-shadow: var(--soft-shadow); align-items: center; gap: 7px;
+    }
+    .frame[data-width="medium"][data-hud="collapsed"] .hud-pill,
+    .frame[data-width="compact"][data-hud="collapsed"] .hud-pill { display: inline-flex; }
+    .frame[data-inspector="open"] .hud-pill { display: none; }
+    .hud-pill .warn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+
+    /* ── 信息检查器：内缩抬升面，悬浮于右侧 rail，无整高硬分割线 ── */
+    .inspector {
+      display: none;
+      position: absolute; top: 10px; right: 10px; bottom: 10px; z-index: 40;
+      width: 344px;
+      border: 1px solid var(--line-strong); border-radius: 14px;
+      background: var(--raised);
+      box-shadow: var(--shadow);
+      overflow-y: auto; flex-direction: column;
+    }
+    .frame[data-inspector="open"] .inspector { display: flex; }
+    .insp-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; font-size: 12px; font-weight: 700; }
+    .insp-head .close { margin-left: auto; border: 0; background: transparent; font-size: 13px; color: var(--muted); padding: 2px 7px; border-radius: 6px; }
+    .insp-head .close:hover { background: rgba(255,255,255,.09); }
+    .insp-body { padding: 4px 14px 14px; font-size: 12px; line-height: 1.65; }
+    .insp-kv { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; margin-bottom: 12px; }
+    .insp-kv dt { color: var(--hint); font-size: 11px; }
+    .insp-kv dd { margin: 0; word-break: break-all; color: var(--ink); }
+    .insp-sec-label { font-size: 10.5px; font-weight: 700; color: var(--hint); letter-spacing: .05em; margin: 10px 0 5px; }
+    .insp-refs { list-style: none; margin: 0; padding: 0; }
+    .insp-refs li { padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted); }
+    .insp-refs li:first-child { border-top: 0; }
+    .insp-note { font-size: 11px; color: var(--muted); background: rgba(0,0,0,.2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 12px; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(8px);
+      background: #0d0d0f; color: #eee; font-size: 12.5px; border: 1px solid var(--line-strong);
+      padding: 9px 18px; border-radius: 10px; box-shadow: var(--shadow);
+      opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+      max-width: 80vw; text-align: center; line-height: 1.5; z-index: 99;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+<div class="prototype-note">
+  <div>
+    <strong>D Code · 0.0.29 任务工作台与 Task HUD 交互原型（对齐原生界面设计系统）。</strong>
+    深色观感与分区、行高、圆角、抬升面遵循《原生界面设计系统》；导航只有「项目 / 任务」两个工作对象分区，
+    任务行即任务对话（协调者在此），Task HUD 在任何宽度下都是独立浮窗（宽屏由中央内容预留的右侧安全宽度保证不遮挡正文），
+    验收卡为「一句话请求 + 确认按钮 + 否定/待定反馈输入框」。模拟数据，不构成 SwiftUI 实现或验收证据。
+  </div>
+  <div class="note-actions">
+    <div class="width-switch" role="group" aria-label="窗口宽度模拟">
+      <button data-w="wide" aria-pressed="true">宽屏 ≥1320</button>
+      <button data-w="medium" aria-pressed="false">中宽 880–1319</button>
+      <button data-w="compact" aria-pressed="false">紧凑 640–879</button>
+    </div>
+    <button class="reset" id="resetBtn">重置演示</button>
+  </div>
+</div>
+
+<div class="frame" id="frame" data-width="wide" data-hud="open" data-inspector="closed">
+
+  <!-- 左：导航栏（导航面从顶到底延续） -->
+  <nav class="sidebar" aria-label="导航栏">
+    <div class="traffic" aria-hidden="true">
+      <i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>
+    </div>
+    <div class="identity">
+      <div>
+        <div class="app">D Code</div>
+        <div class="who">diwu</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="glyph-btn" title="搜索（功能入口，非分区）">⌕</button>
+      <button class="glyph-btn" title="活动（投影视图，非分区）">◔</button>
+    </div>
+
+    <button class="verb-row">⊕ 新建任务 <span class="kbd">⌘N</span></button>
+    <button class="verb-row">⊞ 新建项目 <span class="kbd">⇧⌘N</span></button>
+
+    <div class="side-label">最近工作</div>
+    <button class="side-row"><span class="name">修复 sitemap 生成失败</span><span class="time">6 小时前</span></button>
+    <button class="side-row"><span class="name">整理发布检查清单</span><span class="time">昨天</span></button>
+
+    <div class="side-label">任务</div>
+    <button class="side-row"><span class="twist">▸</span><span class="name">整理本机 dotfiles</span><span class="time">4 天前</span></button>
+
+    <div class="side-label">项目</div>
+    <button class="side-row"><span class="twist">▾</span><span class="name">Mercury 文档站</span></button>
+    <div class="side-sub">
+      <button class="side-row" aria-current="true" data-open-session="coord" id="navCoord"><span class="twist">▾</span><span class="name">重构发布流水线并补齐验收证据</span><span class="time">刚刚</span></button>
+      <div class="side-sub">
+        <button class="side-row" data-open-session="builder"><span class="dot running" id="navDotBuilder"></span><span class="name">builder · 实现</span></button>
+        <button class="side-row" data-open-session="verifier"><span class="dot waiting" id="navDotVerifier"></span><span class="name">verifier · 验证</span></button>
+        <button class="side-row" data-open-session="scribe"><span class="dot completed"></span><span class="name">scribe · 文档</span></button>
+      </div>
+      <button class="side-row"><span class="twist">▸</span><span class="name">站内搜索改造</span><span class="time">2 天前</span></button>
+    </div>
+    <button class="side-row"><span class="twist">▸</span><span class="name">D Code（创造模式）</span></button>
+    <div class="side-hint">任务行即任务对话入口，协调者活在任务对话里；展开只列实际启动的成员。智能体档案在 设置 › 智能体档案，不占日常导航。</div>
+
+    <div class="sidebar-bottom">
+      <button class="glyph-btn" title="设置">⚙</button>
+    </div>
+  </nav>
+
+  <!-- 中 + 右：主画布，左圆角覆盖导航面 -->
+  <main class="canvas" aria-label="主工作区">
+    <div class="control-band">
+      <span class="obj-title" id="bandTitle">重构发布流水线并补齐验收证据</span>
+      <span class="session-tag" id="sessionTag">任务对话 · 协调者在此</span>
+      <div class="tabstrip" id="tabstrip"></div>
+      <div class="right">
+        <button class="glyph-btn" title="信息检查器开关" data-inspect="evidence">◫</button>
+      </div>
+    </div>
+
+    <div class="reading">
+      <div class="reading-inner" id="readingInner"><!-- JS 渲染 --></div>
+    </div>
+
+    <div class="composer-area">
+      <div class="composer">
+        <div class="composer-target">发送到：<b id="composerTarget">任务对话（协调者）</b> <span id="composerHint">· 普通任务沟通与最终综合的默认入口</span></div>
+        <div class="composer-box">
+          <textarea rows="2" placeholder="交给 D Code 一项工作，/ 使用命令" aria-label="消息输入"></textarea>
+          <div class="composer-ctl">
+            <button class="plus" title="添加文件或图片、技能、命令">＋</button>
+            <span class="model">claude-sonnet-5</span>
+            <span class="effort">推理强度 · 标准</span>
+            <button class="send" id="sendBtn" title="发送">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button class="hud-pill" id="hudPill"><span class="warn-dot" id="pillWarnDot"></span>任务概览 · <span id="pillSummary">1 项等待</span></button>
+
+    <!-- Task HUD：独立浮窗 -->
+    <aside class="hud" id="hudRail" aria-label="任务浮层">
+      <div class="hud-title">任务概览 · TASK HUD
+        <button class="collapse-btn" id="hudCollapseBtn">收起</button>
+      </div>
+
+      <section class="hud-sec" data-open="true">
+        <button class="hud-sec-head" data-toggle>进度 <span class="chev">▾</span></button>
+        <div class="hud-sec-body">
+          <div class="goal">目标：发布流水线可一键构建、验证并产出可回查证据</div>
+          <div class="phase">阶段：实现与验证并行 · <span class="mono">revision 47</span></div>
+          <ul class="worklist">
+            <li class="wl-done"><span class="wl-mark">✓</span><span class="wl-text">梳理现有构建脚本与依赖</span></li>
+            <li class="wl-done"><span class="wl-mark">✓</span><span class="wl-text">确认发布指南信息结构</span></li>
+            <li class="wl-doing"><span class="wl-mark">●</span><span class="wl-text">重写 pipeline 构建与产物签名</span></li>
+            <li class="wl-blocked"><span class="wl-mark">⛔</span><span class="wl-text">端到端验证（等待测试批准）</span></li>
+          </ul>
+          <div class="evidence-line">最近证据：<a data-inspect="evidence">evidence-0342 · host 全量测试通过</a></div>
+          <div class="await-accept" id="awaitAccept">协调者已提出任务验收请求，等待你的决定。</div>
+        </div>
+      </section>
+
+      <section class="hud-sec" data-open="true">
+        <button class="hud-sec-head" data-toggle>Agent Team <span class="count">3</span><span class="chev">▾</span></button>
+        <div class="hud-sec-body">
+          <div class="member">
+            <div class="member-row1"><span class="dot running" id="hudDotBuilder"></span><span class="member-name">builder · 实现</span><span class="member-model">gpt-5.2-codex</span></div>
+            <div class="member-act" id="builderAct">正在修改 <code>host/src/pipeline.ts</code> · 12 分钟 · 41k tokens</div>
+            <div class="member-ops">
+              <button class="mini-btn" data-open-session="builder">打开子会话</button>
+              <button class="mini-btn danger" id="stopBuilderBtn">停止此成员</button>
+            </div>
+          </div>
+          <div class="member">
+            <div class="member-row1"><span class="dot waiting" id="hudDotVerifier"></span><span class="member-name">verifier · 验证</span><span class="member-model">claude-sonnet-5</span></div>
+            <div class="member-act" id="verifierAct">等待批准执行 <code>npm test</code> · 已等待 3 分钟</div>
+            <div class="member-ops"><button class="mini-btn" data-open-session="verifier">打开子会话</button></div>
+          </div>
+          <div class="member">
+            <div class="member-row1"><span class="dot completed"></span><span class="member-name">scribe · 文档</span><span class="member-model">claude-haiku-4-5</span></div>
+            <div class="member-act">已完成 · 报告与《发布指南.md》 · 8 分钟 · 18k tokens</div>
+            <div class="member-ops">
+              <button class="mini-btn" data-open-session="scribe">打开子会话</button>
+              <button class="mini-btn" data-inspect="report">查看报告</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="hud-sec" data-open="true">
+        <button class="hud-sec-head" data-toggle>等待你处理 <span class="count warn" id="waitCount">1</span><span class="chev">▾</span></button>
+        <div class="hud-sec-body" id="waitingBody">
+          <div class="wait-item">
+            <div class="wi-from">verifier · 结构化请求 req-081</div>
+            申请在成员工作树内执行 <code>npm test</code>（只读源码，写入测试缓存）。
+            <div class="wi-ops">
+              <button class="mini-btn" data-answer="approve">批准</button>
+              <button class="mini-btn" data-answer="deny">拒绝</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="hud-sec" data-open="true">
+        <button class="hud-sec-head" data-toggle>交付物 <span class="count">3</span><span class="chev">▾</span></button>
+        <div class="hud-sec-body">
+          <div class="deliv"><button class="d-name" data-open-tab="guide">发布指南.md</button><span class="d-type">Markdown</span><button class="mini-btn" data-inspect="artifact">详情</button></div>
+          <div class="deliv"><button class="d-name" data-open-tab="diff">pipeline 变更（Git Diff）</button><span class="d-type">Diff</span><button class="mini-btn" data-inspect="diff">详情</button></div>
+          <div class="deliv"><button class="d-name" data-inspect="evidence">evidence-0342 验证证据</button><span class="d-type">Evidence</span><button class="mini-btn" data-inspect="evidence">详情</button></div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- 信息检查器：内缩抬升面 -->
+    <aside class="inspector" id="inspector" aria-label="信息检查器">
+      <div class="insp-head">检查器 · <span id="inspTitle">对象详情</span>
+        <button class="close" id="inspCloseBtn" aria-label="关闭检查器">✕</button>
+      </div>
+      <div class="insp-body" id="inspBody"></div>
+    </aside>
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  var frame = document.getElementById('frame');
+  var toastEl = document.getElementById('toast');
+  var toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3400);
+  }
+
+  function msg(kind, who, text) {
+    return '<div class="msg ' + kind + '"><div class="who">' + who + '</div><div class="bubble">' + text + '</div></div>';
+  }
+  function objCard(kindClass, kindLabel, from, body, actions, id) {
+    return '<div class="obj-card"' + (id ? ' id="' + id + '"' : '') + '><div class="obj-head"><span class="obj-kind ' + kindClass + '">' + kindLabel + '</span><span class="from">' + from + '</span></div>'
+      + '<div class="obj-body">' + body + '</div>'
+      + (actions ? '<div class="obj-actions">' + actions + '</div>' : '') + '</div>';
+  }
+
+  var sessions = {
+    coord: {
+      tag: '任务对话 · 协调者在此', tagClass: '', composer: '任务对话（协调者）',
+      hint: '· 普通任务沟通与最终综合的默认入口',
+      html: ''
+        + msg('user', '你', '目标：把发布流水线重构成可一键构建、验证并产出可回查证据。先梳理现状，再并行实现和写发布指南。')
+        + msg('assistant', '协调者', '收到。我把工作拆为实现、验证、文档三个有界职责，分别派发给独立成员；验证在实现有阶段产物后开始。派发与请求会以任务对象呈现在下方，你随时可以进入任一子会话查看。')
+        + objCard('assign', '派发 · Assignment asg-021', 'builder · 实现',
+            '职责：重写 <code>host/src/pipeline.ts</code> 的构建与产物签名。范围：仅 <code>host/</code>；独立工作树 <code>wt/builder-021</code>。',
+            '<button class="btn" data-open-session="builder">进入 builder 子会话</button>')
+        + objCard('report', '报告到达 · Report rpt-014', 'scribe · 文档',
+            '《发布指南.md》初稿完成：覆盖构建、签名、验证、回滚四节，引用 <code>app/build.sh</code> 真实参数。',
+            '<button class="btn" data-open-tab="guide">在中央打开</button> <button class="btn" data-inspect="report">查看报告详情</button>')
+        + '<div id="coordWaitCard">'
+        + objCard('request', '成员请求 · Request req-081', 'verifier · 验证',
+            '申请在成员工作树内执行 <code>npm test</code>（只读源码，写入测试缓存）。回答只影响 verifier。',
+            '<button class="btn primary" data-answer="approve">批准</button> <button class="btn" data-answer="deny">拒绝</button>')
+        + '</div>'
+        + objCard('accept', '验收请求 · Acceptance', '协调者',
+            '是否接受当前阶段结果？（证据 <a style="color:#7cbcff;cursor:pointer" data-inspect="evidence">evidence-0342</a> 可回查）'
+            + '<div class="feedback-box"><textarea id="acceptFeedback" rows="2" placeholder="留空确认 = 接受；写下反馈（可贴图）再确认 = 按反馈执行，否定即返工，验收保持待定…"></textarea></div>',
+            '<button class="btn primary" id="acceptConfirmBtn" data-accept="confirm">确认接受</button> <span style="font-size:11px;color:var(--hint)">单一确认动作：语义由输入框内容决定</span>',
+            'acceptCard')
+    },
+    builder: {
+      tag: '子会话 · builder（实现）', tagClass: 'child', composer: 'builder · 子会话',
+      hint: '· 消息只进入该成员的有界上下文',
+      html: ''
+        + '<div class="child-banner">成员 <b>builder</b> 的有界上下文：模型 <code>gpt-5.2-codex</code>，工作树 <code>wt/builder-021</code>。返回任务对话不会停止该成员或其他 Runtime。</div>'
+        + msg('assistant', 'builder', '正在重写 pipeline 构建阶段：已拆出 <code>buildArtifacts()</code> 与 <code>signArtifacts()</code>，接下来接入产物清单校验。')
+        + msg('assistant', 'builder', '（活动）编辑 <code>host/src/pipeline.ts</code> · 第 3 次工具调用运行中…')
+    },
+    verifier: {
+      tag: '子会话 · verifier（验证）', tagClass: 'child', composer: 'verifier · 子会话',
+      hint: '· 消息只进入该成员的有界上下文',
+      html: ''
+        + '<div class="child-banner">成员 <b>verifier</b> 的有界上下文：模型 <code>claude-sonnet-5</code>，工作树 <code>wt/verifier-022</code>。当前处于结构化等待。</div>'
+        + msg('assistant', 'verifier', '验证计划：先运行 host 全量测试，再对签名产物做端到端校验。运行测试需要批准，已发出请求 req-081。')
+    },
+    scribe: {
+      tag: '子会话 · scribe（文档）', tagClass: 'child', composer: 'scribe · 子会话',
+      hint: '· 成员已完成；发送消息将开始新的 Run',
+      html: ''
+        + '<div class="child-banner">成员 <b>scribe</b> 的有界上下文：已完成，报告 rpt-014 与《发布指南.md》可回查。</div>'
+        + msg('assistant', 'scribe', '发布指南已按构建、签名、验证、回滚四节完成，全部命令来自仓库真实脚本。')
+    }
+  };
+
+  var inspectObjects = {
+    artifact: {
+      title: 'Artifact · 发布指南.md',
+      body: kv([['类型', 'Markdown Artifact'], ['路径', '<code>doc/发布指南.md</code>'], ['来源', 'scribe · Run run-3f2 · rpt-014'], ['revision', '<code>artf-208 · rev 3</code>'], ['大小', '6.4 KB · 214 行']])
+        + sec('引用关系', ['被报告 rpt-014 引用', '引用 <code>app/build.sh</code> 参数 4 处']) + note()
+    },
+    diff: {
+      title: 'Git Diff · pipeline 变更',
+      body: kv([['类型', 'Exact Git Diff（只读）'], ['工作树', '<code>wt/builder-021</code>'], ['范围', '<code>host/src/pipeline.ts</code> +182 −96'], ['基线', '<code>main @ 41d3fd1</code>'], ['状态', '未提交 · 未合并']])
+        + sec('变更摘要', ['拆出 buildArtifacts / signArtifacts', '新增产物清单校验入口']) + note()
+    },
+    evidence: {
+      title: 'Evidence · evidence-0342',
+      body: kv([['类型', '结构化验证证据'], ['命令', '<code>cd host && npm test</code>'], ['结果', '通过 · 217 项 · 0 失败'], ['产生于', 'verifier · Run run-4a1 · 14:32'], ['revision', '<code>ev-0342 · rev 1</code>']])
+        + sec('可回查内容', ['完整命令输出（12.3 KB）', '执行目录与环境快照']) + note()
+    },
+    report: {
+      title: 'Report · rpt-014（scribe）',
+      body: kv([['类型', 'Agent Run Report'], ['成员', 'scribe · 文档 · claude-haiku-4-5'], ['耗时', '8 分钟 · 18k tokens'], ['产物', '发布指南.md（artf-208）'], ['revision', '<code>rpt-014 · rev 1</code>']])
+        + sec('报告结论', ['指南四节完成，命令均来自真实脚本', '建议验证通过后补「常见失败」一节']) + note()
+    }
+  };
+  function kv(pairs) {
+    var h = '<dl class="insp-kv">';
+    pairs.forEach(function (p) { h += '<dt>' + p[0] + '</dt><dd>' + p[1] + '</dd>'; });
+    return h + '</dl>';
+  }
+  function sec(label, items) {
+    return '<div class="insp-sec-label">' + label + '</div><ul class="insp-refs">' + items.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul>';
+  }
+  function note() { return '<div class="insp-note">打开详情不会把对象加入模型 Context、修改文件、改变 Git 状态或启动 Agent。</div>'; }
+
+  var readingInner = document.getElementById('readingInner');
+  var sessionTag = document.getElementById('sessionTag');
+  var composerTarget = document.getElementById('composerTarget');
+  var composerHint = document.getElementById('composerHint');
+  var currentSession = 'coord';
+  var openTabs = {};
+  var activeTab = null;
+  var state = { verifierAnswered: false, builderStopped: false, accepted: false, feedbackSent: false };
+
+  function renderSession(key) {
+    currentSession = key;
+    var s = sessions[key];
+    readingInner.innerHTML = s.html;
+    sessionTag.textContent = s.tag;
+    sessionTag.className = 'session-tag ' + s.tagClass;
+    composerTarget.textContent = s.composer;
+    composerHint.textContent = s.hint;
+    document.querySelectorAll('.sidebar [data-open-session]').forEach(function (b) {
+      b.setAttribute('aria-current', b.getAttribute('data-open-session') === key ? 'true' : 'false');
+    });
+    syncCards();
+  }
+
+  var tabContents = {
+    guide: { label: '发布指南.md', body: msg('assistant', 'Workspace Tab · 只读预览', '<b># 发布指南</b><br><br>## 构建<br><code>./app/build.sh</code> 产出 <code>dist/D Code.app</code>…<br><br>（模拟内容：真实预览由 Workspace Tab 契约提供，关闭最后一个标签回到会话主页面。）') },
+    diff:  { label: 'pipeline.diff', body: msg('assistant', 'Workspace Tab · Exact Git Diff', '<code>host/src/pipeline.ts</code> · +182 −96<br><br><code>+ export function buildArtifacts() { … }</code><br><code>+ export function signArtifacts() { … }</code><br><code>− legacy inline steps …</code>') }
+  };
+  var tabstrip = document.getElementById('tabstrip');
+  function renderTabs() {
+    tabstrip.innerHTML = '';
+    Object.keys(openTabs).forEach(function (k) {
+      var t = document.createElement('button');
+      t.className = 'tab';
+      t.setAttribute('aria-current', activeTab === k ? 'true' : 'false');
+      t.innerHTML = tabContents[k].label + ' <span class="x" data-close-tab="' + k + '">✕</span>';
+      t.addEventListener('click', function (e) {
+        if (e.target.getAttribute('data-close-tab')) {
+          delete openTabs[k];
+          if (activeTab === k) { activeTab = null; renderSession(currentSession); }
+          renderTabs();
+          if (!Object.keys(openTabs).length) toast('已关闭最后一个内容标签，回到会话主页面。');
+          return;
+        }
+        activeTab = k;
+        readingInner.innerHTML = tabContents[k].body;
+        sessionTag.textContent = tabContents[k].label + ' · 内容标签';
+        renderTabs();
+      });
+      tabstrip.appendChild(t);
+    });
+  }
+  function openTab(key) {
+    openTabs[key] = true;
+    activeTab = key;
+    readingInner.innerHTML = tabContents[key].body;
+    sessionTag.textContent = tabContents[key].label + ' · 内容标签';
+    renderTabs();
+    toast('已在中央 Workspace Tab 打开内容；会话草稿与阅读位置保持。');
+  }
+
+  function syncCards() {
+    var coordCard = document.getElementById('coordWaitCard');
+    if (coordCard && state.verifierAnswered) {
+      coordCard.innerHTML = '<div class="obj-card"><div class="obj-head"><span class="obj-kind request">成员请求 · Request req-081</span><span class="from">verifier · 验证</span></div><div class="resolved-line" style="padding:10px 12px">✓ 已批准 · verifier 正在执行 <code>npm test</code>；其他成员未受影响。</div></div>';
+    }
+    var acceptCard = document.getElementById('acceptCard');
+    if (acceptCard) {
+      if (state.accepted) {
+        acceptCard.querySelector('.obj-actions').innerHTML = '<span style="font-size:12px;color:var(--positive)">✓ 你已接受当前阶段结果 · 验收是结构化事实</span>';
+      } else if (state.feedbackSent) {
+        acceptCard.querySelector('.obj-actions').innerHTML = '<span style="font-size:12px;color:var(--warn)">✓ 反馈已提交并绑定本验收请求 · 协调者返工中，验收保持待定</span>';
+      }
+    }
+  }
+
+  function setDot(name, cls) {
+    ['nav', 'hud'].forEach(function (p) {
+      var el = document.getElementById(p + 'Dot' + name);
+      if (el) el.className = 'dot ' + cls;
+    });
+  }
+
+  function answerVerifier(approve) {
+    if (state.verifierAnswered) return;
+    state.verifierAnswered = true;
+    document.getElementById('waitingBody').innerHTML = '<div class="wait-empty">当前没有等待你处理的事项。</div>';
+    document.getElementById('waitCount').textContent = '0';
+    document.getElementById('waitCount').classList.remove('warn');
+    document.getElementById('pillSummary').textContent = '无等待';
+    document.getElementById('pillWarnDot').style.display = 'none';
+    if (approve) {
+      setDot('Verifier', 'running');
+      document.getElementById('verifierAct').innerHTML = '正在执行 <code>npm test</code> · 刚刚开始';
+      toast('已批准 req-081：verifier 开始执行 npm test；builder 与 scribe 未受影响。');
+    } else {
+      document.getElementById('verifierAct').innerHTML = '请求被拒绝 · 等待协调者调整验证计划';
+      toast('已拒绝 req-081：verifier 保持等待，其他成员未受影响。');
+    }
+    syncCards();
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-answer]');
+    if (t) { answerVerifier(t.getAttribute('data-answer') === 'approve'); return; }
+
+    t = e.target.closest('[data-open-session]');
+    if (t) { activeTab = null; renderTabs(); renderSession(t.getAttribute('data-open-session')); return; }
+
+    t = e.target.closest('[data-open-tab]');
+    if (t) { openTab(t.getAttribute('data-open-tab')); return; }
+
+    t = e.target.closest('[data-inspect]');
+    if (t) { openInspector(t.getAttribute('data-inspect')); return; }
+
+    t = e.target.closest('[data-accept]');
+    if (t) {
+      var el = document.getElementById('awaitAccept');
+      var fb = document.getElementById('acceptFeedback');
+      var feedbackText = fb ? fb.value.trim() : '';
+      if (feedbackText) {
+        state.feedbackSent = true;
+        if (el) el.textContent = '你已提交验收反馈；协调者按反馈返工，验收保持待定。';
+        toast('确认（有内容）＝按反馈执行：反馈绑定本验收请求，协调者据此返工；其他成员不受影响。');
+      } else {
+        state.accepted = true;
+        if (el) { el.textContent = '你已接受当前阶段结果。'; el.style.background = 'rgba(48,209,88,.14)'; el.style.color = 'var(--positive)'; }
+        toast('确认（空内容）＝接受：产生结构化验收事实，不由模型回复推导。');
+      }
+      syncCards();
+      return;
+    }
+  });
+
+  // 单一确认按钮的动态语义标签
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.id === 'acceptFeedback') {
+      var btn = document.getElementById('acceptConfirmBtn');
+      if (btn) btn.textContent = e.target.value.trim() ? '确认 · 按反馈执行' : '确认接受';
+    }
+  });
+
+  document.getElementById('stopBuilderBtn').addEventListener('click', function () {
+    if (state.builderStopped) return;
+    var ok = window.confirm('停止成员 builder（实现）？\n\n影响范围：仅终止 builder 的当前 Run；工作树 wt/builder-021 与已产生变更保留，verifier / scribe 与协调者不受影响。');
+    if (!ok) return;
+    state.builderStopped = true;
+    setDot('Builder', 'stopped');
+    document.getElementById('builderAct').innerHTML = '已停止 · 工作树与变更保留，可重新派发';
+    this.disabled = true;
+    toast('已停止 builder 的当前 Run；其他成员继续运行。');
+  });
+
+  document.querySelectorAll('[data-toggle]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var sec = b.closest('.hud-sec');
+      var open = sec.getAttribute('data-open') === 'true';
+      sec.setAttribute('data-open', open ? 'false' : 'true');
+      b.querySelector('.chev').textContent = open ? '▸' : '▾';
+    });
+  });
+  document.getElementById('hudCollapseBtn').addEventListener('click', function () {
+    frame.setAttribute('data-hud', 'collapsed');
+    toast('浮层已收起：只改变呈现，不停止任何 Run。');
+  });
+  document.getElementById('hudPill').addEventListener('click', function () { frame.setAttribute('data-hud', 'open'); });
+
+  var inspector = document.getElementById('inspector');
+  function openInspector(key) {
+    var obj = inspectObjects[key];
+    if (!obj) return;
+    document.getElementById('inspTitle').textContent = obj.title;
+    document.getElementById('inspBody').innerHTML = obj.body;
+    frame.setAttribute('data-inspector', 'open');
+    toast('检查器打开：任务浮层暂时让出，关闭后自动恢复。');
+  }
+  document.getElementById('inspCloseBtn').addEventListener('click', function () {
+    frame.setAttribute('data-inspector', 'closed');
+  });
+
+  document.querySelectorAll('.width-switch button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.width-switch button').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      var w = b.getAttribute('data-w');
+      frame.setAttribute('data-width', w);
+      if (w === 'wide') {
+        frame.setAttribute('data-hud', 'open');
+        toast('宽屏：浮窗常驻右侧安全留白，中央内容不被遮挡。');
+      } else if (w === 'medium') {
+        toast('中宽：浮窗允许覆盖阅读区域，可收起 / 恢复。');
+      } else {
+        frame.setAttribute('data-hud', 'collapsed');
+        toast('紧凑：初始只保留「任务概览」入口。');
+      }
+    });
+  });
+
+  document.getElementById('sendBtn').addEventListener('click', function () {
+    if (currentSession === 'coord' && !state.accepted) {
+      toast('演示：这里是普通任务对话；针对验收的反馈请使用验收卡内的输入框，超出任务目标的新方向可能拆为新任务。');
+    } else {
+      toast('演示：消息将进入「' + sessions[currentSession].composer + '」，控制目标绑定确切 Session / Run。');
+    }
+  });
+  document.getElementById('resetBtn').addEventListener('click', function () { location.reload(); });
+
+  renderSession('coord');
+})();
+</script>
+</body>
+</html>

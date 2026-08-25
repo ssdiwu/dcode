@@ -44,6 +44,30 @@ test("parseRequest bounds correlation fields", () => {
 
 test("method parameter validation rejects invalid values", () => {
   assert.doesNotThrow(() => validateMethodParams("foundation.snapshot", { afterEventSequence: 0 }));
+  assert.doesNotThrow(() => validateMethodParams("taskWorkbenchViewState.patch", {
+    requestId: "workbench-selection",
+    expectedStoreRevision: 4,
+    expectedViewStateRevision: 1,
+    patch: {
+      selection: { taskId: "task-a", sessionId: "session-a" },
+    },
+  }));
+  assert.doesNotThrow(() => validateMethodParams("dcodeSession.composerDraft.set", {
+    requestId: "save-composer-draft",
+    expectedStoreRevision: 4,
+    taskId: "task-a",
+    dcodeSessionId: "session-a",
+    text: "未提交草稿",
+  }));
+  assert.throws(
+    () => validateMethodParams("taskWorkbenchViewState.patch", {
+      requestId: "bad-workbench-selection",
+      expectedStoreRevision: 4,
+      expectedViewStateRevision: 1,
+      patch: { selection: { taskId: "task-a", sessionId: null } },
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.doesNotThrow(() => validateMethodParams("project.create", {
     requestId: "project-request",
     expectedStoreRevision: 0,
@@ -131,6 +155,16 @@ test("method parameter validation rejects invalid values", () => {
     taskId: "task-a",
     teamRunId: "team-a",
     agentRunId: "agent-a",
+    sessionRunId: "session-run-a",
+    expectedAgentRunRevision: 2,
+  }));
+  assert.doesNotThrow(() => validateMethodParams("agentRun.stop", {
+    requestId: "stop-standalone-coordinator",
+    expectedStoreRevision: 9,
+    runtimeId: "runtime-coordinator",
+    scope: { kind: "user", userId: "current-user" },
+    taskId: "task-a",
+    agentRunId: "coordinator-a",
     sessionRunId: "session-run-a",
     expectedAgentRunRevision: 2,
   }));

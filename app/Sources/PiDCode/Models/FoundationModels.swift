@@ -165,11 +165,13 @@ struct FoundationSnapshot: Codable, Sendable {
     let modelCatalogEntries: [FoundationModelCatalogEntry]?
     let credentialReferences: [FoundationCredentialReference]?
     let runtimeModelSelection: FoundationRuntimeModelSelection?
+    let taskWorkbenchViewState: FoundationTaskWorkbenchViewState?
     let agentProfiles: [FoundationAgentProfile]
     let tasks: [FoundationTask]
     let taskContextSets: [FoundationTaskContextSet]
     let taskPlans: [FoundationTaskPlan]
     let taskWorkItems: [FoundationTaskWorkItem]
+    let composerDrafts: [FoundationComposerDraft]?
     let sessions: [FoundationSession]
     let sessionPaths: [FoundationSessionPath]
     let coordinatorAssignments: [FoundationCoordinatorAssignment]
@@ -192,6 +194,45 @@ struct FoundationSnapshot: Codable, Sendable {
     let evidence: [FoundationEvidence]
 }
 
+struct FoundationTaskWorkbenchViewState: Codable, Sendable {
+    let version: Int
+    let selection: FoundationTaskWorkbenchSelection
+    let expandedHudSections: [String]
+    let inspectorTarget: FoundationTaskWorkbenchInspectorTarget?
+    let revision: Int
+}
+
+struct FoundationTaskWorkbenchSelection: Codable, Sendable {
+    let taskId: String?
+    let sessionId: String?
+}
+
+struct FoundationTaskWorkbenchInspectorTarget: Codable, Hashable, Sendable {
+    let kind: String
+    let id: String
+}
+
+struct FoundationTaskWorkbenchViewStateMutation: Codable, Sendable {
+    let storeRevision: Int
+    let taskWorkbenchViewState: FoundationTaskWorkbenchViewState
+}
+
+struct FoundationComposerDraft: Codable, Identifiable, Sendable {
+    let id: String
+    let taskId: String?
+    let sessionId: String?
+    let draftKind: String
+    let text: String
+    let revision: Int
+    let createdAt: String
+    let updatedAt: String
+}
+
+struct FoundationComposerDraftMutation: Codable, Sendable {
+    let storeRevision: Int
+    let composerDraft: FoundationComposerDraft?
+}
+
 struct FoundationSessionRuntimeBinding: Codable, Identifiable, Sendable {
     var id: String { sessionId }
     let sessionId: String
@@ -202,6 +243,25 @@ struct FoundationSessionRuntimeBinding: Codable, Identifiable, Sendable {
     let cwd: String
     let state: String
     let revision: Int
+}
+
+struct FoundationDCodeSessionRuntime: Codable, Sendable {
+    let runtimeId: String
+    let state: HostState
+}
+
+struct FoundationDCodeSessionPresentation: Codable, Sendable {
+    let dcodeSession: FoundationSession
+    let binding: FoundationSessionRuntimeBinding?
+    let runtime: FoundationDCodeSessionRuntime?
+    let adapterState: String
+    let inspection: SessionInspection?
+}
+
+struct FoundationDCodeSessionPromptResult: Codable, Sendable {
+    let runtimeId: String
+    let started: Bool
+    let result: JSONValue
 }
 
 struct FoundationTaskContextSource: Codable, Identifiable, Hashable, Sendable {
@@ -446,6 +506,8 @@ struct FoundationAgentRun: Codable, Identifiable, Sendable {
     let profileId: String
     let profileSnapshot: JSONValue
     let role: String
+    let modelProvider: String?
+    let modelId: String?
     let status: String
     let revision: Int
 }

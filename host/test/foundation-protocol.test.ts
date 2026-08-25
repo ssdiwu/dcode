@@ -49,6 +49,7 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     assert.equal(hello.capabilities.productStore, true);
     assert.equal(hello.capabilities.nativeTasks, true);
     assert.equal(hello.capabilities.foundationSnapshot, true);
+    assert.equal(hello.capabilities.taskWorkbenchViewState, true);
     assert.equal(hello.capabilities.piSessionImport, true);
     assert.equal(hello.capabilities.sessionPathFacts, true);
 

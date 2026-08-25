@@ -81,16 +81,16 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 
 ### Navigation Sidebar（导航栏；当前实现名 Session Sidebar）
 
-- 左侧导航默认展开，以 User Home、User Scope Task、Project 与 Project Task 为产品主干；Recent Sessions 是快速入口，不取代任务导航。它不是独立页面，也不承载设置或归档管理内容。
-- 首次使用同时提供“新建任务”和“新建项目”：未选择 Project 的新任务进入 User Scope；创建 Project 后显示其 Task 及按需展开的 D Code Session。
-- Project 主行进入项目作用域；Task 主行进入任务当前状态、会话、Agent Run、计划、产物和证据。普通会话行只作为任务内入口，并能返回所属任务。
+- 左侧导航默认展开，日常工作对象只分为「项目」与「任务」两组：Project 行下显示其 Task；未选择 Project 的 Task 直接显示在「任务」组。User Home 与 User Scope 是产品语义，不是可点击的导航容器或分区名称；Recent Sessions 是快速入口，不取代任务导航。导航栏不承载设置或归档管理内容。
+- 首次使用同时提供“新建任务”和“新建项目”：当前已选择 Project 时新任务进入该 Project；未选择 Project 时新任务直接进入「任务」组。创建 Project 后显示其 Task 及按需展开的 D Code Session。
+- Project 主行进入项目作用域；Task 主行直接进入任务当前状态、任务对话、Agent Run、计划、产物和证据。普通会话行只作为任务内入口，并能返回所属任务。
 - 完整会话谱系是所选 Session 的二级历史视图，不在日常导航中永久展开。
 - 置顶与归档只改变投影视图，不改变 Project、Task、Session 或文件关系；Hover 不能成为唯一可达操作。
 
 ### Main Workspace（主工作区）
 
 - 主工作区是窗口中央唯一的内容页面容器。Workspace（工作台）、Settings（设置）与 Archived Sessions（已归档会话）都是其中可切换的 Workbench Page（工作台页面），不会打开第二个 App 窗口或叠加 Sheet。
-- 齿轮与 `Command-,` 都在当前窗口进入 Settings 工具页面；该页面临时使用完整工作台画布，以页内设置导航组织模型、本机资源、自定义供应商、通知、外观、工作台、已归档会话、自进化、Host 诊断与“关于 D Code”，以受限宽度分组内容承载具体选项。“已归档会话”沿用同一设置外壳，不打开 Sheet 或第二窗口；“关于 D Code”显示应用图标、版本 / 构建号、作者 GitHub 和项目 GitHub。页内设置导航在语义上不是会话栏，但继承会话栏当前实际宽度；在 Settings 或 Workspace 调整后，另一页面立即同步。进入期间日常会话栏与信息检查器让出空间，但其显示偏好保持不变，返回 Workspace 后恢复。
+- 齿轮与 `Command-,` 都在当前窗口进入 Settings 工具页面；该页面临时使用完整工作台画布，以页内设置导航组织模型、本机资源、智能体档案、自定义供应商、通知、外观、工作台、已归档会话、自进化、Host 诊断与“关于 D Code”，以受限宽度分组内容承载具体选项。智能体档案是可复用配置，不在日常导航中另占工作对象分区。“已归档会话”沿用同一设置外壳，不打开 Sheet 或第二窗口；“关于 D Code”显示应用图标、版本 / 构建号、作者 GitHub 和项目 GitHub。页内设置导航在语义上不是会话栏，但继承会话栏当前实际宽度；在 Settings 或 Workspace 调整后，另一页面立即同步。进入期间日常会话栏与信息检查器让出空间，但其显示偏好保持不变，返回 Workspace 后恢复。
 - Conversation 是 Workspace 中唯一的会话主页面，不建立或显示名为“对话”的标签。只有真实打开文件、Artifact、Preview 或 Editor 后才出现 Workspace Tab 标签栏，标签栏不预放空标签，也不拥有独立于主画布的整条背景。
 - 从 User Home 开始新工作时建立 User Scope Task Draft，从 Project 开始时建立 Project Task Draft；首次提交非空正文时创建对应作用域的 Task 及其首个 D Code Session。空白草稿离开即消失，非空草稿可以恢复；创建已提交但运行失败时保留真实 Task、Session 与逐字草稿，不自动删除。
 - 打开内容标签时，当前会话的原生消息流、Active Plan 与 Composer 可以隐藏，但其 Session、Session Path、滚动位置、输入草稿和恢复状态不得被重建或清除；关闭最后一个内容标签或从会话栏重新进入 Session 后，主页面原位恢复。
@@ -115,7 +115,8 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 ### Information Inspector（信息检查器）
 
 - 当前 Task 存在时，进度、Agent Team、等待事项与交付物始终进入 Main Workspace 右上方的 Task HUD（任务浮层），而不是占据从上到下的常驻右栏。正常宽度下浮层持续可见，不提供整体关闭动作；各内容分区仍可独立折叠。
-- Task HUD 使用内容所需的紧凑尺寸，并允许进入 Child Agent Session 或所选交付物。正常宽度下它落在中央阅读画布右侧的工作区留白中，不压缩、不移动也不遮挡中央阅读画布；它不保存为第三个结构栏位。
+- Task HUD 在任何宽度下都是与窗口边缘分离的独立浮窗，不进入普通文档流，也不保存为第三个结构栏位。正常宽度由 Main Workspace 为中央阅读画布与 Composer 预留左右安全宽度，使浮窗只落在安全区之外的留白上，不压缩、不移动也不遮挡正文；宽度不足时才允许浮窗覆盖阅读区域。
+- Task HUD 使用内容所需的紧凑尺寸，并允许进入 Child Agent Session 或所选交付物。
 - Information Inspector 只在用户明确打开文件、Artifact、Diff、Context 来源或其他需要连续检查的具体对象时出现为全高右栏，显示路径、来源、revision、元数据、变更、引用关系和适用操作。退出具体对象后关闭，不回退成任务概览栏。
 - Project Files / Changes 的入口可以来自导航、Workspace 或 Task HUD；选择文件会在主工作区打开或聚焦对应 Workspace Tab，选择“查看详情”才打开 Information Inspector。两者都不会自动加入模型 Context 或改变 Git 状态。
 - 全高 Information Inspector 与会话可以同时操作；空间不足时按响应式规则临时覆盖。Task HUD 与全高 Inspector 不在同一位置叠加：打开 Inspector 时浮层暂时让出，关闭后自动恢复，而不是被用户永久关闭。
@@ -152,7 +153,8 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 ## Agent Team（智能体团队）
 
 - Agent Team 属于 Task。Task 可以直接启动单个 Agent Run，也可以显式启动一轮 Team Run；团队、会话和模型都不拥有任务。
-- Task 可以指定一个 Coordination Session 作为主任务对话；Coordinator Agent 在其中持续理解目标、管理计划与派发、汇总成员问题和结果。子 Agent 会话在该 Task 下按需展开，返回主对话不会停止其运行。
+- Task 可以指定一个 Coordination Session 作为任务对话；Coordinator Agent 就是活在任务对话中的 LLM，在其中持续理解目标、管理计划与派发、汇总成员问题和结果。导航中点击 Task 主行即进入任务对话，协调会话不显示为独立的子会话行；展开 Task 只列实际启动的 Child Agent Session，返回任务对话不会停止其运行。
+- Coordinator 的 Task 验收请求以验收卡进入任务对话：一句话请求、一个反馈输入框和单一确认动作。空内容确认即产生结构化接受事实；非空内容确认把反馈绑定该验收请求提交（可含图片附件），Coordinator 按反馈返工，验收保持待定；不设独立的「要求返工」动作。等待类对象（成员请求、验收请求）在任务对话对象卡与 Task HUD 等待分区双入口等价，操作同一结构化对象，任一处操作后另一处同步消解。
 - Agent Profile 是具有稳定身份和版本的可复用默认配置；创建、编辑或选择档案不会启动 Agent，也不会创建 D Code Session。一个 Profile 可以在不同 Task 或 Team Run 中承担不同职责。
 - Team Run 必须在明确目标、范围、完成信号和停止边界下显式启动；短任务可以保持单 Agent，串行接力和并行调查使用同一 Agent Run 合同。
 - 每个 Agent Run 保存 Profile 快照、职责、实际模型、实际工具、Skill 身份 / 版本、声明范围、来源上下文、执行目录、状态、Child Agent Session、可见事件、Report 与 Evidence。模型是运行事实，不是 Agent 身份。
@@ -222,7 +224,7 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 
 ### Project、Task、会话与一等项目文档
 
-- [ ] 全新状态打开 D Code 时同时可以创建 User Scope Task 或 Project；User Scope Task 不显示为“未选项目”，也不把 `cwd`、会话或目录分组冒充 Project。
+- [ ] 全新状态打开 D Code 时同时提供“新建任务”与“新建项目”；未选择 Project 创建的 Task 直接显示在「任务」分区，不显示为“未选项目”，也不把 `cwd`、会话或目录分组冒充 Project。
 - [ ] Task owner 必须是 User Scope 或一个 Project；User Scope Task 默认 cwd 为用户 Home Directory，而 Product Store、Session 和设置只写入 `~/.dcode/`。
 - [ ] 用户可以创建 Project 并选择唯一 Project Directory；Project 以 Task 为主干，Recent Sessions 只提供能够返回所属 Task 的快速入口。
 - [ ] 创建 Task 可以先形成 Task Draft；首次非空提交创建 Task 及首个 D Code Session，创建或编辑 Task 本身不会自动启动 Agent。
@@ -278,7 +280,7 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 - [ ] Agent Profile 可独立创建和编辑稳定身份、名称、职责、可选默认工作范围与模型路由，且不会因保存档案而启动 Worker；同一档案可在不同 Team Run 中承担不同职责，修改也不会热更新在途成员。
 - [ ] Agent Team 只能在 Task 中显式启动，短任务仍可保持单 Agent；团队概览显示成员职责、实际模型与工具、声明范围、运行状态、活动、耗时 / 用量、请求、报告和证据，不暴露隐藏推理、完整私有过程或凭据。
 - [ ] 每个 Agent Run 可以拥有独立 Child Agent Session；D Code 能证明 Task、Team Run、Agent Run、子会话和执行目录关系，而不把子会话重复平铺到顶层导航。
-- [ ] Task 的 Coordination Session 作为默认主任务对话，由 Coordinator Agent 管理目标、派发、问题去重与结果综合；左侧可按 Task 展开 Child Agent Session，进入或返回不会停止其他运行。
+- [ ] Task 的 Coordination Session 作为默认任务对话，由 Coordinator Agent 在其中管理目标、派发、问题去重与结果综合；左侧点击 Task 主行即进入任务对话，协调会话没有独立导航行，展开 Task 只列 Child Agent Session，进入或返回不会停止其他运行。
 - [ ] 具有写入能力的成员使用独立可写执行目录；重启后未处理工作空间与父子引用仍可恢复，运行中断不会被伪装为 Worker Runtime 已恢复，也不会自动重跑、合并或删除成果。
 - [ ] Agent Run 报告、Team Run 关闭与 Task 验收三种完成语义可独立判定，任一前置状态都不会自动推导后续完成。
 - [ ] 跨会话消息保留稳定身份、来源、目标、引用、送达、已读与失败状态；重试幂等，重启后可恢复，且不会被呈现为普通用户消息。

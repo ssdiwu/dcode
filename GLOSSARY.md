@@ -61,12 +61,12 @@ ADR 0013 曾用来表示 D Team 协作根的 Pi Session。当前产品协作根�
 _Avoid_: Task Root、当前产品协作根
 
 **User Home（用户首页）**：
-D Code 的全局入口，以当前 macOS 用户名标识使用者，并提供 User Scope Task、Project、近期工作、需要关注的工作、全局 Knowledge、Vision 与全局创造模式入口。它是 User Scope 的界面投影，不等于文件系统用户主目录、默认 Project 或数据仓本身。
-_Avoid_: 默认项目、会话目录、Product Store、`~/.dcode/` 文件浏览器
+D Code 的全局导航初始状态，以当前 macOS 用户名标识使用者。日常导航直接呈现「项目」与「任务」两个工作对象分区；它不是需要先进入的独立页面或容器，也不等于文件系统用户主目录、默认 Project 或数据仓本身。
+_Avoid_: 默认项目、会话目录、Product Store、`~/.dcode/` 文件浏览器、用户作用域页面
 
 **User Scope（用户作用域）**：
-当前 macOS 用户拥有、位于所有 Project 之外的 D Code Task 归属范围。Task 未选择 Project 时必须属于 User Scope，其默认执行目录映射为该用户的 Home Directory；产品数据仍写入 `~/.dcode/`，不会散落到主目录普通文件中，也不会伪造“未选项目”。
-_Avoid_: nullable Project、默认 Project、无归属 Task、`~/.dcode/` 执行目录
+当前 macOS 用户拥有、位于所有 Project 之外的 D Code Task 归属范围。Task 未选择 Project 时必须属于 User Scope，其默认执行目录映射为该用户的 Home Directory；产品数据仍写入 `~/.dcode/`，不会散落到主目录普通文件中，也不会伪造“未选项目”。导航栏只在「任务」分区直接呈现这些 Task，不把 User Scope 作为可进入的容器、分组名称或技术标签显示给用户。
+_Avoid_: nullable Project、默认 Project、无归属 Task、`~/.dcode/` 执行目录、用户作用域分区
 
 **Project Scope（项目作用域）**：
 由一个 D Code Project 拥有、以其唯一 Project Directory 为默认执行目录的 Task 归属范围。Task 属于 Project Scope 时保存稳定 Project ID；它不等于目录本身、User Scope 或项目文件全文。
@@ -247,8 +247,8 @@ _Avoid_: 已发送消息、后台任务、任务工作项
 _Avoid_: Steer、任务队列、跨会话收件箱
 
 **Navigation Sidebar（导航栏）**：
-D Code 工作台左侧以 User Home、Project 与 Task 为主干的全局导航区域；Recent Sessions 与 Activity View 只是快速入口和活动投影。它负责选择、组织与活动发现，不拥有任务、会话或设置页面。
-_Avoid_: 任务数据库、项目页面、设置导航
+D Code 工作台左侧以「项目」与「任务」为唯一工作对象分区的全局导航区域：每个 Project 行下显示其 Task；不属于 Project 的 Task 直接显示在「任务」分区。置顶、最近、活动、搜索、归档与设置只是功能入口或投影视图，不成为第三种工作对象分组。它负责选择、组织与活动发现，不拥有任务、会话或设置页面。
+_Avoid_: 任务数据库、项目页面、设置导航、用户作用域容器、未选项目分区
 
 **Session Sidebar（会话栏）**（当前实现术语）：
 0.0.x 会话优先工作台的左侧导航名称。目标产品升级为 Navigation Sidebar；保留该词只用于当前源码、版本 PRD 和迁移验收，不继续表达产品主干。
@@ -383,6 +383,10 @@ _Avoid_: Thinking、普通回复、Agent Report、已验收事实
 **Agent Request（智能体请求）**：
 Agent Run 向用户、Coordinator 或指定 Agent 提交的耐久、可寻址输入请求，具有来源、目标、问题、允许回答形式、状态和恢复身份。它不是普通会话消息、User Attention 或执行失败；User Attention 只是其可能产生的一种投影。
 _Avoid_: 普通提问文本、通知、User Attention、无限等待状态
+
+**Acceptance Request（验收请求）**：
+Coordinator 向用户提出的任务阶段验收对象，在任务对话中呈现为验收卡：一句话请求、一个反馈输入框和单一确认动作。空内容确认即产生结构化接受事实；非空内容确认把反馈绑定本请求提交（可含图片附件）并触发返工，验收保持待定。接受不由模型文案推导，也不设独立的「要求返工」动作；它与成员请求一样在任务对话对象卡与 Task HUD 等待分区双入口等价。
+_Avoid_: 要求返工按钮、自动验收、普通聊天确认、双状态源
 
 **Agent Report（智能体报告）**：
 Agent Run 在有界任务结束、阻塞或交接时提交的结构化结果，汇总 Finding、Artifact、Evidence、未解决项和建议下一步。报告完成不自动完成 Team Run 或 Task，也不替用户验收。

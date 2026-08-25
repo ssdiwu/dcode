@@ -1,12 +1,12 @@
 # D Code 系统提示词与活动工具同源边界
 
-状态：Accepted（已接受；定义目标架构，当前 0.0.x Host 尚未实现）
+状态：Accepted（已接受；`0.0.28` Host 已形成实现候选，原生人工验收与真实认证交接仍由版本 PRD 记录）
 
 ## 背景
 
 Pi SDK 默认把模型定义为“运行在 Pi 中的 coding assistant”，并在默认 System Prompt（系统提示词）里加入 Pi 文档入口、工具摘要、项目上下文、Skill 与当前工作目录。D Code 已经确定为以 Pi SDK 作为首个 Agent Runtime 的独立 ADE；继续沿用 Pi 身份，或只在其后追加一句 D Code 品牌说明，会让模型误解自己所处的产品、对象权威、会话语义和能力边界。
 
-当前 D Code 的 `DCodeResourceLoader` 仍只代理 Pi `DefaultResourceLoader`，没有提供 D Code `systemPromptOverride`；因此当前 Host 通常仍会使用 Pi 默认身份，并可能发现 Pi 的 `SYSTEM.md`、`APPEND_SYSTEM.md`、项目上下文和 Skill。Pi 的 custom prompt 分支虽然可以替换默认身份，但不会自动渲染默认工具清单；所以 D Code 不能只换一段静态文案，必须拥有完整提示词组装和活动工具同源链路。
+`0.0.28` Host 已通过 D Code Prompt Assembler（提示词组装器）显式建立 D Code Identity、运行环境、角色合同、选中一等项目文档 / Context Projection 与 Active Tool Manifest；它完整替换 Pi 通用身份，且只从实际注册的 Active Tool Set 生成工具说明。Pi Resource Loader 仍是 Runtime Adapter 的资源发现机制，但 Pi 默认身份、Pi `SYSTEM.md` / `APPEND_SYSTEM.md`、默认文档入口与未选择的全量上下文不得静默进入 D Code Prompt。
 
 ## 决定
 
@@ -44,7 +44,7 @@ flowchart LR
 
 ## 影响
 
-- 当前 0.0.x Host 仍使用 Pi 默认资源加载路径；本 ADR 不能冒充替换已经实现。迁移需要在 D Code Runtime Adapter 中建立自有 prompt assembler，并为替换、继承项阻断、角色差异、环境事实与工具集合一致性增加测试。
+- `0.0.28` Host 已在 D Code Runtime Adapter 中建立自有 Prompt Assembler，并为身份替换、Pi 继承项阻断、角色差异、环境事实与工具集合一致性加入自动测试；该结果仍不替代原生人工验收或真实认证 Provider 交接。
 - Pi SDK 当前的 `systemPromptOverride` 可以去掉默认身份，但仍可能追加 append prompt、project context、skills 与 cwd；D Code 必须显式接管这些继承项，或在每轮启动边界提交最终有效 System Prompt，不能只依赖一个静态 override。
 - Coordination Session 与 Child Agent Session 共用 D Code 基础身份，但分别获得 Coordinator 或成员角色合同和各自 Active Tool Set。
 - 工具说明进入 System Prompt 是发现与选择能力，不取代模型 API 的结构化 schema，也不改变 ADR 0005 的“真实注册才可调用”边界。

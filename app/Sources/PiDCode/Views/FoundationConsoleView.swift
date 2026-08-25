@@ -73,7 +73,7 @@ struct FoundationConsoleView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("D Code")
                         .font(.headline)
-                    Text("0.0.28 · Foundation Console")
+                    Text("0.0.29 · 基础合同")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -116,7 +116,7 @@ struct FoundationConsoleView: View {
 
             List(selection: $selectedTaskID) {
                 if let snapshot {
-                    Section("用户空间") {
+                    Section("任务") {
                         ForEach(snapshot.tasks.filter { task in
                             if case .user = task.scope { return true }
                             return false
@@ -195,7 +195,7 @@ struct FoundationConsoleView: View {
                     ContentUnavailableView(
                         "还没有任务",
                         systemImage: "checklist",
-                        description: Text("创建 User Scope 或 Project Scope 任务，或显式导入一个 Pi 会话。")
+                        description: Text("新建任务、创建项目，或显式导入一个 Pi 会话。")
                     )
                     agentProfiles(snapshot)
                     piImport(snapshot)
@@ -867,14 +867,14 @@ struct FoundationConsoleView: View {
     private func scopeLabel(_ scope: FoundationTaskScope, snapshot: FoundationSnapshot) -> String {
         switch scope {
         case .user:
-            "用户空间"
+            "不归入项目"
         case let .project(projectId):
             snapshot.projects.first(where: { $0.id == projectId })?.title ?? "项目"
         }
     }
 }
 
-private struct FoundationProfileCreateSheet: View {
+struct FoundationProfileCreateSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -912,7 +912,7 @@ private struct FoundationProfileCreateSheet: View {
     }
 }
 
-private struct FoundationProjectCreateSheet: View {
+struct FoundationProjectCreateSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
@@ -960,7 +960,7 @@ private struct FoundationProjectCreateSheet: View {
     }
 }
 
-private struct FoundationPiImportPreviewSheet: View {
+struct FoundationPiImportPreviewSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let candidate: FoundationPiImportCandidate
@@ -974,14 +974,14 @@ private struct FoundationPiImportPreviewSheet: View {
             if let preview = model.foundationImportPreview,
                preview.sourceSessionId == candidate.sourceSessionId {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
-                    GridRow { Text("Lineage"); Text(preview.lineageStatus) }
+                    GridRow { Text("来源连续性（Lineage）"); Text(preview.lineageStatus) }
                     GridRow { Text("可导入记录"); Text("\(preview.importedEntryCount)") }
-                    GridRow { Text("Source digest"); Text(preview.sourceDigest).font(.caption.monospaced()) }
+                    GridRow { Text("来源摘要（Source digest）"); Text(preview.sourceDigest).font(.caption.monospaced()) }
                     GridRow { Text("源文件"); Text(preview.sourcePath).lineLimit(2) }
                 }
                 .font(.caption)
                 let omissions = [
-                    preview.omittedContent.hiddenThinking ? "隐藏 Thinking" : nil,
+                    preview.omittedContent.hiddenThinking ? "隐藏思考（Thinking）" : nil,
                     preview.omittedContent.binaryImages ? "图片二进制" : nil,
                     preview.omittedContent.toolArguments ? "工具参数" : nil,
                     preview.omittedContent.toolResults ? "工具结果正文" : nil,
@@ -990,8 +990,8 @@ private struct FoundationPiImportPreviewSheet: View {
                 Text(omissions.isEmpty ? "没有检测到需要省略的内容。" : "导入时省略：\(omissions.joined(separator: "、"))")
                     .font(.caption)
                     .foregroundStyle(omissions.isEmpty ? Color.secondary : Color.orange)
-                Picker("归属", selection: $scopeKey) {
-                    Text("用户空间").tag("user")
+                Picker("归属项目", selection: $scopeKey) {
+                    Text("不归入项目").tag("user")
                     ForEach(model.foundationSnapshot?.projects ?? []) { project in
                         Text(project.title).tag("project:\(project.id)")
                     }
@@ -1052,13 +1052,19 @@ private struct FoundationSection<Content: View>: View {
     }
 }
 
-private struct FoundationTaskCreateSheet: View {
+struct FoundationTaskCreateSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    let preferredProjectID: String?
     @State private var title = ""
     @State private var goal = ""
-    @State private var scopeKey = "user"
+    @State private var scopeKey: String
     @State private var isSaving = false
+
+    init(preferredProjectID: String? = nil) {
+        self.preferredProjectID = preferredProjectID
+        _scopeKey = State(initialValue: preferredProjectID.map { "project:\($0)" } ?? "user")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1066,8 +1072,8 @@ private struct FoundationTaskCreateSheet: View {
             TextField("任务名称", text: $title)
             TextField("这次任务要完成什么？", text: $goal, axis: .vertical)
                 .lineLimit(3...6)
-            Picker("归属", selection: $scopeKey) {
-                Text("用户空间").tag("user")
+            Picker("归属项目", selection: $scopeKey) {
+                Text("不归入项目").tag("user")
                 ForEach(model.foundationSnapshot?.projects ?? []) { project in
                     Text(project.title).tag("project:\(project.id)")
                 }
@@ -1097,7 +1103,74 @@ private struct FoundationTaskCreateSheet: View {
     }
 }
 
-private struct FoundationProfileEditor: View {
+struct FoundationAgentProfilesSettingsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var editingProfile: FoundationAgentProfile?
+    @State private var creatingProfile = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("设置 · 智能体档案")
+                        .font(.title2.weight(.semibold))
+                    Text("档案是可复用配置；当前任务实际工作的成员只在任务概览中显示。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("完成") { dismiss() }
+            }
+            .padding(20)
+            Divider()
+            List(model.foundationSnapshot?.agentProfiles ?? []) { profile in
+                HStack(spacing: 10) {
+                    Image(systemName: profileSymbol(profile.role))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name)
+                        Text(profile.role)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(profile.enabled ? "已启用" : "已停用")
+                        .font(.caption)
+                        .foregroundStyle(profile.enabled ? .secondary : .tertiary)
+                    Button("编辑") { editingProfile = profile }
+                        .buttonStyle(.borderless)
+                }
+            }
+            .listStyle(.inset)
+            Divider()
+            HStack {
+                Button("新建档案") { creatingProfile = true }
+                Spacer()
+            }
+            .padding(16)
+        }
+        .frame(width: 560, height: 520)
+        .sheet(item: $editingProfile) { profile in
+            FoundationProfileEditor(profile: profile)
+        }
+        .sheet(isPresented: $creatingProfile) {
+            FoundationProfileCreateSheet()
+        }
+    }
+
+    private func profileSymbol(_ role: String) -> String {
+        switch role {
+        case "coordinator": "point.3.connected.trianglepath.dotted"
+        case "explore": "magnifyingglass"
+        case "worker": "hammer"
+        case "verifier": "checkmark.shield"
+        default: "person.crop.circle"
+        }
+    }
+}
+
+struct FoundationProfileEditor: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let profile: FoundationAgentProfile

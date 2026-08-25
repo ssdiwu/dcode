@@ -191,6 +191,110 @@ test("D Code owns a credential-free Runtime Model Catalog and future-Run selecti
   }
 });
 
+test("Task Workbench presentation stays in Product Store and patches one field without overwriting another", async () => {
+  const f = await fixture();
+  const store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    assert.deepEqual(initial.taskWorkbenchViewState, {
+      version: 1,
+      selection: { taskId: null, sessionId: null },
+      expandedHudSections: ["deliverables", "progress", "team", "waiting"],
+      inspectorTarget: null,
+      revision: 0,
+    });
+    const created = await store.createTask({
+      requestId: "create-task-for-workbench-presentation",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Persist workbench state",
+      goal: "Keep task selection under .dcode",
+      acceptance: [],
+    });
+    const selected = await store.patchTaskWorkbenchViewState({
+      requestId: "select-workbench-task",
+      expectedStoreRevision: created.storeRevision,
+      expectedViewStateRevision: 0,
+      patch: {
+        selection: { taskId: created.task.id, sessionId: created.coordinationSession.id },
+      },
+    });
+    assert.equal(selected.taskWorkbenchViewState.selection.taskId, created.task.id);
+    assert.equal(selected.taskWorkbenchViewState.selection.sessionId, created.coordinationSession.id);
+    assert.equal(selected.taskWorkbenchViewState.revision, 1);
+
+    const collapsed = await store.patchTaskWorkbenchViewState({
+      requestId: "collapse-workbench-hud",
+      expectedStoreRevision: selected.storeRevision,
+      expectedViewStateRevision: selected.taskWorkbenchViewState.revision,
+      patch: { expandedHudSections: ["progress", "waiting"] },
+    });
+    assert.deepEqual(collapsed.taskWorkbenchViewState.selection, selected.taskWorkbenchViewState.selection);
+    assert.deepEqual(collapsed.taskWorkbenchViewState.expandedHudSections, ["progress", "waiting"]);
+    assert.equal(collapsed.taskWorkbenchViewState.revision, 2);
+
+    const replayed = await store.patchTaskWorkbenchViewState({
+      requestId: "collapse-workbench-hud",
+      expectedStoreRevision: selected.storeRevision,
+      expectedViewStateRevision: selected.taskWorkbenchViewState.revision,
+      patch: { expandedHudSections: ["progress", "waiting"] },
+    });
+    assert.deepEqual(replayed, collapsed, "the same preference patch must use its durable receipt");
+    await assert.rejects(
+      store.patchTaskWorkbenchViewState({
+        requestId: "invalid-workbench-hud",
+        expectedStoreRevision: collapsed.storeRevision,
+        expectedViewStateRevision: collapsed.taskWorkbenchViewState.revision,
+        patch: { expandedHudSections: ["unknown"] },
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "INVALID_ARGUMENT",
+    );
+    const restored = await store.snapshot();
+    assert.deepEqual(restored.taskWorkbenchViewState, collapsed.taskWorkbenchViewState);
+    assert.equal(JSON.stringify(restored.taskWorkbenchViewState).includes("Persist workbench state"), false);
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("D Code Session composer drafts persist under Product Store and clear without retaining text", async () => {
+  const f = await fixture();
+  const store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    const created = await store.createTask({
+      requestId: "create-task-for-composer-draft",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Persist composer draft",
+      goal: "Recover only unsubmitted text",
+      acceptance: [],
+    });
+    const saved = await store.setDCodeSessionComposerDraft({
+      requestId: "save-dcode-session-composer-draft",
+      expectedStoreRevision: created.storeRevision,
+      taskId: created.task.id,
+      sessionId: created.coordinationSession.id,
+      text: "请在重启后继续这一条未提交的消息",
+    });
+    assert.equal(saved.composerDraft?.text, "请在重启后继续这一条未提交的消息");
+    assert.equal((await store.snapshot()).composerDrafts.find((draft) => draft.sessionId === created.coordinationSession.id)?.text, saved.composerDraft?.text);
+    const cleared = await store.setDCodeSessionComposerDraft({
+      requestId: "clear-dcode-session-composer-draft",
+      expectedStoreRevision: saved.storeRevision,
+      taskId: created.task.id,
+      sessionId: created.coordinationSession.id,
+      text: "",
+    });
+    assert.equal(cleared.composerDraft, undefined);
+    assert.equal((await store.snapshot()).composerDrafts.some((draft) => draft.sessionId === created.coordinationSession.id), false);
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("Product Store rejects a symbolic-link data root without changing the target", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-product-store-symlink-root-"));
   const target = join(root, "unrelated-target");

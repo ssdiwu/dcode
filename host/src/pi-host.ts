@@ -124,7 +124,7 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
 ]);
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.28";
+const HOST_VERSION = "0.0.29";
 
 const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "runtime.start",
@@ -1290,6 +1290,8 @@ export class PiHost {
             nativeTasks: true,
             foundationSnapshot: true,
             dcodeModelCatalog: true,
+            taskWorkbenchViewState: true,
+            dcodeSessionComposerDrafts: true,
             dcodeSessionPresentation: true,
             piSessionImport: true,
             sessionPathFacts: true,
@@ -1339,8 +1341,40 @@ export class PiHost {
         });
         return result;
       }
+      case "taskWorkbenchViewState.patch": {
+        const result = await (await this.getProductStore()).patchTaskWorkbenchViewState({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          expectedViewStateRevision: params.expectedViewStateRevision as number,
+          patch: params.patch as import("./product-store.js").TaskWorkbenchViewStatePatch,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "taskWorkbenchViewState.updated",
+          entityKind: "taskWorkbenchViewState",
+          entityId: "workbench.taskViewState",
+        });
+        return result;
+      }
       case "dcodeSession.presentation":
         return await this.dcodeSessionPresentation(params.dcodeSessionId as string);
+      case "dcodeSession.composerDraft.set": {
+        const result = await (await this.getProductStore()).setDCodeSessionComposerDraft({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          sessionId: params.dcodeSessionId as string,
+          text: params.text as string,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: result.composerDraft ? "dcodeSession.composerDraft.saved" : "dcodeSession.composerDraft.cleared",
+          entityKind: "composerDraft",
+          entityId: result.composerDraft?.id ?? `composer-draft:${params.dcodeSessionId as string}`,
+          taskId: params.taskId as string,
+        });
+        return result;
+      }
       case "dcodeSession.prompt":
         return await this.promptDCodeSession({
           dcodeSessionId: params.dcodeSessionId as string,
@@ -1553,7 +1587,7 @@ export class PiHost {
           expectedRequestRevision: params.expectedRequestRevision as number,
           taskId: params.taskId as string,
           scope: params.scope as TaskScope,
-          teamRunId: params.teamRunId as string,
+          ...(typeof params.teamRunId === "string" ? { teamRunId: params.teamRunId } : {}),
           agentRunId: params.agentRunId as string,
           sessionRunId: params.sessionRunId as string,
           runtimeId: params.runtimeId as string,
@@ -1894,7 +1928,7 @@ export class PiHost {
       expectedStoreRevision: params.expectedStoreRevision as number,
       scope: params.scope as TaskScope,
       taskId: params.taskId as string,
-      teamRunId: params.teamRunId as string,
+      ...(typeof params.teamRunId === "string" ? { teamRunId: params.teamRunId } : {}),
       agentRunId: params.agentRunId as string,
       sessionRunId: params.sessionRunId as string,
       runtimeId: params.runtimeId as string,

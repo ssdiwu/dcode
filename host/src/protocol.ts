@@ -6,7 +6,9 @@ export const HOST_METHODS = [
   "runtime.start",
   "foundation.snapshot",
   "runtimeModelSelection.set",
+  "taskWorkbenchViewState.patch",
   "dcodeSession.presentation",
+  "dcodeSession.composerDraft.set",
   "dcodeSession.prompt",
   "project.create",
   "task.create",
@@ -566,9 +568,60 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireModelIdentifier(params, "providerId");
       requireModelIdentifier(params, "modelId");
       return;
+    case "taskWorkbenchViewState.patch": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireInteger(params, "expectedViewStateRevision", 0, Number.MAX_SAFE_INTEGER);
+      if (!isRecord(params.patch) || Object.keys(params.patch).length === 0) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch to contain a Task Workbench state change");
+      }
+      const patch = params.patch;
+      if (patch.selection !== undefined) {
+        if (!isRecord(patch.selection) || Object.keys(patch.selection).length !== 2) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.selection to contain taskId and sessionId");
+        }
+        for (const key of ["taskId", "sessionId"] as const) {
+          const value = patch.selection[key];
+          if (value !== null && (typeof value !== "string" || value.length === 0 || value.length > 200)) {
+            throw new ProtocolValidationError("INVALID_PARAMS", `Expected params.patch.selection.${key} to be a non-empty string or null`);
+          }
+        }
+        if ((patch.selection.taskId === null) !== (patch.selection.sessionId === null)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.selection to contain both identities or neither");
+        }
+      }
+      if (patch.expandedHudSections !== undefined) requireStringArray(patch, "expandedHudSections", 4);
+      if (patch.inspectorTarget !== undefined && patch.inspectorTarget !== null) {
+        if (!isRecord(patch.inspectorTarget)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.inspectorTarget to be an object or null");
+        }
+        const target = patch.inspectorTarget;
+        if (
+          Object.keys(target).length !== 2
+          || !["artifact", "evidence", "report", "context"].includes(target.kind as string)
+          || typeof target.id !== "string"
+          || target.id.length === 0
+          || target.id.length > 200
+        ) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.inspectorTarget to contain kind and id");
+        }
+      }
+      return;
+    }
     case "dcodeSession.presentation":
       requireBoundedString(params, "dcodeSessionId", 200);
       return;
+    case "dcodeSession.composerDraft.set": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "dcodeSessionId", 200);
+      const draft = requireString(params, "text", { allowEmpty: true });
+      if (draft.length > 200_000) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.text to be at most 200000 characters");
+      }
+      return;
+    }
     case "dcodeSession.prompt": {
       requireBoundedString(params, "dcodeSessionId", 200);
       const message = requireString(params, "message", { allowEmpty: true });
@@ -712,7 +765,12 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "runtimeId", 128);
       validateTaskScope(params);
       requireBoundedString(params, "taskId", 200);
-      requireBoundedString(params, "teamRunId", 200);
+      {
+        const teamRunId = optionalString(params, "teamRunId");
+        if (teamRunId !== undefined && (teamRunId.length === 0 || teamRunId.length > 200)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.teamRunId to be a non-empty string up to 200 characters");
+        }
+      }
       requireBoundedString(params, "agentRunId", 200);
       requireBoundedString(params, "sessionRunId", 200);
       requireBoundedString(params, "agentRequestId", 200);
@@ -740,7 +798,12 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "runtimeId", 128);
       validateTaskScope(params);
       requireBoundedString(params, "taskId", 200);
-      requireBoundedString(params, "teamRunId", 200);
+      {
+        const teamRunId = optionalString(params, "teamRunId");
+        if (teamRunId !== undefined && (teamRunId.length === 0 || teamRunId.length > 200)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.teamRunId to be a non-empty string up to 200 characters");
+        }
+      }
       requireBoundedString(params, "agentRunId", 200);
       requireBoundedString(params, "sessionRunId", 200);
       requireInteger(params, "expectedAgentRunRevision", 1, Number.MAX_SAFE_INTEGER);

@@ -1,6 +1,6 @@
 # D Code 原生产品数据权威与 Pi 单向导入边界
 
-状态：Accepted（已接受；定义目标架构，取代 ADR 0001、0007 与 0018 的产品前提；当前 0.0.x 实现仍须另行迁移）
+状态：Accepted（已接受；取代 ADR 0001、0007 与 0018 的产品前提；`0.0.28` 已形成实现候选，原生人工验收与发布状态由版本 PRD 另行记录）
 
 ## 背景
 
@@ -17,7 +17,7 @@ D Code 已确定为基于 Pi SDK 的独立 ADE，而不是 Pi CLI 的原生界�
 5. 完整导出以 D Code 自有格式为准。未来若提供 Pi JSONL 导出，只能是明确标注能力损失的可选适配，不构成 Pi CLI 可以继续使用的兼容合同。
 6. 提交原文与生效输入是两个相互关联的 D Code 事实：用户真正提交的内容不可被技能展开、输入转换或压缩覆盖；运行时输入可以组装和压缩，但必须可追溯回原始来源。
 7. Project Directory 中的源码、普通文件与一等项目文档继续以当前文件系统内容为正文权威。Product Store 只保存项目关系、文档类型、路径、revision、加载记录和必要索引，不复制正文建立竞争权威。
-8. 当前源码仍以 Pi SessionManager、Pi JSONL 与 Pi 配置为运行事实。`doc/10-架构与运行/` 必须继续如实记录这一现状，直到迁移实现和验收成立；任何目标态文档不得冒充已经交付。
+8. `0.0.28` 起，D Code Product Store 是产品 Task / Session / Run、模型选择、提示词回执与恢复事实的实现候选权威；Pi SessionManager / JSONL / 配置只保留为 Runtime Adapter 私有会话、只读发现或显式单向导入来源。原生人工验收与真实认证交接仍未成立，任何目标态文档不得冒充已经交付。
 9. 当前 macOS 用户的 D Code Data Root 固定为 `~/.dcode/`。Product Store、D Code Session、设置、Agent Profile、能力 / 模型配置、受管 Artifact、索引、日志和恢复资料都归入该根；Project 源码与一等项目文档正文仍留在真实 Project Directory。凭据正文使用 Keychain 或外部安全来源，`~/.dcode/` 只保存安全引用与认证状态。
 10. 每个 Task 必须恰好属于一个 Project Scope 或 User Scope，不允许 nullable Project 产生“无归属任务”。User Scope 由 User Home 呈现；未选择 Project 的 Task 默认执行目录映射为当前用户 Home Directory，但其产品数据仍写入 `~/.dcode/`，不会把主目录伪造成 Project 或把数据散落到普通文件。
 11. `0.0.28` 必须把现有 D Code 本机状态与被采用的 Pi 资产从 `~/Library/Application Support/D Code`、配置所指 `agentDir/pi-dcode` 及明确导入源迁入 `~/.dcode/`，并为旧路径定义一次性迁移、只读退出与失败恢复；Lease / lock 与可重建缓存不迁移。完成后不得继续把 `~/.pi/agent`、旧 App Support 文件或 `agentDir/pi-dcode` 当作新增产品状态的可写权威。

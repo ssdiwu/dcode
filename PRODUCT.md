@@ -20,7 +20,7 @@ D Code 把 AI 工作从“围绕一段会话临时完成一次回答”提升为
 
 ## 产品主干
 
-- User Scope（用户作用域）承载未选择 Project 的 Task，由 User Home 呈现，默认工作目录映射为当前用户 Home Directory；它不是默认 Project。
+- User Scope（用户作用域）承载未选择 Project 的 Task，默认工作目录映射为当前用户 Home Directory；日常界面把它们直接列在「任务」分区，不把 User Home 或 User Scope 呈现为容器，也不把它伪造成默认 Project。
 - Project（项目）是长期持续演化的产品与工作容器，拥有唯一项目目录、一等项目文档、Project Knowledge、Project Vision 和 Task 集合。
 - Task（任务）是基本完成单位，必须恰好属于 User Scope 或一个 Project，并拥有短期目标、范围、计划、工作清单、多个 D Code Session、Agent Run、产物、证据与验收。
 - D Code Session（D Code 会话）是任务拥有的对话与上下文容器，不是任务本身。一个任务可以没有、一个或多个会话。

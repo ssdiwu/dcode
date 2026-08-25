@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import PiDCode
 
@@ -10,6 +11,16 @@ final class FoundationConsoleTests: XCTestCase {
     ) -> JSONValue {
         let task = taskValue(projectScope: projectScope)
         let session = sessionValue()
+        let workbenchState: JSONValue = .object([
+            "version": .number(1),
+            "selection": .object([
+                "taskId": withOpenRequest ? .string("task-one") : .null,
+                "sessionId": withOpenRequest ? .string("session-one") : .null,
+            ]),
+            "expandedHudSections": .array([.string("progress"), .string("team"), .string("waiting"), .string("deliverables")]),
+            "inspectorTarget": .null,
+            "revision": .number(1),
+        ])
         return .object([
             "schemaVersion": .number(1),
             "storeRevision": .number(Double(revision)),
@@ -19,6 +30,7 @@ final class FoundationConsoleTests: XCTestCase {
                 "homeDirectory": .string("/Users/tester"),
                 "revision": .number(1),
             ]),
+            "taskWorkbenchViewState": workbenchState,
             "projects": .array([]),
             "agentProfiles": .array([
                 .object([
@@ -260,6 +272,121 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertTrue(harness.model.projects.isEmpty, "legacy Swift Project Store must not become a second authority")
         let methods = await harness.client.recordedMethods()
         XCTAssertEqual(methods, ["host.hello", "foundation.snapshot", "piImport.listCandidates"])
+    }
+
+    func testFoundationSessionPresentationAndPromptUseDCodeSessionIdentity() async throws {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 7)
+        let session = sessionValue()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "dcodeSession.presentation": .object([
+                "dcodeSession": session,
+                "binding": .null,
+                "runtime": .null,
+                "adapterState": .string("unbound"),
+                "inspection": .null,
+            ])
+            case "dcodeSession.prompt": .object([
+                "runtimeId": .string("runtime-coordinator"),
+                "started": .bool(true),
+                "result": .object(["accepted": .bool(true)]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+
+        let loaded = await harness.model.loadFoundationSessionPresentation("session-one")
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(harness.model.foundationSessionPresentation?.dcodeSession.id, "session-one")
+        XCTAssertEqual(harness.model.foundationSessionPresentation?.adapterState, "unbound")
+        let prompted = await harness.model.promptFoundationDCodeSession(
+            dcodeSessionID: "session-one",
+            message: "向协调者继续任务"
+        )
+        XCTAssertTrue(prompted)
+
+        let calls = await harness.client.requests
+        let presentation = try XCTUnwrap(calls.first(where: { $0.method == "dcodeSession.presentation" }))
+        XCTAssertEqual(presentation.params["dcodeSessionId"]?.stringValue, "session-one")
+        let prompt = try XCTUnwrap(calls.first(where: { $0.method == "dcodeSession.prompt" }))
+        XCTAssertEqual(prompt.params["dcodeSessionId"]?.stringValue, "session-one")
+        XCTAssertEqual(prompt.params["message"]?.stringValue, "向协调者继续任务")
+        XCTAssertNotNil(prompt.params["promptId"]?.stringValue)
+    }
+
+    func testTaskWorkbenchPresentationPatchesOnlyTheRequestedProductStoreField() async throws {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 7, withOpenRequest: true)
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "taskWorkbenchViewState.patch": .object([
+                "storeRevision": .number(8),
+                "taskWorkbenchViewState": .object([
+                    "version": .number(1),
+                    "selection": .object([
+                        "taskId": .string("task-one"),
+                        "sessionId": .string("session-one"),
+                    ]),
+                    "expandedHudSections": .array([.string("progress"), .string("waiting")]),
+                    "inspectorTarget": .null,
+                    "revision": .number(2),
+                ]),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+
+        let mutation = await harness.model.patchFoundationTaskWorkbenchViewState(
+            expectedViewStateRevision: 1,
+            patch: ["expandedHudSections": .array([.string("progress"), .string("waiting")])]
+        )
+        XCTAssertEqual(mutation?.taskWorkbenchViewState.expandedHudSections, ["progress", "waiting"])
+        let requests = await harness.client.requests
+        let request = try XCTUnwrap(requests.last(where: { $0.method == "taskWorkbenchViewState.patch" }))
+        XCTAssertEqual(request.params["expectedStoreRevision"], .number(7))
+        XCTAssertEqual(request.params["expectedViewStateRevision"], .number(1))
+        XCTAssertNil(request.params["patch"]?["selection"], "折叠 HUD 不得覆写当前 Task / Session 选择")
+        XCTAssertEqual(request.params["patch"]?["expandedHudSections"]?.arrayValue?.count, 2)
+    }
+
+    func testFoundationRootRendersTheTaskWorkbenchAtAllHUDWidthClasses() async {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 2, withOpenRequest: true)
+        let session = sessionValue()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "dcodeSession.presentation": .object([
+                "dcodeSession": session,
+                "binding": .null,
+                "runtime": .null,
+                "adapterState": .string("unbound"),
+                "inspection": .null,
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        for width: CGFloat in [1_320, 1_000, 720] {
+            let host = NSHostingView(
+                rootView: RootView()
+                    .environment(harness.model)
+                    .frame(width: width, height: 820)
+            )
+            host.layoutSubtreeIfNeeded()
+            XCTAssertFalse(host.fittingSize == .zero, "任务工作台在 \(width)pt 下必须可布局")
+        }
     }
 
     func testFoundationTaskAndPiImportUseTheSharedMutationContract() async {

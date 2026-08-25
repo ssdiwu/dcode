@@ -105,6 +105,8 @@ final class AppModel {
     private(set) var foundationImportCandidates: [FoundationPiImportCandidate] = []
     private(set) var foundationImportPreview: FoundationPiImportPreview?
     private(set) var isLoadingFoundation = false
+    private(set) var foundationSessionPresentation: FoundationDCodeSessionPresentation?
+    private(set) var isLoadingFoundationSessionPresentation = false
     var isFoundationMode: Bool { foundationSnapshot != nil }
     var projects: [DCodeProject] = []
     var recentSessions: [SessionSummary] = []
@@ -774,7 +776,10 @@ final class AppModel {
         isLoadingFoundation = true
         defer { isLoadingFoundation = false }
         do {
-            foundationSnapshot = try await client.request("foundation.snapshot")
+            let nextSnapshot: FoundationSnapshot = try await client.request("foundation.snapshot")
+            if nextSnapshot.storeRevision >= (foundationSnapshot?.storeRevision ?? -1) {
+                foundationSnapshot = nextSnapshot
+            }
             let candidates: FoundationPiImportCandidateList = try await client.request(
                 "piImport.listCandidates",
                 params: ["limit": .number(200)]
@@ -782,6 +787,108 @@ final class AppModel {
             foundationImportCandidates = candidates.candidates
         } catch {
             present(error, title: "基础设施状态未能刷新")
+        }
+    }
+
+    func loadFoundationSessionPresentation(_ dcodeSessionID: String) async -> Bool {
+        guard let client else { return false }
+        isLoadingFoundationSessionPresentation = true
+        defer { isLoadingFoundationSessionPresentation = false }
+        do {
+            let presentation: FoundationDCodeSessionPresentation = try await client.request(
+                "dcodeSession.presentation",
+                params: ["dcodeSessionId": .string(dcodeSessionID)]
+            )
+            guard presentation.dcodeSession.id == dcodeSessionID else { return false }
+            foundationSessionPresentation = presentation
+            return true
+        } catch {
+            if foundationSessionPresentation?.dcodeSession.id == dcodeSessionID {
+                foundationSessionPresentation = nil
+            }
+            present(error, title: "任务会话暂时无法读取")
+            return false
+        }
+    }
+
+    @discardableResult
+    func promptFoundationDCodeSession(
+        dcodeSessionID: String,
+        message: String
+    ) async -> Bool {
+        guard let client else { return false }
+        do {
+            let _: FoundationDCodeSessionPromptResult = try await client.request(
+                "dcodeSession.prompt",
+                params: [
+                    "dcodeSessionId": .string(dcodeSessionID),
+                    "promptId": .string(UUID().uuidString),
+                    "message": .string(message),
+                ]
+            )
+            await reloadFoundation()
+            _ = await loadFoundationSessionPresentation(dcodeSessionID)
+            return true
+        } catch {
+            present(error, title: "任务消息未能提交")
+            return false
+        }
+    }
+
+    /// Persist only the small task-workbench object selection state. The Product
+    /// Store owns it under ~/.dcode; no session text or artifact body crosses
+    /// this boundary.
+    @discardableResult
+    func patchFoundationTaskWorkbenchViewState(
+        expectedViewStateRevision: Int,
+        patch: [String: JSONValue]
+    ) async -> FoundationTaskWorkbenchViewStateMutation? {
+        guard let client, let snapshot = foundationSnapshot else { return nil }
+        do {
+            let params: [String: JSONValue] = [
+                "requestId": .string(UUID().uuidString),
+                "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                "expectedViewStateRevision": .number(Double(expectedViewStateRevision)),
+                "patch": .object(patch),
+            ]
+            let mutation: FoundationTaskWorkbenchViewStateMutation = try await client.request(
+                "taskWorkbenchViewState.patch",
+                params: params
+            )
+            await reloadFoundation()
+            return mutation
+        } catch {
+            // View selection is safe to retry from the next Foundation snapshot;
+            // do not turn a benign stale preference write into a global alert.
+            await reloadFoundation()
+            return nil
+        }
+    }
+
+    @discardableResult
+    func saveFoundationDCodeSessionComposerDraft(
+        taskID: String,
+        dcodeSessionID: String,
+        text: String
+    ) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationComposerDraftMutation = try await client.request(
+                "dcodeSession.composerDraft.set",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "taskId": .string(taskID),
+                    "dcodeSessionId": .string(dcodeSessionID),
+                    "text": .string(text),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            // Draft persistence must never overwrite or erase the in-memory text
+            // after a transient Store conflict or credential-boundary rejection.
+            return false
         }
     }
 
@@ -1080,7 +1187,6 @@ final class AppModel {
             let client,
             let snapshot = foundationSnapshot,
             let task = snapshot.tasks.first(where: { $0.id == agentRun.taskId }),
-            let teamRunId = agentRun.teamRunId,
             let sessionRun = snapshot.sessionRuns.last(where: {
                 $0.taskId == agentRun.taskId
                     && $0.sessionId == agentRun.sessionId
@@ -1091,19 +1197,23 @@ final class AppModel {
             return
         }
         do {
+            let teamRunID = agentRun.teamRunId ?? snapshot.teamRuns.last(where: {
+                $0.taskId == agentRun.taskId && $0.coordinatorAgentRunId == agentRun.id
+            })?.id
+            var params: [String: JSONValue] = [
+                "requestId": .string(UUID().uuidString),
+                "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                "runtimeId": .string(sessionRun.runtimeId),
+                "scope": task.scope.jsonValue,
+                "taskId": .string(agentRun.taskId),
+                "agentRunId": .string(agentRun.id),
+                "sessionRunId": .string(sessionRun.id),
+                "expectedAgentRunRevision": .number(Double(agentRun.revision)),
+            ]
+            if let teamRunID { params["teamRunId"] = .string(teamRunID) }
             let result: FoundationAgentStopResult = try await client.request(
                 "agentRun.stop",
-                params: [
-                    "requestId": .string(UUID().uuidString),
-                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
-                    "runtimeId": .string(sessionRun.runtimeId),
-                    "scope": task.scope.jsonValue,
-                    "taskId": .string(agentRun.taskId),
-                    "teamRunId": .string(teamRunId),
-                    "agentRunId": .string(agentRun.id),
-                    "sessionRunId": .string(sessionRun.id),
-                    "expectedAgentRunRevision": .number(Double(agentRun.revision)),
-                ]
+                params: params
             )
             await reloadFoundation()
             if !result.stopped {
@@ -1124,28 +1234,31 @@ final class AppModel {
         guard
             let client,
             let snapshot = foundationSnapshot,
-            let task = snapshot.tasks.first(where: { $0.id == request.taskId }),
-            let teamRunId = request.teamRunId
+            let task = snapshot.tasks.first(where: { $0.id == request.taskId })
         else { return false }
         do {
+            let teamRunID = request.teamRunId ?? snapshot.teamRuns.last(where: {
+                $0.taskId == request.taskId && $0.coordinatorAgentRunId == request.agentRunId
+            })?.id
+            var params: [String: JSONValue] = [
+                "requestId": .string(UUID().uuidString),
+                "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                "runtimeId": .string(request.runtimeId),
+                "scope": task.scope.jsonValue,
+                "taskId": .string(request.taskId),
+                "agentRunId": .string(request.agentRunId),
+                "sessionRunId": .string(request.sessionRunId),
+                "agentRequestId": .string(request.id),
+                "expectedRequestRevision": .number(Double(request.revision)),
+                "answer": .object([
+                    "kind": .string("choice"),
+                    "optionId": .string(option.id),
+                ]),
+            ]
+            if let teamRunID { params["teamRunId"] = .string(teamRunID) }
             let _: JSONValue = try await client.request(
                 "agentRequest.answer",
-                params: [
-                    "requestId": .string(UUID().uuidString),
-                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
-                    "runtimeId": .string(request.runtimeId),
-                    "scope": task.scope.jsonValue,
-                    "taskId": .string(request.taskId),
-                    "teamRunId": .string(teamRunId),
-                    "agentRunId": .string(request.agentRunId),
-                    "sessionRunId": .string(request.sessionRunId),
-                    "agentRequestId": .string(request.id),
-                    "expectedRequestRevision": .number(Double(request.revision)),
-                    "answer": .object([
-                        "kind": .string("choice"),
-                        "optionId": .string(option.id),
-                    ]),
-                ]
+                params: params
             )
             await reloadFoundation()
             return true

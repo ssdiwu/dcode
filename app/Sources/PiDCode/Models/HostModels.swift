@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.28"
+    static let appVersion = "0.0.29"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -55,6 +55,9 @@ enum HostCompatibility {
         "productStore",
         "nativeTasks",
         "foundationSnapshot",
+        "dcodeModelCatalog",
+        "taskWorkbenchViewState",
+        "dcodeSessionPresentation",
         "piSessionImport",
         "sessionPathFacts",
         "multiRuntime",

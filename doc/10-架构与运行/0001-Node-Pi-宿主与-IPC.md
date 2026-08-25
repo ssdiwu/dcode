@@ -101,8 +101,9 @@ open "dist/D Code.app"
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
-| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence、Runtime Binding、Model Catalog、Credential Reference 与未来 Runtime Model Selection 投影；Prompt Receipt 只返回路径 / hash / 字节数和 Imported History Receipt 元数据，并在单次快照内复用当前文件读取，派生 `current_match` / `hash_mismatch` / `historical_unavailable` 状态，不返回历史 Prompt、导入历史正文或项目正文 |
+| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence、Runtime Binding、Model Catalog、Credential Reference、未来 Runtime Model Selection 与 Task Workbench Presentation 投影；Prompt Receipt 只返回路径 / hash / 字节数和 Imported History Receipt 元数据，并在单次快照内复用当前文件读取，派生 `current_match` / `hash_mismatch` / `historical_unavailable` 状态，不返回历史 Prompt、导入历史正文或项目正文 |
 | `runtimeModelSelection.set` | 以 request ID 与 expected Store revision 选择下一次 D Code Runtime 的 Provider / Model；只写 Product Store，不回写 Pi `settings.json` 或历史 Run |
+| `taskWorkbenchViewState.patch` | 以 request ID、Store revision 与 View State revision 对 Task / Session 选择、HUD 分区或 Inspector 对象作局部 patch；所有 ID 必须属于同一选中 Task，状态只保存身份而不保存会话正文、Prompt 或 Artifact 内容 |
 | `dcodeSession.presentation`、`dcodeSession.prompt` | 前者按 D Code Session ID 返回受控的只读 binding / Runtime / Adapter 快照；后者只为 Coordination Session 自动建立精确 Runtime，或把消息路由到已活动的指定 Child Runtime，绝不按标题、cwd 或全局 active Session 猜目标 |
 | `project.create`、`task.create`、`task.acceptance` | 以 request ID、expected revision 和精确 User / Project Scope 创建或验收 D Code 原生对象 |
 | `agentProfile.create`、`agentProfile.update` | 创建自定义 Profile 或版本化修改内建 / 自定义 Profile；已启动 Agent Run 保留启动快照 |
@@ -181,14 +182,13 @@ open "dist/D Code.app"
 
 `host.hello.capabilities.preSessionModelSelection=true` 表示 `session.getModels` 可以在没有活动 Pi Session 时接受一个规范工作目录，使用 Pi 的 `auth.json`、`models.json` 与该目录生效的 `settings.json` 组合本机可用模型快照，再按 `enabledModels` 的精确 / 通配规则解析 Composer 选择范围；仅登记、已认证但未启用的模型不会进入结果，并仅在精确默认 Provider / Model 同时位于该范围时返回 `defaultModel`。同一过滤合同也用于已有 Session 的模型选择菜单，但不会改写该 Session 当前或历史模型事实。结果还公开 Pi 的可选默认 thinking level，以及从真实模型元数据和 D Code Fast Mode 合同推导的 thinking levels / `fastModeSupported`；它们不构成第二份模型配置。该查询不进行网络目录刷新，不返回或复制凭据，也不修改 Pi 设置；App 没有范围内精确默认项时必须让用户显式选择，并在第一条 Prompt 前通过已有 `session.setModel`、`session.setThinking` 与 `session.setFastMode` 写入新 Session。全局模型设置与自定义 Provider 管理使用各自的独立方法组，不改变这项会话前选择能力的边界。
 
-## Pi 模型设置边界
+## D Code 模型与凭据边界
 
-`host.hello.capabilities.modelSettings=true` 表示 Host 提供认证后目录的安全投影与全局选择设置写入，而不是把 Pi 模型配置复制成 D Code 私有数据库；`modelAuthentication=true` 表示可以通过 Pi 原生认证合同关联 Provider。
+`host.hello.capabilities.dcodeModelCatalog=true` 表示 Host 将非敏感 Provider / Model 目录、Credential Reference（凭据安全引用）与 future Runtime Model Selection（未来运行模型选择）投影到 D Code Product Store。每次 D Code Runtime 启动前必须以 Store 选择、目录和已配置安全引用验证模型，并显式设置模型；Pi `settings.json`、`models.json` 与 `auth.json` 只服务受控发现或外部认证桥状态，不是产品权威。
 
-- `modelSettings.get` 创建缓存优先、`allowModelNetwork=false` 的 Pi `ModelRuntime`；首次进入设置不隐式访问网络。`modelSettings.refresh` 才以用户动作允许网络并设置 12 秒中止边界，单个 Provider 失败保留其他目录，整体失败或离线也继续返回本地可辨认快照。
-- 模型快照 Wire 只返回 Provider / Model 安全元数据、认证是否已配置及认证来源类型、缓存时间、启用规则、匹配关系与设置读取问题；未认证 Provider 的模型数组为空。认证步骤中的 API Key / Provider 配置值只短暂经过 `modelAuth.respond`，Protocol 严格限长，Host 不发事件、不回显、不写日志，错误统一脱敏；Provider 产生的 prompt / progress 文案进入界面前也会限长并再次脱敏。OAuth token 与认证文件正文始终不进入 Swift，D Code 不建立凭据资料。
-- 全局写入先由 Pi `SettingsManager` 读取并确认没有 global error，再使用其 setter 与 `flush()` 锁内合并；损坏或不可读的全局文件原字节保留。默认模型还必须真实存在、已认证且位于全局启用范围。
-- 当前 `cwd` 的 `.pi/settings.json` 只用于计算 effective scope 与解释覆盖来源；`0.0.7` 不写项目设置。更改全局值只影响后续选择和新会话，不改当前 / 历史 Session 的模型事实。
+- `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` 只保留旧 Pi 目录的安全只读诊断 / 迁入来源；其中不得返回 API Key、OAuth token 或认证文件正文。
+- `modelProviders.save / remove`、`modelSettings.setEnabledModels / setDefaultModel` 与 `modelAuth.start / respond / cancel` 均被 Host 明确拒绝。D Code 不通过 IPC 新建 Pi 认证流程，也不把凭据正文交给 Pi。
+- `runtimeModelSelection.set` 只写入 Product Store 的安全、版本化选择；Pi Runtime Adapter 在实际 Run 边界读取该选择，不回写 Pi 默认配置或历史 Run。
 
 Swift 将尚未呈现的最新稳定完成身份原子保存到 `~/Library/Application Support/D Code/activity-attention-v1.json`；资料版本化、有界且只含 Session / Run / Completion / Entry 身份、完成时间与可选查看时间，不保存正文、Thinking、工具结果或凭据。Activity View 仍从可见 Pi Session 与 Host Run State 重建；关注资料不是第二套会话数据库，旧结果也不能清除同一 Session 的更新完成身份。
 

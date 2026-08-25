@@ -2,6 +2,9 @@
 
 ### Added
 
+- `0.0.29` Task Workbench（任务工作台）：Project / Task 导航以 Task 主行直接进入协调者任务对话，展开后只列 Child Session；Project 内和当前 Project 语境的新建 Task 都有明确入口，Pi 导入显式选择加入项目或不归入项目。
+- Task HUD（任务浮层）与对象内容区：宽屏以 `304 pt` 独立圆角浮窗停在右上 gutter（留白区），中央对话与 Composer 预留安全区；中宽才覆盖、紧凑初始只保留入口。Artifact / Report 先在中央内容区打开，再按需进入 Information Inspector（信息检查器）；Inspector 打开时 HUD 让出并在关闭后恢复。
+- Task Workbench Presentation（任务工作台呈现状态）：当前 Task / Session、HUD 分区和 Inspector 目标以受类型、revision（修订号）和 idempotency（幂等）保护的 Product Store 记录持久化在 `~/.dcode/`，不再写入 `UserDefaults（应用偏好）`，不保存会话正文、Prompt 或 Artifact 内容；未提交的当前任务会话草稿则复用 Product Store Composer Draft（输入草稿）记录恢复，不随 UI 状态字段混写。
 - `0.0.28` Foundation Candidate（基础候选）：以当前用户 `~/.dcode/` 中的版本化 Product Store（产品数据库）原生持久化 User / Project Scope、Task、D Code Session / Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence；首次晋升使用单写入租约、原子迁移、schema fingerprint、revision 和 durable request ID，未知或损坏状态失败关闭。
 - Pi Session 单向导入：D Code 已管理的旧会话在首次晋升时自动转换为 Legacy Task；其他 Pi Session 只有经 Foundation Console（基础控制台）预览、选择 Scope 并确认后才原子导入，保留 source digest / provenance / unknown lineage，不修改或双写源 JSONL。
 - 多 Runtime Supervisor（运行时监督器）：同一 Task 可同时拥有 Coordinator 与多个独立 Pi AgentSession；Coordinator 先规划、两个只读成员 Provider 请求真实并行、成员 Report 落库后再由同一 Coordination Session 综合。Agent Request 可耐久等待和恢复，单成员 Stop 先写 Attempt 再执行，Provider / Tool / Stop 结果未知时禁止自动重放。
@@ -16,7 +19,7 @@
 
 ### Changed
 
-- App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.28`；`0.0.27` 起动候选与新 Product Store schema 明确不支持降级混用。
+- App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.29`；`0.0.27` 起动候选与 `0.0.28` Product Store schema 明确不支持降级混用。
 - Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
 - Pi `models.json` / `settings.json` 的 D Code 写入口、Pi 认证启动与认证响应全部改为明确拒绝；Swift 不再将 Provider API Key 或认证值通过 Host IPC 发送，旧 Pi 模型接口只保留安全只读诊断 / 迁入来源。
 

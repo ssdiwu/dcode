@@ -129,7 +129,7 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 
 ## 6. 当前布局
 
-工作台只使用三种栏位术语：左侧称 Session Sidebar（会话栏），中央称 Main Workspace（主工作区），右侧称 Information Inspector（信息检查器）。Settings（设置）、Archived Sessions（已归档会话）等“页面”只能在主工作区内切换；会话栏负责导航，信息检查器负责补充事实，二者都不是页面容器。源码中的 `WorkInspector` 仍是既有内部类型名，不作为用户文案。
+工作台只使用三种栏位术语：左侧称 Navigation Sidebar（导航栏；当前源码仍称 Session Sidebar），中央称 Main Workspace（主工作区），右侧称 Information Inspector（信息检查器）。Settings（设置）、Archived Sessions（已归档会话）等“页面”只能在主工作区内切换；导航栏负责导航，信息检查器负责补充事实，二者都不是页面容器。源码中的 `WorkInspector` 仍是既有内部类型名，不作为用户文案。
 
 - 默认窗口 `1360 × 860pt`，最小 `640 × 620pt`。
 - 会话栏与信息检查器默认均为 `400pt`，可在 `400–520pt` 内调整；左栏为 Project 名称、行内动作与后续 Activity View 保留稳定宽度，右栏保证完整 Session ID 在标准字号下保持单行。旧于该下限的已保存栏宽在布局时自动校准。宽度本机保存，拖动内侧边缘、双击恢复默认。该边缘只是透明命中区：常态、Hover（悬停）、拖动与键盘聚焦都不显示竖线、胶囊或系统蓝色焦点框，只通过水平调宽光标表达可拖动性。
@@ -144,19 +144,20 @@ SF Symbols 的自然宽高和 optical metrics（视觉度量）不同；规范�
 
 ## 7. 当前组件规则
 
-### 7.1 Session Sidebar（会话栏）
+### 7.1 Navigation Sidebar（导航栏；当前源码仍称 Session Sidebar）
 
-- Recent 只显示 D Code 来源会话并按需分页；Project 只投影已登记项目目录精确匹配的会话。
-- 已置顶会话集中在会话栏所有普通会话列表之前的全局“置顶”区域，并从 Recent 与 Project 普通列表去重；同一稳定 Session ID 始终使用同一置顶与归档状态。
-- Recent、Project 与全局置顶区域复用同一个 `SessionNavigationItem`。普通行尾部常显右对齐的相对更新时间（caption、tertiary、monospaced digits）；时间是扫视排序的核心线索，不藏进 Hover。完整标题、Project、项目目录、完整 `cwd` 与当前 Git 分支仍通过行级 Hover / keyboard focus 的非模态详情呈现。分支只描述当前工作目录，不表示 Session 历史分支。
-- 会话栏动词行（“新建会话”“新建项目”）与正文行共用 `36pt` 行高；动词行行尾常显快捷键提示（如 `⌘N`，caption2 等宽、tertiary 色），不藏进菜单。
-- Window control band、会话栏身份行、“新建项目”、Project 和 Session 导航行统一使用 `36pt` 行高；紧凑图标动作仍是 `32pt` 目标，不得为了填满行高放大 glyph 或 surface。
+- 日常导航只显示两种工作对象分区：「项目」与「任务」。每个 Project 行下显示它拥有的 Task；未选择 Project 的 Task 直接显示在「任务」分区。不得显示“User Home”“User Scope”“个人任务区”“未选项目”或用户主目录作为可进入的中间容器。
+- Task 行是任务对话的主入口；选中后直接进入该 Task 的当前状态、任务对话、计划、工作清单、Agent Run、产物与证据。协调者活在任务对话中，不另设协调会话行；展开 Task 时才显示实际启动的 Child Agent Session 与必要的其他 Task Session。
+- 「新建任务」与「新建项目」是导航动作，不是第三种对象分区。当前选择 Project 时，“新建任务”进入该 Project；没有选择 Project 时，创建的 Task 直接进入「任务」分区。
+- 置顶、最近、活动、搜索、归档与设置是功能入口或投影视图，不成为第三种工作对象分区；从这些入口打开 Task 或 Session 时，必须能回到其所属 Project 或「任务」分区的 Task 行。
+- Project 与 Task 导航行复用同一行级选择、相对时间、Hover、键盘焦点、置顶与归档几何；Task 的归属差异不得改变行高、可达动作或任务对话入口。完整标题、Project、项目目录、完整 `cwd` 与当前 Git 分支仍通过行级 Hover / keyboard focus 的非模态详情呈现。分支只描述当前工作目录，不表示 Session 历史分支。
+- 导航动词行（“新建任务”“新建项目”）与正文行共用 `36pt` 行高；动词行行尾常显快捷键提示（如 `⌘N`，caption2 等宽、tertiary 色），不藏进菜单。Window control band、导航栏身份行、“新建任务”、“新建项目”、Project 和 Task 导航行统一使用 `36pt` 行高；紧凑图标动作仍是 `32pt` 目标，不得为了填满行高放大 glyph 或 surface。
 - row 的文字区与尾部槽位分离。尾部为 `64pt` 双用途槽位：静止时右对齐显示相对更新时间；Hover / keyboard focus 时时间淡出（保留占位），置顶与归档两个 `32 × 32pt` sibling 按钮在同一槽位翻出覆盖。标题截断边界保持在槽位之前，任何状态不与按钮或时间重叠。
 - 外层保留 `8pt` 水平 padding；文字与圆角边缘不得贴边。标题和 metadata 始终保留自己的稳定起点。
 - Hover 使用低强度中性圆角面；Selected 使用更强的持久中性面；Keyboard focus 使用 accent outline。三者切换不得改变 row 高度、标题位置或 action rail。
 - Hover / focus 显示 pin 与 archive；全局置顶区中的 `pin.fill` 常显。Context menu 与 Session header menu 提供等价操作。
 - Archive 是可恢复的 D Code 可见性操作，不修改 Pi JSONL；Trash 只适用于符合安全条件的空 D Code Session。
-- 设置与归档管理都不占用日常会话导航。齿轮和 `Command-,` 进入当前窗口内的 Settings 工具页面；该页面临时使用完整工作台画布，以继承会话栏实际宽度的页内设置导航组织“模型 / 本机资源 / 自定义供应商 / 通知 / 外观 / 工作台 / 已归档会话 / 自进化 / Host 诊断 / 关于 D Code”，右侧正文限制为约 `780pt`，使用少量语义分组与整行控件，而不是一张铺满窗口的表或卡片瀑布。设置页内拖动左侧边缘会更新全局共享宽度，返回 Workspace 后会话栏立即采用同一宽度。进入设置期间隐藏日常会话栏和信息检查器，但只暂时让出空间，不改写它们的显示偏好；返回 Workspace 后恢复。已归档会话复用同一设置外壳与页内导航，不得叠加 Sheet、卡片式弹窗或第二窗口。“关于 D Code”也复用该外壳，集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub，不为静态身份资料新开窗口。
+- 设置与归档管理都不占用日常会话导航。齿轮和 `Command-,` 进入当前窗口内的 Settings 工具页面；该页面临时使用完整工作台画布，以继承会话栏实际宽度的页内设置导航组织“模型 / 本机资源 / 智能体档案 / 自定义供应商 / 通知 / 外观 / 工作台 / 已归档会话 / 自进化 / Host 诊断 / 关于 D Code”，右侧正文限制为约 `780pt`，使用少量语义分组与整行控件，而不是一张铺满窗口的表或卡片瀑布。智能体档案是可复用配置，不能在日常导航中另占工作对象分区。设置页内拖动左侧边缘会更新全局共享宽度，返回 Workspace 后会话栏立即采用同一宽度。进入设置期间隐藏日常会话栏和信息检查器，但只暂时让出空间，不改写它们的显示偏好；返回 Workspace 后恢复。已归档会话复用同一设置外壳与页内导航，不得叠加 Sheet、卡片式弹窗或第二窗口。“关于 D Code”也复用该外壳，集中显示 App 图标、版本 / 构建号、作者 GitHub 与项目 GitHub，不为静态身份资料新开窗口。
 - 自构建页按 Source Checkout（源码 checkout）→ Verification（自动门禁）→ Candidate（候选）→ Active Build（当前构建）四段呈现。源码根必须显示真实路径与可操作错误；脏工作树使用橙色“仅本机 / 不可分发”，但不以警告重量压过测试失败。Swift / Host 门禁逐项显示命令、结果与耗时，失败输出按需展开；候选卡集中显示 App / Host 版本、签名、revision、digest 和来源状态，重启仍是显式确认动作。
 - `0.0.27` 起设置导航使用“自进化”，首组固定显示本次回执、Assurance、当前状态、Local-only 边界与唯一下一动作；候选就绪、阻塞、恢复和人工验收的主动作在 `1280 × 800` 首屏可见。Source Checkout、门禁、签名和事件时间线属于按需证据详情，不得再次把“重启”埋到长候选清单底部。Bootstrap 持续显示“恢复后补建、不计入完整循环”，Full Receipt 只在人工验收后显示 `1/3`；恢复后的原 Session 只增加一条可进入回执的轻量状态条，不建立第二个常驻 Dock。
 

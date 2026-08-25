@@ -10,7 +10,7 @@
 
 D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能力配置，通过 Runtime Adapter 使用 Pi SDK 等 Agent Runtime；Pi JSONL 只作为可选择的单向导入来源。难逆转边界见 [ADR 0037](doc/决策档案/0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md)。
 
-当前 checkout 的 App / Host manifest 已进入 `0.0.28` 实现候选：Product Store 位于当前用户 `~/.dcode/`，Task 必属 User Scope 或 Project Scope；一个 Task 可同时运行 Coordinator 与多个独立 Pi AgentSession，D Code 自有 Prompt / Tool Manifest、Raw / Effective Input、Operation Attempt、Agent Request、显式 Pi 导入和 Foundation Console 已接通。`v0.0.27` 仍是已发布源码基线；当前候选已生成不可分发的 ad-hoc Local Dirty Candidate（本地脏工作树候选），尚未 tag、发布或完成原生人工验收，精确状态见[版本实施方案](doc/40-版本实施方案/README.md)。
+当前 checkout 的 App / Host manifest 为 `0.0.29` Implementation Candidate（实现候选）：`0.0.28` 的 Product Store、Task / Session / Run、多 Runtime、D Code Prompt / Tool Manifest、Raw / Effective Input、显式 Pi 导入与模型选择基础设施，已被 Project → Task → 协调者任务对话、Child Session、Task HUD（任务浮层）、中间交付物内容区和按需 Information Inspector（信息检查器）消费。产品数据与 Task Workbench（任务工作台）的恢复状态归当前用户 `~/.dcode/`；Pi JSONL 不双写。`v0.0.27` 仍是已发布源码基线；当前候选尚未 tag、发布或完成原生人工验收，精确状态见[版本实施方案](doc/40-版本实施方案/README.md)。
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 

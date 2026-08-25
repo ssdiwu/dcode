@@ -35,10 +35,10 @@
 - 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，Host 不另建产品队列；
 - 运行中可在 Host Run State 仍为 `running` 时使用 Pi 原生 steer 介入下一安全模型边界；它不替换 Run ID，也不伪装成立即中止工具；
 - `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
-- 模型设置主目录只投影已认证 Provider 的模型；未认证 Provider 通过独立认证桥调用 Pi `ModelRuntime.login`，支持 API Key / OAuth prompt、浏览器链接、设备代码、取消与脱敏错误，凭据只由 Pi 持久化；
+- D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，API Key、OAuth 值和认证响应不经 D Code IPC；
 - 投影 Pi `resourceLoader` 真实加载的 Extension、Skill、Prompt 与 Command，按 Pi `SettingsManager.setPackages` 修改扩展包启停并热重载；D Code 自有隐藏扩展不进入用户清单；
 - 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade；当前生产合同只确认 `changes` / `lineage`，`evidence` / `project` 的 Swift 存储兼容缺口见 [0.0.15 PRD](../doc/40-版本实施方案/0016-0.0.15-界面即上下文与本机资源产品需求.md)；
-- 提供 `modelProviders.list / save / remove` 管理 Pi `models.json` 自定义供应商：候选文件经结构检查与 Pi `ModelConfig` 校验后原子替换。该界面的嵌套 header 脱敏、删除后目录刷新与并发写入边界尚未收口，见 [0.0.16 PRD](../doc/40-版本实施方案/0017-0.0.16-自定义模型供应商与一次性资源调用产品需求.md)；
+- `modelProviders.save / remove`、`modelSettings.set*` 与 `modelAuth.*` 是保留给旧 Protocol 的显式拒绝入口；D Code 不再改写 Pi `models.json` / `settings.json`，也不接受任何凭据正文或 Pi 认证响应；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
 - SIGINT 与 SIGTERM 同走 graceful shutdown（清理活动会话、尾行合法 JSON、中断态如实报 `phase=unknown`，退出码均为 143）；
@@ -75,10 +75,10 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/dcode-facts.ts`：在同一 Agent Loop 注册 D Code 独有事实的只读工具 facade。
 - `src/resource-policy.ts`：在 Extension Factory（扩展工厂）执行前排除外部 `pi-dfast`，其余启用扩展仍交由固定 Pi SDK 加载。
 - `src/resources.ts`：Pi 本机资源加载快照、扩展包启停影子清单与热重载。
-- `src/model-providers.ts`：Pi `models.json` 自定义供应商的投影、校验、合并与原子替换；嵌套 header 脱敏仍有已知缺口。
+- `src/model-providers.ts`：旧 Pi `models.json` 自定义供应商适配 / 只读发现逻辑；D Code 产品路径不调用其写入入口。
 - `src/session-lease.ts`：会话租约、静默检查和外部写入检测。
 - `src/extension-ui.ts`：标准结构化扩展 UI，以及 TUI 能力的显式 unsupported 边界。
-- `src/model-auth.ts`：Pi Provider 认证 prompt / event 的有界原生桥与旁路响应生命周期。
+- `src/model-auth.ts`：旧 Pi Provider 认证桥；D Code 产品 IPC 显式拒绝认证交互和认证正文。
 - `src/pi-host.ts`：Pi SDK 会话生命周期与协议动作。
 - `src/index.ts`：stdin/stdout Host 进程入口。
 - `test/`：只使用临时写入范围的公开行为测试。

@@ -106,6 +106,42 @@ export interface RuntimeModelSelectionRecord {
   revision: number;
 }
 
+export type TaskWorkbenchInspectorTarget =
+  | { kind: "artifact"; id: string }
+  | { kind: "evidence"; id: string }
+  | { kind: "report"; id: string }
+  | { kind: "context"; id: string };
+
+/**
+ * A small, credential-free view preference that belongs to the D Code Product
+ * Store rather than the App sandbox. It restores object identity only — never
+ * transcript, prompt, artifact, or any other content body.
+ */
+export interface TaskWorkbenchViewStateRecord {
+  version: 1;
+  selection: { taskId: string | null; sessionId: string | null };
+  expandedHudSections: string[];
+  inspectorTarget: TaskWorkbenchInspectorTarget | null;
+  revision: number;
+}
+
+export interface TaskWorkbenchViewStatePatch {
+  selection?: { taskId: string | null; sessionId: string | null };
+  expandedHudSections?: string[];
+  inspectorTarget?: TaskWorkbenchInspectorTarget | null;
+}
+
+export interface ComposerDraftRecord {
+  id: string;
+  taskId?: string;
+  sessionId?: string;
+  draftKind: "new_task" | "session_path";
+  text: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RuntimeModelCatalogProviderInput {
   id: string;
   name: string;
@@ -400,6 +436,8 @@ export interface AgentRunRecord {
   profileId: string;
   profileSnapshot: unknown;
   role: string;
+  modelProvider?: string;
+  modelId?: string;
   status: string;
   revision: number;
 }
@@ -589,11 +627,13 @@ export interface FoundationSnapshot {
   modelCatalogEntries: ModelCatalogEntryRecord[];
   credentialReferences: CredentialReferenceRecord[];
   runtimeModelSelection?: RuntimeModelSelectionRecord;
+  taskWorkbenchViewState: TaskWorkbenchViewStateRecord;
   agentProfiles: AgentProfileRecord[];
   tasks: TaskRecord[];
   taskContextSets: TaskContextSetRecord[];
   taskPlans: TaskPlanRecord[];
   taskWorkItems: TaskWorkItemRecord[];
+  composerDrafts: ComposerDraftRecord[];
   sessions: DCodeSessionRecord[];
   sessionPaths: SessionPathRecord[];
   sessionProvenance: SessionProvenanceRecord[];
@@ -760,6 +800,115 @@ function parseStringArray(value: unknown, field: string): string[] {
     throw new ProductStoreError("INVALID_ARGUMENT", `${field} must be an array of strings up to 2000 characters`);
   }
   return [...value];
+}
+
+const TASK_WORKBENCH_HUD_SECTIONS = new Set(["progress", "team", "waiting", "deliverables"]);
+const DEFAULT_TASK_WORKBENCH_HUD_SECTIONS = [...TASK_WORKBENCH_HUD_SECTIONS].sort();
+const TASK_WORKBENCH_INSPECTOR_KINDS = new Set(["artifact", "evidence", "report", "context"]);
+
+function normalizedTaskWorkbenchInspectorTarget(value: unknown): TaskWorkbenchInspectorTarget | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench inspectorTarget must be an object or null");
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 2 || !TASK_WORKBENCH_INSPECTOR_KINDS.has(record.kind as string)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench inspectorTarget is invalid");
+  }
+  const kind = record.kind as TaskWorkbenchInspectorTarget["kind"];
+  const id = requiredCredentialFreeString(record.id, "Task Workbench inspectorTarget.id", 200);
+  return { kind, id } as TaskWorkbenchInspectorTarget;
+}
+
+function normalizedTaskWorkbenchViewState(
+  value: unknown,
+  revision: number,
+): TaskWorkbenchViewStateRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(["version", "selection", "expandedHudSections", "inspectorTarget"]);
+  if (Object.keys(record).some((key) => !allowed.has(key)) || record.version !== 1) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State has an unsupported shape");
+  }
+  if (typeof record.selection !== "object" || record.selection === null || Array.isArray(record.selection)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State selection is invalid");
+  }
+  const selection = record.selection as Record<string, unknown>;
+  if (Object.keys(selection).length !== 2 || !("taskId" in selection) || !("sessionId" in selection)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State selection has an unsupported shape");
+  }
+  const identity = (value: unknown, field: string): string | null => {
+    if (value === null) return null;
+    return requiredCredentialFreeString(value, field, 200);
+  };
+  const taskId = identity(selection.taskId, "Task Workbench View State selection.taskId");
+  const sessionId = identity(selection.sessionId, "Task Workbench View State selection.sessionId");
+  if ((taskId === null) !== (sessionId === null)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State selection must contain both identities or neither");
+  }
+  if (!Array.isArray(record.expandedHudSections) || record.expandedHudSections.length > TASK_WORKBENCH_HUD_SECTIONS.size) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State expandedHudSections is invalid");
+  }
+  const expandedHudSections = [...new Set(record.expandedHudSections.map((section, index) => {
+    const sectionID = requiredCredentialFreeString(section, `Task Workbench View State.expandedHudSections[${index}]`, 40);
+    if (!TASK_WORKBENCH_HUD_SECTIONS.has(sectionID)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State contains an unknown HUD section");
+    }
+    return sectionID;
+  }))].sort();
+  return {
+    version: 1,
+    selection: { taskId, sessionId },
+    expandedHudSections,
+    inspectorTarget: normalizedTaskWorkbenchInspectorTarget(record.inspectorTarget),
+    revision,
+  };
+}
+
+function normalizedTaskWorkbenchViewStatePatch(value: unknown): TaskWorkbenchViewStatePatch {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(["selection", "expandedHudSections", "inspectorTarget"]);
+  if (Object.keys(record).length === 0 || Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch has an unsupported shape");
+  }
+  const patch: TaskWorkbenchViewStatePatch = {};
+  if ("selection" in record) {
+    const selection = record.selection;
+    if (typeof selection !== "object" || selection === null || Array.isArray(selection)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch selection is invalid");
+    }
+    const source = selection as Record<string, unknown>;
+    if (Object.keys(source).length !== 2 || !("taskId" in source) || !("sessionId" in source)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch selection has an unsupported shape");
+    }
+    const identity = (candidate: unknown, field: string): string | null => (
+      candidate === null ? null : requiredCredentialFreeString(candidate, field, 200)
+    );
+    const taskId = identity(source.taskId, "Task Workbench View State patch selection.taskId");
+    const sessionId = identity(source.sessionId, "Task Workbench View State patch selection.sessionId");
+    if ((taskId === null) !== (sessionId === null)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch selection must contain both identities or neither");
+    }
+    patch.selection = { taskId, sessionId };
+  }
+  if ("expandedHudSections" in record) {
+    const state = normalizedTaskWorkbenchViewState({
+      version: 1,
+      selection: { taskId: null, sessionId: null },
+      expandedHudSections: record.expandedHudSections,
+      inspectorTarget: null,
+    }, 0);
+    patch.expandedHudSections = state.expandedHudSections;
+  }
+  if ("inspectorTarget" in record) {
+    patch.inspectorTarget = normalizedTaskWorkbenchInspectorTarget(record.inspectorTarget);
+  }
+  return patch;
 }
 
 function normalizedTaskScope(value: unknown): TaskScope {
@@ -1114,6 +1263,19 @@ function taskWorkItem(row: SQLiteRow): TaskWorkItemRecord {
   };
 }
 
+function composerDraft(row: SQLiteRow): ComposerDraftRecord {
+  return {
+    id: text(row, "id"),
+    ...(typeof row.task_id === "string" ? { taskId: row.task_id } : {}),
+    ...(typeof row.session_id === "string" ? { sessionId: row.session_id } : {}),
+    draftKind: text(row, "draft_kind") as ComposerDraftRecord["draftKind"],
+    text: text(row, "text"),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
 function session(row: SQLiteRow): DCodeSessionRecord {
   return {
     id: text(row, "id"),
@@ -1309,6 +1471,8 @@ function teamRun(row: SQLiteRow): TeamRunRecord {
 
 function agentRun(row: SQLiteRow): AgentRunRecord {
   const teamRunId = typeof row.team_run_id === "string" ? row.team_run_id : undefined;
+  const modelProvider = typeof row.model_provider === "string" ? row.model_provider : undefined;
+  const modelId = typeof row.model_id === "string" ? row.model_id : undefined;
   return {
     id: text(row, "id"),
     taskId: text(row, "task_id"),
@@ -1317,6 +1481,8 @@ function agentRun(row: SQLiteRow): AgentRunRecord {
     profileId: text(row, "profile_id"),
     profileSnapshot: JSON.parse(text(row, "profile_snapshot_json")),
     role: text(row, "role"),
+    ...(modelProvider ? { modelProvider } : {}),
+    ...(modelId ? { modelId } : {}),
     status: text(row, "status"),
     revision: integer(row, "revision"),
   };
@@ -1897,6 +2063,204 @@ export class ProductStore {
     };
   }
 
+  taskWorkbenchViewState(): TaskWorkbenchViewStateRecord {
+    this.assertOpen();
+    const row = this.database.prepare(`
+      SELECT * FROM product_settings WHERE key = 'workbench.taskViewState'
+    `).get() as SQLiteRow | undefined;
+    if (!row) {
+      return {
+        version: 1,
+        selection: { taskId: null, sessionId: null },
+        expandedHudSections: DEFAULT_TASK_WORKBENCH_HUD_SECTIONS,
+        inspectorTarget: null,
+        revision: 0,
+      };
+    }
+    const sourceKind = text(row, "source_kind");
+    if (sourceKind !== "legacy_user_defaults" && sourceKind !== "user") {
+      throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Task Workbench View State has an invalid source kind");
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(text(row, "value_json"));
+    } catch (error) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Task Workbench View State is invalid JSON",
+        { cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    try {
+      return normalizedTaskWorkbenchViewState(value, integer(row, "revision"));
+    } catch (error) {
+      if (error instanceof ProductStoreError) {
+        throw new ProductStoreError("PRODUCT_STORE_CORRUPT", error.message, error.details);
+      }
+      throw error;
+    }
+  }
+
+  async patchTaskWorkbenchViewState(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    expectedViewStateRevision: number;
+    patch: TaskWorkbenchViewStatePatch;
+  }): Promise<{ storeRevision: number; taskWorkbenchViewState: TaskWorkbenchViewStateRecord }> {
+    const patch = normalizedTaskWorkbenchViewStatePatch(input.patch);
+    return await this.mutate(
+      "taskWorkbenchViewState.patch",
+      input.requestId,
+      input.expectedStoreRevision,
+      { expectedViewStateRevision: input.expectedViewStateRevision, patch },
+      (_storeRevision, now) => {
+        const current = this.taskWorkbenchViewState();
+        if (current.revision !== requiredRevision(input.expectedViewStateRevision, "expectedViewStateRevision")) {
+          throw new ProductStoreError(
+            "REVISION_CONFLICT",
+            "The Task Workbench View State changed before this patch could be applied",
+            { expectedViewStateRevision: input.expectedViewStateRevision, currentViewStateRevision: current.revision },
+          );
+        }
+        const state: TaskWorkbenchViewStateRecord = {
+          version: 1,
+          selection: patch.selection ?? current.selection,
+          expandedHudSections: patch.expandedHudSections ?? current.expandedHudSections,
+          inspectorTarget: patch.inspectorTarget === undefined ? current.inspectorTarget : patch.inspectorTarget,
+          revision: current.revision,
+        };
+        this.validateTaskWorkbenchViewStateReferences(state);
+        const existing = this.database.prepare(`
+          SELECT revision FROM product_settings WHERE key = 'workbench.taskViewState'
+        `).get() as SQLiteRow | undefined;
+        const revision = existing ? integer(existing, "revision") + 1 : 1;
+        this.database.prepare(`
+          INSERT INTO product_settings(key, value_json, source_kind, revision, created_at, updated_at)
+          VALUES ('workbench.taskViewState', ?, 'user', ?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            value_json = excluded.value_json,
+            source_kind = 'user',
+            revision = excluded.revision,
+            updated_at = excluded.updated_at
+        `).run(canonicalJSON({
+          version: 1,
+          selection: state.selection,
+          expandedHudSections: state.expandedHudSections,
+          inspectorTarget: state.inspectorTarget,
+        }), revision, now, now);
+        const taskWorkbenchViewState: TaskWorkbenchViewStateRecord = { ...state, revision };
+        return {
+          value: { taskWorkbenchViewState },
+          event: {
+            kind: "taskWorkbenchViewState.updated",
+            entityKind: "taskWorkbenchViewState",
+            entityId: "workbench.taskViewState",
+            payload: { taskWorkbenchViewState },
+          },
+        };
+      },
+    );
+  }
+
+  async setDCodeSessionComposerDraft(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    sessionId: string;
+    text: string;
+  }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const sessionId = requiredString(input.sessionId, "sessionId", 200);
+    if (typeof input.text !== "string" || input.text.length > 200_000) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "D Code Session Composer Draft text must be a string up to 200000 characters");
+    }
+    if (redactCredentialText(input.text).redacted) {
+      throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED", "D Code Session Composer Draft contains credential material");
+    }
+    const textValue = input.text;
+    return await this.mutate<{ composerDraft?: ComposerDraftRecord }>(
+      "dcodeSession.composerDraft.set",
+      input.requestId,
+      input.expectedStoreRevision,
+      { taskId, sessionId, text: textValue },
+      (_storeRevision, now) => {
+        const sessionRow = this.database.prepare(`
+          SELECT id FROM sessions WHERE id = ? AND task_id = ?
+        `).get(sessionId, taskId) as SQLiteRow | undefined;
+        if (!sessionRow) {
+          throw new ProductStoreError("NOT_FOUND", "D Code Session Composer Draft target does not exist", { taskId, sessionId });
+        }
+        const existing = this.database.prepare(`
+          SELECT * FROM composer_drafts
+          WHERE session_id = ? AND draft_kind = 'session_path'
+          ORDER BY updated_at DESC, id DESC LIMIT 1
+        `).get(sessionId) as SQLiteRow | undefined;
+        if (textValue.length === 0) {
+          if (existing) {
+            this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(text(existing, "id"));
+          }
+          return {
+            value: {},
+            event: {
+              kind: "dcodeSession.composerDraft.cleared",
+              entityKind: "composerDraft",
+              entityId: existing ? text(existing, "id") : `composer-draft:${sessionId}`,
+              taskId,
+              payload: { sessionId },
+            },
+          };
+        }
+        const id = existing ? text(existing, "id") : `composer-draft:${sessionId}`;
+        const revision = existing ? integer(existing, "revision") + 1 : 1;
+        if (existing) {
+          this.database.prepare(`
+            UPDATE composer_drafts
+            SET task_id = ?, text = ?, payload_json = ?, revision = ?, updated_at = ?
+            WHERE id = ? AND revision = ?
+          `).run(taskId, textValue, canonicalJSON({ source: "dcode_task_workbench" }), revision, now, id, integer(existing, "revision"));
+        } else {
+          this.database.prepare(`
+            INSERT INTO composer_drafts(
+              id, task_id, session_id, draft_kind, text, payload_json,
+              source_ordinal, revision, created_at, updated_at
+            ) VALUES (?, ?, ?, 'session_path', ?, ?, NULL, 1, ?, ?)
+          `).run(id, taskId, sessionId, textValue, canonicalJSON({ source: "dcode_task_workbench" }), now, now);
+        }
+        const composerDraft: ComposerDraftRecord = {
+          id,
+          taskId,
+          sessionId,
+          draftKind: "session_path",
+          text: textValue,
+          revision,
+          createdAt: existing ? text(existing, "created_at") : now,
+          updatedAt: now,
+        };
+        return {
+          value: { composerDraft },
+          event: {
+            kind: "dcodeSession.composerDraft.saved",
+            entityKind: "composerDraft",
+            entityId: id,
+            taskId,
+            payload: {
+              composerDraft: {
+                id,
+                taskId,
+                sessionId,
+                draftKind: composerDraft.draftKind,
+                revision,
+                createdAt: composerDraft.createdAt,
+                updatedAt: now,
+                textBytes: Buffer.byteLength(textValue, "utf8"),
+              },
+            },
+          },
+        };
+      },
+    );
+  }
+
   async seedRuntimeModelCatalog(input: {
     requestId: string;
     providers: RuntimeModelCatalogProviderInput[];
@@ -2196,6 +2560,7 @@ export class ProductStore {
       this.database.prepare("SELECT * FROM task_context_sets ORDER BY task_id").all() as SQLiteRow[]
     ).map((row) => taskContextSet(row, taskContextSourcesByTask.get(text(row, "task_id")) ?? []));
     const runtimeModelSelection = this.runtimeModelSelection();
+    const taskWorkbenchViewState = this.taskWorkbenchViewState();
     return {
       schemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
       storeRevision: this.metaInteger("store_revision"),
@@ -2212,6 +2577,7 @@ export class ProductStore {
         this.database.prepare("SELECT * FROM credential_references ORDER BY provider_id, id").all() as SQLiteRow[]
       ).map(credentialReference),
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
+      taskWorkbenchViewState,
       agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
       tasks: (this.database.prepare("SELECT * FROM tasks ORDER BY created_at, id").all() as SQLiteRow[]).map(task),
       taskContextSets,
@@ -2221,6 +2587,9 @@ export class ProductStore {
       taskWorkItems: (
         this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
       ).map(taskWorkItem),
+      composerDrafts: (
+        this.database.prepare("SELECT * FROM composer_drafts ORDER BY updated_at, id").all() as SQLiteRow[]
+      ).map(composerDraft),
       sessions: (this.database.prepare("SELECT * FROM sessions ORDER BY created_at, id").all() as SQLiteRow[]).map(session),
       sessionPaths: (
         this.database.prepare("SELECT * FROM session_paths ORDER BY session_id, is_current DESC, id").all() as SQLiteRow[]
@@ -2378,6 +2747,50 @@ export class ProductStore {
         content: entry.content,
       })),
     });
+  }
+
+  private validateTaskWorkbenchViewStateReferences(state: TaskWorkbenchViewStateRecord): void {
+    const { taskId, sessionId } = state.selection;
+    if (taskId === null || sessionId === null) {
+      if (state.inspectorTarget !== null) {
+        throw new ProductStoreError(
+          "INVALID_ARGUMENT",
+          "Task Workbench inspectorTarget requires an active Task selection",
+        );
+      }
+      return;
+    }
+    const taskRow = this.database.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+    if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Task Workbench selected Task does not exist", { taskId });
+    const sessionRow = this.database.prepare(`
+      SELECT id FROM sessions WHERE id = ? AND task_id = ?
+    `).get(sessionId, taskId) as SQLiteRow | undefined;
+    if (!sessionRow) {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "Task Workbench selected Session does not belong to its selected Task",
+        { taskId, sessionId },
+      );
+    }
+    const target = state.inspectorTarget;
+    if (!target) return;
+    const table = target.kind === "artifact"
+      ? "artifacts"
+      : target.kind === "evidence"
+        ? "evidence_records"
+        : target.kind === "report"
+          ? "agent_reports"
+          : "task_context_sources";
+    const targetRow = this.database.prepare(`
+      SELECT id FROM ${table} WHERE id = ? AND task_id = ?
+    `).get(target.id, taskId) as SQLiteRow | undefined;
+    if (!targetRow) {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "Task Workbench inspectorTarget does not belong to its selected Task",
+        { taskId, inspectorTarget: target },
+      );
+    }
   }
 
   private taskForScope(taskId: string, scope: TaskScope): TaskRecord {
@@ -3919,9 +4332,10 @@ export class ProductStore {
           this.database.prepare(`
             UPDATE agent_runs
             SET status = 'running', revision = revision + 1,
+              model_provider = ?, model_id = ?,
               completed_at = NULL, updated_at = ?
             WHERE id = ? AND status IN ('prepared', 'completed')
-          `).run(now, agentRunId);
+          `).run(input.modelProvider ?? null, input.modelId ?? null, now, agentRunId);
         }
         this.database.prepare(`
           INSERT INTO prompt_receipts(
@@ -4885,9 +5299,12 @@ export class ProductStore {
         this.database.prepare(`
           UPDATE agent_requests
           SET status = 'cancelled', answer_json = ?, revision = revision + 1, updated_at = ?
-          WHERE agent_run_id IN (SELECT id FROM agent_runs WHERE team_run_id = ?)
+          WHERE agent_run_id IN (
+            SELECT id FROM agent_runs
+            WHERE team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+          )
             AND status = 'open'
-        `).run(canonicalJSON({ reason }), now, teamRunId);
+        `).run(canonicalJSON({ reason }), now, teamRunId, teamRunId);
         return {
           value: { teamRun: updated },
           event: {
@@ -4955,7 +5372,11 @@ export class ProductStore {
       { taskId, agentRunId, sessionId, sessionRunId, runtimeId, kind, prompt, options },
       (_storeRevision, now) => {
         const run = this.database.prepare(`
-          SELECT g.id, g.team_run_id, g.status AS agent_status, r.status AS session_status
+          SELECT g.id, g.team_run_id,
+            (SELECT id FROM team_runs
+              WHERE coordinator_agent_run_id = g.id AND status IN ('prepared', 'active', 'waiting')
+              ORDER BY created_at DESC, id DESC LIMIT 1) AS coordinator_team_run_id,
+            g.status AS agent_status, r.status AS session_status
           FROM agent_runs g
           JOIN session_runs r ON r.agent_run_id = g.id
           WHERE g.id = ? AND g.task_id = ? AND g.session_id = ?
@@ -4976,10 +5397,15 @@ export class ProductStore {
         if (existingOpen) {
           throw new ProductStoreError("REVISION_CONFLICT", "Agent Run already has an open Agent Request");
         }
+        const resolvedTeamRunId = typeof run.team_run_id === "string"
+          ? run.team_run_id
+          : typeof run.coordinator_team_run_id === "string"
+            ? run.coordinator_team_run_id
+            : undefined;
         const record: AgentRequestRecord = {
           id: `agent-request-${randomUUID()}`,
           taskId,
-          ...(typeof run.team_run_id === "string" ? { teamRunId: run.team_run_id } : {}),
+          ...(resolvedTeamRunId ? { teamRunId: resolvedTeamRunId } : {}),
           agentRunId,
           sessionId,
           sessionRunId,
@@ -5024,16 +5450,17 @@ export class ProductStore {
           UPDATE sessions SET state = 'waiting', revision = revision + 1, updated_at = ?
           WHERE id = ? AND state IN ('idle', 'active')
         `).run(now, sessionId);
-        if (typeof run.team_run_id === "string") {
+        if (resolvedTeamRunId) {
           const stillRunning = this.database.prepare(`
             SELECT COUNT(*) AS count FROM agent_runs
-            WHERE team_run_id = ? AND status IN ('prepared', 'running')
-          `).get(run.team_run_id) as { count?: unknown } | undefined;
+            WHERE (team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
+              AND status IN ('prepared', 'running')
+          `).get(resolvedTeamRunId, resolvedTeamRunId) as { count?: unknown } | undefined;
           if (stillRunning?.count === 0) {
             this.database.prepare(`
               UPDATE team_runs SET status = 'waiting', revision = revision + 1, updated_at = ?
               WHERE id = ? AND status = 'active'
-            `).run(now, run.team_run_id);
+            `).run(now, resolvedTeamRunId);
           }
         }
         return {
@@ -5057,7 +5484,7 @@ export class ProductStore {
     expectedRequestRevision: number;
     taskId: string;
     scope: TaskScope;
-    teamRunId: string;
+    teamRunId?: string;
     agentRunId: string;
     sessionRunId: string;
     runtimeId: string;
@@ -5067,7 +5494,7 @@ export class ProductStore {
     const expectedRequestRevision = requiredRevision(input.expectedRequestRevision, "expectedRequestRevision");
     const taskId = requiredString(input.taskId, "taskId", 200);
     const scope = normalizedTaskScope(input.scope);
-    const teamRunId = requiredString(input.teamRunId, "teamRunId", 200);
+    const teamRunId = input.teamRunId === undefined ? undefined : requiredString(input.teamRunId, "teamRunId", 200);
     const agentRunId = requiredString(input.agentRunId, "agentRunId", 200);
     const sessionRunId = requiredString(input.sessionRunId, "sessionRunId", 200);
     const runtimeId = requiredString(input.runtimeId, "runtimeId", 200);
@@ -5141,21 +5568,19 @@ export class ProductStore {
           UPDATE sessions SET state = 'active', revision = revision + 1, updated_at = ?
           WHERE id = ? AND state = 'waiting'
         `).run(now, previous.sessionId);
-        const team = this.database.prepare(`
-          SELECT team_run_id FROM agent_runs WHERE id = ?
-        `).get(previous.agentRunId) as { team_run_id?: unknown } | undefined;
-        if (typeof team?.team_run_id === "string") {
+        if (previous.teamRunId) {
           const remaining = this.database.prepare(`
             SELECT COUNT(*) AS count
             FROM agent_requests q
             JOIN agent_runs r ON r.id = q.agent_run_id
-            WHERE r.team_run_id = ? AND q.status = 'open'
-          `).get(team.team_run_id) as { count?: unknown } | undefined;
+            WHERE (r.team_run_id = ? OR r.id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
+              AND q.status = 'open'
+          `).get(previous.teamRunId, previous.teamRunId) as { count?: unknown } | undefined;
           if (remaining?.count === 0) {
             this.database.prepare(`
               UPDATE team_runs SET status = 'active', revision = revision + 1, updated_at = ?
               WHERE id = ? AND status = 'waiting'
-            `).run(now, team.team_run_id);
+            `).run(now, previous.teamRunId);
           }
         }
         const updated: AgentRequestRecord = {
@@ -5452,7 +5877,7 @@ export class ProductStore {
     expectedStoreRevision: number;
     scope: TaskScope;
     taskId: string;
-    teamRunId: string;
+    teamRunId?: string;
     agentRunId: string;
     sessionRunId: string;
     runtimeId: string;
@@ -5460,7 +5885,7 @@ export class ProductStore {
   }): Promise<{ storeRevision: number; attemptId: string }> {
     const scope = normalizedTaskScope(input.scope);
     const taskId = requiredString(input.taskId, "taskId", 200);
-    const teamRunId = requiredString(input.teamRunId, "teamRunId", 200);
+    const teamRunId = input.teamRunId === undefined ? undefined : requiredString(input.teamRunId, "teamRunId", 200);
     const agentRunId = requiredString(input.agentRunId, "agentRunId", 200);
     const sessionRunId = requiredString(input.sessionRunId, "sessionRunId", 200);
     const runtimeId = requiredString(input.runtimeId, "runtimeId", 200);
@@ -5481,9 +5906,16 @@ export class ProductStore {
           FROM agent_runs g
           JOIN session_runs r ON r.agent_run_id = g.id
           WHERE g.id = ? AND g.task_id = ?
-            AND (g.team_run_id = ? OR g.id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
+            AND (
+              (? IS NULL AND g.team_run_id IS NULL AND NOT EXISTS(
+                SELECT 1 FROM team_runs standalone WHERE standalone.coordinator_agent_run_id = g.id
+              ))
+              OR (? IS NOT NULL AND (
+                g.team_run_id = ? OR g.id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+              ))
+            )
             AND r.id = ? AND r.runtime_id = ?
-        `).get(agentRunId, taskId, teamRunId, teamRunId, sessionRunId, runtimeId) as SQLiteRow | undefined;
+        `).get(agentRunId, taskId, teamRunId ?? null, teamRunId ?? null, teamRunId ?? null, teamRunId ?? null, sessionRunId, runtimeId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Agent Run stop identity does not exist");
         if (integer(row, "agent_revision") !== expectedAgentRunRevision) {
           throw new ProductStoreError("REVISION_CONFLICT", "Agent Run changed before stop", {
@@ -5516,7 +5948,7 @@ export class ProductStore {
           sessionRunId,
           agentRunId,
           `runtime.abort:${runtimeId}`,
-          `sha256:${payloadHash({ taskId, teamRunId, agentRunId, sessionRunId, runtimeId })}`,
+          `sha256:${payloadHash({ taskId, teamRunId: teamRunId ?? null, agentRunId, sessionRunId, runtimeId })}`,
           now,
           now,
           sessionRunId,
@@ -5528,7 +5960,7 @@ export class ProductStore {
             entityKind: "operationAttempt",
             entityId: attemptId,
             taskId,
-            payload: { attemptId, teamRunId, agentRunId, sessionRunId, runtimeId },
+            payload: { attemptId, ...(teamRunId ? { teamRunId } : {}), agentRunId, sessionRunId, runtimeId },
           },
         };
       },

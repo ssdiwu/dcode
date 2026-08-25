@@ -498,6 +498,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             "preSessionModelSelection": True, "modelSettings": True,
             "sessionSteer": True, "modelAuthentication": True,
             "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
+            "dcodeModelCatalog": True, "taskWorkbenchViewState": True, "dcodeSessionPresentation": True,
             "piSessionImport": True, "sessionPathFacts": True,
             "multiRuntime": True, "runtimeIdentity": True,
             "workspaceIsolation": True, "managedWorkerWorktree": True, "taskContextSelection": True, "taskPlanWorkList": True, "agentRequests": True,
@@ -537,7 +538,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.28", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.29", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":

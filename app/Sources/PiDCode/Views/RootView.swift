@@ -22,7 +22,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if model.isFoundationMode {
-                FoundationConsoleView()
+                TaskWorkbenchView()
             } else {
                 legacyWorkbench
             }
