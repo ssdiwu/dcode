@@ -2,11 +2,20 @@
 
 ## 一句话定位
 
-`host/` 是 `D Code` 的 Node/Pi 运行边界：它通过版本化 JSONL 协议向 Swift App 暴露 Pi 会话，而不是建立第二套会话系统。`@pi-dcode/host` 与 `pi-dcode-host` 继续作为内部兼容标识。
+`host/` 是 `D Code` 的 Product Store、Runtime Supervisor 与 Node/Pi 适配边界：它通过版本化 JSONL 协议向 Swift App 暴露 D Code 原生产品对象和多个 Pi Runtime，不把 Pi JSONL 当作产品权威。`@pi-dcode/host` 与 `pi-dcode-host` 继续作为内部兼容标识。
 
 完整进程、协议与生命周期说明见 [Node/Pi 宿主与 IPC](../doc/10-架构与运行/0001-Node-Pi-宿主与-IPC.md)。
 
 ## 当前能力
+
+- 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
+- 原生拥有 User Scope / Project、Task、Coordination / Child Session、Session Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence 投影；
+- 外部 Pi Session 先预览、再经显式 `piImport.importAsTask` 单向导入；D Code 已管理的旧会话在首次晋升时自动接管，其他 Pi 会话不自动进入产品数据库；
+- Runtime Supervisor 按 Task / Session / Agent Run / Runtime 身份同时维护多个 AgentSession；同一 Session 单写、workspace 写入冲突、12 个活动 Runtime 上限和 shared-read-only 工具证明均在启动前阻断；
+- Team Run 由 Coordinator 先规划，Child Agent Provider 请求真实并行，成员 Report 落库后 Coordinator 再在同一 Coordination Session 综合；成员完成不自动验收 Task；
+- `dcode_request` 原生工具把阻塞决定写成耐久 Agent Request，回答回到同一 Tool Result；回答或停止单个成员均携带完整身份、revision 和预写 Attempt，不影响其他 Runtime；
+- 每个 Provider 请求使用 D Code 自有 System Prompt 与活动工具清单；Effective Input、Session Run、Prompt Receipt 和 Provider Attempt 在请求前同事务持久化，Pi 默认 Prompt 与外部扩展不进入显式 D Code Runtime；
+- Tool Invocation 在执行前创建 Attempt，结果只以 digest 和有界 Evidence 入库；凭据形态在原生输入、导入、请求和 legacy 迁移边界被拒绝、脱敏或省略；
 
 - Protocol v1 的请求、响应和事件信封；
 - 请求参数最小运行时校验与结构化错误；
@@ -49,6 +58,11 @@ npm start -- --agent-dir ~/.pi/agent
 ## 目录
 
 - `src/protocol.ts`：Protocol v1 类型、解析、参数校验和信封构造。
+- `src/product-store.ts` / `src/product-store-schema.ts`：D Code 原生产品数据库、事务、迁移、投影与恢复合同。
+- `src/dcode-data-root.ts` / `src/product-store-lease.ts`：`~/.dcode/` 安全目录与 Product Store 单写入所有权。
+- `src/legacy-migration.ts` / `src/pi-session-import.ts`：旧 D Code 资料晋升与外部 Pi Session 显式单向导入。
+- `src/prompt-assembler.ts`：D Code 身份、环境、一等项目文档来源与活动工具同源组装。
+- `src/agent-request-extension.ts` / `src/operation-attempt-extension.ts`：耐久输入请求与工具执行前置 Attempt。
 - `src/jsonl.ts`：JSONL 解码与有序输出。
 - `src/session-reader.ts`：安全会话扫描、快照和 Active Plan 恢复。
 - `src/session-copy.ts`：完整会话的有界流式校验、隐藏暂存与原子发布。

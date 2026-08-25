@@ -79,7 +79,9 @@ actor PiHostClient: HostProviding {
         process.executableURL = configuration.nodeURL
         process.arguments = configuration.arguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-        process.environment = HostProcessEnvironment.make(agentDirectoryURL: configuration.agentDirectoryURL)
+        var environment = HostProcessEnvironment.make(agentDirectoryURL: configuration.agentDirectoryURL)
+        environment["D_CODE_LEGACY_USER_DEFAULTS_JSON"] = try LegacyUserDefaultsSnapshot.encoded()
+        process.environment = environment
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe

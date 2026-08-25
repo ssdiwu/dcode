@@ -145,7 +145,7 @@ final class SelfBuildTests: XCTestCase {
     private func makeSignedCandidate(
         root: URL,
         manifest: SelfBuildCandidateManifest,
-        version: String = "0.0.27"
+        version: String = "0.0.28"
     ) throws -> URL {
         let bundle = root
             .appending(path: SelfBuildModels.candidateDirectoryName, directoryHint: .isDirectory)
@@ -796,7 +796,7 @@ final class SelfBuildTests: XCTestCase {
         XCTAssertTrue(model.beginRestartPreparation())
         XCTAssertTrue(model.prepareRollbackRestartBeforeSwap(
             kind: .selfEvolutionRollback,
-            targetAppVersion: "0.0.27",
+            targetAppVersion: "0.0.28",
             pendingSessionID: "session-finalize-failure",
             selfEvolutionRunID: nil
         ))
@@ -834,7 +834,7 @@ final class SelfBuildTests: XCTestCase {
         XCTAssertTrue(model.beginRestartPreparation())
         XCTAssertTrue(model.prepareRollbackRestartBeforeSwap(
             kind: .selfEvolutionRollback,
-            targetAppVersion: "0.0.27",
+            targetAppVersion: "0.0.28",
             pendingSessionID: "session-finalized-helper-failure",
             selfEvolutionRunID: nil
         ))
@@ -998,7 +998,7 @@ final class SelfBuildTests: XCTestCase {
         XCTAssertTrue(rollbackModel.beginRestartPreparation())
         XCTAssertTrue(rollbackModel.prepareRollbackRestartBeforeSwap(
             kind: .selfEvolutionRollback,
-            targetAppVersion: "0.0.27",
+            targetAppVersion: "0.0.28",
             pendingSessionID: "session-rollback-helper",
             selfEvolutionRunID: nil
         ))
@@ -1012,6 +1012,28 @@ final class SelfBuildTests: XCTestCase {
         XCTAssertEqual(rollbackBox.loadRequests().count, 1)
         XCTAssertEqual(rollbackBox.loadTerminationCount(), 1)
         XCTAssertEqual(SelfBuildModel.restartIntent(defaults: defaults)?.kind, .selfEvolutionRollback)
+    }
+
+    func testProductStorePromotionRejectsRollbackToZeroPointZeroPointTwentySeven() throws {
+        let root = try sourceRoot("product-store-downgrade-block")
+        try makeActiveBundle(root: root)
+        let model = SelfBuildModel(
+            rootDirectory: root,
+            distDirectory: root.appending(path: "dist", directoryHint: .isDirectory),
+            relaunchHelperPreparer: { _, _ in }
+        )
+        XCTAssertTrue(model.beginRestartPreparation())
+        XCTAssertFalse(model.prepareRollbackRestartBeforeSwap(
+            kind: .ordinary,
+            targetAppVersion: "0.0.27",
+            pendingSessionID: "legacy-session",
+            selfEvolutionRunID: nil
+        ))
+        XCTAssertEqual(
+            model.issue,
+            "Product Store 已晋升到 0.0.28 schema；不支持切换到 0.0.27，最低可运行版本为 0.0.28。"
+        )
+        XCTAssertEqual(model.phase, .failed)
     }
 
 

@@ -43,6 +43,130 @@ test("parseRequest bounds correlation fields", () => {
 });
 
 test("method parameter validation rejects invalid values", () => {
+  assert.doesNotThrow(() => validateMethodParams("foundation.snapshot", { afterEventSequence: 0 }));
+  assert.doesNotThrow(() => validateMethodParams("project.create", {
+    requestId: "project-request",
+    expectedStoreRevision: 0,
+    title: "D Code",
+    directory: "/work/dcode",
+  }));
+  assert.doesNotThrow(() => validateMethodParams("task.create", {
+    requestId: "task-request",
+    expectedStoreRevision: 0,
+    scope: { kind: "user", userId: "current-user" },
+    title: "Native task",
+    goal: "Create the native Task bundle",
+    acceptance: ["Task exists"],
+  }));
+  assert.throws(
+    () => validateMethodParams("task.create", {
+      requestId: "mixed-scope",
+      expectedStoreRevision: 0,
+      scope: { kind: "user", userId: "current-user", projectId: "project-a" },
+      title: "Invalid",
+      goal: "Must fail",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("agentRun.stop", {
+    requestId: "stop-agent",
+    expectedStoreRevision: 9,
+    runtimeId: "runtime-agent",
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    teamRunId: "team-a",
+    agentRunId: "agent-a",
+    sessionRunId: "session-run-a",
+    expectedAgentRunRevision: 2,
+  }));
+  assert.throws(
+    () => validateMethodParams("task.create", {
+      requestId: "null-project",
+      expectedStoreRevision: 0,
+      scope: { kind: "project", projectId: null },
+      title: "Invalid",
+      goal: "Must fail",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("task.create", {
+      requestId: "extra-scope-field",
+      expectedStoreRevision: 0,
+      scope: { kind: "user", userId: "current-user", unexpected: "must-not-pass" },
+      title: "Invalid",
+      goal: "Must fail",
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("agentProfile.update", {
+    requestId: "profile-request",
+    expectedStoreRevision: 0,
+    profileId: "builtin-coordinator",
+    expectedProfileRevision: 1,
+    name: "Coordinator",
+    roleContract: "Coordinate the Task",
+    enabled: true,
+  }));
+  assert.doesNotThrow(() => validateMethodParams("agentProfile.create", {
+    requestId: "create-profile",
+    expectedStoreRevision: 0,
+    name: "Researcher",
+    roleContract: "Research a bounded question.",
+    enabled: true,
+  }));
+  const teamStart = {
+    requestId: "team-start-request",
+    expectedStoreRevision: 4,
+    expectedTeamRunRevision: 1,
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    teamRunId: "team-a",
+    message: "Coordinate this Task",
+    workspace: { workspaceId: "team-workspace", cwd: "/work/project", access: "sharedReadOnly" },
+  };
+  assert.doesNotThrow(() => validateMethodParams("team.start", teamStart));
+  assert.throws(
+    () => validateMethodParams("team.start", { ...teamStart, expectedTeamRunRevision: undefined }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  const agentRequestAnswer = {
+    requestId: "answer-request",
+    expectedStoreRevision: 8,
+    runtimeId: "runtime-agent",
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    teamRunId: "team-a",
+    agentRunId: "agent-a",
+    sessionRunId: "session-run-a",
+    agentRequestId: "request-a",
+    expectedRequestRevision: 1,
+    answer: { kind: "choice", optionId: "recommended" },
+  };
+  assert.doesNotThrow(() => validateMethodParams("agentRequest.answer", agentRequestAnswer));
+  assert.throws(
+    () => validateMethodParams("agentRequest.answer", {
+      ...agentRequestAnswer,
+      runtimeId: undefined,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("agentRequest.answer", {
+      ...agentRequestAnswer,
+      answer: { kind: "text", value: "unstructured" },
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.doesNotThrow(() => validateMethodParams("piImport.listCandidates", { limit: 50 }));
+  assert.doesNotThrow(() => validateMethodParams("piImport.preview", { sourceSessionId: "pi-session" }));
+  assert.doesNotThrow(() => validateMethodParams("piImport.importAsTask", {
+    requestId: "import-request",
+    expectedStoreRevision: 0,
+    scope: { kind: "project", projectId: "project-a" },
+    sourceSessionId: "pi-session",
+  }));
+  assert.doesNotThrow(() => validateMethodParams("session.importedEntries", { sessionId: "dcode-session" }));
   assert.throws(
     () => validateMethodParams("session.open", { sessionId: "s1", mode: "write" }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
@@ -55,6 +179,39 @@ test("method parameter validation rejects invalid values", () => {
     "session.open",
     { sessionId: "s1", mode: "writable", writeIntent: true },
   ));
+  assert.doesNotThrow(() => validateMethodParams("session.open", {
+    sessionId: "adapter-session",
+    adapterSessionId: "adapter-session",
+    runtimeId: "runtime-one",
+    taskId: "task-one",
+    dcodeSessionId: "dcode-session-one",
+    scope: { kind: "project", projectId: "project-one" },
+    workspace: { workspaceId: "workspace-one", cwd: "/work/one", access: "exclusiveWrite" },
+    mode: "writable",
+    writeIntent: true,
+  }));
+  assert.doesNotThrow(() => validateMethodParams("runtime.start", {
+    requestId: "start-runtime",
+    runtimeId: "runtime-one",
+    taskId: "task-one",
+    dcodeSessionId: "dcode-session-one",
+    scope: { kind: "project", projectId: "project-one" },
+    workspace: { workspaceId: "workspace-one", cwd: "/work/one", access: "exclusiveWrite" },
+  }));
+  assert.throws(
+    () => validateMethodParams("session.open", {
+      sessionId: "adapter-session",
+      adapterSessionId: "another-session",
+      runtimeId: "runtime-one",
+      taskId: "task-one",
+      dcodeSessionId: "dcode-session-one",
+      scope: { kind: "project", projectId: "project-one" },
+      workspace: { workspaceId: "workspace-one", cwd: "/work/one", access: "exclusiveWrite" },
+      mode: "writable",
+      writeIntent: true,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.doesNotThrow(() => validateMethodParams("session.open", { sessionId: "s1", mode: "readOnly" }));
   assert.doesNotThrow(() => validateMethodParams("session.close", { expectedSessionId: "s1" }));
   assert.throws(

@@ -1,6 +1,6 @@
 # D Code 版本界面演进
 
-状态：Confirmed Direction（已确认方向；`v0.0.1`–`v0.0.16`、`v0.0.25` 与 `v0.0.26` 已推送源码标签；`0.0.17`–`0.0.20` 已实现但仍保留各自人工验收边界；`0.0.26` 隔离网页 eval 通过，原生人工验收待完成）
+状态：Confirmed Direction（已确认方向；当前源码基线为 `v0.0.27` / `main@68237c3`；源码标签、自动门禁、原生人工验收与二进制发布继续分别成立）
 
 [打开可切换版本的界面演进](dcode-version-evolution.html)
 
@@ -8,7 +8,7 @@
 
 本原型用于比较 `0.0.1` 至 `0.1.0` 的用户可见变化。顶部版本按钮切换的是各版本具有代表性的目标工作状态，不表示相应能力已经由当前 Swift App 实现。
 
-已经切入版本的范围、状态与验收记录统一由[版本实施方案](../../../40-版本实施方案/README.md)路由；本页是已确认的版本顺序与差异基线。`0.0.6` 已形成公开源码标签 `v0.0.6`；`0.0.7` 已完成范围对齐并进入独立 PRD，后续版本仍只有进入对应 PRD 后才形成冻结的交付范围。
+已经切入版本的范围、状态与验收记录统一由[版本实施方案](../../../40-版本实施方案/README.md)路由；本页只说明版本顺序与差异。当前下一版 `0.0.28` 已进入独立 PRD；其后能力只有进入各自 PRD 才形成冻结交付范围。
 
 ## 最新版本排期
 
@@ -23,7 +23,7 @@
 | `0.0.5` | Follow-up Queue（后续消息队列）：Agent 运行中仍可在 Composer 附近添加、查看、编辑、调整或撤回绑定当前 Session / Path 的普通文本；前一 Run 正常收口后才按顺序逐条派发。同时新建入口先进入本地草稿，首次发送才创建 Pi Session。 | Steer（运行中转向）、完整 Interaction Dock、多 Agent、长期 Work Item（工作项）、跨 Session 调度、把排队消息冒充已执行、用空 Pi Session 代表未发送草稿。 | 运行中继续表达意图不会中断当前回合；失败、等待或身份漂移时队列可恢复且不自动派发，正常路径不丢顺序或重复派发；未输入的新会话不会留下 Pi 记录。 |
 | `0.0.6` | Activity View（活动视图）与 Run State（运行状态）：会话栏铃铛在默认导航和活动投影间切换，优先显示真实运行、等待处理和带蓝点的新完成结果，其余会话按活动时间排序；当前 Session 的队列、停止、重试与等待输入收敛到 Interaction Dock（交互坞）。 | 后台多会话执行、多个同时运行的 Session、Goal（目标）和跨会话调度。 | 用户既能回答“哪个 Agent 正在做什么、哪里有新结果”，也能在当前会话回答“下一步是什么、为什么停住、我能做什么”；蓝点只在最新完成结果真正呈现后消除。 |
 | `0.0.7` | Model Settings（模型设置）：主目录只显示已认证 Pi Provider，底部通过 Pi API Key / OAuth 合同关联未认证 Provider；模型行管理全局启用与默认模型。Composer 增加 steer / queue 选择、蓝色剩余 / 白色已用 Context 圆环、持续 Thinking、顶部累积轮次导航；最终回复常显时间、耗时与真实 token。 | 自定义供应商编辑、已保存凭据查看 / 登出、项目设置写入、费用统计、把“未在 D Code 中启用”说成供应商或模型不可用。 | 认证前不暴露内建模型，认证成功后自动刷新；刷新失败保留缓存，模型行写入不破坏通配规则；介入异常恢复正文，完成 Dock 不重复；当前 Session 与历史模型事实不被强改，回复运行信息不估算。 |
-| `0.0.8` | 工程内构 + dgoal 融入 + 上下文构成：AppModel 领域状态拆分为自有 `@Observable` 子模型、事件族拆分与 `HostProviding` 注入测试基线（[ADR 0016](../../../决策档案/0016-AppModel-域拆分与宿主注入测试边界.md)）；dgoal Work List / Plan Contract 原生呈现（保障档位、验收、审核、证据、暂停、耗时）与待批提案批准卡（`/dgoal review` + 原生门禁对话框）；上下文弹层提供按部分估算的构成占比、环体低余量警示与本轮增减（[ADR 0017](../../../决策档案/0017-dgoal-结构化状态融入与上下文构成呈现边界.md)）。 | dgoal 内嵌分发、自动触发升级 / 审核、Goal / Work Map 耐久对象化（`0.2.x`）；精确 per-section token 统计；转录 / 流式 / 结算时序拆分。 | 行为零变化由回归守护；dgoal 呈现与批准链路、构成估算口径均有自动化用例，真实 dgoal 会话手测留待人工验收。 |
+| `0.0.8` | 工程内构 + dgoal 融入 + 上下文构成：AppModel 领域状态拆分为自有 `@Observable` 子模型、事件族拆分与 `HostProviding` 注入测试基线（[ADR 0016](../../../决策档案/0016-AppModel-域拆分与宿主注入测试边界.md)）；dgoal Work List / Plan Contract 原生呈现（保障档位、验收、审核、证据、暂停、耗时）与待批提案批准卡（`/dgoal review` + 原生门禁对话框）；上下文弹层提供按部分估算的构成占比、环体低余量警示与本轮增减（[ADR 0017](../../../决策档案/0017-dgoal-结构化状态融入与上下文构成呈现边界.md)）。 | dgoal 内嵌分发、自动触发升级 / 审核、D Code 原生 Task / Goal / Plan / Work List；精确 per-section token 统计；转录 / 流式 / 结算时序拆分。 | 行为零变化由回归守护；dgoal 呈现与批准链路、构成估算口径均有自动化用例，真实 dgoal 会话手测留待人工验收。目标对象迁移另立 PRD。 |
 | `0.0.9` | 打开即接管：会话一律以可写打开（ADR 0018），只读观察删除，D Code 实例间租约可抢占（LEASE_STOLEN 诚实退出），冲突原生卡片一键重接；ModelRuntime 单例复用与 signpost 埋点。 | 抢占自动重连、Pi CLI 侧改动、多会话并行写入。 | 两个 D Code 窗口的抢占 / 重接流与 Pi CLI 并用流手测成立；Host / Swift 全量回归通过。 |
 | `0.0.10` | Project Trust（项目信任）与动作级 Permission（权限）：按项目根、动作目标、风险和有效范围询问，区分本次允许、当前范围允许与拒绝。 | Skill 即权限、无限期全局授权、操作系统沙箱承诺。 | 文件写入、命令和外部副作用在执行前具有真实、可追溯且可撤回的授权边界。 |
 | `0.0.11` | 只读 Exact Git Diff（精确 Git 差异）：从已有 Changes 数量进入逐文件、逐 hunk（变更块）与行级净差异核对，并保持 staged / unstaged（已暂存 / 未暂存）语义诚实。 | stage、discard、commit、push。 | 用户可在 D Code 内核对当前工作树真实差异，且不与 `0.0.4` 的会话变更账本混淆。 |
@@ -43,8 +43,10 @@
 | `0.0.25` | Project 目录一一对应与 Composer 收口：主页只选择 Project；改目录时保持 Session 身份直接迁移 `cwd`，文件迁移为第二步选择；文件、Skill、命令、目标与计划收进 `+`。该源码标签误删了模型选择，并用大 Popover 承载 `+`，当前已由 0.0.27 修正；Skill 普通名称与剪贴板图片由 ADR 0034 补齐。 | 多目录 Project、目录迁移伪装成复制、插件 / 网页预览占据 Composer 一级。 | 项目、目录与历史会话的归属一致；目录迁移的 Session 与文件影响可独立核对；模型与菜单修正以 ADR 0033 / 0034 为准。 |
 | `0.0.26` | Sol 自迭代候选闭环：显式源码 checkout、脏工作树本机候选、Swift / Host 门禁、候选来源清单与重启后核对。 | 自动提交 / 发布、无人确认重启、模型文案冒充验证、网页 eval 冒充原生 App 验收。 | Sol 修改 D Code 后能形成来源稳定、门禁可核对且明确不可分发的候选，并在显式重启后恢复原任务。 |
 | `0.0.27` | 自进化运行回执与安全恢复；同时修正 Composer 模型入口与 `+` 菜单：恢复无图标模型名选择，推理强度独立相邻，`+` 改为紧凑原生 Menu。 | 把 Bootstrap 倒填为完整回执、自动验收 / 发布、第二套 Goal / Plan、运行中热迁移；恢复 CPU 图标、Fast 或大 Popover。 | Bootstrap 诚实不计数；模型可在任务入口直接选择；原生 `+` 菜单与参考层级一致。 |
-| `0.0.28+` | 使用 Full Receipt 连续完成真实 dogfood（自用），每版只处理一个可复现缺口。 | 为赶 `0.1.0` 预装空入口或一次塞入多个大系统。 | 缺口有真实复现、明确版本差异与独立验收；完整自进化计数只来自回执。 |
-| `0.1.0` | Promotion（晋升）版本：冻结并证明已经成立的自迭代闭环，不突然加入新主功能。 | Goal / Work Map、D Team、跨 Session 编排等下一阶段能力。 | 见下方晋升门禁；全部成立后才可命名、提交、打标签和发布。 |
+| `0.0.28` | 原生数据与多会话运行基础设施：把现有 D Code 数据单向晋升到 `~/.dcode/` Product Store，建立 User Scope / Project Task、D Code Session / 设置 / Profile / 能力配置，自动接管 D Code 已管理会话，其他 Pi Session 经显式“导入为任务”转换，并建立 Raw / Effective Input、多 Runtime Supervisor、Coordinator + 两个 Child Agent、Prompt Assembler、Active Tool Set、Artifact / Evidence 最小事实、结构化 query / mutation contract，以及可真实操作的 Foundation Console。 | 最终任务工作台视觉、常驻 HUD、复杂项目管理、Knowledge / Vision 全体验、第二 Runtime 或晋升后的 0.0.27 降级。 | 迁移提交前失败保持旧数据不变，提交后无双写且不支持降级；同一 App 内两个 Child Agent 真实并行；Foundation Console 可完成创建、导入、派发、回答、停止、报告与验收；Pi 源不变；Prompt / Tools / Receipt 同源且先持久化。 |
+| `0.0.29` | 任务工作台与协调者协作体验：复用 Foundation Console 的生产合同，完成 User Home / Project → Task → Coordination / Child Sessions 导航、显式“导入为任务”、协调者主对话、宽屏常驻 Task HUD、窄屏覆盖、具体对象 Inspector 与并行运行控制。 | 修改 `0.0.28` 数据 / 并发 / mutation 合同、空 Task 状态、聊天文案推断进度或新增第二运行时。 | 正式工作台与 Foundation Console 操作同源；宽中窄三类窗口、真实两个子 Agent、对象检查、重启恢复和无障碍人工验收通过，旧普通控制入口退出。 |
+| `0.0.30+` | 继续按依赖与真实 dogfood 缺口切片；Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 分别进入独立 PRD。 | 为赶 `0.1.0` 预装空入口，或把多个未验证大系统重新混成一版。 | 每版只有一个可运行用户结果、明确失败边界与独立验收，不用目标文档冒充实现。 |
+| `0.1.0` | Promotion（晋升）版本：冻结并证明已经成立的自迭代闭环，不突然加入新主功能。 | 把尚未实现的目标架构能力一起打包成晋升理由。 | 见下方晋升门禁；全部成立后才可命名、提交、打标签和发布。 |
 
 ## Otty 参考的版本吸收
 
@@ -64,23 +66,23 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 
 | ZCode 观察 | D Code 的吸收方式 | 版本边界 |
 |---|---|---|
-| Plan Mode：先只读探索、产出计划、显式批准后才动代码 | 由 dgoal 承接（已提前进入 `0.0.8`，[ADR 0017](../../../决策档案/0017-dgoal-结构化状态融入与上下文构成呈现边界.md)）：D Code 识别 dgoal Plan Contract 的结构化状态并原生呈现，待批提案以 Composer 批准卡一键发起 `/dgoal review`，实际批准由 dgoal 原生门禁对话框完成，不建立平行的 D Code 计划机制 | 呈现 + 批准卡已在 `0.0.8`；Goal / Work Map 耐久产品对象化仍属 `0.2.x` |
+| Plan Mode：先只读探索、产出计划、显式批准后才动代码 | 当前 `0.0.8` 仍读取 dgoal Plan Contract 并原生呈现；目标架构由 D Code Task 自己拥有 Goal、Plan、Work List 与批准语义，dgoal 只保留为机制和导入来源 | 当前实现见 `0.0.8`；目标迁移服从 ADR 0035 / 0036，尚未绑定后续版本 |
 | `@` 文件补全与图片直接进入对话 | 图片输入已核实：Pi SDK `prompt(input, images?)` 支持图片内容块，D Code 协议 v1 的 `session.prompt` 尚需扩展 `images` 参数后由 `0.0.20` 的 `+` 附件入口落地；`@` 提及链接到既有只读文件标签与路径草稿 | 附件与统一命令面板已绑定 `0.0.20`（首个 dogfood 反馈）；`@` 补全绑定 `0.0.22`，不预建空入口 |
 | 每条回复常显时间、耗时与 token | 已由 `0.0.7` 回复运行信息行成立 | 已完成 |
 | 上下文圆环点开后的构成分解（各部分 token 占比与剩余） | Host `session.contextBreakdown` 按消息种类估算分项（用户 / 助手 / 思考 / 工具结果），真实总量锚定并反推系统与工具；圆环弹层分项条形呈现，估算口径如实标注（[ADR 0017](../../../决策档案/0017-dgoal-结构化状态融入与上下文构成呈现边界.md)） | `0.0.8` |
-| 结构化任务清单与状态推进 | 复用 Pi `plan.changed` 与 ActivePlan 数据源做原生清单渲染，不新建第二任务权威 | 按真实 dogfood 缺口进入 `0.0.25+` |
-| 后台任务卡片与完成通知 | 与 Activity View、完成蓝点、注意力记录合并为一套“运行中/已完成”呈现，覆盖索引重建、目录刷新等 Host 长任务 | 按真实 dogfood 缺口进入 `0.0.25+` |
-| 会话接手摘要（从既有会话恢复上下文） | 打开既有 Pi 会话时结构化呈现最后状态、未完成验收与遗留事项；复用持续观察，不建立第二会话库 | 按真实 dogfood 缺口进入 `0.0.25+` |
+| 结构化任务清单与状态推进 | 当前实现继续读取 Pi `plan.changed` / ActivePlan；目标由 D Code Task 的 Plan 与 Work List 成为唯一产品状态，迁移前不画空任务系统 | 当前实现按既有版本回归；目标另立 PRD |
+| 后台任务卡片与完成通知 | 当前 Activity View 继续呈现真实 Session 运行与关注态；`0.0.28` 先建立 Task / Agent Run / Artifact 事实，`0.0.29` 的 Task HUD 只消费该投影，不从会话文案猜测 | 基础事实进入 `0.0.28`；最终 HUD 进入 `0.0.29` |
+| 会话接手摘要（从既有会话恢复上下文） | 当前可读取 Pi 会话事实；目标由 D Code Session / Task / Effective Prompt Receipt 提供可追溯恢复，Pi Session 只单向导入 | 当前实现继续回归；目标服从 ADR 0037 / 0040 |
 | 按会话/计划粒度的权限授予 | 与 Project Trust（`0.0.10`）的动作级权限合并设计，授权范围绑定项目与动作目标 | `0.0.9` |
 | 终端式 Markdown 渲染、TUI 兼容层 | 不吸收；D Code 继续原生组件路线，`custom` / Widget 显式阻止 | 永不 |
 
 ## D 能力吸收规则
 
-- 不设置一个把所有 `d` 开头扩展一次装进 D Code 的总集成版本。前缀只说明能力来源，不定义产品对象、界面位置或版本边界；每项能力都要以一个真实用户结果进入既有模块或独立版本。
-- 外部 Pi Extension 的发现、启停、来源与兼容性统一在 `0.0.15` 管理。需要模型主动调用的能力，必须把名称、说明、输入 schema（模式）和执行器注册进同一个 Pi SDK Agent Loop（智能体循环）；Prompt（提示词）只补充发现与选择线索，不能单独构成可调用工具，也不建立第二套 Agent Loop 或工具调度器。
-- `pi-dfast` 的成立机制已经由 D Code 自有极速请求策略吸收；`pi-dhashline` 属于结构化文件工具与原生 presenter（呈现器）路径。现有能力继续保留，后续缺口按真实 dogfood 进入 `0.0.25+`，不重新包装成“扩展中心”。
-- `pi-dusage`、`pi-dstatus` 一类观察能力优先进入设置、状态或证据界面，不因来源是扩展就强制暴露为模型工具；只有存在明确、可授权的模型动作时才增加小型工具 facade（门面）。
-- dgoal / Goal / Work Map 仍属于 `0.2.x` 产品对象，`pi-dteam` / D Team 仍属于 `0.3.x` 执行层；两者可以向模型暴露少量结构化操作，但其状态、生命周期和原生界面继续由 D Code 拥有。ZCode 计划批准工作流由 dgoal 承接：D Code 识别 dgoal 的 Work List 与 Plan Contract 结构化状态（含 `execution → goal_check → staged_check` 单向升级和独立检查授权），原生呈现批准与升级门禁；dgoal 的 TUI 计划浮层在 D Code 中按既有边界显式忽略，不伪装成功。
+- 不设置一个把所有 `d` 开头扩展一次装进 D Code 的总集成版本。扩展是经过验证的能力来源，不是 D Code 的产品兼容面；每项机制都必须以 D Code 拥有的用户结果、数据合同与原生呈现进入独立切片。
+- 当前 `0.0.x` 仍允许 Pi SDK 内置与扩展工具进入 Agent Loop；从 `0.0.28` 起，所有来源必须先归一、过滤并冻结为 D Code Active Tool Set，再同源生成 API Tools 与 Active Tool Manifest。Prompt 不能单独创造工具，也不建立第二套 Agent Loop。
+- `pi-dfast` 的成立机制已经由 D Code 自有极速请求策略吸收；`pi-dhashline` 的安全文件语义可以成为 Safe File Operations 的实现来源，但不得以旧扩展品牌或直接桥接定义产品能力。
+- `pi-dusage`、`pi-dstatus` 一类观察结果属于 Runtime Facts、设置、状态或证据，不因来源是扩展就升级成 Capability；只有存在明确模型动作、结构化输入与结果时才进入 Active Tool Set。
+- Goal、Plan、Work List 与 Agent Team 已由 ADR 0035 / 0036 确认为 D Code 基础能力；dgoal / dteam 只保留机制与导入来源。具体迁移、Artifact、Profile 和多会话执行分别进入后续 PRD，不沿用旧 `0.2.x / 0.3.x` 绑定。
 
 ## `0.1.0` 自迭代晋升门禁
 
@@ -92,16 +94,17 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 - Exact Diff（精确差异）、验证、构建、人工验收、提交、标签与发布分别成立。D Code 可以协助每一关，但未经 507 明确授权不得自动越过提交和发布门禁。
 - 最后一个 `0.0.x` 与 `0.1.0` 的主要差异是证据和稳定性晋升；若仍需一个大功能才能称为可用，就继续发布新的 `0.0.x`。
 
-## `0.1.0` 之后的方向
+## 目标架构重置后的后续方向
 
-- `0.2.x` 候选方向：Goal / Work Map，建立耐久工作对象、依赖、验收、人工门禁以及 Work Item 到 Session / Team Run 的引用基础；创建工作对象不会自动启动 Agent。计划批准的交互形态由 dgoal 承接（见上方 ZCode 吸收表）。
-- `0.3.0` 候选方向：Agent Profile / D Team 的首个“一主一子”垂直闭环。当前主 Pi Session 作为协作根，在其受管执行命名空间下创建一个具有新 Session ID、独立上下文与隔离执行目录的子 Pi Session；D Code 恢复父子关系、状态、证据与报告，不伪装恢复在途 Worker Runtime。
-- `0.3.1+` 候选方向：在首个闭环成立后，逐步增加多个子成员并行、权限与写入范围、请求中转、结果比较和显式集成；有写入能力的成员不得共享同一可写工作树。
-- `0.4.x` 候选方向：以耐久工作对象为锚点、且不局限于主从 D Team 关系的跨 Session 交接、送达与恢复。
+当前依赖顺序固定为：
 
-这些方向保留此前研究，但不再挤占 `0.1.0` 前的自迭代基础设施。会话任务看板、Percho、MiniMax Code、Todos 与 `pi-dteam` 都只提供界面或机制参考；D Code 不照搬其云端权威、跨平台外壳、常驻团队、在线市场、远程控制或 TUI 呈现路径。
+1. `0.0.28` 一次建立 D Code Product Store、现有本机状态迁移、D Code Session、Raw Input / Effective Input、Pi 单向导入、Task / Agent Run、多 Runtime、Coordinator + 两个 Child Agent、Prompt / Tools / Receipt、结构化操作合同与可 dogfood 的 Foundation Console；
+2. `0.0.29` 只消费并重新呈现上述事实和操作，完成 Coordination Session 主对话、Child Session 树、宽屏持续可见 Task HUD、窄屏覆盖与具体对象 Inspector；
+3. `0.0.30+` 再让 Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 按真实依赖进入独立 PRD。
 
-上述主、子会话、编排权威、工作空间与版本边界由 [ADR 0013](../../../决策档案/0013-D-Code-编排权威与主会话派生子会话边界.md) 固定。它不改变 `0.0.x–0.1.0` 已确认范围；`0.3.0` 进入 PRD 前仍需以当时 Pi SDK、Git 隔离、权限和恢复能力做最小实作验证。
+Project → Task 的产品根、D Code 数据权威、能力吸收、全局创造模式、一等项目文档与系统提示词分别由 ADR 0035–0040 固定。ADR 0013 只保留旧主 Pi Session 编排方案及仍成立的子会话隔离、单写入、报告与诚实恢复经验，不再拥有当前产品路线。
+
+会话任务看板、Percho、MiniMax Code、Macro Tasks、GitHub Projects 与 `pi-dteam` 只提供界面或机制参考；D Code 不照搬其云端权威、跨平台外壳、常驻团队、在线市场、远程控制或 TUI 呈现路径。
 
 ## 后续版本进入 PRD 前的决策门禁
 
@@ -115,7 +118,7 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 - `0.0.17–0.0.18` 先固定编辑缓冲区、磁盘冲突、原子保存、HTML sandbox（沙箱）与本机 / 网络资源策略。
 - `0.0.19` 先用 Host、构建、重启、权限和写入中断建立可重复恢复信号，再冻结幂等重试边界。
 - `0.0.20` 进入 PRD 前先核实：Pi `session.prompt` 的 `images` 传递合同（SDK 已支持 `ImageContent`，协议 v1 需扩展）、附件与 Source Folder 授权的关系、统一面板中 Skill / Prompt / 命令的调用文本形式（复用 `0.0.16` 的 `composerInvocationText` 合同）。`0.0.21`–`0.0.24` 进入各自 PRD 前分别核实：查找 / 替换与保存冲突、关闭确认的交互合同；`@` 引用的插入形式与 Pi 上下文合同；命令输出的真实尺寸分布与呈现边界；用量与费用的数据来源合同（与[探索原型验证结论](../dcode-settings-usage-cost-验证.md)对齐）。
-- `0.2.x` 只建立 Goal / Work Map 与执行引用的耐久身份；`0.3.0` 按 [ADR 0013](../../../决策档案/0013-D-Code-编排权威与主会话派生子会话边界.md) 先证明“一主一子”、新子 Pi Session、隔离工作空间、结构化回报与重启恢复，再扩展多个成员；`0.4.x` 另行固定任意既有 Session 间的消息身份、送达与幂等合同。
+- `0.0.28` 必须先证明 Product Store 与多会话运行基础，`0.0.29` 才能实现最终任务工作台；旧 `0.2.x / 0.3.x / 0.4.x` 编号不再构成门禁。
 
 ## 界面语言
 
@@ -124,7 +127,7 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 ## 证据边界
 
 - 每个版本必须在上一版本可运行基线上增加真实能力，不能先显示没有数据和行为的空标签。
-- `0.0.1` 就建立最终三栏空间关系；后续版本只向既有区域增加真实能力，不再以重排主界面制造版本变化。
+- `0.0.1` 建立了当前 0.0.x 三栏实现基线；它不再被称为最终空间关系。长期目标已经把 Task 进度、Agent Team 与交付物收敛为右上 Task HUD，只有具体文件、Artifact、Diff 或 Context 来源详情进入全高 Information Inspector；该变化必须由后续版本 PRD、原生实现和人工验收成立，不能靠修改历史原型冒充交付。
 - 工作检查器中的具体值仍是原型样例；“真实”指字段与状态在该版本必须接通真实数据，不表示本 HTML 已读取本机会话。
 - 本文件只表达当前版本切割草案；版本范围在对齐完成并进入 `40-版本实施方案/` 前不是交付承诺。
 - 当前实现与测试事实仍以项目源码、[架构与运行](../../../10-架构与运行/README.md)和实际验证结果为准。

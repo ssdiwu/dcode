@@ -497,6 +497,10 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             "sessionRunCorrelation": True, "sessionRunState": True,
             "preSessionModelSelection": True, "modelSettings": True,
             "sessionSteer": True, "modelAuthentication": True,
+            "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
+            "piSessionImport": True, "sessionPathFacts": True,
+            "multiRuntime": True, "runtimeIdentity": True,
+            "workspaceIsolation": True, "agentRequests": True,
         }
 
         def snapshot():
@@ -533,7 +537,7 @@ final class ComposerAttachmentRequestTests: XCTestCase {
             method = request["method"]
             params = request.get("params", {})
             if method == "host.hello":
-                result = {"protocolVersion": 1, "hostVersion": "0.0.27", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
+                result = {"protocolVersion": 1, "hostVersion": "0.0.28", "piVersion": "0.84.1", "nodeVersion": "test", "capabilities": capabilities}
             elif method == "session.list":
                 result = {"sessions": [snapshot()["summary"]]}
             elif method == "session.open":

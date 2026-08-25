@@ -1,6 +1,6 @@
 # Project 目录一一对应与会话 cwd 迁移边界
 
-状态：Accepted（取代 ADR 0004；在 Project 目录迁移范围内取代 ADR 0008 对“同 ID 改写 cwd”的禁止）
+状态：Partially Superseded（Project 与目录一一对应继续成立；Pi Header `cwd` 迁移目标已由 [ADR 0037](0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md) 取代）
 
 D Code Project 改为只拥有一个规范化工作目录，且一个目录最多属于一个 Project。Project 改目录不是仅更新本机组织信息：Pi Host 在明确用户操作、所有受影响 Session 空闲且租约稳定后，原地原子改写旧目录精确匹配 Session 的 Header `cwd`。Session ID、JSONL 非 Header 条目、Session 文件路径、`parentSession` 谱系和 Pi 会话权威均保留；这不是 Session Copy，也不创建新身份。
 

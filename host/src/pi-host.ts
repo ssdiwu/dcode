@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
-import { link, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, lstat, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -58,13 +58,78 @@ import { SessionCopier } from "./session-copy.js";
 import { ProjectDirectoryMigrator, ProjectDirectoryMigrationError } from "./project-directory-migration.js";
 import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
+import { ProductStore, type TaskScope } from "./product-store.js";
+import {
+  listPiImportCandidates,
+  preparePiSessionImport,
+} from "./pi-session-import.js";
+import { redactCredentialText } from "./credential-material.js";
+import type { LegacyStoreKind } from "./legacy-migration.js";
+import {
+  assembleDCodeSystemPrompt,
+  loadDCodePromptDocuments,
+  type AssembledDCodePrompt,
+  type DCodePromptEnvironment,
+  type DCodePromptTool,
+} from "./prompt-assembler.js";
+import {
+  DCodeOperationAttemptController,
+  createDCodeOperationAttemptExtension,
+} from "./operation-attempt-extension.js";
+import {
+  DCODE_AGENT_REQUEST_TOOL_NAME,
+  DCodeAgentRequestController,
+  createDCodeAgentRequestExtension,
+  type DCodeAgentRequestInput,
+} from "./agent-request-extension.js";
 
 // Pi 0.84.1 uses medium when settings.json does not override the default.
 // Keep this pinned-version fallback next to the Host compatibility boundary.
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+const MAX_ACTIVE_RUNTIMES = 12;
+const SHARED_READ_ONLY_TOOL_NAMES = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "dcode_facts",
+  DCODE_AGENT_REQUEST_TOOL_NAME,
+]);
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.27";
+const HOST_VERSION = "0.0.28";
+
+const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
+  "runtime.start",
+  "session.open",
+  "session.close",
+  "session.refresh",
+  "session.prompt",
+  "session.steer",
+  "session.abort",
+  "session.getState",
+  "session.contextBreakdown",
+  "session.getCommands",
+  "session.getModels",
+  "session.compactionInfo",
+  "session.compact",
+  "session.getThinkingLevels",
+  "session.setModel",
+  "session.setName",
+  "session.setThinking",
+  "session.setFastMode",
+  "extension.respond",
+  "agentRequest.answer",
+  "agentRun.stop",
+]);
+
+const RUNTIME_CONTROL_METHODS = new Set<HostMethod>([
+  "session.steer",
+  "session.abort",
+  "extension.respond",
+  "agentRequest.answer",
+  "agentRun.stop",
+]);
 
 type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
@@ -86,6 +151,11 @@ interface RunState {
 
 interface ActiveRun {
   id: string;
+  sessionRunId?: string;
+  providerAttemptId?: string;
+  rawInputId?: string;
+  effectiveInputId?: string;
+  promptReceiptId?: string;
   pathEntryId?: string;
   toolCalls: Map<string, { toolName: string; args: unknown }>;
   state: RunState;
@@ -102,6 +172,10 @@ function runWaitKind(value: unknown): RunWaitKind | undefined {
 export interface PiHostOptions {
   agentDir?: string;
   sessionsDirectory?: string;
+  dataRoot?: string;
+  userHome?: string;
+  legacyUserDefaults?: Record<string, unknown>;
+  legacySourcePaths?: Partial<Record<LegacyStoreKind, string>>;
   leaseAgentDir?: string;
   leaseQuietWindowMs?: number;
   conflictPollMs?: number;
@@ -135,9 +209,47 @@ interface WritableSession {
   closing: boolean;
   currentRun?: ActiveRun;
   lastRunState?: RunState;
+  runtimeIdentity?: RuntimeIdentity;
+  runtimeEventSequence: number;
+  seenPromptIds: Map<string, string>;
+  seenSteerIds: Map<string, string>;
+  writePoison?: { sessionId: string; reason: string };
+  assembledPrompt?: AssembledDCodePrompt;
+  promptEnvironment?: DCodePromptEnvironment;
+  activePromptTools: DCodePromptTool[];
+  toolsWritable: boolean;
+  attemptController?: DCodeOperationAttemptController;
+  agentRequestController?: DCodeAgentRequestController;
 }
 
 type ActiveSession = WritableSession;
+
+interface RuntimeIdentity {
+  runtimeId: string;
+  scope: TaskScope;
+  taskId: string;
+  dcodeSessionId: string;
+  agentRunId?: string;
+  adapterSessionId: string;
+  workspace: {
+    workspaceId: string;
+    cwd: string;
+    access: "sharedReadOnly" | "exclusiveWrite";
+    isolationKey?: string;
+  };
+}
+
+interface WorkspaceClaim {
+  access: "sharedReadOnly" | "exclusiveWrite";
+  runtimeIds: Set<string>;
+}
+
+interface PendingAgentRequestResolution {
+  runtimeId: string;
+  resolve: (answer: unknown) => void;
+  reject: (error: Error) => void;
+  removeAbortListener?: () => void;
+}
 
 interface PromptCallContext {
   active: WritableSession;
@@ -328,20 +440,131 @@ export class PiHost {
   readonly sessionCopier: SessionCopier;
   readonly projectDirectoryMigrator = new ProjectDirectoryMigrator();
   readonly trashDirectory: string;
-  private active?: ActiveSession;
+  private legacyActive?: ActiveSession;
+  private readonly runtimes = new Map<string, ActiveSession>();
+  private readonly runtimeByAdapterSessionId = new Map<string, string>();
+  private readonly openingAdapterSessionIds = new Map<string, string>();
+  private readonly runtimeByDCodeSessionId = new Map<string, string>();
+  private readonly openingDCodeSessionIds = new Map<string, string>();
+  private readonly runtimeWorkspaceClaims = new Map<string, WorkspaceClaim>();
+  private readonly openingWorkspaceClaims = new Map<string, WorkspaceClaim>();
+  private readonly runtimeContext = new AsyncLocalStorage<string | undefined>();
+  private readonly runtimeQueues = new Map<string, Promise<void>>();
+  private readonly pendingAgentRequests = new Map<string, PendingAgentRequestResolution>();
+  private readonly teamLifecycles = new Map<string, Promise<void>>();
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
   private writePoison?: { sessionId: string; reason: string };
+  private readonly runtimeWritePoisons = new Map<string, { sessionId: string; reason: string }>();
   private searchShutdown?: Promise<void>;
   private readonly leaseQuietWindowMs: number;
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
   private readonly modelAuth: ModelAuthBridge;
+  private productStore?: ProductStore;
+  private productStoreOpening?: Promise<ProductStore>;
   /** ADR 0027 决定 5：已见 promptId / steerId 的幂等登记（有界 LRU），
    * 重复提交返回诚实错误而不是重复执行。 */
   private static readonly seenIdLimit = 256;
-  private readonly seenPromptIds = new Map<string, string>();
-  private readonly seenSteerIds = new Map<string, string>();
+
+  private get active(): ActiveSession | undefined {
+    const runtimeId = this.runtimeContext.getStore();
+    return runtimeId ? this.runtimes.get(runtimeId) : this.legacyActive;
+  }
+
+  private set active(value: ActiveSession | undefined) {
+    const runtimeId = this.runtimeContext.getStore();
+    if (!runtimeId) {
+      this.legacyActive = value;
+      return;
+    }
+    const previous = this.runtimes.get(runtimeId);
+    if (previous?.runtimeIdentity) {
+      this.runtimeByAdapterSessionId.delete(previous.runtimeIdentity.adapterSessionId);
+      this.runtimeByDCodeSessionId.delete(previous.runtimeIdentity.dcodeSessionId);
+      this.releaseWorkspaceClaim(
+        this.runtimeWorkspaceClaims,
+        this.workspaceClaimKey(previous.runtimeIdentity.workspace),
+        runtimeId,
+      );
+    }
+    if (!value) {
+      this.runtimes.delete(runtimeId);
+      return;
+    }
+    if (value.runtimeIdentity?.runtimeId !== runtimeId) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime activation identity does not match its routing context");
+    }
+    this.runtimes.set(runtimeId, value);
+    this.runtimeByAdapterSessionId.set(value.runtimeIdentity.adapterSessionId, runtimeId);
+    this.runtimeByDCodeSessionId.set(value.runtimeIdentity.dcodeSessionId, runtimeId);
+    this.addWorkspaceClaim(
+      this.runtimeWorkspaceClaims,
+      this.workspaceClaimKey(value.runtimeIdentity.workspace),
+      runtimeId,
+      value.runtimeIdentity.workspace.access,
+    );
+  }
+
+  private addWorkspaceClaim(
+    claims: Map<string, WorkspaceClaim>,
+    cwd: string,
+    runtimeId: string,
+    access: WorkspaceClaim["access"],
+  ): void {
+    const current = claims.get(cwd);
+    if (!current) {
+      claims.set(cwd, { access, runtimeIds: new Set([runtimeId]) });
+      return;
+    }
+    if (current.access !== "sharedReadOnly" || access !== "sharedReadOnly") {
+      if (!current.runtimeIds.has(runtimeId) || current.runtimeIds.size > 1) {
+        throw new PiHostError("WORKSPACE_IN_USE", "Runtime workspace claim conflicts with an active writer", { cwd });
+      }
+    }
+    current.runtimeIds.add(runtimeId);
+  }
+
+  private releaseWorkspaceClaim(
+    claims: Map<string, WorkspaceClaim>,
+    cwd: string,
+    runtimeId: string,
+  ): void {
+    const current = claims.get(cwd);
+    if (!current) return;
+    current.runtimeIds.delete(runtimeId);
+    if (current.runtimeIds.size === 0) claims.delete(cwd);
+  }
+
+  private workspaceConflict(cwd: string, runtimeId: string, access: WorkspaceClaim["access"]): string | undefined {
+    for (const claims of [this.runtimeWorkspaceClaims, this.openingWorkspaceClaims]) {
+      const current = claims.get(cwd);
+      if (!current) continue;
+      const otherRuntime = [...current.runtimeIds].find((candidate) => candidate !== runtimeId);
+      if (!otherRuntime) continue;
+      if (current.access === "exclusiveWrite" || access === "exclusiveWrite") return otherRuntime;
+    }
+    return undefined;
+  }
+
+  private workspaceClaimKey(workspace: RuntimeIdentity["workspace"]): string {
+    return workspace.isolationKey ?? workspace.cwd;
+  }
+
+  private async resolveWorkspaceIsolationKey(cwd: string): Promise<string> {
+    let current = cwd;
+    while (true) {
+      try {
+        const marker = await lstat(join(current, ".git"));
+        if (marker.isDirectory() || marker.isFile() || marker.isSymbolicLink()) return current;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const parent = dirname(current);
+      if (parent === current) return cwd;
+      current = parent;
+    }
+  }
 
   private rememberSeenId(map: Map<string, string>, id: string, runId: string): void {
     if (map.has(id)) return;
@@ -371,9 +594,234 @@ export class PiHost {
   }
 
   get wantsShutdown(): boolean { return this.shutdownRequested; }
+  get productDataRoot(): string | undefined { return this.productStore?.layout.root; }
+
+  async start(): Promise<void> {
+    await this.getProductStore();
+  }
+
+  private async getProductStore(): Promise<ProductStore> {
+    if (this.productStore) return this.productStore;
+    this.productStoreOpening ??= ProductStore.open({
+      ...(this.options.dataRoot ? { dataRoot: this.options.dataRoot } : {}),
+      ...(this.options.userHome ? { userHome: this.options.userHome } : {}),
+      legacyMigration: {
+        agentDir: this.agentDir,
+        sessionsDirectory: this.sessionsDirectory,
+        ...(this.options.legacyUserDefaults ? { userDefaults: this.options.legacyUserDefaults } : {}),
+        ...(this.options.legacySourcePaths ? { sourcePaths: this.options.legacySourcePaths } : {}),
+      },
+    });
+    try {
+      this.productStore = await this.productStoreOpening;
+      return this.productStore;
+    } catch (error) {
+      this.productStoreOpening = undefined;
+      throw error;
+    }
+  }
+
+  private runtimeIdentityFromParams(params: Record<string, unknown>): RuntimeIdentity | undefined {
+    if (params.runtimeId === undefined) return undefined;
+    const runtimeId = params.runtimeId;
+    const taskId = params.taskId;
+    const dcodeSessionId = params.dcodeSessionId;
+    const agentRunId = params.agentRunId;
+    const adapterSessionId = params.adapterSessionId;
+    const scope = params.scope;
+    const workspace = params.workspace;
+    if (
+      typeof runtimeId !== "string"
+      || typeof taskId !== "string"
+      || typeof dcodeSessionId !== "string"
+      || typeof adapterSessionId !== "string"
+      || (agentRunId !== undefined && typeof agentRunId !== "string")
+      || typeof scope !== "object"
+      || scope === null
+      || Array.isArray(scope)
+      || typeof workspace !== "object"
+      || workspace === null
+      || Array.isArray(workspace)
+    ) {
+      throw new PiHostError("RUNTIME_IDENTITY_INVALID", "Runtime identity is incomplete");
+    }
+    const taskScope = scope as Record<string, unknown>;
+    const normalizedScope: TaskScope = taskScope.kind === "user" && typeof taskScope.userId === "string"
+      ? { kind: "user", userId: taskScope.userId }
+      : taskScope.kind === "project" && typeof taskScope.projectId === "string"
+        ? { kind: "project", projectId: taskScope.projectId }
+        : (() => { throw new PiHostError("RUNTIME_IDENTITY_INVALID", "Runtime Task Scope is invalid"); })();
+    const runtimeWorkspace = workspace as Record<string, unknown>;
+    if (
+      typeof runtimeWorkspace.workspaceId !== "string"
+      || typeof runtimeWorkspace.cwd !== "string"
+      || (runtimeWorkspace.access !== "sharedReadOnly" && runtimeWorkspace.access !== "exclusiveWrite")
+    ) {
+      throw new PiHostError("RUNTIME_IDENTITY_INVALID", "Runtime workspace identity is invalid");
+    }
+    return {
+      runtimeId,
+      scope: normalizedScope,
+      taskId,
+      dcodeSessionId,
+      ...(typeof agentRunId === "string" ? { agentRunId } : {}),
+      adapterSessionId,
+      workspace: {
+        workspaceId: runtimeWorkspace.workspaceId,
+        cwd: runtimeWorkspace.cwd,
+        access: runtimeWorkspace.access,
+      },
+    };
+  }
+
+  private async validateRuntimeIdentity(identity: RuntimeIdentity, adapterSessionId: string): Promise<void> {
+    if (identity.adapterSessionId !== adapterSessionId) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime adapterSessionId does not match session.open");
+    }
+    let canonicalWorkspace: string;
+    try {
+      canonicalWorkspace = await realpath(identity.workspace.cwd);
+      if (!(await stat(canonicalWorkspace)).isDirectory()) throw new Error("not a directory");
+    } catch (error) {
+      throw new PiHostError("WORKSPACE_NOT_ACCESSIBLE", "Runtime workspace is not an accessible directory", {
+        cwd: identity.workspace.cwd,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    identity.workspace.cwd = canonicalWorkspace;
+    identity.workspace.isolationKey = await this.resolveWorkspaceIsolationKey(canonicalWorkspace);
+    const snapshot = await (await this.getProductStore()).snapshot();
+    const task = snapshot.tasks.find((candidate) => candidate.id === identity.taskId);
+    const session = snapshot.sessions.find((candidate) => candidate.id === identity.dcodeSessionId);
+    if (!task || !session || session.taskId !== task.id) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Task or D Code Session does not exist");
+    }
+    if (JSON.stringify(task.scope) !== JSON.stringify(identity.scope)) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Task Scope does not match the Product Store");
+    }
+    if (identity.agentRunId) {
+      const agentRun = snapshot.agentRuns.find((candidate) => candidate.id === identity.agentRunId);
+      if (!agentRun || agentRun.taskId !== task.id || agentRun.sessionId !== session.id) {
+        throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Agent Run does not match its Task and Session");
+      }
+    }
+  }
+
+  private async runtimePromptContext(identity: RuntimeIdentity): Promise<{
+    environment: DCodePromptEnvironment;
+    documents: Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
+  }> {
+    const snapshot = await (await this.getProductStore()).snapshot();
+    const task = snapshot.tasks.find((candidate) => candidate.id === identity.taskId);
+    const session = snapshot.sessions.find((candidate) => candidate.id === identity.dcodeSessionId);
+    const assignment = snapshot.coordinatorAssignments.find((candidate) => (
+      candidate.taskId === identity.taskId && candidate.sessionId === identity.dcodeSessionId
+    ));
+    const childRun = snapshot.agentRuns.find((candidate) => (
+      candidate.taskId === identity.taskId
+      && candidate.sessionId === identity.dcodeSessionId
+      && (identity.agentRunId === undefined || candidate.id === identity.agentRunId)
+    ));
+    const childAssignment = childRun
+      ? snapshot.agentAssignments.find((candidate) => candidate.agentRunId === childRun.id)
+      : undefined;
+    const profileId = assignment?.profileId ?? childAssignment?.profileId;
+    const liveProfile = profileId
+      ? snapshot.agentProfiles.find((candidate) => candidate.id === profileId)
+      : undefined;
+    const storedProfile = typeof childRun?.profileSnapshot === "object"
+      && childRun.profileSnapshot !== null
+      && !Array.isArray(childRun.profileSnapshot)
+      ? childRun.profileSnapshot as Record<string, unknown>
+      : undefined;
+    const role = typeof storedProfile?.role === "string" ? storedProfile.role : liveProfile?.role;
+    const roleContract = typeof storedProfile?.roleContract === "string"
+      ? storedProfile.roleContract
+      : liveProfile?.roleContract;
+    const storedProfileId = typeof storedProfile?.id === "string" ? storedProfile.id : liveProfile?.id;
+    const profileVersion = typeof storedProfile?.profileVersion === "number"
+      ? storedProfile.profileVersion
+      : liveProfile?.profileVersion;
+    if (!task || !session || !role || !roleContract || !storedProfileId || profileVersion === undefined) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime prompt facts are incomplete in the Product Store");
+    }
+    return {
+      environment: {
+        runtimeId: identity.runtimeId,
+        scope: identity.scope,
+        taskId: task.id,
+        taskTitle: task.title,
+        taskGoal: task.goal,
+        sessionId: session.id,
+        sessionKind: session.kind,
+        workspaceId: identity.workspace.workspaceId,
+        cwd: identity.workspace.cwd,
+        workspaceAccess: identity.workspace.access,
+        role,
+        roleRevision: `${storedProfileId}:v${profileVersion}`,
+        roleContract,
+      },
+      documents: await loadDCodePromptDocuments(identity.workspace.cwd),
+    };
+  }
+
+  private async refreshRuntimePrompt(active: WritableSession): Promise<void> {
+    const identity = active.runtimeIdentity;
+    if (!identity) return;
+    const context = await this.runtimePromptContext(identity);
+    const activeToolNames = active.session.getActiveToolNames();
+    const activeToolNameSet = new Set(activeToolNames);
+    const tools = active.session.getAllTools()
+      .filter((tool) => activeToolNameSet.has(tool.name))
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }));
+    const toolsWritable = tools.some((tool) => !SHARED_READ_ONLY_TOOL_NAMES.has(tool.name));
+    if (identity.workspace.access === "sharedReadOnly" && toolsWritable) {
+      throw new PiHostError(
+        "WORKSPACE_ISOLATION_REQUIRED",
+        "A sharedReadOnly Runtime resolved a write-capable Active Tool Set",
+      );
+    }
+    const assembled = assembleDCodeSystemPrompt({
+      environment: {
+        ...context.environment,
+        ...(active.session.model
+          ? { modelProvider: active.session.model.provider, modelId: active.session.model.id }
+          : {}),
+      },
+      documents: context.documents,
+      tools,
+    });
+    active.session.setActiveToolsByName(activeToolNames);
+    const internals = active.session as unknown as {
+      _baseSystemPrompt: string;
+      _systemPromptOverride?: string;
+    };
+    internals._baseSystemPrompt = assembled.text;
+    internals._systemPromptOverride = undefined;
+    active.session.agent.state.systemPrompt = assembled.text;
+    active.assembledPrompt = assembled;
+    active.promptEnvironment = context.environment;
+    active.activePromptTools = tools;
+    active.toolsWritable = toolsWritable;
+    if (active.session.systemPrompt !== assembled.text) {
+      throw new PiHostError("PROMPT_ASSEMBLY_FAILED", "D Code could not install its System Prompt");
+    }
+    const manifestNames = [...tools.map((tool) => tool.name)].sort();
+    const apiToolNames = [...active.session.getActiveToolNames()].sort();
+    if (JSON.stringify(manifestNames) !== JSON.stringify(apiToolNames)) {
+      throw new PiHostError("TOOL_MANIFEST_MISMATCH", "D Code Active Tool Manifest does not match API tools");
+    }
+  }
 
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
     if (method === "extension.respond") {
+      if (typeof params.runtimeId === "string") {
+        return await this.handleRuntimeRequest(method, params);
+      }
       return await this.handleExtensionResponse(params);
     }
     if (method === "modelAuth.respond") {
@@ -398,9 +846,36 @@ export class PiHost {
         ...(params.probe === true ? { probe: true } : {}),
       });
     }
+    if (typeof params.runtimeId === "string") {
+      if (!RUNTIME_SCOPED_METHODS.has(method)) {
+        throw new PiHostError("RUNTIME_METHOD_NOT_SCOPED", `Method ${method} cannot be routed to a Runtime`);
+      }
+      return await this.handleRuntimeRequest(method, params);
+    }
     const operation = this.operationQueue.then(() => this.handleSerial(method, params));
     this.operationQueue = operation.then(() => undefined, () => undefined);
     return await operation;
+  }
+
+  private async handleRuntimeRequest(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
+    const runtimeId = params.runtimeId;
+    if (typeof runtimeId !== "string" || runtimeId.length === 0) {
+      throw new PiHostError("RUNTIME_ID_REQUIRED", "A non-empty runtimeId is required");
+    }
+    const execute = async (): Promise<unknown> => await this.runtimeContext.run(runtimeId, async () => {
+      if (method === "extension.respond") return await this.handleExtensionResponse(params);
+      return await this.handleSerial(method, params);
+    });
+    if (RUNTIME_CONTROL_METHODS.has(method)) return await execute();
+    const previous = this.runtimeQueues.get(runtimeId) ?? Promise.resolve();
+    const operation = previous.then(execute);
+    const tail = operation.then(() => undefined, () => undefined);
+    this.runtimeQueues.set(runtimeId, tail);
+    try {
+      return await operation;
+    } finally {
+      if (this.runtimeQueues.get(runtimeId) === tail) this.runtimeQueues.delete(runtimeId);
+    }
   }
 
   async close(): Promise<void> {
@@ -409,9 +884,19 @@ export class PiHost {
     this.searchShutdown = searchClose;
     try {
       await this.operationQueue;
+      await Promise.all([...this.runtimeQueues.values()]);
+      await Promise.all([...this.runtimes.keys()].map(async (runtimeId) => {
+        await this.runtimeContext.run(runtimeId, async () => { await this.closeActive(); });
+      }));
       await this.closeActive();
     } finally {
-      await searchClose;
+      try {
+        await searchClose;
+      } finally {
+        const store = this.productStore
+          ?? (this.productStoreOpening ? await this.productStoreOpening.catch(() => undefined) : undefined);
+        await store?.close();
+      }
     }
   }
 
@@ -453,8 +938,255 @@ export class PiHost {
             modelSettings: true,
             sessionSteer: true,
             modelAuthentication: true,
+            productStore: true,
+            nativeTasks: true,
+            foundationSnapshot: true,
+            piSessionImport: true,
+            sessionPathFacts: true,
+            multiRuntime: true,
+            runtimeIdentity: true,
+            runtimeEventSequence: true,
+            workspaceIsolation: true,
+            agentRequests: true,
           },
         };
+      case "runtime.list":
+        return {
+          limits: {
+            maxActiveRuntimes: MAX_ACTIVE_RUNTIMES,
+            maxConcurrentProviderRequests: MAX_ACTIVE_RUNTIMES,
+          },
+          runtimes: [...this.runtimes.values()].map((runtime) => ({
+            identity: runtime.runtimeIdentity,
+            sessionId: runtime.session.sessionId,
+            state: this.runtimeState(runtime),
+            sequence: runtime.runtimeEventSequence,
+            systemPromptDigest: runtime.assembledPrompt?.digest ?? null,
+            activeToolNames: runtime.activePromptTools.map((tool) => tool.name),
+          })),
+        };
+      case "runtime.start":
+        return await this.startDCodeRuntime(params);
+      case "foundation.snapshot":
+        return await (await this.getProductStore()).snapshot(
+          typeof params.afterEventSequence === "number" ? params.afterEventSequence : 0,
+        );
+      case "project.create": {
+        const result = await (await this.getProductStore()).createProject({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          title: params.title as string,
+          directory: params.directory as string,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "project.created",
+          entityKind: "project",
+          entityId: result.project.id,
+        });
+        return result;
+      }
+      case "task.create": {
+        const result = await (await this.getProductStore()).createTask({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          scope: params.scope as TaskScope,
+          title: params.title as string,
+          goal: params.goal as string,
+          ...(Array.isArray(params.acceptance) ? { acceptance: params.acceptance as string[] } : {}),
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "task.created",
+          entityKind: "task",
+          entityId: result.task.id,
+          taskId: result.task.id,
+          scope: result.task.scope,
+        });
+        return result;
+      }
+      case "task.acceptance": {
+        const result = await (await this.getProductStore()).decideTaskAcceptance({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          expectedTaskRevision: params.expectedTaskRevision as number,
+          decision: params.decision as "accepted" | "rejected",
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: result.task.state === "completed" ? "task.accepted" : "task.rejected",
+          entityKind: "task",
+          entityId: result.task.id,
+          taskId: result.task.id,
+        });
+        return result;
+      }
+      case "team.create": {
+        const result = await (await this.getProductStore()).createTeamRun({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          members: params.members as Array<{
+            profileId: string;
+            title: string;
+            taskPacket: Record<string, unknown>;
+          }>,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "teamRun.created",
+          entityKind: "teamRun",
+          entityId: result.teamRun.id,
+          taskId: result.teamRun.taskId,
+        });
+        return result;
+      }
+      case "team.start":
+        return await this.startTeamRun(params);
+      case "agentRequest.answer": {
+        const serializedAnswer = JSON.stringify(params.answer);
+        if (redactCredentialText(serializedAnswer).redacted) {
+          throw new PiHostError(
+            "CREDENTIAL_MATERIAL_REJECTED",
+            "D Code 检测到回答中可能包含凭据。请移除密钥、Token 或密码。",
+          );
+        }
+        const result = await (await this.getProductStore()).answerAgentRequest({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          agentRequestId: params.agentRequestId as string,
+          expectedRequestRevision: params.expectedRequestRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          teamRunId: params.teamRunId as string,
+          agentRunId: params.agentRunId as string,
+          sessionRunId: params.sessionRunId as string,
+          runtimeId: params.runtimeId as string,
+          answer: params.answer as { kind: "choice"; optionId: string },
+        });
+        const pending = this.pendingAgentRequests.get(result.agentRequest.id);
+        let deliveredToRuntime = false;
+        if (pending) {
+          this.pendingAgentRequests.delete(result.agentRequest.id);
+          pending.removeAbortListener?.();
+          const runtime = this.runtimes.get(pending.runtimeId);
+          if (runtime?.currentRun?.sessionRunId === result.agentRequest.sessionRunId) {
+            this.updateRunState(runtime, runtime.currentRun, "running");
+          }
+          pending.resolve(result.agentRequest.answer);
+          deliveredToRuntime = true;
+        }
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "agentRequest.answered",
+          entityKind: "agentRequest",
+          entityId: result.agentRequest.id,
+          taskId: result.agentRequest.taskId,
+        });
+        return { ...result, deliveredToRuntime };
+      }
+      case "agentRun.stop":
+        return await this.stopAgentRun(params);
+      case "agentProfile.update": {
+        const result = await (await this.getProductStore()).updateAgentProfile({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          profileId: params.profileId as string,
+          expectedProfileRevision: params.expectedProfileRevision as number,
+          name: params.name as string,
+          roleContract: params.roleContract as string,
+          enabled: params.enabled as boolean,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "agentProfile.updated",
+          entityKind: "agentProfile",
+          entityId: result.agentProfile.id,
+        });
+        return result;
+      }
+      case "agentProfile.create": {
+        const result = await (await this.getProductStore()).createAgentProfile({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          name: params.name as string,
+          roleContract: params.roleContract as string,
+          enabled: params.enabled as boolean,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "agentProfile.created",
+          entityKind: "agentProfile",
+          entityId: result.agentProfile.id,
+        });
+        return result;
+      }
+      case "piImport.listCandidates": {
+        const store = await this.getProductStore();
+        const snapshot = await store.snapshot();
+        return {
+          candidates: await listPiImportCandidates(
+            this.reader,
+            snapshot.piImports,
+            typeof params.limit === "number" ? params.limit : 200,
+          ),
+        };
+      }
+      case "piImport.preview": {
+        const store = await this.getProductStore();
+        const snapshot = await store.snapshot();
+        const prepared = await preparePiSessionImport(
+          this.reader,
+          params.sourceSessionId as string,
+          snapshot.piImports,
+        );
+        return prepared.preview;
+      }
+      case "piImport.importAsTask": {
+        const store = await this.getProductStore();
+        const replayed = await store.replayPiImportRequest({
+          requestId: params.requestId as string,
+          scope: params.scope as TaskScope,
+          sourceSessionId: params.sourceSessionId as string,
+        });
+        if (replayed) return replayed;
+        const snapshot = await store.snapshot();
+        const prepared = await preparePiSessionImport(
+          this.reader,
+          params.sourceSessionId as string,
+          snapshot.piImports,
+        );
+        const result = await store.importPiSessionAsTask({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          scope: params.scope as TaskScope,
+          sourceSessionId: prepared.preview.sourceSessionId,
+          sourcePath: prepared.preview.sourcePath,
+          sourceDigest: prepared.preview.sourceDigest,
+          historicalCwd: prepared.preview.cwd,
+          title: prepared.preview.title,
+          entries: prepared.entries,
+          paths: prepared.paths,
+          conversionEvidence: prepared.conversionEvidence,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "piImport.completed",
+          entityKind: "task",
+          entityId: result.task.id,
+          taskId: result.task.id,
+          scope: result.task.scope,
+          sourceSessionId: result.piImport.sourceSessionId,
+        });
+        return result;
+      }
+      case "session.importedEntries": {
+        const entries = await (await this.getProductStore()).importedSessionEntries(params.sessionId as string);
+        return { entries };
+      }
       case "session.list":
         return {
           sessions: await this.reader.list({
@@ -494,12 +1226,50 @@ export class PiHost {
       case "session.repair":
         return await this.reader.repair(params.sessionId as string);
       case "session.open":
-        return await this.openSessionWithRepairHint(
-          params.sessionId as string,
-          typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
-          typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
-          leafIdForPathId(params.pathId),
-        );
+        {
+          const identity = this.runtimeIdentityFromParams(params);
+          if (identity) {
+            await this.validateRuntimeIdentity(identity, params.sessionId as string);
+            const existing = this.active;
+            if (existing) {
+              if (JSON.stringify(existing.runtimeIdentity) !== JSON.stringify(identity)) {
+                throw new PiHostError("RUNTIME_ID_CONFLICT", "runtimeId is already bound to a different identity");
+              }
+              return {
+                mode: "writable" as const,
+                snapshot: existing.inspection,
+                state: this.getState(),
+                extensions: { loaded: 0, errors: [] },
+                reused: true,
+              };
+            }
+            const adapterOwner = this.runtimeByAdapterSessionId.get(identity.adapterSessionId)
+              ?? this.openingAdapterSessionIds.get(identity.adapterSessionId);
+            if (adapterOwner && adapterOwner !== identity.runtimeId) {
+              throw new PiHostError(
+                "ADAPTER_SESSION_ALREADY_ACTIVE",
+                "The Pi adapter session is already owned by another Runtime",
+                { adapterSessionId: identity.adapterSessionId, runtimeId: adapterOwner },
+              );
+            }
+            const dcodeSessionOwner = this.runtimeByDCodeSessionId.get(identity.dcodeSessionId)
+              ?? this.openingDCodeSessionIds.get(identity.dcodeSessionId);
+            if (dcodeSessionOwner && dcodeSessionOwner !== identity.runtimeId) {
+              throw new PiHostError(
+                "SESSION_ALREADY_ACTIVE",
+                "The D Code Session is already owned by another Runtime",
+                { dcodeSessionId: identity.dcodeSessionId, runtimeId: dcodeSessionOwner },
+              );
+            }
+          }
+          return await this.openSessionWithRepairHint(
+            params.sessionId as string,
+            typeof params.expectedEntryId === "string" ? params.expectedEntryId : undefined,
+            typeof params.expectedEntryDigest === "string" ? params.expectedEntryDigest : undefined,
+            leafIdForPathId(params.pathId),
+            identity,
+          );
+        }
       case "session.close":
         if (typeof params.expectedSessionId === "string"
           && this.active?.inspection.summary.id !== params.expectedSessionId) {
@@ -632,6 +1402,88 @@ export class PiHost {
     return { accepted };
   }
 
+  private async stopAgentRun(params: Record<string, unknown>): Promise<unknown> {
+    const store = await this.getProductStore();
+    const prepared = await store.prepareAgentRunStop({
+      requestId: params.requestId as string,
+      expectedStoreRevision: params.expectedStoreRevision as number,
+      scope: params.scope as TaskScope,
+      taskId: params.taskId as string,
+      teamRunId: params.teamRunId as string,
+      agentRunId: params.agentRunId as string,
+      sessionRunId: params.sessionRunId as string,
+      runtimeId: params.runtimeId as string,
+      expectedAgentRunRevision: params.expectedAgentRunRevision as number,
+    });
+    const afterPrepare = await store.snapshot();
+    const durableAttempt = afterPrepare.operationAttempts.find((attempt) => attempt.id === prepared.attemptId);
+    if (durableAttempt?.status === "succeeded") {
+      return { stopped: true, attemptId: prepared.attemptId, storeRevision: afterPrepare.storeRevision, replayed: true };
+    }
+    if (durableAttempt?.status === "unknown") {
+      return { stopped: false, outcome: "unknown", attemptId: prepared.attemptId, storeRevision: afterPrepare.storeRevision, replayed: true };
+    }
+    const active = this.active;
+    const identity = active?.runtimeIdentity;
+    const run = active?.currentRun;
+    if (!active || !identity?.agentRunId || !run?.sessionRunId) {
+      const unknown = await store.finishOperationAttempt({ attemptId: prepared.attemptId, outcome: "unknown" });
+      return {
+        stopped: false,
+        outcome: "unknown",
+        reasonCode: "AGENT_RUN_NOT_ACTIVE",
+        attemptId: prepared.attemptId,
+        storeRevision: unknown.storeRevision,
+      };
+    }
+    if (
+      identity.runtimeId !== params.runtimeId
+      || identity.taskId !== params.taskId
+      || identity.agentRunId !== params.agentRunId
+      || run.sessionRunId !== params.sessionRunId
+      || JSON.stringify(identity.scope) !== JSON.stringify(params.scope)
+    ) {
+      await store.finishOperationAttempt({ attemptId: prepared.attemptId, outcome: "unknown" });
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Agent Run stop identity does not match the active Runtime");
+    }
+    this.options.emit("foundation.changed", {
+      storeRevision: prepared.storeRevision,
+      kind: "agentRun.stopPrepared",
+      entityKind: "operationAttempt",
+      entityId: prepared.attemptId,
+      taskId: identity.taskId,
+      runtimeId: identity.runtimeId,
+      agentRunId: identity.agentRunId,
+    });
+    this.updateRunState(active, run, "stopRequested");
+    try {
+      await active.session.abort();
+      await active.session.waitForIdle();
+      await this.finalizeRun(active, run, "aborted");
+      await this.finishDurableSessionRun(active, run, "aborted");
+      const finished = await store.finishOperationAttempt({
+        attemptId: prepared.attemptId,
+        outcome: "succeeded",
+      });
+      this.options.emit("foundation.changed", {
+        storeRevision: finished.storeRevision,
+        kind: "agentRun.stopped",
+        entityKind: "agentRun",
+        entityId: identity.agentRunId,
+        taskId: identity.taskId,
+        runtimeId: identity.runtimeId,
+      });
+      return { stopped: true, attemptId: prepared.attemptId, storeRevision: finished.storeRevision };
+    } catch (error) {
+      await store.finishOperationAttempt({
+        attemptId: prepared.attemptId,
+        outcome: "unknown",
+      }).catch(() => undefined);
+      this.updateRunState(active, run, "unknown", { retryable: false });
+      throw error;
+    }
+  }
+
   private renderMermaid(source: string): unknown {
     const kind = diagramKind(source);
     try {
@@ -655,6 +1507,369 @@ export class PiHost {
       };
     } catch {
       return { rendered: false, kind, error: "Mermaid rendering failed" };
+    }
+  }
+
+  private async startDCodeRuntime(params: Record<string, unknown>): Promise<unknown> {
+    const runtimeId = params.runtimeId as string;
+    const taskId = params.taskId as string;
+    const dcodeSessionId = params.dcodeSessionId as string;
+    const agentRunId = typeof params.agentRunId === "string" ? params.agentRunId : undefined;
+    const scope = params.scope as TaskScope;
+    const workspace = params.workspace as {
+      workspaceId: string;
+      cwd: string;
+      access: "exclusiveWrite";
+    };
+    const active = this.active;
+    if (active) {
+      if (
+        active.runtimeIdentity?.taskId === taskId
+        && active.runtimeIdentity.dcodeSessionId === dcodeSessionId
+      ) {
+        return {
+          reused: true,
+          binding: await (await this.getProductStore()).sessionRuntimeBinding(dcodeSessionId),
+          runtime: { identity: active.runtimeIdentity, state: this.runtimeState(active) },
+        };
+      }
+      throw new PiHostError("RUNTIME_ID_CONFLICT", "runtimeId is already active for another D Code Session");
+    }
+    if (this.runtimes.size + this.openingDCodeSessionIds.size >= MAX_ACTIVE_RUNTIMES) {
+      throw new PiHostError(
+        "RUNTIME_LIMIT_REACHED",
+        "D Code has reached its active Runtime limit; existing runs were left untouched",
+        { maxActiveRuntimes: MAX_ACTIVE_RUNTIMES },
+      );
+    }
+    const dcodeOwner = this.runtimeByDCodeSessionId.get(dcodeSessionId)
+      ?? this.openingDCodeSessionIds.get(dcodeSessionId);
+    if (dcodeOwner && dcodeOwner !== runtimeId) {
+      throw new PiHostError("SESSION_ALREADY_ACTIVE", "D Code Session is already active", {
+        dcodeSessionId,
+        runtimeId: dcodeOwner,
+      });
+    }
+    this.openingDCodeSessionIds.set(dcodeSessionId, runtimeId);
+    try {
+      const store = await this.getProductStore();
+      let binding = await store.sessionRuntimeBinding(dcodeSessionId);
+      if (!binding) {
+        const created = await this.createSession(workspace.cwd) as {
+          session: SessionSummary;
+        };
+        binding = (await store.bindSessionRuntime({
+          taskId,
+          sessionId: dcodeSessionId,
+          adapterSessionId: created.session.id,
+          adapterSessionPath: created.session.path,
+          cwd: created.session.cwd,
+        })).binding;
+      }
+      const identity: RuntimeIdentity = {
+        runtimeId,
+        scope,
+        taskId,
+        dcodeSessionId,
+        ...(agentRunId ? { agentRunId } : {}),
+        adapterSessionId: binding.adapterSessionId,
+        workspace: {
+          workspaceId: workspace.workspaceId,
+          cwd: workspace.cwd,
+          access: workspace.access,
+        },
+      };
+      await this.validateRuntimeIdentity(identity, binding.adapterSessionId);
+      const opened = await this.openSessionWithRepairHint(
+        binding.adapterSessionId,
+        undefined,
+        undefined,
+        undefined,
+        identity,
+      );
+      return { binding, runtime: opened };
+    } finally {
+      this.openingDCodeSessionIds.delete(dcodeSessionId);
+    }
+  }
+
+  private async startTeamRun(params: Record<string, unknown>): Promise<unknown> {
+    const taskId = params.taskId as string;
+    const teamRunId = params.teamRunId as string;
+    const message = params.message as string;
+    const workspace = params.workspace as {
+      workspaceId: string;
+      cwd: string;
+      access: "sharedReadOnly";
+    };
+    const store = await this.getProductStore();
+    const claimed = await store.claimTeamRunStart({
+      requestId: params.requestId as string,
+      expectedStoreRevision: params.expectedStoreRevision as number,
+      expectedTeamRunRevision: params.expectedTeamRunRevision as number,
+      scope: params.scope as TaskScope,
+      taskId,
+      teamRunId,
+    });
+    this.options.emit("foundation.changed", {
+      storeRevision: claimed.storeRevision,
+      kind: "teamRun.startClaimed",
+      entityKind: "teamRun",
+      entityId: teamRunId,
+      taskId,
+    });
+    const snapshot = await store.snapshot();
+    const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
+    const teamRun = snapshot.teamRuns.find((candidate) => candidate.id === teamRunId && candidate.taskId === taskId);
+    if (!task || !teamRun) {
+      throw new PiHostError("TEAM_RUN_NOT_ACTIVE", "Team Run is missing", { taskId, teamRunId });
+    }
+    if (JSON.stringify(task.scope) !== JSON.stringify(params.scope)) {
+      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task Scope does not match the stored Task");
+    }
+    const agentRuns = snapshot.agentRuns.filter((candidate) => candidate.teamRunId === teamRunId);
+    if (agentRuns.length < 2) {
+      throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run requires a Coordinator and at least one member");
+    }
+    const runtimeDescriptors = agentRuns.map((agentRun) => ({
+      runtimeId: `runtime-${agentRun.id}`,
+      agentRunId: agentRun.id,
+      sessionId: agentRun.sessionId,
+    }));
+    if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(teamRun.status)) {
+      const agentRunIds = new Set(agentRuns.map((agentRun) => agentRun.id));
+      const started = snapshot.sessionRuns.some((run) => run.agentRunId && agentRunIds.has(run.agentRunId));
+      return {
+        taskId,
+        teamRunId,
+        runtimes: runtimeDescriptors,
+        coordinatorManaged: true,
+        started,
+        terminalStatus: teamRun.status,
+        replayed: true,
+      };
+    }
+    if (this.teamLifecycles.has(teamRunId)) {
+      return { taskId, teamRunId, runtimes: runtimeDescriptors, coordinatorManaged: true, started: true, replayed: true };
+    }
+    if (agentRuns.some((agentRun) => agentRun.role === "worker")) {
+      await this.finishTeamRunDurably({
+        requestId: `team-start-failed:${teamRunId}:worker-worktree-required`,
+        taskId,
+        teamRunId,
+        status: "failed",
+        reason: "Worker requires an isolated writable worktree; sharedReadOnly Team start was refused",
+      });
+      return {
+        taskId,
+        teamRunId,
+        runtimes: runtimeDescriptors,
+        coordinatorManaged: true,
+        started: false,
+        terminalStatus: "failed",
+        reasonCode: "WORKSPACE_ISOLATION_REQUIRED",
+      };
+    }
+    const settlements = await Promise.allSettled(agentRuns.map(async (agentRun) => {
+      const runtimeId = `runtime-${agentRun.id}`;
+      const runtimeWorkspace = {
+        workspaceId: `${workspace.workspaceId}:${agentRun.id}`,
+        cwd: workspace.cwd,
+        access: workspace.access,
+      };
+      const result = await this.runtimeContext.run(runtimeId, async () => await this.startDCodeRuntime({
+        requestId: `${params.requestId as string}:${agentRun.id}`,
+        runtimeId,
+        taskId,
+        dcodeSessionId: agentRun.sessionId,
+        agentRunId: agentRun.id,
+        scope: task.scope,
+        workspace: runtimeWorkspace,
+      }));
+      return { agentRun, runtimeId, result };
+    }));
+    const started = settlements.flatMap((settlement) => settlement.status === "fulfilled" ? [settlement.value] : []);
+    const failedStart = settlements.find((settlement) => settlement.status === "rejected");
+    if (failedStart?.status === "rejected") {
+      await Promise.all(started.map(async ({ runtimeId }) => await this.closeRuntime(runtimeId)));
+      await this.finishTeamRunDurably({
+        requestId: `team-start-failed:${teamRunId}:partial-runtime-open`,
+        taskId,
+        teamRunId,
+        status: "failed",
+        reason: "One or more Team Runtimes could not be opened safely",
+      });
+      return {
+        taskId,
+        teamRunId,
+        runtimes: runtimeDescriptors,
+        coordinatorManaged: true,
+        started: false,
+        terminalStatus: "failed",
+        reasonCode: errorRecord(failedStart.reason).code,
+      };
+    }
+    const assignments = snapshot.agentAssignments.filter((candidate) => candidate.teamRunId === teamRunId);
+    const rawLifecycle = this.runCoordinatedTeamLifecycle({
+      taskId,
+      teamRunId,
+      message,
+      coordinatorAgentRunId: teamRun.coordinatorAgentRunId,
+      started,
+      assignments,
+    });
+    const lifecycle = rawLifecycle.catch(async (error) => {
+      await this.finishTeamRunDurably({
+        requestId: `team-lifecycle-failed:${teamRunId}`,
+        taskId,
+        teamRunId,
+        status: "failed",
+        reason: "Coordinator lifecycle failed before durable completion",
+      }).catch(() => undefined);
+      throw error;
+    }).finally(async () => {
+      await Promise.all(started.map(async ({ runtimeId }) => await this.closeRuntime(runtimeId)));
+    });
+    this.teamLifecycles.set(teamRunId, lifecycle);
+    void lifecycle.catch((error) => {
+      this.options.emit("team.lifecycleFailed", {
+        taskId,
+        teamRunId,
+        ...errorRecord(error),
+      });
+    }).finally(() => {
+      if (this.teamLifecycles.get(teamRunId) === lifecycle) this.teamLifecycles.delete(teamRunId);
+    });
+    return {
+      taskId,
+      teamRunId,
+      runtimes: runtimeDescriptors,
+      coordinatorManaged: true,
+      started: true,
+      claimStoreRevision: claimed.storeRevision,
+    };
+  }
+
+  private async closeRuntime(runtimeId: string): Promise<void> {
+    await this.runtimeContext.run(runtimeId, async () => { await this.closeActive(); });
+  }
+
+  private async finishTeamRunDurably(input: {
+    requestId: string;
+    taskId: string;
+    teamRunId: string;
+    status: "failed" | "aborted";
+    reason: string;
+  }): Promise<void> {
+    const result = await (await this.getProductStore()).finishTeamRun(input);
+    this.options.emit("foundation.changed", {
+      storeRevision: result.storeRevision,
+      kind: `teamRun.${result.teamRun.status}`,
+      entityKind: "teamRun",
+      entityId: result.teamRun.id,
+      taskId: result.teamRun.taskId,
+    });
+  }
+
+  private async runCoordinatedTeamLifecycle(input: {
+    taskId: string;
+    teamRunId: string;
+    message: string;
+    coordinatorAgentRunId: string;
+    started: Array<{ agentRun: { id: string; sessionId: string }; runtimeId: string; result: unknown }>;
+    assignments: Array<{ agentRunId?: string; taskPacket: unknown }>;
+  }): Promise<void> {
+    const coordinator = input.started.find(({ agentRun }) => agentRun.id === input.coordinatorAgentRunId);
+    if (!coordinator) throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run has no Coordinator Runtime");
+    const members = input.started.filter(({ agentRun }) => agentRun.id !== input.coordinatorAgentRunId);
+    await this.handleRuntimeRequest("session.prompt", {
+      runtimeId: coordinator.runtimeId,
+      message: `${input.message}\n\n第一阶段：先理解目标、边界和成员职责，形成协调计划；不要假装成员已经完成。`,
+      promptId: `team:${input.teamRunId}:coordinator-plan`,
+    });
+    const planningStatus = await this.waitForAgentRunTerminal(input.coordinatorAgentRunId);
+    if (planningStatus !== "completed") {
+      await this.finishTeamRunDurably({
+        requestId: `team-lifecycle-terminal:${input.teamRunId}:planning`,
+        taskId: input.taskId,
+        teamRunId: input.teamRunId,
+        status: planningStatus === "aborted" ? "aborted" : "failed",
+        reason: `Coordinator planning ended as ${planningStatus}`,
+      });
+      return;
+    }
+
+    await Promise.all(members.map(async ({ agentRun, runtimeId }) => {
+      const assignment = input.assignments.find((candidate) => candidate.agentRunId === agentRun.id);
+      await this.handleRuntimeRequest("session.prompt", {
+        runtimeId,
+        message: `执行 D Code Agent Assignment（智能体指派）：\n${JSON.stringify(assignment?.taskPacket ?? {})}`,
+        promptId: `team:${input.teamRunId}:${agentRun.id}:work`,
+      });
+    }));
+    await Promise.all(members.map(async ({ agentRun }) => await this.waitForAgentRunTerminal(agentRun.id)));
+
+    const memberIds = new Set(members.map(({ agentRun }) => agentRun.id));
+    const snapshot = await (await this.getProductStore()).snapshot();
+    const reports = snapshot.agentReports
+      .filter((report) => memberIds.has(report.agentRunId))
+      .map((report) => ({
+        agentRunId: report.agentRunId,
+        reportKind: report.reportKind,
+        body: report.body,
+      }));
+    await this.handleRuntimeRequest("session.prompt", {
+      runtimeId: coordinator.runtimeId,
+      message: [
+        "第二阶段：下面是已经持久化的 Child Agent Reports（子代理报告）。",
+        "只综合报告中真实存在的事实、分歧、未知与证据；不要把成员完成自动等同于 Task 验收。",
+        JSON.stringify(reports),
+      ].join("\n"),
+      promptId: `team:${input.teamRunId}:coordinator-synthesis`,
+    });
+    const synthesisStatus = await this.waitForAgentRunTerminal(input.coordinatorAgentRunId);
+    if (synthesisStatus !== "completed") {
+      await this.finishTeamRunDurably({
+        requestId: `team-lifecycle-terminal:${input.teamRunId}:synthesis`,
+        taskId: input.taskId,
+        teamRunId: input.teamRunId,
+        status: synthesisStatus === "aborted" ? "aborted" : "failed",
+        reason: `Coordinator synthesis ended as ${synthesisStatus}`,
+      });
+      return;
+    }
+    await this.waitForTeamTerminal(input.teamRunId);
+    this.options.emit("foundation.changed", {
+      kind: "teamRun.coordinatorSynthesized",
+      entityKind: "teamRun",
+      entityId: input.teamRunId,
+      taskId: input.taskId,
+    });
+  }
+
+  private async waitForAgentRunTerminal(agentRunId: string, timeoutMs = 120_000): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const snapshot = await (await this.getProductStore()).snapshot();
+      const status = snapshot.agentRuns.find((run) => run.id === agentRunId)?.status;
+      if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(status ?? "")) return status!;
+      if (Date.now() >= deadline) {
+        throw new PiHostError("TEAM_RUN_TIMEOUT", "Timed out while waiting for an Agent Run", { agentRunId, status });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  private async waitForTeamTerminal(teamRunId: string, timeoutMs = 120_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const snapshot = await (await this.getProductStore()).snapshot();
+      const status = snapshot.teamRuns.find((run) => run.id === teamRunId)?.status;
+      if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(status ?? "")) return;
+      if (Date.now() >= deadline) {
+        throw new PiHostError("TEAM_RUN_TIMEOUT", "Timed out while waiting for Coordinator synthesis", { teamRunId, status });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
@@ -1149,9 +2364,10 @@ export class PiHost {
     expectedEntryId?: string,
     expectedEntryDigest?: string,
     selectedLeafId?: string | null,
+    runtimeIdentity?: RuntimeIdentity,
   ): Promise<unknown> {
     try {
-      return await this.openSession(sessionId, expectedEntryId, expectedEntryDigest, selectedLeafId);
+      return await this.openSession(sessionId, expectedEntryId, expectedEntryDigest, selectedLeafId, runtimeIdentity);
     } catch (error) {
       if (error instanceof SessionReadError && error.code === "INVALID_SESSION") {
         const inspection = await this.reader.inspectRepairability(sessionId).catch(() => null);
@@ -1174,6 +2390,7 @@ export class PiHost {
     expectedEntryId?: string,
     expectedEntryDigest?: string,
     selectedLeafId?: string | null,
+    runtimeIdentity?: RuntimeIdentity,
   ): Promise<unknown> {
     this.assertWriteHealthy();
     const inspection = await this.reader.inspect(sessionId, selectedLeafId);
@@ -1185,15 +2402,61 @@ export class PiHost {
     }
     // 先校验搜索目标与版本，失败时不影响当前已打开的会话。
     this.assertExpectedEntry(inspection, expectedEntryId, expectedEntryDigest);
+    if (runtimeIdentity) {
+      const adapterCwd = await realpath(inspection.summary.cwd);
+      if (adapterCwd !== runtimeIdentity.workspace.cwd) {
+        throw new PiHostError(
+          "RUNTIME_IDENTITY_MISMATCH",
+          "Runtime workspace does not match the Pi adapter session cwd",
+          { workspaceCwd: runtimeIdentity.workspace.cwd, adapterCwd },
+        );
+      }
+      const workspaceOwner = this.workspaceConflict(
+        this.workspaceClaimKey(runtimeIdentity.workspace),
+        runtimeIdentity.runtimeId,
+        runtimeIdentity.workspace.access,
+      );
+      if (workspaceOwner) {
+        throw new PiHostError(
+          "WORKSPACE_IN_USE",
+          "The write-capable Runtime workspace is already active",
+          { cwd: runtimeIdentity.workspace.cwd, runtimeId: workspaceOwner },
+        );
+      }
+      this.openingAdapterSessionIds.set(runtimeIdentity.adapterSessionId, runtimeIdentity.runtimeId);
+      this.openingDCodeSessionIds.set(runtimeIdentity.dcodeSessionId, runtimeIdentity.runtimeId);
+      this.addWorkspaceClaim(
+        this.openingWorkspaceClaims,
+        this.workspaceClaimKey(runtimeIdentity.workspace),
+        runtimeIdentity.runtimeId,
+        runtimeIdentity.workspace.access,
+      );
+    }
     await this.closeActive();
     // 打开即接管：D Code 是一等公民。force 抢占其他 D Code 实例的租约；
     // 静默窗口内文件仍在变（Pi CLI 在途写入）时轮询到稳定再完成接管，超时如实报错。
-    const lease = await this.acquireLeaseUntilIdle(sessionId, inspection.summary.path);
+    let lease: SessionLease;
+    try {
+      lease = await this.acquireLeaseUntilIdle(sessionId, inspection.summary.path);
+    } catch (error) {
+      if (runtimeIdentity) {
+        this.openingAdapterSessionIds.delete(runtimeIdentity.adapterSessionId);
+        this.openingDCodeSessionIds.delete(runtimeIdentity.dcodeSessionId);
+        this.releaseWorkspaceClaim(
+          this.openingWorkspaceClaims,
+          this.workspaceClaimKey(runtimeIdentity.workspace),
+          runtimeIdentity.runtimeId,
+        );
+      }
+      throw error;
+    }
 
     let session: AgentSession | undefined;
     let ui: ExtensionUIBridge | undefined;
     let unsubscribe: (() => void) | undefined;
     let conflictTimer: ReturnType<typeof setInterval> | undefined;
+    let attemptController: DCodeOperationAttemptController | undefined;
+    let agentRequestController: DCodeAgentRequestController | undefined;
     try {
       const manager = SessionManager.open(inspection.summary.path);
       if (selectedLeafId !== undefined) {
@@ -1202,10 +2465,21 @@ export class PiHost {
       }
       await lease.assertUnchanged();
       const fastMode = new DCodeFastController();
+      let activeForFacts: WritableSession | undefined;
+      const promptContext = runtimeIdentity ? await this.runtimePromptContext(runtimeIdentity) : undefined;
+      attemptController = runtimeIdentity ? new DCodeOperationAttemptController() : undefined;
+      agentRequestController = runtimeIdentity?.agentRunId ? new DCodeAgentRequestController() : undefined;
+      let assembledPrompt = promptContext
+        ? assembleDCodeSystemPrompt({
+          environment: promptContext.environment,
+          documents: promptContext.documents,
+          tools: [],
+        })
+        : undefined;
       const factsContext = {
-        sessionId: () => this.active?.inspection.summary.id,
-        cwd: () => this.active?.inspection.summary.cwd,
-        paths: () => (this.active?.inspection.paths ?? []).map((path) => ({
+        sessionId: () => activeForFacts?.inspection.summary.id,
+        cwd: () => activeForFacts?.inspection.summary.cwd,
+        paths: () => (activeForFacts?.inspection.paths ?? []).map((path) => ({
           id: path.id,
           title: path.title,
           isCurrent: path.isCurrent,
@@ -1220,7 +2494,23 @@ export class PiHost {
         extensionFactories: [
           { name: "dcode-fast", hidden: true, factory: createDCodeFastExtension(fastMode) },
           { name: "dcode-facts", hidden: true, factory: createDCodeFactsExtension(factsContext) },
+          ...(attemptController
+            ? [{
+              name: "dcode-operation-attempts",
+              hidden: true,
+              factory: createDCodeOperationAttemptExtension(attemptController),
+            }]
+            : []),
+          ...(agentRequestController
+            ? [{
+              name: "dcode-agent-request",
+              hidden: true,
+              factory: createDCodeAgentRequestExtension(agentRequestController),
+            }]
+            : []),
         ],
+        ...(runtimeIdentity ? { systemPromptOverride: () => assembledPrompt?.text } : {}),
+        ...(runtimeIdentity ? { allowExternalExtensions: false } : {}),
       });
       await resourceLoader.reload();
       const created = await createAgentSession({
@@ -1229,9 +2519,65 @@ export class PiHost {
         sessionManager: manager,
         settingsManager: sourceSettingsManager,
         resourceLoader,
+        ...(promptContext && new Set(["coordinator", "explore", "verifier", "custom"]).has(promptContext.environment.role)
+          ? { tools: ["read", "grep", "find", "ls", "dcode_facts", DCODE_AGENT_REQUEST_TOOL_NAME] }
+          : {}),
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
       });
       session = created.session;
+      let activePromptTools: DCodePromptTool[] = [];
+      let toolsWritable = false;
+      if (promptContext) {
+        const activeToolNames = session.getActiveToolNames();
+        const activeToolNameSet = new Set(activeToolNames);
+        activePromptTools = session.getAllTools()
+          .filter((tool) => activeToolNameSet.has(tool.name))
+          .map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          }));
+        toolsWritable = activePromptTools.some((tool) => !SHARED_READ_ONLY_TOOL_NAMES.has(tool.name));
+        if (runtimeIdentity?.workspace.access === "sharedReadOnly" && toolsWritable) {
+          throw new PiHostError(
+            "WORKSPACE_ISOLATION_REQUIRED",
+            "A sharedReadOnly Runtime resolved a write-capable Active Tool Set",
+          );
+        }
+        assembledPrompt = assembleDCodeSystemPrompt({
+          environment: {
+            ...promptContext.environment,
+            ...(session.model ? { modelProvider: session.model.provider, modelId: session.model.id } : {}),
+          },
+          documents: promptContext.documents,
+          tools: activePromptTools,
+        });
+        session.setActiveToolsByName(activeToolNames);
+        // Pi 0.84.1 resets every turn to _baseSystemPrompt during preflight.
+        // Install the D Code prompt as that base after the exact tool set is frozen;
+        // a private one-turn override would be cleared before the Provider request.
+        const internals = session as unknown as {
+          _baseSystemPrompt: string;
+          _systemPromptOverride?: string;
+        };
+        internals._baseSystemPrompt = assembledPrompt.text;
+        internals._systemPromptOverride = undefined;
+        session.agent.state.systemPrompt = assembledPrompt.text;
+        if (session.systemPrompt !== assembledPrompt.text) {
+          throw new PiHostError(
+            "PROMPT_ASSEMBLY_FAILED",
+            "D Code could not install its own System Prompt before Runtime activation",
+          );
+        }
+        const manifestNames = [...activePromptTools.map((tool) => tool.name)].sort();
+        const apiToolNames = [...session.getActiveToolNames()].sort();
+        if (JSON.stringify(manifestNames) !== JSON.stringify(apiToolNames)) {
+          throw new PiHostError(
+            "TOOL_MANIFEST_MISMATCH",
+            "D Code Active Tool Manifest does not match the Runtime API tools",
+          );
+        }
+      }
       let active: WritableSession;
       ui = new ExtensionUIBridge((event, data) => {
         const run = active.currentRun;
@@ -1249,7 +2595,7 @@ export class PiHost {
             this.updateRunState(active, run, "running");
           }
         }
-        this.options.emit(event, {
+        this.emitRuntimeEvent(active, event, {
           ...details,
           sessionId: active.session.sessionId,
           ...(run ? { runId: run.id } : {}),
@@ -1268,10 +2614,181 @@ export class PiHost {
         activeProposal: inspection.activeProposal,
         fastMode,
         closing: false,
+        ...(runtimeIdentity ? { runtimeIdentity } : {}),
+        runtimeEventSequence: 0,
+        seenPromptIds: new Map(),
+        seenSteerIds: new Map(),
+        ...(assembledPrompt ? { assembledPrompt } : {}),
+        ...(promptContext ? { promptEnvironment: promptContext.environment } : {}),
+        activePromptTools,
+        toolsWritable,
+        ...(attemptController ? { attemptController } : {}),
+        ...(agentRequestController ? { agentRequestController } : {}),
       };
+      activeForFacts = active;
+      if (attemptController && runtimeIdentity) {
+        const toolAttemptIds = new Map<string, string>();
+        attemptController.bind({
+          prepare: async (event) => {
+            const run = active.currentRun;
+            if (!run?.sessionRunId) {
+              throw new PiHostError("OPERATION_ATTEMPT_MISSING_RUN", "Tool execution has no durable Session Run");
+            }
+            const parameterDigest = `sha256:${createHash("sha256")
+              .update(JSON.stringify(event.input))
+              .digest("hex")}`;
+            const prepared = await (await this.getProductStore()).prepareToolAttempt({
+              taskId: runtimeIdentity.taskId,
+              sessionId: runtimeIdentity.dcodeSessionId,
+              sessionRunId: run.sessionRunId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              parameterDigest,
+            });
+            toolAttemptIds.set(event.toolCallId, prepared.attemptId);
+            this.emitRuntimeEvent(active, "operationAttempt.prepared", {
+              attemptId: prepared.attemptId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              storeRevision: prepared.storeRevision,
+            });
+          },
+          finish: async (event) => {
+            const attemptId = toolAttemptIds.get(event.toolCallId);
+            if (!attemptId) {
+              throw new PiHostError("OPERATION_ATTEMPT_NOT_FOUND", "Tool Result has no prepared Operation Attempt");
+            }
+            const resultDigest = `sha256:${createHash("sha256")
+              .update(JSON.stringify({ content: event.content, isError: event.isError }))
+              .digest("hex")}`;
+            const finished = await (await this.getProductStore()).finishOperationAttempt({
+              attemptId,
+              outcome: event.isError ? "failed" : "succeeded",
+              resultDigest,
+            });
+            const evidence = await (await this.getProductStore()).recordToolEvidence({
+              requestId: `tool-evidence:${attemptId}`,
+              attemptId,
+              toolName: event.toolName,
+              outcome: event.isError ? "failed" : "succeeded",
+              resultDigest,
+            });
+            toolAttemptIds.delete(event.toolCallId);
+            this.emitRuntimeEvent(active, "operationAttempt.finished", {
+              attemptId,
+              toolCallId: event.toolCallId,
+              outcome: finished.status,
+              storeRevision: finished.storeRevision,
+            });
+            this.options.emit("foundation.changed", {
+              storeRevision: evidence.storeRevision,
+              kind: "evidence.recorded",
+              entityKind: "evidence",
+              entityId: evidence.evidence.id,
+              taskId: runtimeIdentity.taskId,
+              runtimeId: runtimeIdentity.runtimeId,
+              agentRunId: runtimeIdentity.agentRunId,
+            });
+          },
+        });
+      }
+      if (agentRequestController && runtimeIdentity?.agentRunId) {
+        agentRequestController.bind(async (
+          toolCallId: string,
+          input: DCodeAgentRequestInput,
+          signal?: AbortSignal,
+        ) => {
+          const run = active.currentRun;
+          if (!run?.sessionRunId) {
+            throw new PiHostError("AGENT_REQUEST_MISSING_RUN", "Agent Request has no durable Session Run");
+          }
+          const normalizedOptions = input.options.map((option) => ({
+            id: option.id,
+            label: option.label,
+            ...(option.description ? { description: option.description } : {}),
+            recommended: option.recommended === true,
+          }));
+          const credentialProbe = JSON.stringify({ prompt: input.prompt, options: normalizedOptions });
+          if (redactCredentialText(credentialProbe).redacted) {
+            throw new PiHostError(
+              "CREDENTIAL_MATERIAL_REJECTED",
+              "Agent Request may not write credential material into Product Store",
+            );
+          }
+          const created = await (await this.getProductStore()).createAgentRequest({
+            requestId: `agent-request-${createHash("sha256")
+              .update(`${run.sessionRunId}\0${toolCallId}`)
+              .digest("hex")
+              .slice(0, 48)}`,
+            taskId: runtimeIdentity.taskId,
+            agentRunId: runtimeIdentity.agentRunId!,
+            sessionId: runtimeIdentity.dcodeSessionId,
+            sessionRunId: run.sessionRunId,
+            runtimeId: runtimeIdentity.runtimeId,
+            kind: "choice",
+            prompt: input.prompt,
+            options: normalizedOptions,
+          });
+          this.updateRunState(active, run, "waitingForUser", { waitingFor: "input" });
+          return await new Promise((resolve, reject) => {
+            const onAbort = () => {
+              const pending = this.pendingAgentRequests.get(created.agentRequest.id);
+              if (pending) {
+                this.pendingAgentRequests.delete(created.agentRequest.id);
+                pending.removeAbortListener?.();
+              }
+              void this.getProductStore().then(async (store) => await store.cancelAgentRequest({
+                requestId: `agent-request-cancel:${created.agentRequest.id}`,
+                agentRequestId: created.agentRequest.id,
+                reason: "runtime_aborted",
+              })).then((cancelled) => {
+                this.options.emit("foundation.changed", {
+                  storeRevision: cancelled.storeRevision,
+                  kind: "agentRequest.cancelled",
+                  entityKind: "agentRequest",
+                  entityId: cancelled.agentRequest.id,
+                  taskId: cancelled.agentRequest.taskId,
+                });
+              }).catch((error) => {
+                this.emitRuntimeEvent(active, "agentRequest.cancelFailed", errorRecord(error));
+              });
+              reject(new PiHostError("AGENT_REQUEST_ABORTED", "Agent Request was interrupted before it was answered"));
+            };
+            if (signal?.aborted) {
+              onAbort();
+              return;
+            }
+            if (signal) signal.addEventListener("abort", onAbort, { once: true });
+            this.pendingAgentRequests.set(created.agentRequest.id, {
+              runtimeId: runtimeIdentity.runtimeId,
+              resolve: (answer) => resolve({ requestId: created.agentRequest.id, answer }),
+              reject,
+              ...(signal ? { removeAbortListener: () => signal.removeEventListener("abort", onAbort) } : {}),
+            });
+            this.options.emit("foundation.changed", {
+              storeRevision: created.storeRevision,
+              kind: "agentRequest.created",
+              entityKind: "agentRequest",
+              entityId: created.agentRequest.id,
+              taskId: created.agentRequest.taskId,
+              runtimeId: runtimeIdentity.runtimeId,
+              agentRunId: runtimeIdentity.agentRunId,
+            });
+          });
+        });
+      }
       this.installPromptSourceBoundary(active);
       clearInterval(active.conflictTimer);
       this.active = active;
+      if (runtimeIdentity) {
+        this.openingAdapterSessionIds.delete(runtimeIdentity.adapterSessionId);
+        this.openingDCodeSessionIds.delete(runtimeIdentity.dcodeSessionId);
+        this.releaseWorkspaceClaim(
+          this.openingWorkspaceClaims,
+          this.workspaceClaimKey(runtimeIdentity.workspace),
+          runtimeIdentity.runtimeId,
+        );
+      }
       const unsubscribeSession = session.subscribe((event) => this.onSessionEvent(active, event));
       const unsubscribePersistedEvents = session.agent.subscribe((event) => this.onPersistedAgentEvent(active, event));
       unsubscribe = () => {
@@ -1318,7 +2835,11 @@ export class PiHost {
       active.activeProposal = synchronizedInspection.activeProposal;
       active.conflictTimer = setInterval(() => { void this.checkConflict(active); }, this.conflictPollMs);
       active.conflictTimer.unref?.();
-      this.options.emit("session.opened", { mode: "writable", sessionId, path: synchronizedInspection.summary.path });
+      this.emitRuntimeEvent(active, "session.opened", {
+        mode: "writable",
+        sessionId,
+        path: synchronizedInspection.summary.path,
+      });
       return {
         mode: "writable" as const,
         snapshot: synchronizedInspection,
@@ -1329,10 +2850,21 @@ export class PiHost {
         },
       };
     } catch (error) {
+      if (runtimeIdentity) {
+        this.openingAdapterSessionIds.delete(runtimeIdentity.adapterSessionId);
+        this.openingDCodeSessionIds.delete(runtimeIdentity.dcodeSessionId);
+        this.releaseWorkspaceClaim(
+          this.openingWorkspaceClaims,
+          this.workspaceClaimKey(runtimeIdentity.workspace),
+          runtimeIdentity.runtimeId,
+        );
+      }
       if (conflictTimer) clearInterval(conflictTimer);
       unsubscribe?.();
       ui?.cancelAll("Session open failed");
       session?.dispose();
+      attemptController?.dispose();
+      agentRequestController?.dispose();
       if (this.active) {
         clearInterval(this.active.conflictTimer);
         this.active.fastMode.dispose();
@@ -1380,6 +2912,8 @@ export class PiHost {
       active.unsubscribe();
       active.session.dispose();
       active.fastMode.dispose();
+      active.attemptController?.dispose();
+      active.agentRequestController?.dispose();
       if (safeToRelease) {
         try {
           await active.lease.release();
@@ -1389,7 +2923,7 @@ export class PiHost {
         }
       }
       if (!safeToRelease) this.poisonWrites(active, "The previous runtime did not stop cleanly");
-      this.options.emit("session.closed", { mode: "writable", sessionId: active.inspection.summary.id });
+      this.emitRuntimeEvent(active, "session.closed", { mode: "writable", sessionId: active.inspection.summary.id });
     }
   }
 
@@ -1558,7 +3092,14 @@ export class PiHost {
     if (pathAction && message.trim().length === 0) {
       throw new PiHostError("EMPTY_PATH_PROMPT", "路径草稿不能为空");
     }
-    const seenRunId = this.seenPromptIds.get(promptId);
+    if (redactCredentialText(message).redacted) {
+      throw new PiHostError(
+        "CREDENTIAL_MATERIAL_REJECTED",
+        "D Code 检测到输入中可能包含凭据。请先移除密钥、Token 或密码；Product Store 不会保存凭据正文。",
+      );
+    }
+    const active = this.requireWritable();
+    const seenRunId = active.seenPromptIds.get(promptId);
     if (seenRunId !== undefined) {
       throw new PiHostError(
         "SESSION_DUPLICATE_PROMPT",
@@ -1566,9 +3107,10 @@ export class PiHost {
         { runId: seenRunId },
       );
     }
-    const active = this.requireWritable();
     await this.beforeMutation(active);
     this.assertPathActionIdle(active);
+    const runtimeIdentity = active.runtimeIdentity;
+    if (runtimeIdentity) await this.refreshRuntimePrompt(active);
     const call: PromptCallContext = {
       active,
       promptId,
@@ -1583,9 +3125,67 @@ export class PiHost {
         throw error;
       }
     }
+    let preparedRun: Awaited<ReturnType<ProductStore["prepareSessionRun"]>> | undefined;
+    if (runtimeIdentity) {
+      const assembledPrompt = active.assembledPrompt;
+      const promptEnvironment = active.promptEnvironment;
+      if (!assembledPrompt || !promptEnvironment) {
+        throw new PiHostError("PROMPT_ASSEMBLY_FAILED", "Runtime has no D Code Prompt Receipt source");
+      }
+      const attachmentRefs = (images ?? []).map((image) => ({
+        type: "image",
+        mimeType: image.mimeType,
+        digest: `sha256:${createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex")}`,
+        bytes: Buffer.byteLength(image.data, "base64"),
+      }));
+      preparedRun = await (await this.getProductStore()).prepareSessionRun({
+        requestId: `provider-${createHash("sha256")
+          .update(`${runtimeIdentity.runtimeId}\0${promptId}`)
+          .digest("hex")
+          .slice(0, 48)}`,
+        taskId: runtimeIdentity.taskId,
+        scope: runtimeIdentity.scope,
+        sessionId: runtimeIdentity.dcodeSessionId,
+        runtimeId: runtimeIdentity.runtimeId,
+        ...(runtimeIdentity.agentRunId ? { agentRunId: runtimeIdentity.agentRunId } : {}),
+        workspaceId: runtimeIdentity.workspace.workspaceId,
+        cwd: runtimeIdentity.workspace.cwd,
+        workspaceAccess: runtimeIdentity.workspace.access,
+        message,
+        attachmentRefs,
+        ...(active.session.model
+          ? { modelProvider: active.session.model.provider, modelId: active.session.model.id }
+          : {}),
+        roleRevision: promptEnvironment.roleRevision,
+        profileSnapshot: {
+          role: promptEnvironment.role,
+          roleRevision: promptEnvironment.roleRevision,
+          roleContract: promptEnvironment.roleContract,
+        },
+        tools: active.activePromptTools,
+        toolsWritable: active.toolsWritable,
+        systemPromptDigest: assembledPrompt.digest,
+        promptSources: assembledPrompt.sources,
+      });
+      this.options.emit("foundation.changed", {
+        storeRevision: preparedRun.storeRevision,
+        kind: "sessionRun.prepared",
+        entityKind: "sessionRun",
+        entityId: preparedRun.sessionRunId,
+        taskId: runtimeIdentity.taskId,
+        runtimeId: runtimeIdentity.runtimeId,
+      });
+    }
     const startedAt = new Date().toISOString();
     const run: ActiveRun = {
       id: promptId,
+      ...(preparedRun ? {
+        sessionRunId: preparedRun.sessionRunId,
+        providerAttemptId: preparedRun.providerAttemptId,
+        rawInputId: preparedRun.rawInputId,
+        effectiveInputId: preparedRun.effectiveInputId,
+        promptReceiptId: preparedRun.promptReceiptId,
+      } : {}),
       toolCalls: new Map(),
       state: {
         sessionId: active.session.sessionId,
@@ -1597,9 +3197,9 @@ export class PiHost {
         retryable: false,
       },
     };
-    this.rememberSeenId(this.seenPromptIds, promptId, promptId);
+    this.rememberSeenId(active.seenPromptIds, promptId, promptId);
     active.currentRun = run;
-    this.options.emit("session.runStateChanged", run.state);
+    this.emitRuntimeEvent(active, "session.runStateChanged", run.state);
     return await new Promise((resolve, reject) => {
       let responded = false;
       const accept = (completed = false) => {
@@ -1607,11 +3207,25 @@ export class PiHost {
         responded = true;
         resolve({ accepted: true, completed });
       };
-      const operation = this.promptCall.run(call, () => active.session.prompt(message, {
+      const operation = this.promptCall.run(call, async () => {
+        if (run.sessionRunId) {
+          const started = await (await this.getProductStore()).startSessionRun(run.sessionRunId);
+          this.options.emit("foundation.changed", {
+            storeRevision: started.storeRevision,
+            kind: "sessionRun.started",
+            entityKind: "sessionRun",
+            entityId: run.sessionRunId,
+            taskId: runtimeIdentity?.taskId,
+            runtimeId: runtimeIdentity?.runtimeId,
+          });
+        }
+        return await active.session.prompt(message, {
           source: "rpc",
+          ...(runtimeIdentity ? { expandPromptTemplates: false } : {}),
           ...(images && images.length > 0 ? { images } : {}),
           preflightResult: (success) => { if (success) accept(false); },
-        }));
+        });
+      });
       void operation.then(async () => {
         if (call.confirmation) await call.confirmation;
         if (!call.confirmed) {
@@ -1621,20 +3235,34 @@ export class PiHost {
             throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
           }
           call.confirmed = true;
-          this.options.emit("session.promptCompleted", {
+          this.emitRuntimeEvent(active, "session.promptCompleted", {
             sessionId: active.session.sessionId,
             promptId,
             outcome: "handled",
           });
         }
         await this.finalizeRun(active, run);
+        const durableOutcome = run.state.phase === "completed"
+          ? "succeeded"
+          : run.state.phase === "aborted"
+            ? "aborted"
+            : run.state.phase === "failed"
+              ? "failed"
+              : "unknown";
+        await this.finishDurableSessionRun(active, run, durableOutcome).catch((storeError) => {
+          this.emitRuntimeEvent(active, "session.persistenceError", errorRecord(storeError));
+        });
         accept(true);
       }).catch(async (error) => {
         if (call.confirmation) await call.confirmation;
         await this.rollbackPromptPath(call);
         await this.finalizeRun(active, run, run.outcome ?? "failed");
+        const durableOutcome = run.outcome === "aborted" ? "aborted" : "failed";
+        await this.finishDurableSessionRun(active, run, durableOutcome).catch((storeError) => {
+          this.emitRuntimeEvent(active, "session.persistenceError", errorRecord(storeError));
+        });
         if (!responded) reject(error);
-        else this.options.emit("session.promptFailed", {
+        else this.emitRuntimeEvent(active, "session.promptFailed", {
           sessionId: active.session.sessionId,
           promptId,
           ...(call.persistedEntryId ? { persistedEntryId: call.persistedEntryId } : {}),
@@ -1644,13 +3272,48 @@ export class PiHost {
     });
   }
 
+  private async finishDurableSessionRun(
+    active: WritableSession,
+    run: ActiveRun,
+    outcome: "succeeded" | "failed" | "aborted" | "unknown",
+  ): Promise<void> {
+    if (!run.sessionRunId || !run.providerAttemptId) return;
+    const completionEntry = run.state.completionEntryId
+      ? active.session.sessionManager.getEntry(run.state.completionEntryId)
+      : undefined;
+    const searchable = completionEntry?.type === "message"
+      ? extractSearchableMessage(completionEntry.message)
+      : undefined;
+    const assistantText = searchable?.role === "assistant"
+      ? redactCredentialText(searchable.body).text
+      : undefined;
+    const result = await (await this.getProductStore()).finishSessionRun({
+      sessionRunId: run.sessionRunId,
+      providerAttemptId: run.providerAttemptId,
+      outcome,
+      resultReference: {
+        piRunId: run.id,
+        ...(run.state.completionEntryId ? { completionEntryId: run.state.completionEntryId } : {}),
+      },
+      ...(assistantText ? { assistantText } : {}),
+      ...(run.state.completionEntryId ? { assistantSourceEntryId: run.state.completionEntryId } : {}),
+    });
+    this.emitRuntimeEvent(active, "session.durableRunFinished", {
+      sessionRunId: run.sessionRunId,
+      providerAttemptId: run.providerAttemptId,
+      outcome,
+      storeRevision: result.storeRevision,
+    });
+  }
+
   private async steer(
     message: string,
     steerId: string,
     expectedRunId: string,
     images?: PromptImageInput[],
   ): Promise<unknown> {
-    const seenSteerRunId = this.seenSteerIds.get(steerId);
+    const active = this.requireWritable();
+    const seenSteerRunId = active.seenSteerIds.get(steerId);
     if (seenSteerRunId !== undefined) {
       throw new PiHostError(
         "SESSION_DUPLICATE_STEER",
@@ -1658,7 +3321,6 @@ export class PiHost {
         { runId: seenSteerRunId },
       );
     }
-    const active = this.requireWritable();
     await this.beforeMutation(active);
     const run = active.currentRun;
     if (!run || run.state.phase !== "running" || !active.session.isStreaming) {
@@ -1685,8 +3347,34 @@ export class PiHost {
     } catch {
       throw new PiHostError("STEER_REJECTED", "Pi did not accept the steering message");
     }
-    this.rememberSeenId(this.seenSteerIds, steerId, run.id);
+    this.rememberSeenId(active.seenSteerIds, steerId, run.id);
     return { accepted: true, steerId, runId: run.id };
+  }
+
+  private emitRuntimeEvent(active: WritableSession, event: string, data?: unknown): void {
+    const identity = active.runtimeIdentity;
+    if (!identity) {
+      this.options.emit(event, data);
+      return;
+    }
+    active.runtimeEventSequence += 1;
+    const details = typeof data === "object" && data !== null && !Array.isArray(data)
+      ? data as Record<string, unknown>
+      : data === undefined ? {} : { value: data };
+    this.options.emit(event, {
+      ...details,
+      runtime: {
+        runtimeId: identity.runtimeId,
+        scope: identity.scope,
+        taskId: identity.taskId,
+        dcodeSessionId: identity.dcodeSessionId,
+        ...(identity.agentRunId ? { agentRunId: identity.agentRunId } : {}),
+        adapter: { kind: "pi", sessionId: identity.adapterSessionId },
+        workspace: identity.workspace,
+        ...(active.currentRun ? { runId: active.currentRun.id } : {}),
+      },
+      sequence: active.runtimeEventSequence,
+    });
   }
 
   private updateRunState(
@@ -1706,7 +3394,7 @@ export class PiHost {
     if (["completed", "failed", "aborted", "unknown"].includes(phase)) {
       active.lastRunState = run.state;
     }
-    this.options.emit("session.runStateChanged", run.state);
+    this.emitRuntimeEvent(active, "session.runStateChanged", run.state);
   }
 
   private async finalizeRun(
@@ -1831,6 +3519,10 @@ export class PiHost {
 
   private getState(): unknown {
     const active = this.requireActive();
+    return this.runtimeState(active);
+  }
+
+  private runtimeState(active: WritableSession): unknown {
     return {
       mode: "writable" as const,
       sessionId: active.session.sessionId,
@@ -2406,7 +4098,7 @@ export class PiHost {
   }
 
   private onSessionEvent(active: WritableSession, event: AgentSessionEvent): void {
-    if (this.active !== active || active.closing) return;
+    if (!this.isActiveSession(active) || active.closing) return;
     if (event.type === "agent_start" && active.currentRun && active.currentRun.state.phase !== "stopRequested") {
       this.updateRunState(active, active.currentRun, "running");
     }
@@ -2430,15 +4122,15 @@ export class PiHost {
         result: event.result,
         isError: event.isError,
       });
-      if (change) this.options.emit("session.changeRecorded", change);
+      if (change) this.emitRuntimeEvent(active, "session.changeRecorded", change);
     }
-    this.options.emit("session.event", toWireEvent(active, event));
+    this.emitRuntimeEvent(active, "session.event", toWireEvent(active, event));
     if (event.type === "entry_appended") {
       const plan = planFromEntry(event.entry);
       if (plan.matched) {
         active.activePlan = plan.plan;
         active.activeProposal = plan.proposal;
-        this.options.emit("plan.changed", { entryId: event.entry.id, plan: plan.plan, proposal: plan.proposal });
+        this.emitRuntimeEvent(active, "plan.changed", { entryId: event.entry.id, plan: plan.plan, proposal: plan.proposal });
       }
     }
     const shouldSynchronize = (
@@ -2458,7 +4150,7 @@ export class PiHost {
   }
 
   private onPersistedAgentEvent(active: WritableSession, event: AgentEvent): void {
-    if (this.active !== active || active.closing) return;
+    if (!this.isActiveSession(active) || active.closing) return;
     const call = this.promptCall.getStore();
     if (
       event.type === "message_end"
@@ -2480,7 +4172,7 @@ export class PiHost {
       call.confirmation = this.synchronizeOwnedSnapshot(active).then(() => {
         if (active.conflict || call.confirmed) return;
         call.confirmed = true;
-        this.options.emit("session.promptCompleted", {
+        this.emitRuntimeEvent(active, "session.promptCompleted", {
           sessionId: active.session.sessionId,
           promptId: call.promptId,
           outcome: "persisted",
@@ -2545,23 +4237,23 @@ export class PiHost {
   }
 
   private async checkConflict(active: WritableSession): Promise<void> {
-    if (this.active !== active || active.conflict || active.ownedMutationDepth > 0) return;
+    if (!this.isActiveSession(active) || active.conflict || active.ownedMutationDepth > 0) return;
     try {
       await this.assertLeaseStable(active);
     } catch (error) {
-      if (this.active !== active || active.conflict) return;
+      if (!this.isActiveSession(active) || active.conflict) return;
       this.markConflict(active, error);
     }
   }
 
   private markConflict(active: WritableSession, error: unknown): void {
-    if (this.active !== active || active.closing || active.conflict) return;
+    if (!this.isActiveSession(active) || active.closing || active.conflict) return;
     active.conflict = errorRecord(error);
     clearInterval(active.conflictTimer);
     const abort = active.session.abort();
     void abort.catch(() => undefined);
     active.conflictAbort = abort;
-    this.options.emit("session.conflict", {
+    this.emitRuntimeEvent(active, "session.conflict", {
       sessionId: active.inspection.summary.id,
       ...active.conflict,
     });
@@ -2621,6 +4313,11 @@ export class PiHost {
     return this.active;
   }
 
+  private isActiveSession(active: ActiveSession): boolean {
+    const runtimeId = active.runtimeIdentity?.runtimeId;
+    return runtimeId ? this.runtimes.get(runtimeId) === active : this.legacyActive === active;
+  }
+
   private assertSameSessionIdentity(expected: SessionHeader, actual: SessionHeader): void {
     if (sameSessionIdentity(expected, actual)) return;
     throw new PiHostError(
@@ -2638,19 +4335,41 @@ export class PiHost {
   }
 
   private assertWriteHealthy(): void {
-    if (!this.writePoison) return;
+    const runtimeId = this.runtimeContext.getStore();
+    const poison = runtimeId
+      ? this.runtimeWritePoisons.get(runtimeId) ?? this.active?.writePoison
+      : this.writePoison;
+    if (!poison) return;
     throw new PiHostError(
       "HOST_RESTART_REQUIRED",
-      "D Code must restart its Host before another write",
-      this.writePoison,
+      runtimeId
+        ? "This Runtime must be reopened before another write"
+        : "D Code must restart its Host before another write",
+      poison,
     );
   }
 
   private poisonWrites(active: WritableSession, reason: string): void {
+    const poison = { sessionId: active.inspection.summary.id, reason };
+    active.writePoison = poison;
+    const runtimeId = active.runtimeIdentity?.runtimeId;
+    if (runtimeId) {
+      this.runtimeWritePoisons.set(runtimeId, poison);
+      this.emitRuntimeEvent(active, "host.restartRequired", poison);
+      return;
+    }
     this.poisonWritesForSession(active.inspection.summary.id, reason);
   }
 
   private poisonWritesForSession(sessionId: string, reason: string): void {
+    const runtimeId = this.runtimeContext.getStore();
+    if (runtimeId) {
+      if (this.runtimeWritePoisons.has(runtimeId)) return;
+      const poison = { sessionId, reason };
+      this.runtimeWritePoisons.set(runtimeId, poison);
+      this.options.emit("host.restartRequired", { ...poison, runtimeId });
+      return;
+    }
     if (this.writePoison) return;
     this.writePoison = { sessionId, reason };
     this.options.emit("host.restartRequired", this.writePoison);

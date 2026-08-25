@@ -2,6 +2,22 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export const HOST_METHODS = [
   "host.hello",
+  "runtime.list",
+  "runtime.start",
+  "foundation.snapshot",
+  "project.create",
+  "task.create",
+  "task.acceptance",
+  "team.create",
+  "team.start",
+  "agentRequest.answer",
+  "agentRun.stop",
+  "agentProfile.create",
+  "agentProfile.update",
+  "piImport.listCandidates",
+  "piImport.preview",
+  "piImport.importAsTask",
+  "session.importedEntries",
   "session.list",
   "session.search",
   "session.inspect",
@@ -216,6 +232,133 @@ function optionalInteger(
   return value as number;
 }
 
+function requireInteger(
+  params: Record<string, unknown>,
+  key: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = optionalInteger(params, key, minimum, maximum);
+  if (value === undefined) {
+    throw new ProtocolValidationError("INVALID_PARAMS", `Expected params.${key} to be an integer`);
+  }
+  return value;
+}
+
+function requireBoundedString(params: Record<string, unknown>, key: string, maximum: number): string {
+  const value = requireString(params, key);
+  if (value.length > maximum) {
+    throw new ProtocolValidationError(
+      "INVALID_PARAMS",
+      `Expected params.${key} to be at most ${maximum} characters`,
+    );
+  }
+  return value;
+}
+
+function validateTaskScope(params: Record<string, unknown>): void {
+  const value = params.scope;
+  if (!isRecord(value)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.scope to be an object");
+  }
+  const keys = Object.keys(value).sort();
+  if (value.kind === "user") {
+    if (keys.length !== 2 || keys[0] !== "kind" || keys[1] !== "userId") {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected User Scope to contain exactly kind and userId",
+      );
+    }
+    if (typeof value.userId !== "string" || value.userId.length === 0 || value.userId.length > 200) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected User Scope to contain a non-empty userId up to 200 characters",
+      );
+    }
+    return;
+  }
+  if (value.kind === "project") {
+    if (keys.length !== 2 || keys[0] !== "kind" || keys[1] !== "projectId") {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected Project Scope to contain exactly kind and projectId",
+      );
+    }
+    if (typeof value.projectId !== "string" || value.projectId.length === 0 || value.projectId.length > 200) {
+      throw new ProtocolValidationError(
+        "INVALID_PARAMS",
+        "Expected Project Scope to contain a non-empty projectId up to 200 characters",
+      );
+    }
+    return;
+  }
+  throw new ProtocolValidationError(
+    "INVALID_PARAMS",
+    'Expected params.scope.kind to be "user" or "project"',
+  );
+}
+
+function validateRuntimeOpenIdentity(params: Record<string, unknown>): void {
+  if (params.runtimeId === undefined) return;
+  const runtimeId = requireBoundedString(params, "runtimeId", 128);
+  if (!runtimeId.trim()) throw new ProtocolValidationError("INVALID_PARAMS", "runtimeId cannot be whitespace");
+  requireBoundedString(params, "taskId", 200);
+  requireBoundedString(params, "dcodeSessionId", 200);
+  if (params.agentRunId !== undefined) requireBoundedString(params, "agentRunId", 200);
+  const adapterSessionId = requireBoundedString(params, "adapterSessionId", 200);
+  if (adapterSessionId !== params.sessionId) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "adapterSessionId must match params.sessionId");
+  }
+  validateTaskScope(params);
+  if (!isRecord(params.workspace)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.workspace to be an object");
+  }
+  const workspace = params.workspace;
+  const keys = Object.keys(workspace).sort();
+  if (
+    keys.length !== 3
+    || keys[0] !== "access"
+    || keys[1] !== "cwd"
+    || keys[2] !== "workspaceId"
+    || typeof workspace.workspaceId !== "string"
+    || workspace.workspaceId.length === 0
+    || workspace.workspaceId.length > 200
+    || typeof workspace.cwd !== "string"
+    || workspace.cwd.length === 0
+    || workspace.cwd.length > 4_096
+    || (workspace.access !== "sharedReadOnly" && workspace.access !== "exclusiveWrite")
+  ) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Runtime workspace identity is invalid");
+  }
+}
+
+function validateRuntimeStart(params: Record<string, unknown>): void {
+  requireBoundedString(params, "requestId", 128);
+  requireBoundedString(params, "runtimeId", 128);
+  requireBoundedString(params, "taskId", 200);
+  requireBoundedString(params, "dcodeSessionId", 200);
+  if (params.agentRunId !== undefined) requireBoundedString(params, "agentRunId", 200);
+  validateTaskScope(params);
+  if (!isRecord(params.workspace)) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.workspace to be an object");
+  }
+  const workspace = params.workspace;
+  const keys = Object.keys(workspace).sort();
+  if (
+    keys.length !== 3
+    || keys[0] !== "access"
+    || keys[1] !== "cwd"
+    || keys[2] !== "workspaceId"
+    || typeof workspace.workspaceId !== "string"
+    || workspace.workspaceId.length === 0
+    || typeof workspace.cwd !== "string"
+    || workspace.cwd.length === 0
+    || (workspace.access !== "sharedReadOnly" && workspace.access !== "exclusiveWrite")
+  ) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "runtime.start workspace access is invalid");
+  }
+}
+
 function optionalCwdScope(params: Record<string, unknown>): void {
   const value = params.cwdScope;
   if (value === undefined) return;
@@ -330,8 +473,10 @@ export function parseRequest(value: unknown): HostRequest {
 }
 
 export function validateMethodParams(method: HostMethod, params: Record<string, unknown>): void {
+  if (params.runtimeId !== undefined) requireBoundedString(params, "runtimeId", 128);
   switch (method) {
     case "host.hello":
+    case "runtime.list":
     case "session.abort":
     case "session.getState":
     case "session.contextBreakdown":
@@ -343,6 +488,157 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "session.getThinkingLevels":
     case "session.refresh":
     case "host.shutdown":
+      return;
+    case "runtime.start":
+      validateRuntimeStart(params);
+      return;
+    case "foundation.snapshot":
+      optionalInteger(params, "afterEventSequence", 0, Number.MAX_SAFE_INTEGER);
+      return;
+    case "project.create":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "title", 200);
+      requireBoundedString(params, "directory", 4_096);
+      return;
+    case "task.create":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "title", 200);
+      requireBoundedString(params, "goal", 4_000);
+      requireStringArray(params, "acceptance", 100, true);
+      return;
+    case "task.acceptance":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      requireInteger(params, "expectedTaskRevision", 1, Number.MAX_SAFE_INTEGER);
+      if (params.decision !== "accepted" && params.decision !== "rejected") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Task acceptance decision is invalid");
+      }
+      return;
+    case "team.create": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      if (!Array.isArray(params.members) || params.members.length < 1 || params.members.length > 8) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.members to contain 1...8 members");
+      }
+      for (const member of params.members) {
+        if (!isRecord(member) || !isRecord(member.taskPacket)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Team member shape is invalid");
+        }
+        const keys = Object.keys(member).sort();
+        if (
+          keys.length !== 3
+          || keys[0] !== "profileId"
+          || keys[1] !== "taskPacket"
+          || keys[2] !== "title"
+          || typeof member.profileId !== "string"
+          || member.profileId.length === 0
+          || typeof member.title !== "string"
+          || member.title.trim().length === 0
+        ) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Team member identity is invalid");
+        }
+      }
+      return;
+    }
+    case "team.start":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireInteger(params, "expectedTeamRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "teamRunId", 200);
+      requireBoundedString(params, "message", 200_000);
+      if (!isRecord(params.workspace)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.workspace to be an object");
+      }
+      if (
+        typeof params.workspace.workspaceId !== "string"
+        || typeof params.workspace.cwd !== "string"
+        || params.workspace.access !== "sharedReadOnly"
+      ) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "team.start requires a sharedReadOnly workspace");
+      }
+      return;
+    case "agentRequest.answer": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "runtimeId", 128);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "teamRunId", 200);
+      requireBoundedString(params, "agentRunId", 200);
+      requireBoundedString(params, "sessionRunId", 200);
+      requireBoundedString(params, "agentRequestId", 200);
+      requireInteger(params, "expectedRequestRevision", 1, Number.MAX_SAFE_INTEGER);
+      if (!isRecord(params.answer)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.answer to be a choice object");
+      }
+      const answerKeys = Object.keys(params.answer).sort();
+      if (
+        answerKeys.length !== 2
+        || answerKeys[0] !== "kind"
+        || answerKeys[1] !== "optionId"
+        || params.answer.kind !== "choice"
+        || typeof params.answer.optionId !== "string"
+        || params.answer.optionId.length === 0
+        || params.answer.optionId.length > 100
+      ) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Agent Request answer is invalid");
+      }
+      return;
+    }
+    case "agentRun.stop":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "runtimeId", 128);
+      validateTaskScope(params);
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "teamRunId", 200);
+      requireBoundedString(params, "agentRunId", 200);
+      requireBoundedString(params, "sessionRunId", 200);
+      requireInteger(params, "expectedAgentRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      return;
+    case "agentProfile.update":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "profileId", 200);
+      requireInteger(params, "expectedProfileRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "name", 200);
+      requireBoundedString(params, "roleContract", 20_000);
+      if (typeof params.enabled !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
+      }
+      return;
+    case "agentProfile.create":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "name", 200);
+      requireBoundedString(params, "roleContract", 20_000);
+      if (typeof params.enabled !== "boolean") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
+      }
+      return;
+    case "piImport.listCandidates":
+      optionalInteger(params, "limit", 1, 1_000);
+      return;
+    case "piImport.preview":
+      requireBoundedString(params, "sourceSessionId", 200);
+      return;
+    case "piImport.importAsTask":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params, "sourceSessionId", 200);
+      return;
+    case "session.importedEntries":
+      requireBoundedString(params, "sessionId", 200);
       return;
     case "modelProviders.save": {
       const provider = params.provider;
@@ -470,6 +766,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     case "session.open": {
       requireString(params, "sessionId");
+      validateRuntimeOpenIdentity(params);
       const expectedEntryId = optionalString(params, "expectedEntryId");
       if (expectedEntryId !== undefined && (expectedEntryId.length === 0 || expectedEntryId.length > 128)) {
         throw new ProtocolValidationError(

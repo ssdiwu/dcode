@@ -29,6 +29,9 @@
 | REF-010 | pi-dteam | Pi Extension（Pi 扩展） | [ssdiwu/pi-dteam](https://github.com/ssdiwu/pi-dteam) | D Team 执行层机制参考 |
 | REF-011 | Codex Taskboard | Local-first Taskboard（本地优先任务看板） | [chuspeeism/dashi-taskboard@9b2aeb53](https://github.com/chuspeeism/dashi-taskboard/tree/9b2aeb53bfe8d40eb5d65feecdfc2cc235928066) | 外部状态流转与会话关联参考，未进入版本路线 |
 | REF-012 | Otty | Native Terminal Workspace（原生终端工作台） | 本机 `1.3.1@c0620a3c`、[官方文档](https://docs.otty.sh/)与 507 提供的实机截图 | 左侧活动扫描与右侧详情分层参考 |
+| REF-013 | Macro Tasks | Unified Workspace Task（统一工作空间任务） | [Macro Tasks](https://macro.com/app/component/tasks) 与 [官方仓库](https://github.com/macro-inc/macro) | 富任务对象、双向引用与并排上下文参考 |
+| REF-014 | GitHub Projects | Project Planning View（项目规划视图） | [官方介绍](https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects)与[最佳实践](https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/best-practices-for-projects) | 同一任务多视图、字段、草稿、依赖与自动化参考 |
+| REF-015 | 507 现有 Pi 拓展族 | Pi Extension Sources（Pi 拓展来源） | [本机只读审计](现有-Pi-拓展能力归宿.md) | D Code 基础能力、可选拓展、提供方与不迁移边界 |
 
 ## REF-001 OpenAI Codex 桌面端
 
@@ -145,6 +148,35 @@
 - Outline 的“快速理解当前内容结构”思想由 D Code 已有 Session Path、Plan、对话导航尺和后续结构化产物导航吸收，不复制终端命令时间线；Process / Ports 只有在连续 dogfood 形成真实闭环缺口后才进入 `0.0.20+`。
 
 **明确不借鉴**：不把 Otty 的 Tab 等同于 Pi Session，不加入 No Grouping / By Project / By Date、Created / Updated / Manual 等通用配置矩阵，不加入手工 Divider（分隔线），也不把终端进程、端口、Shell Outline 或任意 Pane / Split Runtime 搬进 D Code。`0.0.6` 首版使用产品语义固定的“等待处理 → 正在运行 → 新完成 → 其余按可证明活动时间”顺序；默认导航仍由置顶、Recent 与 Project 组织。
+
+## REF-013 Macro Tasks
+
+**D Code 借鉴**：
+
+- Task（任务）首先是可自由描述意图的富文档，再附加状态、优先级、负责人、标签、自定义属性、讨论和 References（引用）；
+- 消息、邮件、文档清单和 Agent 对话可以显式提升为任务，并与来源保持双向引用；
+- 任务、文档、Agent、收件箱等对象保留各自界面，同时可在同一工作空间并排打开；
+- Agent 可以读取任务、复制为 Prompt（提示内容）或通过结构化能力继续执行；任务的当前状态与会话中的真实过程并存。
+
+**明确不借鉴**：不复制 Macro 的团队套件、邮件/CRM 导航、视觉皮肤或通用任务表格；不因 Git 分支、Pull Request（拉取请求）或合并事件自动把 D Code Task 判定为完成。D Code 的项目、任务、会话、Agent 运行、自动验证、人工验收、提交与发布继续分别成立。
+
+## REF-014 GitHub Projects
+
+**D Code 借鉴**：
+
+- Project Management（项目管理）是同一批 Task 上的规划与观察能力，不是第二份任务数据库；
+- 表格、看板、路线图、筛选、排序、分组和自定义字段形成多个 Task View（任务视图）；
+- Task Draft（任务草稿）可以先快速捕捉，确认后再提升为正式 Task；
+- Subtask（子任务）和依赖只在独立执行、并行或验收有价值时建立；
+- 自动化应由真实事件更新明确字段，并坚持 Single Source of Truth（单一真相源）。
+
+**明确不借鉴**：GitHub Project 不等于 D Code Project；D Code Project 是长期产品、项目目录、规则、设计、知识、愿景和任务集合。Issue 关闭、Pull Request 合并或项目字段变化都不能自动替代 D Code 的任务验收。
+
+## REF-015 507 现有 Pi 拓展族
+
+**D Code 借鉴**：现有 `pi-*` 仓库是 507 已经验证过的工作方法、交互、安全和 Provider（提供方）机制来源。逐项归宿、分类判据和证据边界见[现有 Pi 拓展能力归宿](现有-Pi-拓展能力归宿.md)。
+
+**明确不借鉴**：不按仓库边界整体搬运，不继续暴露 `dgoal`、`dteam` 等来源名称，不加载它们作为 D Code 原生 Goal / Agent Team 的运行时依赖，不复制 Pi TUI、Pi 包市场、Pi 状态键或会话所有权。只有当前 D Code 产品需要的机制进入基础能力、可选一等拓展、Capability Provider 或 Skill。
 
 ## 技术上游，不属于竞品参考
 

@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { JsonlDecoder, JsonlWriter } from "./jsonl.js";
 import { PiHost } from "./pi-host.js";
+import type { LegacyStoreKind } from "./legacy-migration.js";
 import {
   ProtocolValidationError,
   errorResponse,
@@ -17,6 +18,7 @@ interface CliOptions {
   sessionsDirectory?: string;
   leaseAgentDir?: string;
   searchCacheDirectory?: string;
+  dataRoot?: string;
 }
 
 function parseCli(argv: readonly string[]): CliOptions {
@@ -29,18 +31,20 @@ function parseCli(argv: readonly string[]): CliOptions {
       || argument === "--sessions-dir"
       || argument === "--lease-agent-dir"
       || argument === "--search-cache-dir"
+      || argument === "--data-root"
     ) {
       if (!value) throw new Error(`Missing value for ${argument}`);
       const path = resolve(value);
       if (argument === "--agent-dir") options.agentDir = path;
       else if (argument === "--sessions-dir") options.sessionsDirectory = path;
       else if (argument === "--lease-agent-dir") options.leaseAgentDir = path;
-      else options.searchCacheDirectory = path;
+      else if (argument === "--search-cache-dir") options.searchCacheDirectory = path;
+      else options.dataRoot = path;
       index += 1;
       continue;
     }
     if (argument === "--help") {
-      process.stderr.write("Usage: pi-dcode-host [--agent-dir PATH] [--sessions-dir PATH] [--lease-agent-dir PATH] [--search-cache-dir PATH]\n");
+      process.stderr.write("Usage: pi-dcode-host [--agent-dir PATH] [--sessions-dir PATH] [--lease-agent-dir PATH] [--search-cache-dir PATH] [--data-root PATH]\n");
       process.exit(0);
     }
     throw new Error(`Unknown argument: ${argument}`);
@@ -75,7 +79,41 @@ function errorDetails(error: unknown): { code: string; message: string; details?
   return { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
 }
 
+function legacyUserDefaultsSnapshot(raw: string | undefined): Record<string, unknown> | undefined {
+  if (raw === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`D Code legacy UserDefaults snapshot is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("D Code legacy UserDefaults snapshot must be an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function legacySourcePathOverrides(environment: NodeJS.ProcessEnv): Partial<Record<LegacyStoreKind, string>> {
+  const keys: Array<[string, LegacyStoreKind]> = [
+    ["D_CODE_PROJECT_STORE_PATH", "projects"],
+    ["D_CODE_SESSION_DRAFT_STORE_PATH", "sessionDrafts"],
+    ["D_CODE_SESSION_ARCHIVE_STORE_PATH", "sessionArchives"],
+    ["D_CODE_SESSION_PIN_STORE_PATH", "sessionPins"],
+    ["D_CODE_SESSION_CHANGE_STORE_PATH", "sessionChanges"],
+    ["D_CODE_FOLLOW_UP_QUEUE_STORE_PATH", "followUpQueues"],
+    ["D_CODE_ACTIVITY_ATTENTION_STORE_PATH", "activityAttention"],
+    ["D_CODE_SELF_EVOLUTION_RUN_STORE_PATH", "selfEvolution"],
+  ];
+  return Object.fromEntries(keys.flatMap(([environmentKey, kind]) => {
+    const value = environment[environmentKey];
+    return value ? [[kind, resolve(value)]] : [];
+  })) as Partial<Record<LegacyStoreKind, string>>;
+}
+
 const options = parseCli(process.argv.slice(2));
+const legacyUserDefaults = legacyUserDefaultsSnapshot(process.env.D_CODE_LEGACY_USER_DEFAULTS_JSON);
+const legacySourcePaths = legacySourcePathOverrides(process.env);
+delete process.env.D_CODE_LEGACY_USER_DEFAULTS_JSON;
 const writer = new JsonlWriter(process.stdout);
 const decoder = new JsonlDecoder();
 const MAX_PENDING_REQUESTS = 128;
@@ -88,6 +126,8 @@ let parentWatch: NodeJS.Timeout | undefined;
 
 const host = new PiHost({
   ...options,
+  ...(legacyUserDefaults ? { legacyUserDefaults } : {}),
+  ...(Object.keys(legacySourcePaths).length > 0 ? { legacySourcePaths } : {}),
   emit: (event, data) => {
     void writer.write(protocolEvent(event, data)).catch((error) => {
       process.stderr.write(`D Code host output error: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -128,11 +168,13 @@ function schedule(value: unknown): void {
   if (pendingRequests >= MAX_PENDING_REQUESTS) process.stdin.pause();
   let bypassQueue = false;
   try {
-    const method = parseRequest(value).method;
+    const request = parseRequest(value);
+    const method = request.method;
     bypassQueue = method === "extension.respond"
       || method === "modelAuth.respond"
       || method === "modelAuth.cancel"
-      || method === "session.search";
+      || method === "session.search"
+      || typeof request.params.runtimeId === "string";
   } catch {
     // Invalid envelopes stay on the serial path and are reported by handleValue.
   }
@@ -214,10 +256,21 @@ parentWatch = setInterval(() => {
 }, 1_000);
 parentWatch.unref();
 
-process.stdin.resume();
+process.stdin.pause();
+try {
+  await host.start();
+} catch (error) {
+  const failure = errorDetails(error);
+  await writer.write(protocolEvent("host.startFailed", failure));
+  await writer.flush();
+  process.stderr.write(`D Code host startup error: ${failure.message}\n`);
+  process.exit(1);
+}
 await writer.write(protocolEvent("host.ready", {
   protocolVersion: 1,
   pid: process.pid,
   agentDir: host.agentDir,
   sessionsDirectory: host.sessionsDirectory,
+  dataRoot: host.productDataRoot,
 }));
+process.stdin.resume();

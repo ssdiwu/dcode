@@ -26,7 +26,7 @@ enum HostCompatibilityError: LocalizedError, Equatable {
 }
 
 enum HostCompatibility {
-    static let appVersion = "0.0.27"
+    static let appVersion = "0.0.28"
     static let requiredCapabilities = [
         "sessionLease",
         "onDemandWrite",
@@ -52,6 +52,15 @@ enum HostCompatibility {
         "modelSettings",
         "sessionSteer",
         "modelAuthentication",
+        "productStore",
+        "nativeTasks",
+        "foundationSnapshot",
+        "piSessionImport",
+        "sessionPathFacts",
+        "multiRuntime",
+        "runtimeIdentity",
+        "workspaceIsolation",
+        "agentRequests",
     ]
 
     static func validate(_ hello: HostHello) throws {

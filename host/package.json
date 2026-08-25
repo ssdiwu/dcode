@@ -1,6 +1,6 @@
 {
   "name": "@pi-dcode/host",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "private": true,
   "type": "module",
   "bin": {
@@ -12,7 +12,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "start": "node dist/src/index.js",
+    "start": "node --disable-warning=ExperimentalWarning dist/src/index.js",
     "test": "npm run build && node --disable-warning=ExperimentalWarning --test dist/test/*.test.js"
   },
   "dependencies": {

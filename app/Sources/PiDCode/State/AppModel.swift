@@ -101,6 +101,11 @@ final class AppModel {
 
     var connectionState: HostConnectionState = .idle
     var hostHello: HostHello?
+    private(set) var foundationSnapshot: FoundationSnapshot?
+    private(set) var foundationImportCandidates: [FoundationPiImportCandidate] = []
+    private(set) var foundationImportPreview: FoundationPiImportPreview?
+    private(set) var isLoadingFoundation = false
+    var isFoundationMode: Bool { foundationSnapshot != nil }
     var projects: [DCodeProject] = []
     var recentSessions: [SessionSummary] = []
     var recentHasMore = false
@@ -220,6 +225,7 @@ final class AppModel {
     @ObservationIgnored private let activityAttentionStore: ActivityAttentionStore
     @ObservationIgnored private let completionNotificationService: CompletionNotificationService
     @ObservationIgnored private let hostConfiguration: HostLaunchConfiguration?
+    @ObservationIgnored private let forceFoundationModeForTests: Bool
     @ObservationIgnored private var projectStoreWritable = false
     @ObservationIgnored private var sessionDraftStoreWritable = false
     @ObservationIgnored private var sessionArchiveStoreWritable = false
@@ -263,6 +269,7 @@ final class AppModel {
         selfBuild: SelfBuildModel = SelfBuildModel(),
         selfEvolution: SelfEvolutionModel = SelfEvolutionModel(),
         hostConfiguration: HostLaunchConfiguration? = nil,
+        forceFoundationModeForTests: Bool = false,
         clientFactory: @escaping (
             HostLaunchConfiguration, @escaping HostEventSink
         ) -> any HostProviding = { configuration, eventSink in
@@ -281,6 +288,7 @@ final class AppModel {
         self.selfBuild = selfBuild
         self.selfEvolution = selfEvolution
         self.hostConfiguration = hostConfiguration
+        self.forceFoundationModeForTests = forceFoundationModeForTests
         self.clientFactory = clientFactory
     }
 
@@ -682,14 +690,7 @@ final class AppModel {
         guard connectionState == .idle, client == nil else { return }
         let startupState = Self.signposter.beginInterval("AppStart")
         defer { Self.signposter.endInterval("AppStart", startupState) }
-        await selfEvolution.load()
-        await prepareSelfEvolutionStartupRecovery()
         connectionState = .connecting
-        await loadProjects()
-        guard await loadSessionMetadata() else {
-            connectionState = .failed
-            return
-        }
         do {
             let configuration: HostLaunchConfiguration
             if let hostConfiguration {
@@ -705,6 +706,35 @@ final class AppModel {
             let hello: HostHello = try await client.request("host.hello")
             try HostCompatibility.validate(hello)
             hostHello = hello
+
+            let foundationCapabilities = [
+                "productStore",
+                "nativeTasks",
+                "foundationSnapshot",
+                "piSessionImport",
+                "sessionPathFacts",
+            ]
+            if (hostConfiguration == nil || forceFoundationModeForTests),
+               foundationCapabilities.allSatisfy({ hello.capabilities[$0]?.boolValue == true }) {
+                foundationSnapshot = try await client.request("foundation.snapshot")
+                let candidates: FoundationPiImportCandidateList = try await client.request(
+                    "piImport.listCandidates",
+                    params: ["limit": .number(200)]
+                )
+                foundationImportCandidates = candidates.candidates
+                connectionState = .ready
+                return
+            }
+
+            await selfEvolution.load()
+            await prepareSelfEvolutionStartupRecovery()
+            await loadProjects()
+            guard await loadSessionMetadata() else {
+                connectionState = .failed
+                await client.shutdown()
+                self.client = nil
+                return
+            }
             connectionState = .ready
             await reloadAllSessionLists()
             if let reopenID = pendingSelfBuildReopenSessionID {
@@ -734,6 +764,349 @@ final class AppModel {
             present(error, title: "无法启动 D Code")
             await client?.shutdown()
             client = nil
+        }
+    }
+
+    func reloadFoundation() async {
+        guard let client, foundationSnapshot != nil else { return }
+        isLoadingFoundation = true
+        defer { isLoadingFoundation = false }
+        do {
+            foundationSnapshot = try await client.request("foundation.snapshot")
+            let candidates: FoundationPiImportCandidateList = try await client.request(
+                "piImport.listCandidates",
+                params: ["limit": .number(200)]
+            )
+            foundationImportCandidates = candidates.candidates
+        } catch {
+            present(error, title: "基础设施状态未能刷新")
+        }
+    }
+
+    func createFoundationTask(
+        title: String,
+        goal: String,
+        scope: FoundationTaskScope
+    ) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationTaskBundle = try await client.request(
+                "task.create",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "scope": scope.jsonValue,
+                    "title": .string(title),
+                    "goal": .string(goal),
+                    "acceptance": .array([]),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "任务未能创建")
+            return false
+        }
+    }
+
+    func createFoundationProject(title: String, directory: String) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationProjectCreation = try await client.request(
+                "project.create",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "title": .string(title),
+                    "directory": .string(directory),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "项目未能创建")
+            return false
+        }
+    }
+
+    func importPiSessionAsFoundationTask(
+        sourceSessionId: String,
+        scope: FoundationTaskScope
+    ) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationTaskBundle = try await client.request(
+                "piImport.importAsTask",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "scope": scope.jsonValue,
+                    "sourceSessionId": .string(sourceSessionId),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Pi 会话未能导入")
+            return false
+        }
+    }
+
+    func previewFoundationPiSession(sourceSessionId: String) async -> Bool {
+        guard let client else { return false }
+        do {
+            foundationImportPreview = try await client.request(
+                "piImport.preview",
+                params: ["sourceSessionId": .string(sourceSessionId)]
+            )
+            return true
+        } catch {
+            foundationImportPreview = nil
+            present(error, title: "Pi 会话预览未能生成")
+            return false
+        }
+    }
+
+    func clearFoundationPiImportPreview() {
+        foundationImportPreview = nil
+    }
+
+    func updateFoundationAgentProfile(
+        _ profile: FoundationAgentProfile,
+        name: String,
+        roleContract: String,
+        enabled: Bool
+    ) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationAgentProfileUpdate = try await client.request(
+                "agentProfile.update",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "profileId": .string(profile.id),
+                    "expectedProfileRevision": .number(Double(profile.revision)),
+                    "name": .string(name),
+                    "roleContract": .string(roleContract),
+                    "enabled": .bool(enabled),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Agent Profile 未能更新")
+            return false
+        }
+    }
+
+    func createFoundationTeam(taskId: String, memberProfileIDs: [String]? = nil) async -> Bool {
+        guard
+            let client,
+            let snapshot = foundationSnapshot,
+            let task = snapshot.tasks.first(where: { $0.id == taskId })
+        else { return false }
+        let defaultIDs = snapshot.agentProfiles.filter {
+            ["explore", "verifier"].contains($0.role) && $0.enabled
+        }.map(\.id)
+        let selectedIDs = memberProfileIDs ?? defaultIDs
+        let members = selectedIDs.compactMap { id in
+            snapshot.agentProfiles.first(where: {
+                $0.id == id && $0.enabled && !["coordinator", "worker"].contains($0.role)
+            })
+        }
+        guard members.count >= 2, members.count == selectedIDs.count else {
+            issue = AppIssue(title: "无法建立 Agent Team", message: "请选择至少两个已启用的只读成员 Profile；Worker 需要独立 worktree，当前 Foundation Team 不会冒险共享源码目录。")
+            return false
+        }
+        do {
+            let _: FoundationTeamRunCreation = try await client.request(
+                "team.create",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "taskId": .string(taskId),
+                    "scope": task.scope.jsonValue,
+                    "members": .array(members.map { profile in
+                        .object([
+                            "profileId": .string(profile.id),
+                            "title": .string("\(profile.name) · \(profile.role)"),
+                            "taskPacket": .object([
+                                "objective": .string(profile.roleContract),
+                                "profileName": .string(profile.name),
+                            ]),
+                        ])
+                    }),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Agent Team 未能建立")
+            return false
+        }
+    }
+
+    func createFoundationAgentProfile(name: String, roleContract: String) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationAgentProfileUpdate = try await client.request(
+                "agentProfile.create",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "name": .string(name),
+                    "roleContract": .string(roleContract),
+                    "enabled": .bool(true),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Agent Profile 未能创建")
+            return false
+        }
+    }
+
+    func startFoundationTeam(task: FoundationTask, teamRunId: String) async -> Bool {
+        guard
+            let client,
+            let snapshot = foundationSnapshot,
+            let team = snapshot.teamRuns.first(where: { $0.id == teamRunId && $0.taskId == task.id })
+        else { return false }
+        do {
+            let result: FoundationTeamStartResult = try await client.request(
+                "team.start",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "expectedTeamRunRevision": .number(Double(team.revision)),
+                    "taskId": .string(task.id),
+                    "scope": task.scope.jsonValue,
+                    "teamRunId": .string(teamRunId),
+                    "message": .string("请作为 Coordinator 推进 Task：\(task.title)\nGoal：\(task.goal)"),
+                    "workspace": .object([
+                        "workspaceId": .string("team-\(teamRunId)"),
+                        "cwd": .string(task.cwd),
+                        "access": .string("sharedReadOnly"),
+                    ]),
+                ]
+            )
+            await reloadFoundation()
+            if !result.started {
+                issue = AppIssue(
+                    title: "Agent Team 未能启动",
+                    message: result.reasonCode == "WORKSPACE_ISOLATION_REQUIRED"
+                        ? "所选成员需要独立可写 worktree；D Code 已在打开任何 Runtime 前停止，没有留下孤儿运行。"
+                        : "Agent Team 未能安全打开全部 Runtime；已清理部分启动并记录失败状态。"
+                )
+            }
+            return result.started
+        } catch {
+            present(error, title: "Agent Team 未能启动")
+            await reloadFoundation()
+            return false
+        }
+    }
+
+    func decideFoundationTask(_ task: FoundationTask, accepted: Bool) async -> Bool {
+        guard let client, let snapshot = foundationSnapshot else { return false }
+        do {
+            let _: FoundationTaskDecision = try await client.request(
+                "task.acceptance",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "taskId": .string(task.id),
+                    "scope": task.scope.jsonValue,
+                    "expectedTaskRevision": .number(Double(task.revision)),
+                    "decision": .string(accepted ? "accepted" : "rejected"),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Task 验收未能记录")
+            return false
+        }
+    }
+
+    func stopFoundationAgentRun(_ agentRun: FoundationAgentRun) async {
+        guard
+            let client,
+            let snapshot = foundationSnapshot,
+            let task = snapshot.tasks.first(where: { $0.id == agentRun.taskId }),
+            let teamRunId = agentRun.teamRunId,
+            let sessionRun = snapshot.sessionRuns.last(where: {
+                $0.taskId == agentRun.taskId
+                    && $0.sessionId == agentRun.sessionId
+                    && ["running", "waiting"].contains($0.status)
+            })
+        else {
+            issue = AppIssue(title: "Agent Run 未能停止", message: "找不到这个成员当前仍在运行的 Session Run。")
+            return
+        }
+        do {
+            let result: FoundationAgentStopResult = try await client.request(
+                "agentRun.stop",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "runtimeId": .string(sessionRun.runtimeId),
+                    "scope": task.scope.jsonValue,
+                    "taskId": .string(agentRun.taskId),
+                    "teamRunId": .string(teamRunId),
+                    "agentRunId": .string(agentRun.id),
+                    "sessionRunId": .string(sessionRun.id),
+                    "expectedAgentRunRevision": .number(Double(agentRun.revision)),
+                ]
+            )
+            await reloadFoundation()
+            if !result.stopped {
+                issue = AppIssue(
+                    title: "Agent Run 停止结果未知",
+                    message: "停止意图已记录为 Attempt，但对应 Runtime 已不可确认。D Code 不会自动重试这个外部动作。"
+                )
+            }
+        } catch {
+            present(error, title: "Agent Run 未能停止")
+        }
+    }
+
+    func answerFoundationAgentRequest(
+        _ request: FoundationAgentRequest,
+        option: FoundationAgentRequestOption
+    ) async -> Bool {
+        guard
+            let client,
+            let snapshot = foundationSnapshot,
+            let task = snapshot.tasks.first(where: { $0.id == request.taskId }),
+            let teamRunId = request.teamRunId
+        else { return false }
+        do {
+            let _: JSONValue = try await client.request(
+                "agentRequest.answer",
+                params: [
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                    "runtimeId": .string(request.runtimeId),
+                    "scope": task.scope.jsonValue,
+                    "taskId": .string(request.taskId),
+                    "teamRunId": .string(teamRunId),
+                    "agentRunId": .string(request.agentRunId),
+                    "sessionRunId": .string(request.sessionRunId),
+                    "agentRequestId": .string(request.id),
+                    "expectedRequestRevision": .number(Double(request.revision)),
+                    "answer": .object([
+                        "kind": .string("choice"),
+                        "optionId": .string(option.id),
+                    ]),
+                ]
+            )
+            await reloadFoundation()
+            return true
+        } catch {
+            present(error, title: "Agent Request 未能回答")
+            return false
         }
     }
 
@@ -5813,6 +6186,21 @@ final class AppModel {
     }
 
     func handle(_ event: HostEvent) {
+        if isFoundationMode {
+            switch event.name {
+            case "foundation.changed":
+                Task { [weak self] in await self?.reloadFoundation() }
+            case "session.durableRunFinished", "session.runStateChanged",
+                 "operationAttempt.prepared", "operationAttempt.finished":
+                Task { [weak self] in await self?.reloadFoundation() }
+            case "host.stderr", "host.outputError", "protocol.decodeError",
+                 "host.processEnded", "host.restartRequired":
+                handleHostLifecycleEvent(event)
+            default:
+                break
+            }
+            return
+        }
         switch event.name {
         case let name where name == "plan.changed" || name.hasPrefix("session."):
             handleSessionHostEvent(event)

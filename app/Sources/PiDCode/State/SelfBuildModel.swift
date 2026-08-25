@@ -3,6 +3,23 @@ import Foundation
 import Observation
 import RelaunchCore
 
+private enum ProductStoreVersionPolicy {
+    static let minimumVersion = "0.0.28"
+
+    static func allows(_ version: String) -> Bool {
+        let components = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 3,
+              let major = Int(components[0]),
+              let minor = Int(components[1]),
+              let patch = Int(components[2]) else { return false }
+        return (major, minor, patch) >= (0, 0, 28)
+    }
+
+    static func rejection(_ version: String) -> String {
+        "Product Store 已晋升到 0.0.28 schema；不支持切换到 \(version)，最低可运行版本为 \(minimumVersion)。"
+    }
+}
+
 /// 自构建域状态：构建执行、候选校验、受控重启与回滚（ADR 0022 协议的 App 侧承载）。
 @MainActor
 @Observable
@@ -319,6 +336,11 @@ final class SelfBuildModel {
             finishRestartFailure(message, phase: .failed)
             return .validationFailed(message)
         }
+        guard ProductStoreVersionPolicy.allows(info.appVersion) else {
+            let message = ProductStoreVersionPolicy.rejection(info.appVersion)
+            finishRestartFailure(message, phase: .failed)
+            return .validationFailed(message)
+        }
         guard sourceStillMatchesCandidate() else {
             let message = "候选来源 digest 与当前源码不匹配；已拒绝交换"
             finishRestartFailure(message, phase: .failed)
@@ -367,6 +389,11 @@ final class SelfBuildModel {
             finishRestartFailure("备份构建缺少可核对的 App 版本", phase: .failed)
             return .swapFailed("备份构建缺少可核对的 App 版本")
         }
+        guard ProductStoreVersionPolicy.allows(targetAppVersion) else {
+            let message = ProductStoreVersionPolicy.rejection(targetAppVersion)
+            finishRestartFailure(message, phase: .failed)
+            return .validationFailed(message)
+        }
         guard prepareRollbackRestartBeforeSwap(
             kind: .ordinary,
             targetAppVersion: targetAppVersion,
@@ -402,6 +429,10 @@ final class SelfBuildModel {
     ) -> Bool {
         guard restartInFlight,
               restartStage == .savingSession || restartStage == .validatingCandidate else { return false }
+        guard ProductStoreVersionPolicy.allows(targetAppVersion) else {
+            finishRestartFailure(ProductStoreVersionPolicy.rejection(targetAppVersion), phase: .failed)
+            return false
+        }
         let backupURL = distDirectory.appending(path: SelfBuildModels.backupBundleName)
         guard prepareRelaunchHelperIfNeeded(from: [Bundle.main.bundleURL, activeBundleURL, backupURL]) else {
             return false
@@ -450,7 +481,7 @@ final class SelfBuildModel {
         }
         restartInFlight = true
         restartStage = .validatingCandidate
-        let targetAppVersion = SelfBuildBundleMetadata.appVersion(at: activeBundleURL) ?? "0.0.27"
+        let targetAppVersion = SelfBuildBundleMetadata.appVersion(at: activeBundleURL) ?? HostCompatibility.appVersion
         markRestart(
             kind: .legacyBootstrap,
             targetAppVersion: targetAppVersion,

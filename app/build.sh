@@ -77,7 +77,7 @@ NODE_VERSION="$(${NODE_BIN} --version)"
 NODE_ARCH="$(file -b "${NODE_BIN}")"
 REQUIRED_NODE_VERSION="v22.22.3"
 if [[ "${NODE_VERSION}" != "${REQUIRED_NODE_VERSION}" ]]; then
-    echo "error: the D Code 0.0.27 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
+    echo "error: the D Code 0.0.28 app bundle requires Node ${REQUIRED_NODE_VERSION}; found ${NODE_VERSION}" >&2
     exit 1
 fi
 if [[ "${NODE_ARCH}" != *"arm64"* ]]; then
@@ -204,7 +204,7 @@ EOF
 printf '==> Validating bundle metadata and embedded Host\n'
 plutil -lint "${CONTENTS_DIR}/Info.plist" >/dev/null
 plutil -lint "${RELAUNCH_HELPER_CONTENTS_DIR}/Info.plist" >/dev/null
-"${RESOURCES_DIR}/runtime/node" "${HOST_RESOURCES_DIR}/dist/src/index.js" --help >/dev/null
+"${RESOURCES_DIR}/runtime/node" --disable-warning=ExperimentalWarning "${HOST_RESOURCES_DIR}/dist/src/index.js" --help >/dev/null
 
 printf '==> Applying local ad-hoc signature\n'
 while IFS= read -r -d '' candidate; do

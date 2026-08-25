@@ -93,6 +93,8 @@ export class DCodeResourceLoader {
     agentDir: string;
     sourceSettingsManager: SettingsManager;
     extensionFactories: NonNullable<LoaderOptions["extensionFactories"]>;
+    systemPromptOverride?: NonNullable<LoaderOptions["systemPromptOverride"]>;
+    allowExternalExtensions?: boolean;
   }) {
     this.resourceSettingsManager = createDCodeResourceSettingsManager({
       cwd: options.cwd,
@@ -106,6 +108,7 @@ export class DCodeResourceLoader {
       noExtensions: true,
       additionalExtensionPaths: [],
       extensionFactories: options.extensionFactories,
+      ...(options.systemPromptOverride ? { systemPromptOverride: options.systemPromptOverride } : {}),
     });
   }
 
@@ -151,11 +154,13 @@ export class DCodeResourceLoader {
 
   async reload(options?: LoaderReloadOptions): Promise<void> {
     this.resourceSettingsManager.setProjectTrusted(this.options.sourceSettingsManager.isProjectTrusted());
-    const extensionPaths = await resolveDCodeExtensionPaths({
-      cwd: this.options.cwd,
-      agentDir: this.options.agentDir,
-      settingsManager: this.resourceSettingsManager,
-    });
+    const extensionPaths = this.options.allowExternalExtensions === false
+      ? []
+      : await resolveDCodeExtensionPaths({
+        cwd: this.options.cwd,
+        agentDir: this.options.agentDir,
+        settingsManager: this.resourceSettingsManager,
+      });
     // Pi 0.84.1 has no PackageManager injection point. Updating this pinned loader field
     // keeps its cache-clearing reload lifecycle while replacing the pre-load extension set.
     (this.loader as unknown as { additionalExtensionPaths: string[] }).additionalExtensionPaths = extensionPaths;

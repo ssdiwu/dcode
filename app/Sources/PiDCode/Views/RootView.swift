@@ -20,6 +20,16 @@ struct RootView: View {
     @State private var renameDraft = ""
 
     var body: some View {
+        Group {
+            if model.isFoundationMode {
+                FoundationConsoleView()
+            } else {
+                legacyWorkbench
+            }
+        }
+    }
+
+    private var legacyWorkbench: some View {
         GeometryReader { proxy in
             let layout = layoutPolicy(width: proxy.size.width)
             let surface = WorkbenchSurfaceLayout(

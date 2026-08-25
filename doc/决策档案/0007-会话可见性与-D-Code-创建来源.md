@@ -1,5 +1,7 @@
 # 会话可见性与 D Code 创建来源
 
+状态：Superseded（已由 [ADR 0037](0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md) 取代；以下只描述旧版 Pi Session 可见性合同）
+
 D Code 不把用户主目录下的全部 Pi Session 直接暴露为 Recent Sessions。Recent Sessions 只包含由 D Code Host 创建、并在创建时与 Session Header 一起写入有效 `dcode-session-origin-v1` Custom Entry 的 Pi Session。该条目的 `data.version` 必须为 `1`，`data.sessionId` 必须与当前 Session Header ID 相同；因其不进入 LLM Context（模型上下文），它只是会话来源与导航可见性的持久证据，不是消息或第二份会话数据。
 
 Session Header 与有效来源标记作为完整初始文档成功发布，是 D Code 创建 Session 的提交点。Host 在该点立即返回稳定 Session 身份，不关闭当前 Runtime、不为新对象取得 Lease，也不把后续打开与激活并入创建结果。App 在显示已创建 Session 后，再以独立 `session.open` 请求获得 observing 或 writable 运行状态；该请求失败不得删除或重写 append-only Pi JSONL，也不得把已持久化 Session 重新报告为“创建失败”。

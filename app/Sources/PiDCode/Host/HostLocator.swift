@@ -4,9 +4,24 @@ struct HostLaunchConfiguration: Sendable, Equatable {
     let nodeURL: URL
     let hostEntryURL: URL
     let agentDirectoryURL: URL
+    let dataRootURL: URL?
+
+    init(
+        nodeURL: URL,
+        hostEntryURL: URL,
+        agentDirectoryURL: URL,
+        dataRootURL: URL? = nil
+    ) {
+        self.nodeURL = nodeURL
+        self.hostEntryURL = hostEntryURL
+        self.agentDirectoryURL = agentDirectoryURL
+        self.dataRootURL = dataRootURL
+    }
 
     var arguments: [String] {
-        [hostEntryURL.path, "--agent-dir", agentDirectoryURL.path]
+        var result = [hostEntryURL.path, "--agent-dir", agentDirectoryURL.path]
+        if let dataRootURL { result += ["--data-root", dataRootURL.path] }
+        return result
     }
 }
 
@@ -39,6 +54,11 @@ enum HostProcessEnvironment {
         environment["HOME"] = base["HOME"] ?? homeDirectory.path
         environment["NO_COLOR"] = "1"
         environment["PI_CODING_AGENT_DIR"] = agentDirectoryURL.path
+        let warningFlag = "--disable-warning=ExperimentalWarning"
+        let nodeOptions = base["NODE_OPTIONS", default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+        environment["NODE_OPTIONS"] = nodeOptions.contains(warningFlag)
+            ? nodeOptions
+            : [nodeOptions, warningFlag].filter { !$0.isEmpty }.joined(separator: " ")
         return environment
     }
 }
@@ -98,10 +118,14 @@ enum HostLocator {
         let agentPath = option("--agent-dir", in: arguments)
             ?? environment["PI_DCODE_AGENT_DIR"]
             ?? homeDirectory.appending(path: ".pi/agent").path
+        let dataRootPath = option("--data-root", in: arguments) ?? environment["D_CODE_DATA_ROOT"]
         return HostLaunchConfiguration(
             nodeURL: nodeURL.standardizedFileURL,
             hostEntryURL: hostEntryURL.standardizedFileURL,
-            agentDirectoryURL: expand(agentPath, homeDirectory: homeDirectory).standardizedFileURL
+            agentDirectoryURL: expand(agentPath, homeDirectory: homeDirectory).standardizedFileURL,
+            dataRootURL: dataRootPath.map {
+                expand($0, homeDirectory: homeDirectory).standardizedFileURL
+            }
         )
     }
 

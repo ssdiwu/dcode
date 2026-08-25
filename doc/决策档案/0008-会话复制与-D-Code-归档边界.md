@@ -1,6 +1,6 @@
 # 会话复制与 D Code 归档边界
 
-状态：Partially Superseded（ADR 0029 为整个 Project 改目录新增保持同 ID 的 `cwd` 迁移；本 ADR 的单 Session 复制与归档边界继续有效）
+状态：Partially Superseded（ADR 0029 曾增加 Pi `cwd` 迁移；ADR 0037 已取代 Pi Fork / JSONL 产品机制，复制先验证、保留源与归档可逆原则继续有效）
 
 D Code 的跨 Project 会话操作使用 Pi SDK 的完整会话 Fork（分叉）语义：源 Pi Session 保留不变，目标在所选 Source Folder 中获得新的 Session ID、新 `cwd` 与指向源 Session 文件的 `parentSession`。产品只称它为“复制到项目”，不得称为“移动会话”或“迁移会话”。D Code 不提供保持同一 Session ID、改写 Header `cwd` 或重命名 Pi 会话目录的常规迁移能力。
 

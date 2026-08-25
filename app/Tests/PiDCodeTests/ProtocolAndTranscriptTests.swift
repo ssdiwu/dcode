@@ -1461,12 +1461,21 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionSteer"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("modelAuthentication"))
         XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionCwdRelocation"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("productStore"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("nativeTasks"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("foundationSnapshot"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("piSessionImport"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("sessionPathFacts"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("multiRuntime"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("runtimeIdentity"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("workspaceIsolation"))
+        XCTAssertTrue(HostCompatibility.requiredCapabilities.contains("agentRequests"))
         let capabilities = Dictionary(
             uniqueKeysWithValues: HostCompatibility.requiredCapabilities.map { ($0, JSONValue.bool(true)) }
         )
         let compatible = HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.27",
+            hostVersion: "0.0.28",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: capabilities
@@ -1487,7 +1496,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         incomplete["projectCwdScope"] = .bool(false)
         XCTAssertThrowsError(try HostCompatibility.validate(HostHello(
             protocolVersion: 1,
-            hostVersion: "0.0.27",
+            hostVersion: "0.0.28",
             piVersion: "0.84.1",
             nodeVersion: "22.19.0",
             capabilities: incomplete
@@ -1622,13 +1631,18 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let host = root.appending(path: "host.js")
         FileManager.default.createFile(atPath: host.path, contents: Data())
         let configuration = try HostLocator.resolve(
-            arguments: ["PiDCode", "--node-bin", "/bin/cat", "--host-entry", host.path, "--agent-dir", root.path],
+            arguments: [
+                "PiDCode", "--node-bin", "/bin/cat", "--host-entry", host.path,
+                "--agent-dir", root.path, "--data-root", root.appending(path: ".dcode").path,
+            ],
             environment: [:],
             homeDirectory: root
         )
         XCTAssertEqual(configuration.nodeURL.path, "/bin/cat")
         XCTAssertEqual(configuration.hostEntryURL.path, host.path)
         XCTAssertEqual(configuration.agentDirectoryURL.path, root.path)
+        XCTAssertEqual(configuration.dataRootURL?.path, root.appending(path: ".dcode").path)
+        XCTAssertEqual(Array(configuration.arguments.suffix(2)), ["--data-root", root.appending(path: ".dcode").path])
     }
 
     func testHostLocatorPrefersEmbeddedRuntimeAndHost() throws {
@@ -1667,7 +1681,11 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         let home = URL(fileURLWithPath: "/Users/fixture")
         let agent = home.appending(path: ".pi/agent")
         let environment = HostProcessEnvironment.make(
-            base: ["PATH": "/usr/bin:/custom/bin:/usr/bin", "KEEP": "yes"],
+            base: [
+                "PATH": "/usr/bin:/custom/bin:/usr/bin",
+                "KEEP": "yes",
+                "NODE_OPTIONS": "--require \"/tmp/D Code/hook.js\"",
+            ],
             homeDirectory: home,
             agentDirectoryURL: agent
         )
@@ -1679,7 +1697,30 @@ final class ProtocolAndTranscriptTests: XCTestCase {
         XCTAssertEqual(environment["HOME"], home.path)
         XCTAssertEqual(environment["PI_CODING_AGENT_DIR"], agent.path)
         XCTAssertEqual(environment["NO_COLOR"], "1")
+        XCTAssertTrue(environment["NODE_OPTIONS", default: ""].contains("--disable-warning=ExperimentalWarning"))
+        XCTAssertTrue(environment["NODE_OPTIONS", default: ""].hasPrefix("--require \"/tmp/D Code/hook.js\""))
         XCTAssertEqual(environment["KEEP"], "yes")
+    }
+
+    func testLegacyUserDefaultsSnapshotPreservesMissingVersusFalseAndRejectsInvalidTypes() throws {
+        let suite = "DCodeLegacyDefaults-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "dcode.sidebar.userHidden")
+        defaults.set(420.0, forKey: "dcode.sidebar.width")
+        defaults.set("dark", forKey: "dcode.appearance")
+
+        let encoded = try LegacyUserDefaultsSnapshot.encoded(defaults: defaults)
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["dcode.sidebar.userHidden"] as? Bool, false)
+        XCTAssertEqual(decoded["dcode.sidebar.width"] as? Double, 420.0)
+        XCTAssertEqual(decoded["dcode.appearance"] as? String, "dark")
+        XCTAssertNil(decoded["dcode.inspector.userHidden"], "missing keys must stay missing")
+
+        defaults.set(Date(), forKey: "dcode.sidebar.width")
+        XCTAssertThrowsError(try LegacyUserDefaultsSnapshot.encoded(defaults: defaults))
     }
 
     func testPiHostClientReceivesMoreThanOneResponseFromAQuietStderrProcess() async throws {
@@ -1763,6 +1804,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "modelSettings": True,
             "sessionSteer": True,
             "modelAuthentication": True,
+            "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
+            "piSessionImport": True, "sessionPathFacts": True,
+            "multiRuntime": True, "runtimeIdentity": True,
+            "workspaceIsolation": True, "agentRequests": True,
         }
         marker = os.path.join(sys.argv[2], "project-list-started")
 
@@ -1773,7 +1818,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.27",
+                    "hostVersion": "0.0.28",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -1881,6 +1926,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "modelSettings": True,
             "sessionSteer": True,
             "modelAuthentication": True,
+            "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
+            "piSessionImport": True, "sessionPathFacts": True,
+            "multiRuntime": True, "runtimeIdentity": True,
+            "workspaceIsolation": True, "agentRequests": True,
         }
         agent_dir = sys.argv[2]
         create_marker = os.path.join(agent_dir, "create-requested")
@@ -1944,7 +1993,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             if method == "host.hello":
                 result = {
                     "protocolVersion": 1,
-                    "hostVersion": "0.0.27",
+                    "hostVersion": "0.0.28",
                     "piVersion": "0.84.1",
                     "nodeVersion": "test",
                     "capabilities": capabilities,
@@ -2248,6 +2297,10 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             "modelSettings": True,
             "sessionSteer": True,
             "modelAuthentication": True,
+            "productStore": True, "nativeTasks": True, "foundationSnapshot": True,
+            "piSessionImport": True, "sessionPathFacts": True,
+            "multiRuntime": True, "runtimeIdentity": True,
+            "workspaceIsolation": True, "agentRequests": True,
         }
         agent_dir = sys.argv[2]
         created = None
@@ -2269,7 +2322,7 @@ final class ProtocolAndTranscriptTests: XCTestCase {
             params = request.get("params", {})
             if method == "host.hello":
                 respond(request, {
-                    "protocolVersion": 1, "hostVersion": "0.0.27", "piVersion": "0.84.1",
+                    "protocolVersion": 1, "hostVersion": "0.0.28", "piVersion": "0.84.1",
                     "nodeVersion": "test", "capabilities": capabilities,
                 })
             elif method == "session.list":

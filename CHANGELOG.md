@@ -1,3 +1,21 @@
+## [Unreleased]
+
+### Added
+
+- `0.0.28` Foundation Candidate（基础候选）：以当前用户 `~/.dcode/` 中的版本化 Product Store（产品数据库）原生持久化 User / Project Scope、Task、D Code Session / Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence；首次晋升使用单写入租约、原子迁移、schema fingerprint、revision 和 durable request ID，未知或损坏状态失败关闭。
+- Pi Session 单向导入：D Code 已管理的旧会话在首次晋升时自动转换为 Legacy Task；其他 Pi Session 只有经 Foundation Console（基础控制台）预览、选择 Scope 并确认后才原子导入，保留 source digest / provenance / unknown lineage，不修改或双写源 JSONL。
+- 多 Runtime Supervisor（运行时监督器）：同一 Task 可同时拥有 Coordinator 与多个独立 Pi AgentSession；Coordinator 先规划、两个只读成员 Provider 请求真实并行、成员 Report 落库后再由同一 Coordination Session 综合。Agent Request 可耐久等待和恢复，单成员 Stop 先写 Attempt 再执行，Provider / Tool / Stop 结果未知时禁止自动重放。
+- D Code System Prompt（系统提示词）与 Active Tool Manifest（活动工具清单）：每个 Session Run 重新读取一等项目文档与当前工具，Provider 实收 Prompt / API Tools / Product Store Receipt 使用同一 digest；Foundation Console 可查看 Project / Task / Profile、Pi 导入、Session / Run、Environment / Tools、Request、Attempt、Report、Artifact / Evidence 与 Task Acceptance。
+
+### Changed
+
+- App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.28`；`0.0.27` 起动候选与新 Product Store schema 明确不支持降级混用。
+- Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
+
+### Security
+
+- Product Store、Pi 导入、Prompt 文档与 legacy migration 共用凭据检测 / 脱敏边界；Tool Result 只保存有界引用和 digest。Worker 需要独立可写 worktree，当前 Foundation Team 在打开任何 Runtime 前诚实拒绝，不留下孤儿运行。
+
 ## [0.0.27] - 2026-08-24
 
 ### Added

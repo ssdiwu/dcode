@@ -49,6 +49,21 @@ export interface SessionInspection {
   activeProposal: unknown;
 }
 
+export interface SessionDocumentPath {
+  id: string;
+  leafId: string | null;
+  title: string;
+  isCurrent: boolean;
+  entryIds: string[];
+}
+
+export interface SessionDocumentInspection {
+  summary: SessionSummary;
+  header: SessionHeader;
+  entries: SessionEntry[];
+  paths: SessionDocumentPath[];
+}
+
 export interface SessionPathSummary {
   id: string;
   leafId: string | null;
@@ -716,6 +731,25 @@ export class SessionReader {
   async inspect(sessionId: string, leafId?: string | null): Promise<SessionInspection> {
     const summary = await this.resolve(sessionId);
     return await this.inspectSummary(summary, sessionId, leafId);
+  }
+
+  async inspectDocument(sessionId: string): Promise<SessionDocumentInspection> {
+    const summary = await this.resolve(sessionId);
+    const parsed = parseStrictSessionDocument(await readFile(summary.path, "utf8"), summary.path);
+    const header = parsed.find((entry): entry is SessionHeader => entry.type === "session");
+    if (!header || header.id !== sessionId) {
+      throw new SessionReadError("INVALID_SESSION", `Session header mismatch: ${summary.path}`);
+    }
+    const entries = parsed.filter((entry): entry is SessionEntry => entry.type !== "session");
+    const currentLeafId = entries.at(-1)?.id ?? null;
+    const paths = sessionPaths(entries, currentLeafId, summary.modified).map((path) => ({
+      id: path.id,
+      leafId: path.leafId,
+      title: path.title,
+      isCurrent: path.isCurrent,
+      entryIds: buildBranch(entries, path.leafId).branch.map((entry) => entry.id),
+    }));
+    return { summary, header, entries, paths };
   }
 
   async inspectPath(path: string, sessionId: string, leafId?: string | null): Promise<SessionInspection> {

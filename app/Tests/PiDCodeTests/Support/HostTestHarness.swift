@@ -11,7 +11,7 @@ final class HostTestHarness {
     let client: FakeHostClient
     let model: AppModel
 
-    init() {
+    init(foundationMode: Bool = false) {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "DCodeHostHarness-\(UUID().uuidString)", directoryHint: .isDirectory)
         self.root = root
@@ -44,6 +44,7 @@ final class HostTestHarness {
                 store: SelfEvolutionRunStore(fileURL: root.appending(path: "self-evolution.json"))
             ),
             hostConfiguration: configuration,
+            forceFoundationModeForTests: foundationMode,
             clientFactory: { _, eventSink in
                 sinkBox.sink = eventSink
                 return fake

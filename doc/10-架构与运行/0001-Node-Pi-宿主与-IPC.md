@@ -4,10 +4,17 @@
 
 ## 职责
 
-`host/` 是 Swift App 与 Pi 0.84.1 之间唯一允许写入会话的运行边界。它使用项目内精确固定的 Pi 包加载 `~/.pi/agent` 的配置、模型、扩展与 JSONL 会话，不调用全局 `pi` 命令，也不建立第二份会话数据库。
+`host/` 是 Swift App 唯一允许写入 D Code Product Store、启动 Runtime Adapter 和执行外部副作用的运行边界。它使用项目内精确固定的 Pi 0.84.1 提供 Agent Loop，但 Project / Task / D Code Session / Run / Prompt Receipt / Attempt 等产品事实进入 `~/.dcode/`，不以 Pi JSONL 作为产品数据库，也不调用全局 `pi` 命令。
 
 Swift 负责原生呈现与用户输入；Host 负责：
 
+- 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；
+- 以 User Scope / Project Scope → Task → Coordination / Child Session → Team / Agent / Session Run 的稳定身份执行 query 与 mutation；
+- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；
+- 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
+- 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；
+- 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；
+- 预览并显式单向导入外部 Pi Session，首次晋升时只自动接管带有效 D Code origin 的旧会话；
 - 发现、解析和恢复 Pi Session；
 - 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的唯一项目目录精确 `cwd` 查询全部关联 Session Summary；
 - 在独立 Worker 中为上述可见会话建立可删除、可重建的 SQLite FTS5 本机索引，并搜索标题与当前活动路径的用户/助手正文；
@@ -49,7 +56,8 @@ open "dist/D Code.app"
 
 - Host 开发运行要求 Node `>=22.19.0`；当前 App Bundle 构建脚本精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
-- `--sessions-dir` 只在测试或显式覆盖时使用；默认会话权威仍为 `<agent-dir>/sessions`。
+- `--data-root` 只在隔离测试或显式诊断时使用；默认 D Code 产品数据根为当前用户 `~/.dcode/`。
+- `--sessions-dir` 只在测试或显式覆盖时使用；默认目录 `<agent-dir>/sessions` 只保存 Pi 来源与 Runtime Adapter 私有会话，不是 D Code 产品权威。
 - `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
 - `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
 - App 退出先发送 `host.shutdown`；Swift Host client 对该请求与子进程等待设有界超时，超时只 force terminate 当前 App 已登记的 Host PID，再完成退出 reply；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
@@ -85,22 +93,30 @@ open "dist/D Code.app"
 {"version":1,"type":"event","event":"session.opened","data":{}}
 ```
 
-非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。普通输入按顺序处理并设置排队背压；`extension.respond` 以及 `modelAuth.respond / cancel` 为解除正在等待原生交互的长请求，在入口与 Pi Host 两层都绕过普通请求队列。输出仍按写入顺序串行化，stdin 正常结束时会等待普通与旁路请求共同收敛。
+非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。无 Runtime 身份的 Product Store mutation 经过全局队列；带 `runtimeId` 的请求进入对应 Runtime 队列，不再被全局“当前会话”串行化。`extension.respond`、`agentRequest.answer`、`agentRun.stop` 以及认证响应属于解除等待或停止的控制请求，会绕过普通 Runtime 队列。输出仍按写入顺序串行化。
 
 ### 方法组
 
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
+| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence 与迁移来源投影 |
+| `project.create`、`task.create`、`task.acceptance` | 以 request ID、expected revision 和精确 User / Project Scope 创建或验收 D Code 原生对象 |
+| `agentProfile.create`、`agentProfile.update` | 创建自定义 Profile 或版本化修改内建 / 自定义 Profile；已启动 Agent Run 保留启动快照 |
+| `piImport.listCandidates`、`piImport.preview`、`piImport.importAsTask` | 发现外部 Pi Session、生成 digest / omission 预览，并在用户确认 Scope 后原子转换为新 Task；不修改源 JSONL |
+| `runtime.list`、`runtime.start` | 返回活动 Runtime 与上限，或为指定 Task / D Code Session / Agent Run 建立独立 Pi AgentSession 和 workspace 所有权 |
+| `team.create`、`team.start` | 建立 Coordinator 与成员身份；Coordinator 先规划，成员 Provider 请求并行，报告持久化后再综合 |
+| `agentRequest.answer` | 以完整 Task / Team / Agent / Session Run / Runtime 身份回答耐久单选请求，答案回到原工具调用 |
+| `agentRun.stop` | 先持久化 Stop Attempt，再中止指定成员并将 Session / Agent / Team 状态诚实收口；不使用含糊的全局停止目标 |
 | `session.list`、`session.inspect` | 不创建 `AgentSession`，发现与恢复历史快照和路径摘要；Recent 使用 `session.list.origin="dcode"` 在分页前识别 Header ID 相符的 D Code 来源标记，Project 使用 `session.list.cwdScope` 精确匹配项目目录，`excludedSessionIds` 在分页前排除归档对象；有界列表先按文件 mtime 选择候选，再解析与筛选摘要 |
 | `session.search` | 在独立 Worker 中查询可见会话本机索引；请求携带完整 Project 目录范围、归档排除 ID 与可选筛选范围，Host 在排序、分组和 `limit` 前再次强制可见性；搜索本身不打开会话、不创建租约 |
 | `session.refresh` | 从当前活动会话的已知规范路径读取最新快照，不重新扫描全部 Session 目录；用于外部 Pi 条目落盘后的合并刷新 |
 | `session.create` | 通过 Pi `SessionManager` 创建 cwd-scoped Session，将 Header 与 `dcode-session-origin-v1` 一次写入初始 JSONL；文档发布即提交创建并立即返回，不扫描全库、不创建 Lease、不加载扩展，也不关闭当前 Runtime；从 `0.0.5` 起 App 只在本地会话前草稿首次提交非空正文时调用，随后用独立 writable `session.open` 与 `session.prompt` 发送 |
-| `session.open`、`session.close` | 打开即接管：校验目标后关闭当前会话、以 `force` 取得目标 Lease，并在指定 `pathId` 上建立唯一可写 runtime；关闭时释放所有权。Protocol 校验仍解释遗留的 `mode / writeIntent / preserveActive` 字段，但运行时不建立只读路径、始终执行可写接管；这是待清理的实现缺口，不构成只读产品能力 |
+| `session.open`、`session.close` | 显式 Runtime 请求只打开 / 关闭对应 Runtime，不影响其他会话；同一 D Code / Adapter Session 仍只有一个写入所有者。无 `runtimeId` 的旧入口保留单活动会话兼容语义，不定义新产品模型 |
 | `session.setName` | 在当前会话空闲、Lease 稳定时调用 Pi SDK 写入 Session Name；空字符串恢复自动名称，单行名称最多 200 个 UTF-16 code unit |
 | `session.trash` | 只将唯一、空的 D Code 创建 Session 移入当前 macOS 用户废纸篓；取得临时 Lease 后再次校验身份、来源、消息数和子会话关系，失败不执行永久删除 |
 | `session.repair` | 受控修复尾部不完整的会话 JSONL（0.0.19）：仅当「尾部恰好一条记录不完整且其余记录完整」时可修；同目录完整备份 `.bak-<uuid>` → 修剪尾行 → 严格读取器复验 → 原子替换，任一环节失败原文件零改动；其余损坏形态拒绝并返回字段级原因。`session.open` 的 `INVALID_SESSION` 失败 details 附 `repairable` 与 `repairReason`，作为该入口的发现路径 |
-| `session.prompt`、`session.abort` | 发送输入与中止当前运行；首次路径输入可携带 `editUser`、`continueAssistant` 或 `continuePath`，只有对应 user record 持久化后才形成新路径；可选 `images`（≤8 张 `{ type: "image", data: base64, mimeType: image/* }`，单张 data ≤ 7,000,000 字符）经 Pi `PromptOptions.images` 进入模型输入（0.0.20） |
+| `session.prompt`、`session.abort` | 显式 D Code Runtime 在 Provider 前原子写 Raw / Effective Input、Session Run、Prompt Receipt 与 Attempt，并使用 D Code Prompt / Tools；`session.abort` 保留为底层 Runtime 控制，Foundation Console 停止成员使用 `agentRun.stop`。旧入口仍支持路径动作与图片附件 |
 | `session.steer` | 携带预期 Run ID（与可选 `images`，同 `session.prompt` 合同），在当前 Host Run 仍为同一 `running`、没有结构化等待时调用 Pi 专用 `AgentSession.steer()`；Run 已变化则拒绝，不经过可降级为普通 Prompt 的异步 input handler，不建立新 Run、不执行斜杠命令、不中止正在执行的工具，在下一安全模型边界应用介入信息 |
 | `session.copy` | 在源稳定且空闲时把完整已持久化历史复制成新 Session ID 与目标 `cwd`；源文件不改，失败目标不进入正常会话目录 |
 | `session.relocateCwd` | 在明确 Project 目录迁移中，以稳定租约原地改写旧项目目录精确匹配 Session Header 的 `cwd`，保持 Session ID、历史、文件路径与谱系；可选移动目录内文件，但目标必须为空且绝不合并或覆盖 |

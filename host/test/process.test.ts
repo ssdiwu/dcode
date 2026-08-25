@@ -73,7 +73,12 @@ test("host process keeps stdout as JSONL and shuts down cleanly", async () => {
   const agentDir = join(root, "agent");
   await mkdir(join(agentDir, "sessions"), { recursive: true });
   await writeFile(join(agentDir, "settings.json"), "{}\n");
-  const child = spawn(process.execPath, [hostEntry, "--agent-dir", agentDir], {
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    hostEntry,
+    "--agent-dir", agentDir,
+    "--data-root", join(root, ".dcode"),
+  ], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
@@ -137,9 +142,11 @@ test("search worker keeps the Host process JSONL-only and does not create a sess
   ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 
   const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
     hostEntry,
     "--agent-dir", agentDir,
     "--search-cache-dir", cacheDir,
+    "--data-root", join(root, ".dcode"),
   ], { stdio: ["pipe", "pipe", "pipe"] });
   const collector = collectMessages(child.stdout);
   let stderr = "";
@@ -212,7 +219,12 @@ test("extension dialog responses bypass a prompt waiting for native UI", async (
     cwd: root,
   })}\n`);
 
-  const child = spawn(process.execPath, [hostEntry, "--agent-dir", agentDir], {
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    hostEntry,
+    "--agent-dir", agentDir,
+    "--data-root", join(root, ".dcode"),
+  ], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const collector = collectMessages(child.stdout);
@@ -279,7 +291,12 @@ test("host exits after its launching parent disappears", async () => {
   await writeFile(join(agentDir, "settings.json"), "{}\n");
   const launcherSource = `
     const { spawn } = require("node:child_process");
-    const child = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(hostEntry)}, "--agent-dir", ${JSON.stringify(agentDir)}], {
+    const child = spawn(${JSON.stringify(process.execPath)}, [
+      "--disable-warning=ExperimentalWarning",
+      ${JSON.stringify(hostEntry)},
+      "--agent-dir", ${JSON.stringify(agentDir)},
+      "--data-root", ${JSON.stringify(join(root, ".dcode"))},
+    ], {
       stdio: ["pipe", "pipe", "ignore"],
     });
     child.stdout.once("data", () => {
