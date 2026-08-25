@@ -109,6 +109,7 @@ test("Pi import preserves visible original text while marking historical lineage
     assert.equal(prepared.preview.lineageStatus, "unknown");
     assert.equal(prepared.preview.omittedContent.hiddenThinking, true);
     assert.equal(prepared.preview.omittedContent.toolArguments, true);
+    assert.equal(prepared.preview.firstMessage, "用户提交原文，必须逐字保留。 [REDACTED]");
     assert.equal(prepared.entries.length, 3);
     assert.equal(prepared.entries[0]?.messageRole, "user");
     assert.equal(prepared.entries[0]?.content, "用户提交原文，必须逐字保留。 [REDACTED]");
@@ -133,6 +134,7 @@ test("Pi import preserves visible original text while marking historical lineage
     assert.equal(JSON.stringify(prepared.entries).includes("abcdefghijklmnopqrstuvwxyz"), false);
     assert.equal(JSON.stringify(prepared.entries).includes("ghp_"), false);
     assert.equal(JSON.stringify(prepared.entries).includes("hf_"), false);
+    assert.equal(JSON.stringify(prepared.paths).includes("fixture_value"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

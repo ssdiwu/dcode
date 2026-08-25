@@ -245,7 +245,7 @@ test("model catalog is available before a Pi session exists and exposes the conf
   }
 });
 
-test("model settings expose safe Pi state and update only global model keys", async () => {
+test("model settings expose safe Pi state but D Code no longer rewrites Pi model configuration", async () => {
   const f = await fixture();
   await writeFile(join(f.agentDir, "settings.json"), `${JSON.stringify({
     defaultProvider: "openai",
@@ -286,35 +286,27 @@ test("model settings expose safe Pi state and update only global model keys", as
     assert.equal(mini?.enabled, false);
 
     await assert.rejects(
+      host.handle("modelSettings.setEnabledModels", {
+        cwd: f.root,
+        enabledModels: ["openai/gpt-4o-mini", "openai/gpt-5.6-*"],
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "D_CODE_MODEL_CONFIGURATION_REPLACED",
+    );
+    await assert.rejects(
       host.handle("modelSettings.setDefaultModel", {
         cwd: f.root,
         provider: "openai",
         modelId: "gpt-5.6-sol",
       }),
-      (error: unknown) => error instanceof PiHostError && error.code === "MODEL_NOT_ENABLED",
+      (error: unknown) => error instanceof PiHostError && error.code === "D_CODE_MODEL_CONFIGURATION_REPLACED",
     );
-    const unchanged = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
-    assert.equal(unchanged.defaultProvider, "openai");
-    assert.equal(unchanged.defaultModel, "gpt-4o-mini");
-
-    const changed = await host.handle("modelSettings.setEnabledModels", {
-      cwd: f.root,
-      enabledModels: ["openai/gpt-4o-mini", "openai/gpt-5.6-*"],
-    }) as { global: { enabledModels: string[] } };
-    assert.deepEqual(changed.global.enabledModels, ["openai/gpt-4o-mini", "openai/gpt-5.6-*"]);
-    const stored = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
-    assert.equal(stored.theme, "dark");
-    assert.equal(stored.defaultThinkingLevel, "high");
-    assert.deepEqual(stored.enabledModels, ["openai/gpt-4o-mini", "openai/gpt-5.6-*"]);
-
-    await host.handle("modelSettings.setDefaultModel", {
-      cwd: f.root,
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-    });
-    const withDefault = JSON.parse(await readFile(join(f.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
-    assert.equal(withDefault.defaultProvider, "openai");
-    assert.equal(withDefault.defaultModel, "gpt-5.6-sol");
+    assert.equal(await readFile(join(f.agentDir, "settings.json"), "utf8"), `${JSON.stringify({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      defaultThinkingLevel: "high",
+      enabledModels: ["openai/gpt-4o-mini"],
+      theme: "dark",
+    })}\n`);
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
@@ -346,7 +338,7 @@ test("model settings refresh respects offline mode and retains the local catalog
   }
 });
 
-test("model settings refuse to overwrite an unreadable Pi global settings file", async () => {
+test("D Code refuses legacy Pi model writes even when the legacy file is unreadable", async () => {
   const f = await fixture();
   const settingsPath = join(f.agentDir, "settings.json");
   await writeFile(settingsPath, "{not-json\n");
@@ -357,7 +349,7 @@ test("model settings refuse to overwrite an unreadable Pi global settings file",
         cwd: f.root,
         enabledModels: ["openai/gpt-4o-mini"],
       }),
-      (error: unknown) => error instanceof PiHostError && error.code === "MODEL_SETTINGS_UNREADABLE",
+      (error: unknown) => error instanceof PiHostError && error.code === "D_CODE_MODEL_CONFIGURATION_REPLACED",
     );
     assert.equal(await readFile(settingsPath, "utf8"), "{not-json\n");
   } finally {
@@ -366,15 +358,14 @@ test("model settings refuse to overwrite an unreadable Pi global settings file",
   }
 });
 
-test("unauthenticated providers hide their models and authenticate through Pi without emitting the secret", async () => {
+test("D Code blocks Pi authentication flows before a secret can be sent through IPC", async () => {
   const f = await fixture();
   const previousOpenAIKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
   await writeFile(join(f.agentDir, "auth.json"), "{}\n");
-  const emitted: Array<{ event: string; data?: unknown }> = [];
   const host = new PiHost({
     agentDir: f.agentDir,
-    emit: (event, data) => emitted.push({ event, data }),
+    emit: () => {},
   });
   try {
     await host.handle("session.open", { sessionId: f.sessionId, mode: "readOnly" });
@@ -393,40 +384,24 @@ test("unauthenticated providers hide their models and authenticate through Pi wi
       true,
     );
 
-    const flowId = "auth-openai";
-    const login = host.handle("modelAuth.start", {
+    await assert.rejects(
+      host.handle("modelAuth.start", {
       cwd: f.root,
-      flowId,
+      flowId: "auth-openai",
       provider: "openai",
       authType: "api_key",
-    }) as Promise<{ providers: Array<{ id: string; auth: { configured: boolean }; models: unknown[] }> }>;
-    await waitUntil(
-      () => emitted.some(({ event }) => event === "modelAuth.request"),
-      "model authentication prompt",
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "D_CODE_CREDENTIAL_IPC_DISABLED",
     );
-    const request = emitted.find(({ event }) => event === "modelAuth.request")?.data as {
-      requestId: string;
-      prompt: { type: string };
-    };
-    assert.equal(request.prompt.type, "secret");
-    const secret = "test-auth-secret-not-real";
-    await host.handle("modelAuth.respond", {
-      flowId,
-      requestId: request.requestId,
-      value: secret,
-    });
-    const authenticated = await login;
-    const openai = authenticated.providers.find((provider) => provider.id === "openai");
-    assert.equal(openai?.auth.configured, true);
-    assert.ok(openai?.models.length);
-    const activeModels = await host.handle("session.getModels", {}) as {
-      models: Array<{ provider: string; id: string }>;
-    };
-    assert.equal(activeModels.models.some((model) => model.provider === "openai"), true);
-    assert.equal(JSON.stringify(emitted).includes(secret), false);
-    assert.equal((JSON.parse(await readFile(join(f.agentDir, "auth.json"), "utf8")) as {
-      openai?: { key?: string };
-    }).openai?.key, secret);
+    await assert.rejects(
+      host.handle("modelAuth.respond", {
+        flowId: "auth-openai",
+        requestId: "request-openai",
+        value: "test-auth-secret-not-real",
+      }),
+      (error: unknown) => error instanceof PiHostError && error.code === "D_CODE_CREDENTIAL_IPC_DISABLED",
+    );
+    assert.equal(await readFile(join(f.agentDir, "auth.json"), "utf8"), "{}\n");
   } finally {
     if (previousOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousOpenAIKey;

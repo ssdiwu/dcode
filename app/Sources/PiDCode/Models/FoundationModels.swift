@@ -54,6 +54,45 @@ struct FoundationProject: Codable, Identifiable, Hashable, Sendable {
     let revision: Int
 }
 
+struct FoundationModelProvider: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let baseUrl: String?
+    let apiKind: String?
+    let authMode: String?
+    let nonsecret: JSONValue
+    let revision: Int
+}
+
+struct FoundationModelCatalogEntry: Codable, Identifiable, Sendable {
+    let id: String
+    let providerId: String
+    let modelId: String
+    let name: String
+    let contextWindow: Int?
+    let maxTokens: Int?
+    let reasoning: Bool
+    let nonsecret: JSONValue
+    let revision: Int
+}
+
+struct FoundationCredentialReference: Codable, Identifiable, Sendable {
+    let id: String
+    let providerId: String
+    let referenceKind: String
+    let locator: String
+    let configured: Bool
+    let sourceDigest: String?
+    let revision: Int
+}
+
+struct FoundationRuntimeModelSelection: Codable, Hashable, Sendable {
+    let providerId: String
+    let modelId: String
+    let sourceKind: String
+    let revision: Int
+}
+
 struct FoundationAgentProfile: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let role: String
@@ -122,6 +161,10 @@ struct FoundationSnapshot: Codable, Sendable {
     let dataRoot: String
     let currentUser: FoundationLocalUser
     let projects: [FoundationProject]
+    let modelProviders: [FoundationModelProvider]?
+    let modelCatalogEntries: [FoundationModelCatalogEntry]?
+    let credentialReferences: [FoundationCredentialReference]?
+    let runtimeModelSelection: FoundationRuntimeModelSelection?
     let agentProfiles: [FoundationAgentProfile]
     let tasks: [FoundationTask]
     let taskContextSets: [FoundationTaskContextSet]
@@ -131,6 +174,7 @@ struct FoundationSnapshot: Codable, Sendable {
     let sessionPaths: [FoundationSessionPath]
     let coordinatorAssignments: [FoundationCoordinatorAssignment]
     let piImports: [FoundationPiImport]
+    let sessionRuntimeBindings: [FoundationSessionRuntimeBinding]?
     let sessionRuns: [FoundationSessionRun]
     let operationAttempts: [FoundationOperationAttempt]
     let runtimeEnvironments: [FoundationRuntimeEnvironment]
@@ -146,6 +190,18 @@ struct FoundationSnapshot: Codable, Sendable {
     let artifacts: [FoundationArtifact]
     let managedWorkerWorktrees: [FoundationManagedWorkerWorktree]
     let evidence: [FoundationEvidence]
+}
+
+struct FoundationSessionRuntimeBinding: Codable, Identifiable, Sendable {
+    var id: String { sessionId }
+    let sessionId: String
+    let taskId: String
+    let adapterKind: String
+    let adapterSessionId: String
+    let adapterSessionPath: String
+    let cwd: String
+    let state: String
+    let revision: Int
 }
 
 struct FoundationTaskContextSource: Codable, Identifiable, Hashable, Sendable {

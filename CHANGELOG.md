@@ -10,15 +10,20 @@
 - Task Context Selection（任务上下文选择，ADR 0041）：每个 Task 原生拥有 revisioned 的有序具体来源；`AGENTS.md` 强制加载，项目文档与 Global Knowledge（全局知识）必须逐个显式选择。Prompt 只消费该集合并冻结来源回执；选择文件缺失、越界、符号链接或含凭据时，在 Pi Session / Provider 副作用前拒绝运行。Product Store schema v1 可先私有备份、再原子单向晋升 v2，存量 Task 得到空选择集合，不支持降级或双写。
 - Task Plan / Work List（任务计划 / 工作清单）：既有 Product Store 表现在成为原生、可查询事实。Plan 创建或激活时保留旧 Plan 并标为 superseded；Work Item 创建、更新、取消、归属与完整重排均使用目标 ID、revision 与 durable request ID。重排在同一 SQLite 事务中先占用临时序号再落到最终序号，避免唯一顺序约束被交换操作击穿；Foundation Snapshot / Console 投影同一份 Plan 与 Work List，不从对话文案推导进度。
 - Managed Worker Worktree（受管 Worker 工作树）：Project Scope 中的 Worker 由 Host 在 `~/.dcode/runtime/` 创建并验证独立 detached Git worktree；Artifact、External Side-effect Attempt 与稳定 Agent Run 先于 Git 操作持久化，工作树成功后保留。User Scope、非 Git、源目录未提交或结果未知时诚实拒绝，不自动删除、提交、合并、推送或重试。
+- Imported History Projection（导入历史投影）：Pi 导入会话首次与后续续写都从 Product Store 当前路径取得有界、二次脱敏的可见历史证据；它明确不是当前指令或 D Code Raw / Effective Input，Prompt / Receipt 只保留 digest、数量、截断与脱敏元数据。源 JSONL、隐藏 Thinking、工具参数和工具结果不进入 Provider 请求。
+- D Code Model Catalog / Credential Reference / Runtime Model Selection（模型目录 / 凭据安全引用 / 未来运行模型选择）：Product Store 投影非敏感 Provider / Model、认证引用和下一次 Runtime 选择；Coordinator 运行前依此验证并显式应用模型，不再写入 Pi `settings.json` / `models.json`。
+- D Code Session Presentation（D Code 会话呈现）：以 D Code Session ID 只读投影 Adapter binding、活动 Runtime 和会话快照，并为 Coordination Session 提供精确 Prompt 路由；首次提交创建持久化 Coordinator Agent Run，随后 Team 复用同一 Coordinator Run / Runtime，查看不抢占 Runtime，Child 仅在其自身 Run 活动时接收消息。
 
 ### Changed
 
 - App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.28`；`0.0.27` 起动候选与新 Product Store schema 明确不支持降级混用。
 - Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
+- Pi `models.json` / `settings.json` 的 D Code 写入口、Pi 认证启动与认证响应全部改为明确拒绝；Swift 不再将 Provider API Key 或认证值通过 Host IPC 发送，旧 Pi 模型接口只保留安全只读诊断 / 迁入来源。
 
 ### Security
 
 - Product Store、Pi 导入、Prompt 文档与 legacy migration 共用凭据检测 / 脱敏边界；Tool Result 只保存有界引用和 digest。Worker 需要独立可写 worktree，当前 Foundation Team 在打开任何 Runtime 前诚实拒绝，不留下孤儿运行。
+- Imported History Projection 对历史文本再次执行凭据脱敏和字节 / 条目上限，Prompt 内容使用转义的证据区块；来源路径标题与预览摘要同样脱敏。D Code 不再支持 API Key、OAuth 值或 Pi 认证响应经 IPC 进入 Runtime。
 
 ## [0.0.27] - 2026-08-24
 

@@ -69,6 +69,10 @@ function title(summary: SessionSummary): string {
   })).text;
 }
 
+function firstMessage(summary: SessionSummary): string {
+  return redactCredentialText(summary.firstMessage).text;
+}
+
 function messageRole(message: unknown): ImportedPiSessionEntryInput["messageRole"] {
   if (typeof message !== "object" || message === null || Array.isArray(message)) return "other";
   const role = (message as { role?: unknown }).role;
@@ -245,7 +249,7 @@ export async function listPiImportCandidates(
       created: summary.created,
       modified: summary.modified,
       messageCount: summary.messageCount,
-      firstMessage: summary.firstMessage,
+      firstMessage: firstMessage(summary),
       previouslyImported: importedIds.has(summary.id),
     }))
     .slice(0, limit);
@@ -290,7 +294,7 @@ async function prepareSessionSnapshot(
   const paths: ImportedPiSessionPathInput[] = inspection.paths.map((path) => ({
     sourcePathId: path.id,
     ...(path.leafId ? { sourceLeafEntryId: path.leafId } : {}),
-    title: path.title,
+    title: redactCredentialText(path.title).text,
     isCurrent: path.isCurrent,
     sourceEntryIds: path.entryIds.filter((entryId) => importedEntryIds.has(entryId)),
   }));
@@ -312,7 +316,7 @@ async function prepareSessionSnapshot(
       created: inspection.summary.created,
       modified: inspection.summary.modified,
       messageCount: inspection.summary.messageCount,
-      firstMessage: inspection.summary.firstMessage,
+      firstMessage: firstMessage(inspection.summary),
       previouslyImported: imports.some((item) => (
         item.sourceSessionId === sourceSessionId && item.sourceDigest === beforeDigest
       )),

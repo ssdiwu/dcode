@@ -31,7 +31,7 @@ import {
   restoreFastMode,
 } from "./dcode-fast.js";
 import { createDCodeFactsExtension } from "./dcode-facts.js";
-import { ModelProvidersStore, type ProviderSaveInput } from "./model-providers.js";
+import { ModelProvidersStore } from "./model-providers.js";
 import {
   DisabledPackageStore,
   collectResourcesSnapshot,
@@ -60,8 +60,11 @@ import { SessionSearchIndex } from "./session-search-index.js";
 import { structuredToolChange } from "./session-change.js";
 import {
   ProductStore,
+  ProductStoreError,
   type AgentRunRecord,
   type ManagedWorkerWorktreeRecord,
+  type RuntimeModelCatalogProviderInput,
+  type RuntimeModelSelectionRecord,
   type TaskContextSourceRecord,
   type TaskContextSourceInput,
   type TaskPlanState,
@@ -415,6 +418,16 @@ function safeModel(model: unknown): SafeModelSnapshot | null {
   };
 }
 
+function redactCredentialValue(value: unknown): unknown {
+  if (typeof value === "string") return redactCredentialText(value).text;
+  if (Array.isArray(value)) return value.map(redactCredentialValue);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+    key,
+    redactCredentialValue(child),
+  ]));
+}
+
 function planFromEntry(entry: SessionEntry): { matched: boolean; plan: unknown; proposal: unknown } {
   if (entry.type !== "custom") return { matched: false, plan: null, proposal: null };
   if (entry.customType === "dgoal-work-v1") {
@@ -648,6 +661,7 @@ export class PiHost {
 
   async start(): Promise<void> {
     await this.getProductStore();
+    await this.ensureDCodeRuntimeModelCatalog();
   }
 
   private async getProductStore(): Promise<ProductStore> {
@@ -975,8 +989,11 @@ export class PiHost {
   private async runtimePromptContext(identity: RuntimePromptIdentity): Promise<{
     environment: DCodePromptEnvironment;
     documents: Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
+    importedHistory: Awaited<ReturnType<ProductStore["importedSessionHistoryProjection"]>>;
+    runtimeModelSelection: RuntimeModelSelectionRecord;
   }> {
-    const snapshot = await (await this.getProductStore()).snapshot();
+    const store = await this.getProductStore();
+    const snapshot = await store.snapshot();
     const task = snapshot.tasks.find((candidate) => candidate.id === identity.taskId);
     const taskContextSet = snapshot.taskContextSets.find((candidate) => candidate.taskId === identity.taskId);
     const session = snapshot.sessions.find((candidate) => candidate.id === identity.dcodeSessionId);
@@ -1011,6 +1028,34 @@ export class PiHost {
     if (!task || !taskContextSet || !session || !role || !roleContract || !storedProfileId || profileVersion === undefined) {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime prompt facts are incomplete in the Product Store");
     }
+    const runtimeModelSelection = snapshot.runtimeModelSelection;
+    if (!runtimeModelSelection) {
+      throw new PiHostError(
+        "D_CODE_MODEL_SELECTION_REQUIRED",
+        "D Code has no selected Model for future Runtimes; Pi defaults were not used implicitly",
+      );
+    }
+    const catalogEntry = snapshot.modelCatalogEntries.find((candidate) => (
+      candidate.providerId === runtimeModelSelection.providerId
+      && candidate.modelId === runtimeModelSelection.modelId
+    ));
+    if (!catalogEntry) {
+      throw new PiHostError(
+        "D_CODE_MODEL_NOT_IN_CATALOG",
+        "D Code selected a Provider / Model pair that is not in its Product Store Catalog",
+        { runtimeModelSelection },
+      );
+    }
+    const credentialReference = snapshot.credentialReferences.find((candidate) => (
+      candidate.providerId === runtimeModelSelection.providerId && candidate.configured
+    ));
+    if (!credentialReference) {
+      throw new PiHostError(
+        "D_CODE_MODEL_AUTH_REQUIRED",
+        "D Code has no configured credential reference for the selected Provider",
+        { providerId: runtimeModelSelection.providerId },
+      );
+    }
     let documents: Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
     try {
       documents = await loadDCodePromptDocuments(identity.workspace.cwd, taskContextSet);
@@ -1027,6 +1072,19 @@ export class PiHost {
           "TASK_CONTEXT_CREDENTIAL_REJECTED",
           "A Task Context Source appears to contain credential material; D Code did not start this Runtime",
           { path: error.path },
+        );
+      }
+      throw error;
+    }
+    let importedHistory: Awaited<ReturnType<ProductStore["importedSessionHistoryProjection"]>>;
+    try {
+      importedHistory = await store.importedSessionHistoryProjection(session.id);
+    } catch (error) {
+      if (error instanceof ProductStoreError) {
+        throw new PiHostError(
+          "IMPORTED_HISTORY_UNAVAILABLE",
+          "Imported Session history cannot be safely projected; D Code did not start this Runtime",
+          { sessionId: session.id, cause: error.code },
         );
       }
       throw error;
@@ -1049,6 +1107,8 @@ export class PiHost {
         contextRevision: taskContextSet.revision,
       },
       documents,
+      importedHistory,
+      runtimeModelSelection,
     };
   }
 
@@ -1080,6 +1140,7 @@ export class PiHost {
           : {}),
       },
       documents: context.documents,
+      ...(context.importedHistory ? { importedHistory: context.importedHistory } : {}),
       tools,
     });
     active.session.setActiveToolsByName(activeToolNames);
@@ -1111,11 +1172,11 @@ export class PiHost {
       }
       return await this.handleExtensionResponse(params);
     }
-    if (method === "modelAuth.respond") {
-      return this.handleModelAuthResponse(params);
-    }
-    if (method === "modelAuth.cancel") {
-      return this.handleModelAuthCancel(params);
+    if (method === "modelAuth.respond" || method === "modelAuth.cancel") {
+      throw new PiHostError(
+        "D_CODE_CREDENTIAL_IPC_DISABLED",
+        "D Code does not accept credential values or Pi authentication responses through its IPC Protocol",
+      );
     }
     if (method === "session.search") {
       return await this.searchIndex.search({
@@ -1228,6 +1289,8 @@ export class PiHost {
             productStore: true,
             nativeTasks: true,
             foundationSnapshot: true,
+            dcodeModelCatalog: true,
+            dcodeSessionPresentation: true,
             piSessionImport: true,
             sessionPathFacts: true,
             multiRuntime: true,
@@ -1261,6 +1324,30 @@ export class PiHost {
         return await this.foundationSnapshot(
           typeof params.afterEventSequence === "number" ? params.afterEventSequence : 0,
         );
+      case "runtimeModelSelection.set": {
+        const result = await (await this.getProductStore()).setRuntimeModelSelection({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          providerId: params.providerId as string,
+          modelId: params.modelId as string,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: "runtimeModelSelection.updated",
+          entityKind: "runtimeModelSelection",
+          entityId: "runtime.modelSelection",
+        });
+        return result;
+      }
+      case "dcodeSession.presentation":
+        return await this.dcodeSessionPresentation(params.dcodeSessionId as string);
+      case "dcodeSession.prompt":
+        return await this.promptDCodeSession({
+          dcodeSessionId: params.dcodeSessionId as string,
+          promptId: params.promptId as string,
+          message: params.message as string,
+          ...(Array.isArray(params.images) ? { images: params.images as PromptImageInput[] } : {}),
+        });
       case "project.create": {
         const result = await (await this.getProductStore()).createProject({
           requestId: params.requestId as string,
@@ -1735,11 +1822,11 @@ export class PiHost {
       case "modelProviders.list":
         return await this.modelProviders().list();
       case "modelProviders.save":
-        return await this.modelProviders().save(
-          params.provider as unknown as ProviderSaveInput,
-        );
       case "modelProviders.remove":
-        return await this.modelProviders().remove(params.id as string);
+        throw new PiHostError(
+          "D_CODE_MODEL_CONFIGURATION_REPLACED",
+          "Pi models.json is no longer a writable D Code Product configuration; use the D Code Model Catalog and secure credential setup",
+        );
       case "resources.setPackageEnabled":
         return await this.setPackageEnabled(
           params.source as string,
@@ -1752,22 +1839,15 @@ export class PiHost {
       case "modelSettings.refresh":
         return await this.getModelSettings(params.cwd as string, true);
       case "modelSettings.setEnabledModels":
-        return await this.setGlobalEnabledModels(
-          params.cwd as string,
-          params.enabledModels as string[],
-        );
       case "modelSettings.setDefaultModel":
-        return await this.setGlobalDefaultModel(
-          params.cwd as string,
-          params.provider as string,
-          params.modelId as string,
+        throw new PiHostError(
+          "D_CODE_MODEL_CONFIGURATION_REPLACED",
+          "Pi settings.json is no longer a writable D Code Model configuration; select the future Runtime Model in the D Code Product Store",
         );
       case "modelAuth.start":
-        return await this.startModelAuth(
-          params.cwd as string,
-          params.flowId as string,
-          params.provider as string,
-          params.authType as AuthType,
+        throw new PiHostError(
+          "D_CODE_CREDENTIAL_IPC_DISABLED",
+          "D Code credential setup must use a secure external reference; Pi interactive authentication is not exposed through D Code IPC",
         );
       case "session.getThinkingLevels":
         return this.getThinkingLevels();
@@ -1915,6 +1995,131 @@ export class PiHost {
     }
   }
 
+  private async dcodeSessionPresentation(dcodeSessionIdValue: string): Promise<unknown> {
+    const dcodeSessionId = dcodeSessionIdValue.trim();
+    const store = await this.getProductStore();
+    const snapshot = await store.snapshot();
+    const dcodeSession = snapshot.sessions.find((candidate) => candidate.id === dcodeSessionId);
+    if (!dcodeSession) {
+      throw new PiHostError("DCODE_SESSION_NOT_FOUND", "D Code Session does not exist", { dcodeSessionId });
+    }
+    const binding = snapshot.sessionRuntimeBindings.find((candidate) => candidate.sessionId === dcodeSession.id);
+    const active = [...this.runtimes.values()].find((candidate) => (
+      candidate.runtimeIdentity?.dcodeSessionId === dcodeSession.id
+    ));
+    if (!binding) {
+      return {
+        dcodeSession,
+        binding: null,
+        runtime: active?.runtimeIdentity
+          ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
+          : null,
+        adapterState: "unbound",
+        inspection: null,
+      };
+    }
+    try {
+      return {
+        dcodeSession,
+        binding,
+        runtime: active?.runtimeIdentity
+          ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
+          : null,
+        adapterState: "ready",
+        inspection: await this.reader.inspect(binding.adapterSessionId),
+      };
+    } catch (error) {
+      if (error instanceof SessionReadError) {
+        return {
+          dcodeSession,
+          binding,
+          runtime: active?.runtimeIdentity
+            ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
+            : null,
+          adapterState: "unavailable",
+          inspection: null,
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async promptDCodeSession(input: {
+    dcodeSessionId: string;
+    promptId: string;
+    message: string;
+    images?: PromptImageInput[];
+  }): Promise<unknown> {
+    const store = await this.getProductStore();
+    const snapshot = await store.snapshot();
+    const dcodeSession = snapshot.sessions.find((candidate) => candidate.id === input.dcodeSessionId);
+    const task = dcodeSession ? snapshot.tasks.find((candidate) => candidate.id === dcodeSession.taskId) : undefined;
+    if (!dcodeSession || !task) {
+      throw new PiHostError("DCODE_SESSION_NOT_FOUND", "D Code Session or its Task does not exist", {
+        dcodeSessionId: input.dcodeSessionId,
+      });
+    }
+    let runtimeId = this.runtimeByDCodeSessionId.get(dcodeSession.id);
+    const existingRuntime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
+    let agentRunId = existingRuntime?.runtimeIdentity?.agentRunId;
+    if (runtimeId && !agentRunId) {
+      throw new PiHostError(
+        "DCODE_SESSION_RUNTIME_UNMANAGED",
+        "D Code Session has an unmanaged Runtime and cannot receive a Task-owned prompt",
+        { dcodeSessionId: dcodeSession.id, runtimeId },
+      );
+    }
+    let started = false;
+    if (!runtimeId) {
+      if (this.openingDCodeSessionIds.has(dcodeSession.id)) {
+        throw new PiHostError("DCODE_SESSION_OPENING", "D Code Session is still opening; its prompt was not duplicated", {
+          dcodeSessionId: dcodeSession.id,
+        });
+      }
+      if (dcodeSession.kind !== "coordination") {
+        throw new PiHostError(
+          "DCODE_CHILD_SESSION_NOT_ACTIVE",
+          "A Child Agent Session can receive a user message only while its own Agent Run is active",
+          { dcodeSessionId: dcodeSession.id },
+        );
+      }
+      const coordinator = await store.ensureCoordinatorAgentRun({
+        requestId: `coordinator-agent-run:${dcodeSession.id}`,
+        taskId: task.id,
+        scope: task.scope,
+      });
+      agentRunId = coordinator.agentRun.id;
+      this.options.emit("foundation.changed", {
+        storeRevision: coordinator.storeRevision,
+        kind: "coordinatorAgentRun.ensured",
+        entityKind: "agentRun",
+        entityId: coordinator.agentRun.id,
+        taskId: task.id,
+      });
+      runtimeId = `runtime-dcode-ui-${createHash("sha256").update(dcodeSession.id).digest("hex").slice(0, 24)}`;
+      await this.runtimeContext.run(runtimeId, async () => await this.startDCodeRuntime({
+        runtimeId,
+        taskId: task.id,
+        dcodeSessionId: dcodeSession.id,
+        agentRunId,
+        scope: task.scope,
+        workspace: {
+          workspaceId: `dcode-session:${dcodeSession.id}`,
+          cwd: task.cwd,
+          access: "sharedReadOnly",
+        },
+      }));
+      started = true;
+    }
+    const result = await this.handleRuntimeRequest("session.prompt", {
+      runtimeId,
+      promptId: input.promptId,
+      message: input.message,
+      ...(input.images ? { images: input.images } : {}),
+    });
+    return { runtimeId, started, result };
+  }
+
   private async startDCodeRuntime(params: Record<string, unknown>): Promise<unknown> {
     const runtimeId = params.runtimeId as string;
     const taskId = params.taskId as string;
@@ -1975,6 +2180,7 @@ export class PiHost {
         scope,
         workspace,
       });
+      await this.ensureDCodeRuntimeModelCatalog();
       await this.runtimePromptContext({
         runtimeId,
         scope,
@@ -2086,7 +2292,9 @@ export class PiHost {
     if (JSON.stringify(task.scope) !== JSON.stringify(params.scope)) {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task Scope does not match the stored Task");
     }
-    const agentRuns = snapshot.agentRuns.filter((candidate) => candidate.teamRunId === teamRunId);
+    const agentRuns = snapshot.agentRuns.filter((candidate) => (
+      candidate.teamRunId === teamRunId || candidate.id === teamRun.coordinatorAgentRunId
+    ));
     const taskContextSet = snapshot.taskContextSets.find((candidate) => candidate.taskId === taskId);
     if (agentRuns.length < 2) {
       throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run requires a Coordinator and at least one member");
@@ -2095,7 +2303,7 @@ export class PiHost {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task has no durable Context Selection set");
     }
     const runtimeDescriptors = agentRuns.map((agentRun) => ({
-      runtimeId: `runtime-${agentRun.id}`,
+      runtimeId: this.runtimeByDCodeSessionId.get(agentRun.sessionId) ?? `runtime-${agentRun.id}`,
       agentRunId: agentRun.id,
       sessionId: agentRun.sessionId,
     }));
@@ -2153,6 +2361,25 @@ export class PiHost {
       access: "sharedReadOnly" as const,
     };
     const settlements = await Promise.allSettled(agentRuns.map(async (agentRun) => {
+      const existingRuntimeId = this.runtimeByDCodeSessionId.get(agentRun.sessionId);
+      const existingRuntime = existingRuntimeId ? this.runtimes.get(existingRuntimeId) : undefined;
+      if (existingRuntime && existingRuntimeId) {
+        if (
+          agentRun.id !== teamRun.coordinatorAgentRunId
+          || existingRuntime.runtimeIdentity?.agentRunId !== agentRun.id
+        ) {
+          throw new PiHostError(
+            "SESSION_ALREADY_ACTIVE",
+            "An active D Code Session Runtime does not belong to this Team Coordinator Agent Run",
+            {
+              dcodeSessionId: agentRun.sessionId,
+              runtimeId: existingRuntimeId,
+              agentRunId: agentRun.id,
+            },
+          );
+        }
+        return { agentRun, runtimeId: existingRuntimeId, result: { reused: true } };
+      }
       const runtimeId = `runtime-${agentRun.id}`;
       const workerWorktree = managedWorkerWorktrees.get(agentRun.id);
       const runtimeWorkspace = workerWorktree
@@ -3131,6 +3358,7 @@ export class PiHost {
         ? assembleDCodeSystemPrompt({
           environment: promptContext.environment,
           documents: promptContext.documents,
+          ...(promptContext.importedHistory ? { importedHistory: promptContext.importedHistory } : {}),
           tools: [],
         })
         : undefined;
@@ -3183,6 +3411,20 @@ export class PiHost {
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
       });
       session = created.session;
+      if (promptContext) {
+        const selectedModel = session.modelRuntime.getAvailableSnapshot().find((candidate) => (
+          candidate.provider === promptContext.runtimeModelSelection.providerId
+          && candidate.id === promptContext.runtimeModelSelection.modelId
+        ));
+        if (!selectedModel) {
+          throw new PiHostError(
+            "D_CODE_MODEL_RUNTIME_UNAVAILABLE",
+            "The D Code-selected Model is unavailable in this Pi Runtime Adapter",
+            { runtimeModelSelection: promptContext.runtimeModelSelection },
+          );
+        }
+        await session.setModel(selectedModel);
+      }
       let activePromptTools: DCodePromptTool[] = [];
       let toolsWritable = false;
       if (promptContext) {
@@ -3208,6 +3450,7 @@ export class PiHost {
             ...(session.model ? { modelProvider: session.model.provider, modelId: session.model.id } : {}),
           },
           documents: promptContext.documents,
+          ...(promptContext.importedHistory ? { importedHistory: promptContext.importedHistory } : {}),
           tools: activePromptTools,
         });
         session.setActiveToolsByName(activeToolNames);
@@ -3825,6 +4068,7 @@ export class PiHost {
         toolsWritable: active.toolsWritable,
         systemPromptDigest: assembledPrompt.digest,
         promptSources: assembledPrompt.sources,
+        ...(assembledPrompt.importedHistory ? { importedHistoryReceipt: assembledPrompt.importedHistory } : {}),
       });
       this.options.emit("foundation.changed", {
         storeRevision: preparedRun.storeRevision,
@@ -4394,6 +4638,79 @@ export class PiHost {
 
   private async createModelSettingsRuntime(): Promise<ModelRuntime> {
     return await this.sharedModelRuntime();
+  }
+
+  private async ensureDCodeRuntimeModelCatalog(): Promise<void> {
+    const store = await this.getProductStore();
+    const current = await store.snapshot();
+    if (current.modelCatalogEntries.length > 0 && current.runtimeModelSelection) return;
+
+    const runtime = await this.createModelSettingsRuntime();
+    const providers: RuntimeModelCatalogProviderInput[] = runtime.getProviders().flatMap((provider) => {
+      const raw = provider as unknown as Record<string, unknown>;
+      const providerId = redactCredentialText(provider.id);
+      if (providerId.redacted) return [];
+      const auth = runtime.getProviderAuthStatus(provider.id);
+      const models = runtime.getModels(provider.id)
+        .map((model) => safeModel(model))
+        .filter((model): model is SafeModelSnapshot => model !== null)
+        .flatMap((model) => {
+          const modelId = redactCredentialText(model.id);
+          if (modelId.redacted) return [];
+          const modelName = redactCredentialText(model.name ?? model.id).text;
+          const contextWindow = model.contextWindow;
+          const maxTokens = model.maxTokens;
+          return [{
+            modelId: modelId.text,
+            name: modelName,
+            ...(typeof contextWindow === "number" && Number.isSafeInteger(contextWindow)
+              ? { contextWindow }
+              : {}),
+            ...(typeof maxTokens === "number" && Number.isSafeInteger(maxTokens)
+              ? { maxTokens }
+              : {}),
+            reasoning: model.reasoning === true,
+            nonsecret: redactCredentialValue(model),
+          }];
+        });
+      if (models.length === 0) return [];
+      const apiKey = raw.auth && typeof raw.auth === "object" && !Array.isArray(raw.auth)
+        ? (raw.auth as { apiKey?: unknown }).apiKey
+        : undefined;
+      const oauth = raw.auth && typeof raw.auth === "object" && !Array.isArray(raw.auth)
+        ? (raw.auth as { oauth?: unknown }).oauth
+        : undefined;
+      const providerName = redactCredentialText(provider.name).text;
+      const baseUrl = typeof raw.baseUrl === "string" ? redactCredentialText(raw.baseUrl) : undefined;
+      const apiKind = typeof raw.api === "string" ? redactCredentialText(raw.api) : undefined;
+      return [{
+        id: providerId.text,
+        name: providerName,
+        ...(baseUrl && !baseUrl.redacted ? { baseUrl: baseUrl.text } : {}),
+        ...(apiKind && !apiKind.redacted ? { apiKind: apiKind.text } : {}),
+        authMode: apiKey ? "api_key" : oauth ? "oauth" : "none",
+        nonsecret: { source: "pi_runtime_discovery" },
+        credential: {
+          locator: `pi-runtime-auth-bridge:${providerId.text}`,
+          configured: auth.configured,
+        },
+        models,
+      } satisfies RuntimeModelCatalogProviderInput];
+    });
+    if (providers.length === 0) return;
+    const settings = SettingsManager.create(current.currentUser.homeDirectory, this.agentDir);
+    const defaultProvider = settings.getGlobalSettings().defaultProvider;
+    const defaultModel = settings.getGlobalSettings().defaultModel;
+    const defaultSelection = defaultProvider && defaultModel && providers.some((provider) => (
+      provider.id === defaultProvider && provider.models.some((model) => model.modelId === defaultModel)
+    ))
+      ? { providerId: defaultProvider, modelId: defaultModel }
+      : undefined;
+    const requestId = `runtime-model-catalog:${createHash("sha256")
+      .update(JSON.stringify({ providers, defaultSelection }))
+      .digest("hex")
+      .slice(0, 48)}`;
+    await store.seedRuntimeModelCatalog({ requestId, providers, ...(defaultSelection ? { defaultSelection } : {}) });
   }
 
   private async projectModelScope(

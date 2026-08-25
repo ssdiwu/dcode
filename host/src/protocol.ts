@@ -5,6 +5,9 @@ export const HOST_METHODS = [
   "runtime.list",
   "runtime.start",
   "foundation.snapshot",
+  "runtimeModelSelection.set",
+  "dcodeSession.presentation",
+  "dcodeSession.prompt",
   "project.create",
   "task.create",
   "task.context.replace",
@@ -557,6 +560,28 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "foundation.snapshot":
       optionalInteger(params, "afterEventSequence", 0, Number.MAX_SAFE_INTEGER);
       return;
+    case "runtimeModelSelection.set":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireModelIdentifier(params, "providerId");
+      requireModelIdentifier(params, "modelId");
+      return;
+    case "dcodeSession.presentation":
+      requireBoundedString(params, "dcodeSessionId", 200);
+      return;
+    case "dcodeSession.prompt": {
+      requireBoundedString(params, "dcodeSessionId", 200);
+      const message = requireString(params, "message", { allowEmpty: true });
+      if (message.trim().length === 0) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.message to contain non-whitespace text");
+      }
+      const promptId = requireString(params, "promptId");
+      if (promptId.length > 128) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");
+      }
+      validatePromptImages(params, "images");
+      return;
+    }
     case "project.create":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);

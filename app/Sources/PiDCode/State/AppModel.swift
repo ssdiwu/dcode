@@ -1589,56 +1589,36 @@ final class AppModel {
     }
 
     func updateGlobalEnabledModels(_ rules: [String]) async {
-        guard let client = readyClient,
-              !modelSettings.isLoadingSnapshot,
+        guard !modelSettings.isLoadingSnapshot,
               !modelSettings.isMutatingSnapshot else { return }
-        let cwd = modelSettingsCwd
         modelSettings.isMutatingSnapshot = true
         modelSettings.snapshotError = nil
         defer { modelSettings.isMutatingSnapshot = false }
-        do {
-            let normalized = ModelSettingsRulePolicy.normalized(rules)
-            let result: ModelSettingsSnapshot = try await client.request(
-                "modelSettings.setEnabledModels",
-                params: [
-                    "cwd": .string(cwd),
-                    "enabledModels": .array(normalized.map(JSONValue.string)),
-                ]
-            )
-            guard modelSettingsCwd == cwd else { return }
-            modelSettings.snapshot = result
-            await reloadModelChoicesAfterSettingsChange()
-        } catch {
-            if modelSettingsCwd == cwd {
-                modelSettings.snapshotError = DiagnosticSanitizer.redact(error.localizedDescription)
-            }
-        }
+        _ = rules
+        modelSettings.snapshotError = "D Code 不再修改 Pi 的 enabledModels；可用目录来自 D Code Model Catalog。"
     }
 
     func updateGlobalDefaultModel(_ model: HostModel) async {
         guard let client = readyClient,
+              let foundationSnapshot,
               !modelSettings.isLoadingSnapshot,
               !modelSettings.isMutatingSnapshot else { return }
-        let cwd = modelSettingsCwd
         modelSettings.isMutatingSnapshot = true
         modelSettings.snapshotError = nil
         defer { modelSettings.isMutatingSnapshot = false }
         do {
-            let result: ModelSettingsSnapshot = try await client.request(
-                "modelSettings.setDefaultModel",
+            let _: JSONValue = try await client.request(
+                "runtimeModelSelection.set",
                 params: [
-                    "cwd": .string(cwd),
-                    "provider": .string(model.provider),
+                    "requestId": .string(UUID().uuidString),
+                    "expectedStoreRevision": .number(Double(foundationSnapshot.storeRevision)),
+                    "providerId": .string(model.provider),
                     "modelId": .string(model.id),
                 ]
             )
-            guard modelSettingsCwd == cwd else { return }
-            modelSettings.snapshot = result
-            await reloadModelChoicesAfterSettingsChange()
+            await reloadFoundation()
         } catch {
-            if modelSettingsCwd == cwd {
-                modelSettings.snapshotError = DiagnosticSanitizer.redact(error.localizedDescription)
-            }
+            modelSettings.snapshotError = DiagnosticSanitizer.redact(error.localizedDescription)
         }
     }
 
@@ -1646,93 +1626,25 @@ final class AppModel {
         provider: ModelSettingsProvider,
         method: ModelSettingsAuthMethod
     ) async {
-        guard method.interactive,
-              modelSettings.authFlow == nil,
-              let client = readyClient else { return }
-        let flowID = UUID().uuidString
-        modelSettings.authFlow = ModelAuthFlow(
-            id: flowID,
-            providerID: provider.id,
-            providerName: provider.name,
-            method: method,
-            prompt: nil,
-            events: [],
-            error: nil
-        )
-        do {
-            let result: ModelSettingsSnapshot = try await client.request(
-                "modelAuth.start",
-                params: [
-                    "cwd": .string(modelSettingsCwd),
-                    "flowId": .string(flowID),
-                    "provider": .string(provider.id),
-                    "authType": .string(method.type),
-                ]
-            )
-            guard modelSettings.authFlow?.id == flowID else { return }
-            modelSettings.snapshot = result
-            modelSettings.authFlow = nil
-            await reloadModelChoicesAfterSettingsChange()
-            showNotice("\(provider.name) 已通过 Pi 完成关联。", level: "info")
-        } catch {
-            guard modelSettings.authFlow?.id == flowID else { return }
-            if let clientError = error as? PiHostClientError,
-               case let .hostFailure(payload) = clientError,
-               payload.code == "MODEL_AUTH_CANCELLED" {
-                modelSettings.authFlow = nil
-                return
-            }
-            modelSettings.authFlow?.prompt = nil
-            modelSettings.authFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
-        }
+        _ = method
+        modelSettings.authFlow = nil
+        modelSettings.snapshotError = "D Code 不会通过 IPC 接收认证值。请使用安全凭据引用配置 \(provider.name)，然后刷新 D Code Model Catalog。"
     }
 
     func respondToModelAuthPrompt(_ prompt: ModelAuthPrompt, value: String?, cancelled: Bool = false) async {
-        guard let client = readyClient,
-              modelSettings.authFlow?.id == prompt.flowID,
-              modelSettings.authFlow?.prompt?.id == prompt.id else { return }
+        _ = value
+        _ = cancelled
+        guard modelSettings.authFlow?.id == prompt.flowID else { return }
         modelSettings.authFlow?.prompt = nil
-        var params: [String: JSONValue] = [
-            "flowId": .string(prompt.flowID),
-            "requestId": .string(prompt.id),
-            "cancelled": .bool(cancelled),
-        ]
-        if !cancelled { params["value"] = .string(value ?? "") }
-        do {
-            let _: Acknowledgement = try await client.request("modelAuth.respond", params: params)
-        } catch {
-            guard modelSettings.authFlow?.id == prompt.flowID else { return }
-            modelSettings.authFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
-        }
+        modelSettings.authFlow?.error = "D Code 已阻止通过 IPC 提交认证值。"
     }
 
     @discardableResult
     func cancelModelAuthentication() async -> Bool {
         guard let flow = modelSettings.authFlow else { return true }
-        if flow.error != nil {
-            modelSettings.authFlow = nil
-            return true
-        }
-        guard let client = readyClient else {
-            modelSettings.authFlow = nil
-            return true
-        }
-        do {
-            let result: ModelAuthCancelResult = try await client.request(
-                "modelAuth.cancel",
-                params: ["flowId": .string(flow.id)]
-            )
-            guard result.cancelled else {
-                modelSettings.authFlow?.error = "Pi Host 未确认认证流程已经停止，请重试关闭。"
-                return false
-            }
-            modelSettings.authFlow = nil
-            return true
-        } catch {
-            guard modelSettings.authFlow?.id == flow.id else { return true }
-            modelSettings.authFlow?.error = DiagnosticSanitizer.redact(error.localizedDescription)
-            return false
-        }
+        _ = flow
+        modelSettings.authFlow = nil
+        return true
     }
 
     private func reloadModelChoicesAfterSettingsChange() async {
@@ -5596,68 +5508,21 @@ final class AppModel {
     /// 成功时刷新快照并联动模型目录（Pi 重新加载后新目录生效）。
     @discardableResult
     func saveModelProvider(_ input: ModelProviderSaveInput) async -> [ProviderFieldError] {
-        guard let client = readyClient else {
-            return [ProviderFieldError(field: "models.json", message: "Pi Host 未连接")]
-        }
-        modelProviders.isSaving = true
-        defer { modelProviders.isSaving = false }
-        do {
-            let encoded = try JSONDecoder().decode(
-                JSONValue.self,
-                from: JSONEncoder().encode(input)
-            )
-            let params: [String: JSONValue] = encoded.objectValue ?? [:]
-            let result: ModelProviderSaveResult = try await client.request(
-                "modelProviders.save",
-                params: ["provider": .object(params)]
-            )
-            if result.ok {
-                modelProviders.snapshot = ModelProviderListResult(
-                    path: modelProviders.snapshot?.path ?? "",
-                    parseError: result.parseError,
-                    providers: result.providers ?? []
-                )
-                if modelSettings.snapshot != nil {
-                    Task { await refreshModelSettingsAfterProviderChange() }
-                }
-                return []
-            }
-            return result.errors ?? [ProviderFieldError(field: "models.json", message: "Pi 拒绝该配置")]
-        } catch {
-            return [ProviderFieldError(field: "models.json", message: DiagnosticSanitizer.redact(error.localizedDescription))]
-        }
+        _ = input
+        return [ProviderFieldError(
+            field: "credential",
+            message: "D Code 不再通过 Pi models.json 或 IPC 保存 Provider 与 API Key。请改用 D Code Model Catalog 与安全凭据引用。"
+        )]
     }
 
     /// 删除供应商：同样返回字段级错误（models.json 解析失败等）。
     @discardableResult
     func removeModelProvider(id: String) async -> [ProviderFieldError] {
-        guard let client = readyClient else {
-            return [ProviderFieldError(field: "models.json", message: "Pi Host 未连接")]
-        }
-        modelProviders.isSaving = true
-        defer { modelProviders.isSaving = false }
-        do {
-            let result: ModelProviderSaveResult = try await client.request(
-                "modelProviders.remove",
-                params: ["id": .string(id)]
-            )
-            if result.ok {
-                modelProviders.snapshot = ModelProviderListResult(
-                    path: modelProviders.snapshot?.path ?? "",
-                    parseError: result.parseError,
-                    providers: result.providers ?? []
-                )
-                // 删除同样改变 Pi 目录：已加载的 Model Settings 快照立即刷新，
-                // 被删 Provider 不得在缓存里继续可选（0.0.16 审计 P1）。
-                if modelSettings.snapshot != nil {
-                    Task { await refreshModelSettingsAfterProviderChange() }
-                }
-                return []
-            }
-            return result.errors ?? [ProviderFieldError(field: "models.json", message: "删除失败")]
-        } catch {
-            return [ProviderFieldError(field: "models.json", message: DiagnosticSanitizer.redact(error.localizedDescription))]
-        }
+        _ = id
+        return [ProviderFieldError(
+            field: "credential",
+            message: "D Code 不再通过 Pi models.json 删除 Provider。请在 D Code Model Catalog 中管理其安全引用。"
+        )]
     }
 
     private func refreshModelSettingsAfterProviderChange() async {

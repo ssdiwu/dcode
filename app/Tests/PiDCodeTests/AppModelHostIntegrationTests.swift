@@ -1046,7 +1046,7 @@ final class ModelProvidersIntegrationTests: XCTestCase {
         let errors = await harness.model.saveModelProvider(input)
 
         XCTAssertEqual(errors.count, 1)
-        XCTAssertEqual(errors.first?.field, "baseUrl")
+        XCTAssertEqual(errors.first?.field, "credential")
         XCTAssertNil(harness.model.notice, "字段级错误走表单行内呈现，不弹全局横幅")
     }
 

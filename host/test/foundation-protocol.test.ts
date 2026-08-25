@@ -55,13 +55,13 @@ test("Host foundation contract creates and restores a native D Code Task bundle"
     const initial = await host.handle("foundation.snapshot", {}) as FoundationSnapshot;
     const created = await host.handle("task.create", {
       requestId: "host-create-task",
-      expectedStoreRevision: 0,
+      expectedStoreRevision: initial.storeRevision,
       scope: { kind: "user", userId: initial.currentUser.id },
       title: "Foundation Console task",
       goal: "Exercise the same contract the Swift UI will consume",
       acceptance: ["Snapshot restores the Task"],
     }) as TaskBundle;
-    assert.equal(created.storeRevision, 1);
+    assert.equal(created.storeRevision, initial.storeRevision + 1);
     assert.equal(created.task.cwd, userHome);
     assert.ok(events.some(({ event, data }) => event === "foundation.changed"
       && (data as { taskId?: unknown }).taskId === created.task.id));

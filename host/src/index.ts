@@ -171,8 +171,6 @@ function schedule(value: unknown): void {
     const request = parseRequest(value);
     const method = request.method;
     bypassQueue = method === "extension.respond"
-      || method === "modelAuth.respond"
-      || method === "modelAuth.cancel"
       || method === "session.search"
       || typeof request.params.runtimeId === "string";
   } catch {

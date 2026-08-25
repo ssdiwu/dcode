@@ -14,7 +14,7 @@ Swift 负责原生呈现与用户输入；Host 负责：
 - 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；非 Worker Runtime 的 cwd 必须精确等于 Task Scope，Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree，且所有选中的 Scope Document 都必须能从冻结 Git revision 物化；
 - 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
 - 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；
-- 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；强制加载运行目录 `AGENTS.md`，其余项目文档和 Global Knowledge 只能来自 Task 的显式、带 revision Context Selection，失效选择在 Pi Session / Provider 副作用前拒绝；
+- 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；强制加载运行目录 `AGENTS.md`，其余项目文档和 Global Knowledge 只能来自 Task 的显式、带 revision Context Selection；导入 Pi 会话只从 Product Store 当前路径生成有界、二次脱敏的 Imported History Projection（导入历史投影），不倒填 Raw / Effective Input、重读或写回源 JSONL；失效选择或损坏的导入投影在 Pi Session / Provider 副作用前拒绝；
 - 预览并显式单向导入外部 Pi Session，首次晋升时只自动接管带有效 D Code origin 的旧会话；
 - 发现、解析和恢复 Pi Session；
 - 按有效 D Code 创建来源查询 Recent Session Summary，或按 Project 的唯一项目目录精确 `cwd` 查询全部关联 Session Summary；
@@ -22,13 +22,13 @@ Swift 负责原生呈现与用户输入；Host 负责：
 - 读取同一 Pi Session 的真实路径谱系，并在用户第一次发送时按明确路径动作切换 Agent 上下文；
 - 把完整已持久化 Session 以新 ID、新 `cwd` 和源谱系有界复制到目标项目目录，经隐藏暂存、严格验证后原子发布；
 - 在列表分页与搜索排序、截断之前排除由 Swift 本机归档资料指定的 Session ID；
-- 打开既有会话即取得 Session Lease，执行单写入所有权、抢占、外部写入检测与冲突恢复；没有只读观察模式；
+- 打开既有 Pi 会话即取得 Session Lease，执行单写入所有权、抢占、外部写入检测与冲突恢复；D Code Session Presentation 是独立、只读的 Product Store / Adapter binding 投影，不调用该抢占路径；
 - 创建 `AgentSession`，发送 prompt、中止、切换模型与 thinking level；
 - 公开当前 D Code-owned Run 的稳定 Session / Run 身份、结构化等待、停止请求、完成、失败、中止与未知状态，并只在最终助手 Entry 经 Lease 同步后确认完成；
 - 返回 Pi SDK 的 Context Usage，并维护 D Code 自有、会话级持久化的极速状态；
-- 缓存优先读取 Pi 模型目录，主目录只投影已认证 Provider，按用户显式动作刷新动态目录或通过 Pi `ModelRuntime.login` 关联 Provider，并通过 Pi SettingsManager 受控修改全局模型启用范围与默认模型；
+- 在 Product Store 中持久化 D Code Model Catalog、Credential Reference 与 Runtime Model Selection；Pi Runtime 只在首次迁入 / 受控发现时提供非敏感 Provider / Model 目录和外部认证桥状态，Runtime 启动前以 Store 选择、目录和凭据引用验证并显式设置模型；
 - 投影 Pi 真实加载的 Extension / Skill / Prompt / Command，受控修改扩展包启停并热重载；
-- 经 Pi `models.json` 与 `ModelConfig` 合同列出、保存和删除自定义供应商定义；
+- 保留 Pi `models.json` / `settings.json` 的只读诊断兼容面，但拒绝 D Code 经其保存 / 删除 Provider、修改默认模型或 enabledModels；认证值不得通过 D Code IPC 进入 Pi `ModelRuntime.login`；
 - 在同一 Pi Agent Loop 注册 `dcode_facts` 只读工具 facade；当前两类生产存储合同缺口由 0.0.15 PRD 记录；
 - 转发 Pi 流式事件和结构化 Active Plan；
 - 以原生 Unicode 结构渲染受支持的 Mermaid 图表，并为不支持类型返回显式失败；
@@ -94,14 +94,16 @@ open "dist/D Code.app"
 {"version":1,"type":"event","event":"session.opened","data":{}}
 ```
 
-非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。无 Runtime 身份的 Product Store mutation 经过全局队列；带 `runtimeId` 的请求进入对应 Runtime 队列，不再被全局“当前会话”串行化。`extension.respond`、`agentRequest.answer`、`agentRun.stop` 以及认证响应属于解除等待或停止的控制请求，会绕过普通 Runtime 队列。输出仍按写入顺序串行化。
+非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。无 Runtime 身份的 Product Store mutation 经过全局队列；带 `runtimeId` 的请求进入对应 Runtime 队列，不再被全局“当前会话”串行化。`extension.respond`、`agentRequest.answer` 与 `agentRun.stop` 属于解除等待或停止的控制请求，会绕过普通 Runtime 队列。认证值没有 D Code IPC 路径。输出仍按写入顺序串行化。
 
 ### 方法组
 
 | 方法 | 作用 |
 |---|---|
 | `host.hello` | 返回协议、Pi 与 Node 版本及目录信息 |
-| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence 与迁移来源投影；Prompt Receipt 只返回路径 / hash / 字节数，并在单次快照内复用当前文件读取，派生 `current_match` / `hash_mismatch` / `historical_unavailable` 状态，不返回历史 Prompt 或项目正文 |
+| `foundation.snapshot` | 一次读取同一 Product Store revision 下的 Project、Task、Session / Path、Run、Attempt、Request、Report、Artifact、Finding、Evidence、Runtime Binding、Model Catalog、Credential Reference 与未来 Runtime Model Selection 投影；Prompt Receipt 只返回路径 / hash / 字节数和 Imported History Receipt 元数据，并在单次快照内复用当前文件读取，派生 `current_match` / `hash_mismatch` / `historical_unavailable` 状态，不返回历史 Prompt、导入历史正文或项目正文 |
+| `runtimeModelSelection.set` | 以 request ID 与 expected Store revision 选择下一次 D Code Runtime 的 Provider / Model；只写 Product Store，不回写 Pi `settings.json` 或历史 Run |
+| `dcodeSession.presentation`、`dcodeSession.prompt` | 前者按 D Code Session ID 返回受控的只读 binding / Runtime / Adapter 快照；后者只为 Coordination Session 自动建立精确 Runtime，或把消息路由到已活动的指定 Child Runtime，绝不按标题、cwd 或全局 active Session 猜目标 |
 | `project.create`、`task.create`、`task.acceptance` | 以 request ID、expected revision 和精确 User / Project Scope 创建或验收 D Code 原生对象 |
 | `agentProfile.create`、`agentProfile.update` | 创建自定义 Profile 或版本化修改内建 / 自定义 Profile；已启动 Agent Run 保留启动快照 |
 | `piImport.listCandidates`、`piImport.preview`、`piImport.importAsTask` | 发现外部 Pi Session、生成 digest / omission 预览，并在用户确认 Scope 后原子转换为新 Task；不修改源 JSONL |
@@ -124,11 +126,10 @@ open "dist/D Code.app"
 | `session.getState`、`session.getCommands`、`session.contextBreakdown` | 获取当前权威状态、D Code-owned Run State、命令 / 模板 / skills 与按消息种类估算的上下文构成 |
 | `resources.list`、`resources.setPackageEnabled` | 投影 Pi 当前真实加载的扩展包、Extension、Skill、Prompt、Command 与诊断；只对有 Pi 配置合同的扩展包执行启停并热重载，Skill / Prompt / Command 保持只读 |
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
-| `modelSettings.get`、`modelSettings.refresh` | 在没有活动 Session 时按规范 `cwd` 读取 Pi 目录、全局与当前有效选择范围、默认模型、项目覆盖和安全认证 / 缓存状态；未认证 Provider 只返回身份与认证方法，不返回内建模型；只有显式 `refresh` 才允许有界访问动态目录网络 |
-| `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel` | 通过 Pi `SettingsManager` 只修改全局 `enabledModels` 或默认 Provider / Model；写前验证设置可读、模型存在、认证与启用范围，项目级设置保持只读 |
-| `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 驱动 Pi `ModelRuntime.login` 的 API Key / OAuth 交互；prompt/event 使用独立 flow/request ID，响应和取消旁路解除等待，成功后只返回重新读取的安全模型快照 |
-| `modelProviders.list`、`modelProviders.save`、`modelProviders.remove` | 读取和变更 Pi `models.json` 自定义供应商；结构检查与 `ModelConfig` 候选校验通过后原子替换。嵌套 header 脱敏、删除后目录刷新和并发编辑边界仍按 0.0.16 PRD 的已知缺口处理 |
-| `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前会话设置 |
+| `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` | 仅保留旧 Pi 目录的安全只读诊断 / 迁入来源，不定义 D Code Model Catalog、未来 Runtime 选择或用户可写产品设置 |
+| `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel`、`modelProviders.save`、`modelProviders.remove` | 明确拒绝；D Code 不再经 Pi `SettingsManager` / `models.json` 写产品模型配置 |
+| `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 明确拒绝；D Code 不通过 IPC 启动 Pi 认证流程或发送 API Key / OAuth 值，凭据只以安全引用进入 Product Store |
+| `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前已绑定 Runtime 的临时会话设置；未来 Runtime 的默认模型仍由 `runtimeModelSelection.set` 归 D Code Product Store 管理 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
 | `extension.respond` | 完成标准 select/confirm/input/editor 扩展请求 |
 | `content.renderMermaid` | 校验至多 100,000 字符的源码，返回 Unicode 行、语义 span、尺寸、类型和 warning；不支持的类型返回结构化失败 |

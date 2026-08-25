@@ -125,6 +125,72 @@ test("fresh Product Store creates private managed storage and four built-in Agen
   }
 });
 
+test("D Code owns a credential-free Runtime Model Catalog and future-Run selection", async () => {
+  const f = await fixture();
+  const store = await open(f);
+  try {
+    const seeded = await store.seedRuntimeModelCatalog({
+      requestId: "seed-runtime-model-catalog",
+      providers: [{
+        id: "provider-one",
+        name: "Provider One",
+        baseUrl: "https://models.example.invalid/v1",
+        apiKind: "openai-completions",
+        authMode: "api_key",
+        nonsecret: { source: "test" },
+        credential: {
+          locator: "pi-runtime-auth-bridge:provider-one",
+          configured: true,
+          sourceDigest: `sha256:${"a".repeat(64)}`,
+        },
+        models: [
+          { modelId: "model-one", name: "Model One", contextWindow: 100_000, maxTokens: 4_096, reasoning: false },
+          { modelId: "model-two", name: "Model Two", contextWindow: 200_000, maxTokens: 8_192, reasoning: true },
+        ],
+      }],
+      defaultSelection: { providerId: "provider-one", modelId: "model-one" },
+    });
+    let snapshot = await store.snapshot();
+    assert.equal(snapshot.modelProviders[0]?.id, "provider-one");
+    assert.equal(snapshot.modelCatalogEntries.length, 2);
+    assert.deepEqual(snapshot.runtimeModelSelection, {
+      providerId: "provider-one",
+      modelId: "model-one",
+      sourceKind: "legacy_pi_settings",
+      revision: 1,
+    });
+    assert.equal(snapshot.credentialReferences[0]?.configured, true);
+    assert.equal(JSON.stringify(snapshot).includes("apiKey"), false);
+
+    const selected = await store.setRuntimeModelSelection({
+      requestId: "choose-runtime-model-two",
+      expectedStoreRevision: seeded.storeRevision,
+      providerId: "provider-one",
+      modelId: "model-two",
+    });
+    snapshot = await store.snapshot();
+    assert.deepEqual(selected.runtimeModelSelection, {
+      providerId: "provider-one",
+      modelId: "model-two",
+      sourceKind: "user",
+      revision: 2,
+    });
+    assert.deepEqual(snapshot.runtimeModelSelection, selected.runtimeModelSelection);
+    await assert.rejects(
+      store.setRuntimeModelSelection({
+        requestId: "choose-missing-runtime-model",
+        expectedStoreRevision: selected.storeRevision,
+        providerId: "provider-one",
+        modelId: "missing",
+      }),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "NOT_FOUND",
+    );
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("Product Store rejects a symbolic-link data root without changing the target", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-product-store-symlink-root-"));
   const target = join(root, "unrelated-target");
@@ -1241,6 +1307,144 @@ test("Pi import publishes one Task bundle with unknown historical lineage and im
       }),
       (error: unknown) => error instanceof ProductStoreError
         && error.code === "PI_SESSION_ALREADY_IMPORTED",
+    );
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("Pi-imported continuation records only an Imported History Receipt beside the new Raw Input", async () => {
+  const f = await fixture();
+  const store = await open(f);
+  try {
+    const user = (await store.snapshot()).currentUser;
+    const imported = await store.importPiSessionAsTask({
+      requestId: "import-history-projection",
+      expectedStoreRevision: 0,
+      scope: { kind: "user", userId: user.id },
+      sourceSessionId: "pi-history-source",
+      sourcePath: join(f.root, "pi-history-source.jsonl"),
+      sourceDigest: `sha256:${"e".repeat(64)}`,
+      historicalCwd: f.home,
+      title: "Imported history continuation",
+      entries: [
+        {
+          sourceEntryId: "imported-user",
+          sourceOrdinal: 0,
+          messageRole: "user",
+          content: "导入的用户原话只作为历史证据",
+        },
+        {
+          sourceEntryId: "imported-assistant",
+          sourceParentEntryId: "imported-user",
+          sourceOrdinal: 1,
+          messageRole: "assistant",
+          content: [{ type: "text", text: "导入的助手结论。" }],
+        },
+      ],
+      paths: [{
+        sourcePathId: "leaf:imported-assistant",
+        sourceLeafEntryId: "imported-assistant",
+        title: "Current imported path",
+        isCurrent: true,
+        sourceEntryIds: ["imported-user", "imported-assistant"],
+      }],
+      conversionEvidence: { version: 1, secretsRedacted: false },
+    });
+    const history = await store.importedSessionHistoryProjection(imported.coordinationSession.id);
+    assert.ok(history);
+    assert.equal(history.receipt.dcodeSessionId, imported.coordinationSession.id);
+    assert.equal(history.receipt.sourceSessionId, "pi-history-source");
+    assert.equal(history.receipt.sourcePathId, "leaf:imported-assistant");
+    assert.equal(history.receipt.redactedAtProjection, false);
+
+    const prepared = await store.prepareSessionRun({
+      requestId: "continue-imported-history",
+      taskId: imported.task.id,
+      scope: imported.task.scope,
+      sessionId: imported.coordinationSession.id,
+      runtimeId: "runtime-imported-history",
+      workspaceId: "workspace-imported-history",
+      cwd: f.home,
+      workspaceAccess: "exclusiveWrite",
+      message: "这是 D Code 中的新提交",
+      attachmentRefs: [],
+      roleRevision: "builtin-coordinator:v1",
+      contextRevision: 1,
+      profileSnapshot: { role: "coordinator" },
+      tools: [],
+      toolsWritable: false,
+      systemPromptDigest: `sha256:${"f".repeat(64)}`,
+      promptSources: [],
+      importedHistoryReceipt: history.receipt,
+    });
+    const snapshot = await store.snapshot();
+    const receipt = snapshot.promptReceipts.find((item) => item.id === prepared.promptReceiptId);
+    assert.deepEqual(receipt?.importedHistoryReceipt, history.receipt);
+    assert.deepEqual(receipt?.sourceReceipts, []);
+
+    const database = new DatabaseSync(join(f.dataRoot, "product-store.sqlite3"));
+    try {
+      const raw = database.prepare(`
+        SELECT submitted_text FROM raw_inputs WHERE id = ?
+      `).get(prepared.rawInputId) as { submitted_text?: unknown } | undefined;
+      const effective = database.prepare(`
+        SELECT effective_content_json, context_projection_json FROM effective_inputs WHERE id = ?
+      `).get(prepared.effectiveInputId) as {
+        effective_content_json?: unknown;
+        context_projection_json?: unknown;
+      } | undefined;
+      assert.equal(raw?.submitted_text, "这是 D Code 中的新提交");
+      assert.deepEqual(JSON.parse(String(effective?.effective_content_json)), {
+        message: "这是 D Code 中的新提交",
+        attachmentRefs: [],
+      });
+      const context = JSON.parse(String(effective?.context_projection_json)) as Record<string, unknown>;
+      assert.equal(context.version, 3);
+      assert.deepEqual(context.importedHistoryReceipt, history.receipt);
+      assert.equal(JSON.stringify(context).includes("导入的用户原话"), false);
+      assert.equal(JSON.stringify(context).includes("导入的助手结论"), false);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a Pi-imported current path without its Pi source identity fails closed before projection", async () => {
+  const f = await fixture();
+  let store = await open(f);
+  try {
+    const user = (await store.snapshot()).currentUser;
+    const imported = await store.importPiSessionAsTask({
+      requestId: "import-missing-source-path",
+      expectedStoreRevision: 0,
+      scope: { kind: "user", userId: user.id },
+      sourceSessionId: "pi-missing-source-path",
+      sourcePath: join(f.root, "pi-missing-source-path.jsonl"),
+      sourceDigest: `sha256:${"c".repeat(64)}`,
+      historicalCwd: f.home,
+      title: "Imported path corruption",
+      entries: [{ sourceEntryId: "u1", sourceOrdinal: 0, messageRole: "user", content: "history" }],
+      paths: [{ sourcePathId: "leaf:u1", sourceLeafEntryId: "u1", title: "Current", isCurrent: true, sourceEntryIds: ["u1"] }],
+      conversionEvidence: { version: 1 },
+    });
+    await store.close();
+    const database = new DatabaseSync(join(f.dataRoot, "product-store.sqlite3"));
+    try {
+      database.prepare(`
+        UPDATE session_paths SET source_path_id = NULL WHERE session_id = ? AND is_current = 1
+      `).run(imported.coordinationSession.id);
+    } finally {
+      database.close();
+    }
+    store = await open(f);
+    await assert.rejects(
+      store.importedSessionHistoryProjection(imported.coordinationSession.id),
+      (error: unknown) => error instanceof ProductStoreError && error.code === "PRODUCT_STORE_CORRUPT",
     );
   } finally {
     await store.close();

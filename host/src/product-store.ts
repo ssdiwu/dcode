@@ -25,6 +25,14 @@ import {
   type DCodePromptSourceReceipt,
 } from "./prompt-source-status.js";
 import {
+  importedHistoryWasRedactedAtImport,
+  ImportedSessionHistoryReceiptError,
+  normalizeImportedSessionHistoryReceipt,
+  projectImportedSessionHistory,
+  type ImportedSessionHistoryProjection,
+  type ImportedSessionHistoryReceipt,
+} from "./imported-history-projection.js";
+import {
   MANAGED_WORKER_WORKTREE_ARTIFACT_KIND,
   MANAGED_WORKER_WORKTREE_TARGET_PREFIX,
   managedWorkerWorktreeArtifactId,
@@ -51,6 +59,73 @@ export interface ProjectRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ModelProviderRecord {
+  id: string;
+  name: string;
+  baseUrl?: string;
+  apiKind?: string;
+  authMode?: string;
+  nonsecret: unknown;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelCatalogEntryRecord {
+  id: string;
+  providerId: string;
+  modelId: string;
+  name: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning: boolean;
+  nonsecret: unknown;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CredentialReferenceRecord {
+  id: string;
+  providerId: string;
+  referenceKind: "keychain" | "environment" | "external_auth_bridge";
+  locator: string;
+  configured: boolean;
+  sourceDigest?: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuntimeModelSelectionRecord {
+  providerId: string;
+  modelId: string;
+  sourceKind: "legacy_pi_settings" | "user";
+  revision: number;
+}
+
+export interface RuntimeModelCatalogProviderInput {
+  id: string;
+  name: string;
+  baseUrl?: string;
+  apiKind?: string;
+  authMode?: string;
+  nonsecret?: unknown;
+  credential: {
+    locator: string;
+    configured: boolean;
+    sourceDigest?: string;
+  };
+  models: Array<{
+    modelId: string;
+    name: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning: boolean;
+    nonsecret?: unknown;
+  }>;
 }
 
 export interface AgentProfileRecord {
@@ -204,6 +279,8 @@ export interface SessionEntryRecord {
   content: unknown;
   createdAt: string;
 }
+
+export type { ImportedSessionHistoryProjection, ImportedSessionHistoryReceipt } from "./imported-history-projection.js";
 
 export interface PiImportSourceRecord {
   id: string;
@@ -365,6 +442,7 @@ export interface PromptReceiptRecord {
   identityRevision: string;
   roleRevision: string;
   sourceReceipts: DCodePromptSourceReceipt[];
+  importedHistoryReceipt?: ImportedSessionHistoryReceipt;
   createdAt: string;
 }
 
@@ -507,6 +585,10 @@ export interface FoundationSnapshot {
   dataRoot: string;
   currentUser: LocalUserRecord;
   projects: ProjectRecord[];
+  modelProviders: ModelProviderRecord[];
+  modelCatalogEntries: ModelCatalogEntryRecord[];
+  credentialReferences: CredentialReferenceRecord[];
+  runtimeModelSelection?: RuntimeModelSelectionRecord;
   agentProfiles: AgentProfileRecord[];
   tasks: TaskRecord[];
   taskContextSets: TaskContextSetRecord[];
@@ -517,6 +599,7 @@ export interface FoundationSnapshot {
   sessionProvenance: SessionProvenanceRecord[];
   coordinatorAssignments: CoordinatorAssignmentRecord[];
   piImports: PiImportSourceRecord[];
+  sessionRuntimeBindings: SessionRuntimeBinding[];
   sessionRuns: SessionRunRecord[];
   operationAttempts: OperationAttemptRecord[];
   runtimeEnvironments: RuntimeEnvironmentRecord[];
@@ -878,6 +961,70 @@ function project(row: SQLiteRow): ProjectRecord {
   };
 }
 
+function modelProvider(row: SQLiteRow): ModelProviderRecord {
+  const optionalText = (key: string): string | undefined => (
+    typeof row[key] === "string" ? row[key] as string : undefined
+  );
+  return {
+    id: text(row, "id"),
+    name: text(row, "name"),
+    ...(optionalText("base_url") ? { baseUrl: optionalText("base_url") } : {}),
+    ...(optionalText("api_kind") ? { apiKind: optionalText("api_kind") } : {}),
+    ...(optionalText("auth_mode") ? { authMode: optionalText("auth_mode") } : {}),
+    nonsecret: JSON.parse(text(row, "nonsecret_json")),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function modelCatalogEntry(row: SQLiteRow): ModelCatalogEntryRecord {
+  const optionalInteger = (key: string): number | undefined => (
+    typeof row[key] === "number" && Number.isSafeInteger(row[key]) ? row[key] as number : undefined
+  );
+  return {
+    id: text(row, "id"),
+    providerId: text(row, "provider_id"),
+    modelId: text(row, "model_id"),
+    name: text(row, "name"),
+    ...(optionalInteger("context_window") ? { contextWindow: optionalInteger("context_window") } : {}),
+    ...(optionalInteger("max_tokens") ? { maxTokens: optionalInteger("max_tokens") } : {}),
+    reasoning: integer(row, "reasoning") === 1,
+    nonsecret: JSON.parse(text(row, "nonsecret_json")),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function credentialReference(row: SQLiteRow): CredentialReferenceRecord {
+  const sourceDigest = typeof row.source_digest === "string" ? row.source_digest as string : undefined;
+  return {
+    id: text(row, "id"),
+    providerId: text(row, "provider_id"),
+    referenceKind: text(row, "reference_kind") as CredentialReferenceRecord["referenceKind"],
+    locator: text(row, "locator"),
+    configured: integer(row, "configured") === 1,
+    ...(sourceDigest ? { sourceDigest } : {}),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function sessionRuntimeBinding(row: SQLiteRow): SessionRuntimeBinding {
+  return {
+    sessionId: text(row, "session_id"),
+    taskId: text(row, "task_id"),
+    adapterKind: "pi",
+    adapterSessionId: text(row, "adapter_session_id"),
+    adapterSessionPath: text(row, "adapter_session_path"),
+    cwd: text(row, "cwd"),
+    state: text(row, "state") as SessionRuntimeBinding["state"],
+    revision: integer(row, "revision"),
+  };
+}
+
 function agentProfile(row: SQLiteRow): AgentProfileRecord {
   const role = text(row, "role") as AgentProfileRecord["role"];
   return {
@@ -1205,10 +1352,39 @@ function activeToolSet(row: SQLiteRow): ActiveToolSetRecord {
   };
 }
 
+function promptReceiptSources(value: unknown): {
+  sourceReceipts: DCodePromptSourceReceipt[];
+  importedHistoryReceipt?: ImportedSessionHistoryReceipt;
+} {
+  if (Array.isArray(value)) {
+    return { sourceReceipts: normalizeDCodePromptSourceReceipts(value) };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new DCodePromptSourceReceiptError("Prompt Receipt sources are invalid");
+  }
+  const payload = value as {
+    version?: unknown;
+    documentSources?: unknown;
+    importedHistory?: unknown;
+  };
+  if (payload.version !== 2) {
+    throw new DCodePromptSourceReceiptError("Prompt Receipt sources have an unsupported version");
+  }
+  return {
+    sourceReceipts: normalizeDCodePromptSourceReceipts(payload.documentSources),
+    ...(payload.importedHistory === undefined
+      ? {}
+      : { importedHistoryReceipt: normalizeImportedSessionHistoryReceipt(payload.importedHistory) }),
+  };
+}
+
 function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
-  let sourceReceipts: DCodePromptSourceReceipt[];
+  let sources: {
+    sourceReceipts: DCodePromptSourceReceipt[];
+    importedHistoryReceipt?: ImportedSessionHistoryReceipt;
+  };
   try {
-    sourceReceipts = normalizeDCodePromptSourceReceipts(JSON.parse(text(row, "source_receipts_json")));
+    sources = promptReceiptSources(JSON.parse(text(row, "source_receipts_json")));
   } catch (error) {
     throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Stored Prompt Receipt metadata is invalid", {
       receiptId: text(row, "id"),
@@ -1226,7 +1402,8 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
     systemPromptDigest: text(row, "system_prompt_digest"),
     identityRevision: text(row, "identity_revision"),
     roleRevision: text(row, "role_revision"),
-    sourceReceipts,
+    sourceReceipts: sources.sourceReceipts,
+    ...(sources.importedHistoryReceipt ? { importedHistoryReceipt: sources.importedHistoryReceipt } : {}),
     createdAt: text(row, "created_at"),
   };
 }
@@ -1650,6 +1827,346 @@ export class ProductStore {
     return localUser(row);
   }
 
+  runtimeModelSelection(): RuntimeModelSelectionRecord | undefined {
+    this.assertOpen();
+    const stored = this.database.prepare(`
+      SELECT * FROM product_settings WHERE key = 'runtime.modelSelection'
+    `).get() as SQLiteRow | undefined;
+    const parseStoredSelection = (row: SQLiteRow, sourceKind: RuntimeModelSelectionRecord["sourceKind"]): RuntimeModelSelectionRecord => {
+      let value: unknown;
+      try {
+        value = JSON.parse(text(row, "value_json"));
+      } catch (error) {
+        throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Runtime Model Selection is not valid JSON", {
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Runtime Model Selection is invalid");
+      }
+      const providerId = (value as { providerId?: unknown }).providerId;
+      const modelId = (value as { modelId?: unknown }).modelId;
+      if (
+        typeof providerId !== "string" || providerId.trim().length === 0 || providerId.length > 200
+        || typeof modelId !== "string" || modelId.trim().length === 0 || modelId.length > 200
+      ) {
+        throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Runtime Model Selection is incomplete");
+      }
+      return { providerId, modelId, sourceKind, revision: integer(row, "revision") };
+    };
+    if (stored) {
+      const sourceKind = text(stored, "source_kind");
+      if (sourceKind !== "legacy_pi_settings" && sourceKind !== "user") {
+        throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Runtime Model Selection has an invalid source kind");
+      }
+      return parseStoredSelection(stored, sourceKind);
+    }
+
+    const legacyRows = this.database.prepare(`
+      SELECT * FROM product_settings
+      WHERE key IN ('runtime.defaultProvider', 'runtime.defaultModel')
+    `).all() as SQLiteRow[];
+    const legacy = new Map(legacyRows.map((row) => [text(row, "key"), row]));
+    const provider = legacy.get("runtime.defaultProvider");
+    const model = legacy.get("runtime.defaultModel");
+    if (!provider && !model) return undefined;
+    if (!provider || !model) {
+      throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Legacy Runtime Model Selection is incomplete");
+    }
+    let providerId: unknown;
+    let modelId: unknown;
+    try {
+      providerId = JSON.parse(text(provider, "value_json"));
+      modelId = JSON.parse(text(model, "value_json"));
+    } catch (error) {
+      throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Legacy Runtime Model Selection is not valid JSON", {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (
+      typeof providerId !== "string" || providerId.trim().length === 0 || providerId.length > 200
+      || typeof modelId !== "string" || modelId.trim().length === 0 || modelId.length > 200
+    ) {
+      throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Legacy Runtime Model Selection is invalid");
+    }
+    return {
+      providerId,
+      modelId,
+      sourceKind: "legacy_pi_settings",
+      revision: Math.max(integer(provider, "revision"), integer(model, "revision")),
+    };
+  }
+
+  async seedRuntimeModelCatalog(input: {
+    requestId: string;
+    providers: RuntimeModelCatalogProviderInput[];
+    defaultSelection?: { providerId: string; modelId: string };
+  }): Promise<{ storeRevision: number; runtimeModelSelection?: RuntimeModelSelectionRecord }> {
+    if (!Array.isArray(input.providers) || input.providers.length === 0 || input.providers.length > 128) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Runtime Model Catalog must contain 1…128 Providers");
+    }
+    const providers = input.providers.map((provider, providerIndex) => {
+      const id = requiredCredentialFreeString(provider.id, `providers[${providerIndex}].id`, 200);
+      const name = requiredCredentialFreeString(provider.name, `providers[${providerIndex}].name`, 200);
+      const baseUrl = provider.baseUrl === undefined
+        ? undefined
+        : requiredCredentialFreeString(provider.baseUrl, `providers[${providerIndex}].baseUrl`, 4_096);
+      const apiKind = provider.apiKind === undefined
+        ? undefined
+        : requiredCredentialFreeString(provider.apiKind, `providers[${providerIndex}].apiKind`, 200);
+      const authMode = provider.authMode === undefined
+        ? undefined
+        : requiredCredentialFreeString(provider.authMode, `providers[${providerIndex}].authMode`, 200);
+      const locator = requiredCredentialFreeString(provider.credential?.locator, `providers[${providerIndex}].credential.locator`, 4_096);
+      if (typeof provider.credential?.configured !== "boolean") {
+        throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].credential.configured is invalid`);
+      }
+      const sourceDigest = provider.credential.sourceDigest;
+      if (sourceDigest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(sourceDigest)) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].credential.sourceDigest is invalid`);
+      }
+      const nonsecret = stableValue(provider.nonsecret ?? {});
+      assertCredentialFreeValue(nonsecret, `providers[${providerIndex}].nonsecret`);
+      if (!Array.isArray(provider.models) || provider.models.length === 0 || provider.models.length > 2_048) {
+        throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].models must contain 1…2048 Models`);
+      }
+      const seenModelIds = new Set<string>();
+      const models = provider.models.map((model, modelIndex) => {
+        const modelId = requiredCredentialFreeString(model.modelId, `providers[${providerIndex}].models[${modelIndex}].modelId`, 200);
+        if (seenModelIds.has(modelId)) {
+          throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].models contains duplicate modelId`);
+        }
+        seenModelIds.add(modelId);
+        const modelName = requiredCredentialFreeString(model.name, `providers[${providerIndex}].models[${modelIndex}].name`, 200);
+        for (const [field, value] of [["contextWindow", model.contextWindow], ["maxTokens", model.maxTokens]] as const) {
+          if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+            throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].models[${modelIndex}].${field} is invalid`);
+          }
+        }
+        if (typeof model.reasoning !== "boolean") {
+          throw new ProductStoreError("INVALID_ARGUMENT", `providers[${providerIndex}].models[${modelIndex}].reasoning is invalid`);
+        }
+        const modelNonsecret = stableValue(model.nonsecret ?? {});
+        assertCredentialFreeValue(modelNonsecret, `providers[${providerIndex}].models[${modelIndex}].nonsecret`);
+        return {
+          modelId,
+          name: modelName,
+          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+          reasoning: model.reasoning,
+          nonsecret: modelNonsecret,
+        };
+      });
+      return {
+        id,
+        name,
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(apiKind ? { apiKind } : {}),
+        ...(authMode ? { authMode } : {}),
+        nonsecret,
+        credential: {
+          locator,
+          configured: provider.credential.configured,
+          ...(sourceDigest ? { sourceDigest } : {}),
+        },
+        models,
+      };
+    });
+    const providerIds = new Set<string>();
+    for (const provider of providers) {
+      if (providerIds.has(provider.id)) throw new ProductStoreError("INVALID_ARGUMENT", "Runtime Model Catalog has duplicate Provider ids");
+      providerIds.add(provider.id);
+    }
+    const defaultSelection = input.defaultSelection === undefined
+      ? undefined
+      : {
+        providerId: requiredCredentialFreeString(input.defaultSelection.providerId, "defaultSelection.providerId", 200),
+        modelId: requiredCredentialFreeString(input.defaultSelection.modelId, "defaultSelection.modelId", 200),
+      };
+    if (defaultSelection && !providers.some((provider) => (
+      provider.id === defaultSelection.providerId
+      && provider.models.some((model) => model.modelId === defaultSelection.modelId)
+    ))) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Runtime Model Catalog defaultSelection is not part of the supplied Catalog");
+    }
+    return await this.mutate(
+      "runtimeModelCatalog.seed",
+      input.requestId,
+      undefined,
+      { providers, ...(defaultSelection ? { defaultSelection } : {}) },
+      (_storeRevision, now) => {
+        const upsertProvider = this.database.prepare(`
+          INSERT INTO model_providers(
+            id, name, base_url, api_kind, auth_mode, nonsecret_json,
+            revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            base_url = excluded.base_url,
+            api_kind = excluded.api_kind,
+            auth_mode = excluded.auth_mode,
+            nonsecret_json = excluded.nonsecret_json,
+            revision = model_providers.revision + 1,
+            updated_at = excluded.updated_at
+        `);
+        const upsertModel = this.database.prepare(`
+          INSERT INTO model_catalog_entries(
+            id, provider_id, model_id, name, context_window, max_tokens,
+            reasoning, nonsecret_json, revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          ON CONFLICT(provider_id, model_id) DO UPDATE SET
+            name = excluded.name,
+            context_window = excluded.context_window,
+            max_tokens = excluded.max_tokens,
+            reasoning = excluded.reasoning,
+            nonsecret_json = excluded.nonsecret_json,
+            revision = model_catalog_entries.revision + 1,
+            updated_at = excluded.updated_at
+        `);
+        const existingCredential = this.database.prepare(`
+          SELECT id, revision FROM credential_references
+          WHERE provider_id = ? AND reference_kind = 'external_auth_bridge'
+          ORDER BY created_at, id LIMIT 1
+        `);
+        const insertCredential = this.database.prepare(`
+          INSERT INTO credential_references(
+            id, provider_id, reference_kind, locator, configured,
+            source_digest, revision, created_at, updated_at
+          ) VALUES (?, ?, 'external_auth_bridge', ?, ?, ?, 1, ?, ?)
+        `);
+        const updateCredential = this.database.prepare(`
+          UPDATE credential_references
+          SET locator = ?, configured = ?, source_digest = ?, revision = ?, updated_at = ?
+          WHERE id = ?
+        `);
+        for (const provider of providers) {
+          upsertProvider.run(
+            provider.id,
+            provider.name,
+            provider.baseUrl ?? null,
+            provider.apiKind ?? null,
+            provider.authMode ?? null,
+            canonicalJSON(provider.nonsecret),
+            now,
+            now,
+          );
+          for (const model of provider.models) {
+            upsertModel.run(
+              `model-${createHash("sha256").update(`${provider.id}\0${model.modelId}`).digest("hex").slice(0, 32)}`,
+              provider.id,
+              model.modelId,
+              model.name,
+              model.contextWindow ?? null,
+              model.maxTokens ?? null,
+              model.reasoning ? 1 : 0,
+              canonicalJSON(model.nonsecret),
+              now,
+              now,
+            );
+          }
+          const credential = existingCredential.get(provider.id) as SQLiteRow | undefined;
+          if (credential) {
+            updateCredential.run(
+              provider.credential.locator,
+              provider.credential.configured ? 1 : 0,
+              provider.credential.sourceDigest ?? null,
+              integer(credential, "revision") + 1,
+              now,
+              text(credential, "id"),
+            );
+          } else {
+            insertCredential.run(
+              `credential-${createHash("sha256").update(provider.id).digest("hex").slice(0, 32)}`,
+              provider.id,
+              provider.credential.locator,
+              provider.credential.configured ? 1 : 0,
+              provider.credential.sourceDigest ?? null,
+              now,
+              now,
+            );
+          }
+        }
+        let runtimeModelSelection = this.runtimeModelSelection();
+        if (!runtimeModelSelection && defaultSelection) {
+          this.database.prepare(`
+            INSERT INTO product_settings(key, value_json, source_kind, revision, created_at, updated_at)
+            VALUES ('runtime.modelSelection', ?, 'legacy_pi_settings', 1, ?, ?)
+          `).run(canonicalJSON(defaultSelection), now, now);
+          runtimeModelSelection = {
+            ...defaultSelection,
+            sourceKind: "legacy_pi_settings",
+            revision: 1,
+          };
+        }
+        return {
+          value: { ...(runtimeModelSelection ? { runtimeModelSelection } : {}) },
+          event: {
+            kind: "runtimeModelCatalog.seeded",
+            entityKind: "runtimeModelCatalog",
+            entityId: "runtime.modelCatalog",
+            payload: { providerCount: providers.length, ...(runtimeModelSelection ? { runtimeModelSelection } : {}) },
+          },
+        };
+      },
+    );
+  }
+
+  async setRuntimeModelSelection(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    providerId: string;
+    modelId: string;
+  }): Promise<{ storeRevision: number; runtimeModelSelection: RuntimeModelSelectionRecord }> {
+    const providerId = requiredCredentialFreeString(input.providerId, "providerId", 200);
+    const modelId = requiredCredentialFreeString(input.modelId, "modelId", 200);
+    return await this.mutate(
+      "runtimeModelSelection.set",
+      input.requestId,
+      input.expectedStoreRevision,
+      { providerId, modelId },
+      (_storeRevision, now) => {
+        const catalogEntry = this.database.prepare(`
+          SELECT id FROM model_catalog_entries WHERE provider_id = ? AND model_id = ?
+        `).get(providerId, modelId) as SQLiteRow | undefined;
+        if (!catalogEntry) {
+          throw new ProductStoreError(
+            "NOT_FOUND",
+            "D Code Model Catalog does not contain this Provider / Model pair",
+            { providerId, modelId },
+          );
+        }
+        const existing = this.database.prepare(`
+          SELECT revision FROM product_settings WHERE key = 'runtime.modelSelection'
+        `).get() as SQLiteRow | undefined;
+        const revision = existing ? integer(existing, "revision") + 1 : 1;
+        this.database.prepare(`
+          INSERT INTO product_settings(key, value_json, source_kind, revision, created_at, updated_at)
+          VALUES ('runtime.modelSelection', ?, 'user', ?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            value_json = excluded.value_json,
+            source_kind = 'user',
+            revision = excluded.revision,
+            updated_at = excluded.updated_at
+        `).run(canonicalJSON({ providerId, modelId }), revision, now, now);
+        const runtimeModelSelection: RuntimeModelSelectionRecord = {
+          providerId,
+          modelId,
+          sourceKind: "user",
+          revision,
+        };
+        return {
+          value: { runtimeModelSelection },
+          event: {
+            kind: "runtimeModelSelection.updated",
+            entityKind: "runtimeModelSelection",
+            entityId: "runtime.modelSelection",
+            payload: { runtimeModelSelection },
+          },
+        };
+      },
+    );
+  }
+
   async snapshot(afterEventSequence = 0): Promise<FoundationSnapshot> {
     this.assertOpen();
     requiredRevision(afterEventSequence, "afterEventSequence");
@@ -1678,12 +2195,23 @@ export class ProductStore {
     const taskContextSets = (
       this.database.prepare("SELECT * FROM task_context_sets ORDER BY task_id").all() as SQLiteRow[]
     ).map((row) => taskContextSet(row, taskContextSourcesByTask.get(text(row, "task_id")) ?? []));
+    const runtimeModelSelection = this.runtimeModelSelection();
     return {
       schemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
       storeRevision: this.metaInteger("store_revision"),
       dataRoot: this.layout.root,
       currentUser: this.currentUser(),
       projects: (this.database.prepare("SELECT * FROM projects ORDER BY created_at, id").all() as SQLiteRow[]).map(project),
+      modelProviders: (
+        this.database.prepare("SELECT * FROM model_providers ORDER BY name, id").all() as SQLiteRow[]
+      ).map(modelProvider),
+      modelCatalogEntries: (
+        this.database.prepare("SELECT * FROM model_catalog_entries ORDER BY provider_id, name, model_id").all() as SQLiteRow[]
+      ).map(modelCatalogEntry),
+      credentialReferences: (
+        this.database.prepare("SELECT * FROM credential_references ORDER BY provider_id, id").all() as SQLiteRow[]
+      ).map(credentialReference),
+      ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
       agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
       tasks: (this.database.prepare("SELECT * FROM tasks ORDER BY created_at, id").all() as SQLiteRow[]).map(task),
       taskContextSets,
@@ -1706,6 +2234,9 @@ export class ProductStore {
       piImports: (
         this.database.prepare("SELECT * FROM pi_import_sources WHERE state = 'completed' ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(piImportSource),
+      sessionRuntimeBindings: (
+        this.database.prepare("SELECT * FROM session_runtime_bindings ORDER BY session_id").all() as SQLiteRow[]
+      ).map(sessionRuntimeBinding),
       sessionRuns: (
         this.database.prepare("SELECT * FROM session_runs ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(sessionRun),
@@ -1759,6 +2290,94 @@ export class ProductStore {
         SELECT * FROM session_entries WHERE session_id = ? ORDER BY source_ordinal, id
       `).all(sessionId) as SQLiteRow[]
     ).map(sessionEntry);
+  }
+
+  async importedSessionHistoryProjection(
+    sessionIdValue: string,
+  ): Promise<ImportedSessionHistoryProjection | undefined> {
+    this.assertOpen();
+    const sessionId = requiredString(sessionIdValue, "sessionId", 200);
+    const provenance = this.database.prepare(`
+      SELECT * FROM session_provenance
+      WHERE session_id = ?
+    `).get(sessionId) as SQLiteRow | undefined;
+    if (!provenance || text(provenance, "source_kind") !== "pi_import") return undefined;
+
+    const importSource = this.database.prepare(`
+      SELECT * FROM pi_import_sources
+      WHERE session_id = ? AND state = 'completed'
+    `).get(sessionId) as SQLiteRow | undefined;
+    if (!importSource) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Pi-imported Session has no completed import provenance",
+        { sessionId },
+      );
+    }
+    if (
+      text(importSource, "source_session_id") !== text(provenance, "source_session_id")
+      || text(importSource, "source_digest") !== text(provenance, "source_digest")
+    ) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Pi-imported Session provenance does not match its import source",
+        { sessionId },
+      );
+    }
+    const currentPath = this.database.prepare(`
+      SELECT id, source_path_id FROM session_paths
+      WHERE session_id = ? AND is_current = 1
+    `).get(sessionId) as SQLiteRow | undefined;
+    if (!currentPath) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Pi-imported Session has no current Session Path",
+        { sessionId },
+      );
+    }
+    if (typeof currentPath.source_path_id !== "string" || currentPath.source_path_id.length === 0) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Pi-imported Session current path has no Pi source path identity",
+        { sessionId },
+      );
+    }
+
+    let provenanceDetails: unknown;
+    try {
+      provenanceDetails = JSON.parse(text(provenance, "details_json"));
+    } catch (error) {
+      throw new ProductStoreError(
+        "PRODUCT_STORE_CORRUPT",
+        "Pi-imported Session provenance details are invalid",
+        { sessionId, cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    const entries = (
+      this.database.prepare(`
+        SELECT e.*
+        FROM session_path_entries p
+        JOIN session_entries e ON e.id = p.entry_id
+        WHERE p.path_id = ?
+          AND e.source_kind = 'pi_import'
+          AND e.message_role IN ('user', 'assistant')
+        ORDER BY p.ordinal, e.id
+      `).all(text(currentPath, "id")) as SQLiteRow[]
+    ).map(sessionEntry);
+    return projectImportedSessionHistory({
+      dcodeSessionId: sessionId,
+      sourceSessionId: text(importSource, "source_session_id"),
+      sourceDigest: text(importSource, "source_digest"),
+      importerVersion: integer(importSource, "importer_version"),
+      sourcePathId: text(currentPath, "source_path_id"),
+      redactedAtImport: importedHistoryWasRedactedAtImport(provenanceDetails),
+      entries: entries.map((entry) => ({
+        id: entry.id,
+        ...(entry.sourceEntryId ? { sourceEntryId: entry.sourceEntryId } : {}),
+        messageRole: entry.messageRole as "user" | "assistant",
+        content: entry.content,
+      })),
+    });
   }
 
   private taskForScope(taskId: string, scope: TaskScope): TaskRecord {
@@ -2998,6 +3617,7 @@ export class ProductStore {
     toolsWritable: boolean;
     systemPromptDigest: string;
     promptSources: DCodePromptSourceReceipt[];
+    importedHistoryReceipt?: ImportedSessionHistoryReceipt;
   }): Promise<PreparedSessionRun> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const scope = normalizedTaskScope(input.scope);
@@ -3029,13 +3649,35 @@ export class ProductStore {
     stableValue(input.profileSnapshot);
     stableValue(input.tools);
     let promptSources: DCodePromptSourceReceipt[];
+    let importedHistoryReceipt: ImportedSessionHistoryReceipt | undefined;
     try {
       promptSources = normalizeDCodePromptSourceReceipts(input.promptSources);
+      importedHistoryReceipt = input.importedHistoryReceipt === undefined
+        ? undefined
+        : normalizeImportedSessionHistoryReceipt(input.importedHistoryReceipt);
     } catch (error) {
-      if (error instanceof DCodePromptSourceReceiptError) {
+      if (error instanceof DCodePromptSourceReceiptError || error instanceof ImportedSessionHistoryReceiptError) {
         throw new ProductStoreError("INVALID_ARGUMENT", error.message);
       }
       throw error;
+    }
+    const currentImportedHistory = await this.importedSessionHistoryProjection(sessionId);
+    if (
+      currentImportedHistory?.receipt.digest !== importedHistoryReceipt?.digest
+      || currentImportedHistory?.receipt.dcodeSessionId !== importedHistoryReceipt?.dcodeSessionId
+    ) {
+      throw new ProductStoreError(
+        "REVISION_CONFLICT",
+        "Imported History Projection changed before this Session Run could be prepared",
+        { sessionId },
+      );
+    }
+    if (importedHistoryReceipt && importedHistoryReceipt.dcodeSessionId !== sessionId) {
+      throw new ProductStoreError(
+        "INVALID_ARGUMENT",
+        "Imported History Receipt does not belong to this D Code Session",
+        { sessionId },
+      );
     }
     assertCredentialFreeValue(input.profileSnapshot, "profileSnapshot");
     assertCredentialFreeValue(input.tools, "tools");
@@ -3104,17 +3746,23 @@ export class ProductStore {
         }
         if (agentRunId) {
           const agentRun = this.database.prepare(`
-            SELECT g.id, g.role, g.status, g.team_run_id, t.status AS team_status
+            SELECT g.id, g.role, g.status, g.team_run_id,
+              COALESCE(
+                t.status,
+                (SELECT c.status FROM team_runs c
+                  WHERE c.coordinator_agent_run_id = g.id AND c.status = 'active'
+                  ORDER BY c.created_at DESC, c.id DESC LIMIT 1)
+              ) AS team_status
             FROM agent_runs g
             LEFT JOIN team_runs t ON t.id = g.team_run_id
             WHERE g.id = ? AND g.task_id = ? AND g.session_id = ?
           `).get(agentRunId, taskId, sessionId) as SQLiteRow | undefined;
           if (!agentRun) throw new ProductStoreError("NOT_FOUND", "Agent Run does not match the Session Run target");
           const agentStatus = text(agentRun, "status");
-          const coordinatorSynthesis = text(agentRun, "role") === "coordinator"
+          const coordinatorContinuation = text(agentRun, "role") === "coordinator"
             && agentStatus === "completed"
-            && agentRun.team_status === "active";
-          if (agentStatus !== "prepared" && !coordinatorSynthesis) {
+            && (agentRun.team_status === "active" || agentRun.team_run_id === null);
+          if (agentStatus !== "prepared" && !coordinatorContinuation) {
             throw new ProductStoreError("REVISION_CONFLICT", "Agent Run cannot start another Session Run", {
               agentStatus,
             });
@@ -3202,7 +3850,12 @@ export class ProductStore {
           sessionId,
           rawInputId,
           canonicalJSON({ message, attachmentRefs: input.attachmentRefs }),
-          canonicalJSON({ version: 2, taskContextRevision: contextRevision, promptSources }),
+          canonicalJSON({
+            version: 3,
+            taskContextRevision: contextRevision,
+            promptSources,
+            ...(importedHistoryReceipt ? { importedHistoryReceipt } : {}),
+          }),
           now,
         );
         this.database.prepare(`
@@ -3286,7 +3939,11 @@ export class ProductStore {
           activeToolSetId,
           input.systemPromptDigest,
           input.roleRevision,
-          canonicalJSON(promptSources),
+          canonicalJSON({
+            version: 2,
+            documentSources: promptSources,
+            ...(importedHistoryReceipt ? { importedHistory: importedHistoryReceipt } : {}),
+          }),
           now,
         );
         this.database.prepare(`
@@ -3325,6 +3982,131 @@ export class ProductStore {
             entityId: sessionRunId,
             taskId,
             payload: value,
+          },
+        };
+      },
+    );
+  }
+
+  async ensureCoordinatorAgentRun(input: {
+    requestId: string;
+    taskId: string;
+    scope: TaskScope;
+  }): Promise<{ storeRevision: number; agentRun: AgentRunRecord; assignment: AgentAssignmentRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    return await this.mutate(
+      "coordinatorAgentRun.ensure",
+      input.requestId,
+      undefined,
+      { taskId, scope },
+      (_storeRevision, now) => {
+        const taskRecord = this.taskForScope(taskId, scope);
+        const coordination = this.database.prepare(`
+          SELECT * FROM sessions WHERE task_id = ? AND kind = 'coordination'
+        `).get(taskId) as SQLiteRow | undefined;
+        const coordinatorAssignment = this.database.prepare(`
+          SELECT * FROM coordinator_assignments WHERE task_id = ?
+        `).get(taskId) as SQLiteRow | undefined;
+        if (!coordination || !coordinatorAssignment) {
+          throw new ProductStoreError("NOT_FOUND", "Task has no Coordination Session or Coordinator assignment");
+        }
+        const profileRow = this.database.prepare(`
+          SELECT * FROM agent_profiles WHERE id = ? AND enabled = 1
+        `).get(text(coordinatorAssignment, "profile_id")) as SQLiteRow | undefined;
+        if (!profileRow) {
+          throw new ProductStoreError("NOT_FOUND", "Coordinator Agent Profile is disabled or missing");
+        }
+        const existing = this.database.prepare(`
+          SELECT * FROM agent_runs
+          WHERE task_id = ? AND session_id = ? AND role = 'coordinator' AND team_run_id IS NULL
+            AND status IN ('prepared', 'running', 'waiting', 'completed')
+          ORDER BY created_at DESC, id DESC LIMIT 1
+        `).get(taskId, text(coordination, "id")) as SQLiteRow | undefined;
+        if (existing) {
+          const agentRunRecord = agentRun(existing);
+          const assignmentRow = this.database.prepare(`
+            SELECT * FROM agent_assignments
+            WHERE agent_run_id = ? AND assignment_kind = 'coordinator'
+            ORDER BY created_at DESC, id DESC LIMIT 1
+          `).get(agentRunRecord.id) as SQLiteRow | undefined;
+          if (!assignmentRow) {
+            throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Coordinator Agent Run has no assignment", {
+              agentRunId: agentRunRecord.id,
+            });
+          }
+          return {
+            value: { agentRun: agentRunRecord, assignment: agentAssignment(assignmentRow) },
+            event: {
+              kind: "coordinatorAgentRun.reused",
+              entityKind: "agentRun",
+              entityId: agentRunRecord.id,
+              taskId,
+              payload: { agentRun: agentRunRecord },
+            },
+          };
+        }
+        const profile = agentProfile(profileRow);
+        const agentRunRecord: AgentRunRecord = {
+          id: `agent-run-${randomUUID()}`,
+          taskId,
+          sessionId: text(coordination, "id"),
+          profileId: profile.id,
+          profileSnapshot: profile,
+          role: "coordinator",
+          status: "prepared",
+          revision: 1,
+        };
+        this.database.prepare(`
+          INSERT INTO agent_runs(
+            id, task_id, team_run_id, session_id, profile_id,
+            profile_snapshot_json, role, model_provider, model_id,
+            status, revision, created_at, updated_at, completed_at
+          ) VALUES (?, ?, NULL, ?, ?, ?, 'coordinator', NULL, NULL, 'prepared', 1, ?, ?, NULL)
+        `).run(
+          agentRunRecord.id,
+          taskId,
+          agentRunRecord.sessionId,
+          profile.id,
+          canonicalJSON(profile),
+          now,
+          now,
+        );
+        const assignment: AgentAssignmentRecord = {
+          id: `agent-assignment-${randomUUID()}`,
+          taskId,
+          agentRunId: agentRunRecord.id,
+          profileId: profile.id,
+          assignmentKind: "coordinator",
+          taskPacket: { title: taskRecord.title, goal: taskRecord.goal },
+          revision: 1,
+        };
+        this.database.prepare(`
+          INSERT INTO agent_assignments(
+            id, task_id, team_run_id, agent_run_id, profile_id,
+            assignment_kind, task_packet_json, revision, created_at, updated_at
+          ) VALUES (?, ?, NULL, ?, ?, 'coordinator', ?, 1, ?, ?)
+        `).run(
+          assignment.id,
+          taskId,
+          agentRunRecord.id,
+          profile.id,
+          canonicalJSON(assignment.taskPacket),
+          now,
+          now,
+        );
+        this.database.prepare(`
+          UPDATE tasks SET state = 'active', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND state IN ('draft', 'waiting')
+        `).run(now, taskId);
+        return {
+          value: { agentRun: agentRunRecord, assignment },
+          event: {
+            kind: "coordinatorAgentRun.created",
+            entityKind: "agentRun",
+            entityId: agentRunRecord.id,
+            taskId,
+            payload: { agentRun: agentRunRecord, assignment },
           },
         };
       },
@@ -3399,7 +4181,23 @@ export class ProductStore {
         }
 
         const teamRunId = `team-run-${randomUUID()}`;
-        const coordinatorAgentRunId = `agent-run-${randomUUID()}`;
+        const reusableCoordinatorRow = this.database.prepare(`
+          SELECT * FROM agent_runs
+          WHERE task_id = ? AND session_id = ? AND role = 'coordinator' AND team_run_id IS NULL
+          ORDER BY created_at DESC, id DESC LIMIT 1
+        `).get(taskId, text(coordination, "id")) as SQLiteRow | undefined;
+        if (reusableCoordinatorRow && ["running", "waiting"].includes(text(reusableCoordinatorRow, "status"))) {
+          throw new ProductStoreError(
+            "REVISION_CONFLICT",
+            "Coordinator Agent Run is still active; D Code did not start a Team beside the same Coordination Runtime",
+            { agentRunId: text(reusableCoordinatorRow, "id") },
+          );
+        }
+        const reusableCoordinator = reusableCoordinatorRow
+          && ["prepared", "completed"].includes(text(reusableCoordinatorRow, "status"))
+          ? agentRun(reusableCoordinatorRow)
+          : undefined;
+        const coordinatorAgentRunId = reusableCoordinator?.id ?? `agent-run-${randomUUID()}`;
         const teamRun: TeamRunRecord = {
           id: teamRunId,
           taskId,
@@ -3413,10 +4211,9 @@ export class ProductStore {
             created_at, updated_at, completed_at
           ) VALUES (?, ?, ?, 'active', 1, ?, ?, NULL)
         `).run(teamRunId, taskId, coordinatorAgentRunId, now, now);
-        const coordinatorAgentRun: AgentRunRecord = {
+        const coordinatorAgentRun: AgentRunRecord = reusableCoordinator ?? {
           id: coordinatorAgentRunId,
           taskId,
-          teamRunId,
           sessionId: text(coordination, "id"),
           profileId: coordinatorProfile.id,
           profileSnapshot: coordinatorProfile,
@@ -3431,17 +4228,19 @@ export class ProductStore {
             status, revision, created_at, updated_at, completed_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'prepared', 1, ?, ?, NULL)
         `);
-        insertAgentRun.run(
-          coordinatorAgentRun.id,
-          taskId,
-          teamRunId,
-          coordinatorAgentRun.sessionId,
-          coordinatorProfile.id,
-          canonicalJSON(coordinatorProfile),
-          coordinatorProfile.role,
-          now,
-          now,
-        );
+        if (!reusableCoordinator) {
+          insertAgentRun.run(
+            coordinatorAgentRun.id,
+            taskId,
+            null,
+            coordinatorAgentRun.sessionId,
+            coordinatorProfile.id,
+            canonicalJSON(coordinatorProfile),
+            coordinatorProfile.role,
+            now,
+            now,
+          );
+        }
         const assignments: AgentAssignmentRecord[] = [];
         const insertAssignment = this.database.prepare(`
           INSERT INTO agent_assignments(
@@ -3618,8 +4417,11 @@ export class ProductStore {
           WHERE id = ? AND revision = ?
         `).run(updated.revision, now, teamRunId, previous.revision);
         const agentRuns = (this.database.prepare(`
-          SELECT * FROM agent_runs WHERE team_run_id = ? ORDER BY created_at, id
-        `).all(teamRunId) as SQLiteRow[]).map(agentRun);
+          SELECT * FROM agent_runs
+          WHERE team_run_id = ?
+            OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+          ORDER BY created_at, id
+        `).all(teamRunId, teamRunId) as SQLiteRow[]).map(agentRun);
         return {
           value: { teamRun: updated, agentRuns },
           event: {
@@ -4046,19 +4848,26 @@ export class ProductStore {
         this.database.prepare(`
           UPDATE agent_runs
           SET status = ?, revision = revision + 1, completed_at = ?, updated_at = ?
-          WHERE team_run_id = ? AND status IN ('prepared', 'running', 'waiting')
-        `).run(input.status, now, now, teamRunId);
+          WHERE (team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
+            AND status IN ('prepared', 'running', 'waiting')
+        `).run(input.status, now, now, teamRunId, teamRunId);
         this.database.prepare(`
           UPDATE session_runs
           SET status = ?, revision = revision + 1, completed_at = ?, updated_at = ?
-          WHERE agent_run_id IN (SELECT id FROM agent_runs WHERE team_run_id = ?)
+          WHERE agent_run_id IN (
+            SELECT id FROM agent_runs
+            WHERE team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+          )
             AND status IN ('prepared', 'running', 'waiting')
-        `).run(input.status, now, now, teamRunId);
+        `).run(input.status, now, now, teamRunId, teamRunId);
         this.database.prepare(`
           UPDATE sessions SET state = 'failed', revision = revision + 1, updated_at = ?
-          WHERE id IN (SELECT session_id FROM agent_runs WHERE team_run_id = ?)
+          WHERE id IN (
+            SELECT session_id FROM agent_runs
+            WHERE team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+          )
             AND state != 'archived'
-        `).run(now, teamRunId);
+        `).run(now, teamRunId, teamRunId);
         markPreparingManagedWorkerWorktreesUnknown(
           this.database,
           now,
@@ -4067,9 +4876,12 @@ export class ProductStore {
         );
         this.database.prepare(`
           UPDATE operation_attempts SET status = 'unknown', updated_at = ?
-          WHERE agent_run_id IN (SELECT id FROM agent_runs WHERE team_run_id = ?)
+          WHERE agent_run_id IN (
+            SELECT id FROM agent_runs
+            WHERE team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?)
+          )
             AND status = 'prepared'
-        `).run(now, teamRunId);
+        `).run(now, teamRunId, teamRunId);
         this.database.prepare(`
           UPDATE agent_requests
           SET status = 'cancelled', answer_json = ?, revision = revision + 1, updated_at = ?
@@ -4668,9 +5480,10 @@ export class ProductStore {
             r.status AS session_run_status
           FROM agent_runs g
           JOIN session_runs r ON r.agent_run_id = g.id
-          WHERE g.id = ? AND g.task_id = ? AND g.team_run_id = ?
+          WHERE g.id = ? AND g.task_id = ?
+            AND (g.team_run_id = ? OR g.id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
             AND r.id = ? AND r.runtime_id = ?
-        `).get(agentRunId, taskId, teamRunId, sessionRunId, runtimeId) as SQLiteRow | undefined;
+        `).get(agentRunId, taskId, teamRunId, teamRunId, sessionRunId, runtimeId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Agent Run stop identity does not exist");
         if (integer(row, "agent_revision") !== expectedAgentRunRevision) {
           throw new ProductStoreError("REVISION_CONFLICT", "Agent Run changed before stop", {
@@ -4938,7 +5751,13 @@ export class ProductStore {
     try {
       const attempt = this.database.prepare(`
         SELECT a.status, a.task_id, r.agent_run_id, r.session_id, r.user_entry_id,
-          g.team_run_id, g.role AS agent_role
+          COALESCE(
+            g.team_run_id,
+            (SELECT c.id FROM team_runs c
+              WHERE c.coordinator_agent_run_id = g.id AND c.status = 'active'
+              ORDER BY c.created_at DESC, c.id DESC LIMIT 1)
+          ) AS team_run_id,
+          g.role AS agent_role
         FROM operation_attempts a
         JOIN session_runs r ON r.id = a.session_run_id
         LEFT JOIN agent_runs g ON g.id = r.agent_run_id

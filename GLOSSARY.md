@@ -28,13 +28,17 @@ _Avoid_: Pi Session Cache、JSONL 镜像、会话搜索索引
 由 D Code Product Store 持久化、附着于 Task 的对话与上下文对象，拥有稳定身份、提交原文、生效输入、消息、路径、运行记录和压缩投影。它可以由 Pi Session 导入，但导入后独立演化，不以 Pi JSONL 作为继续使用的权威。
 _Avoid_: Pi Session、一次 Agent Run、任务本身
 
+**D Code Session Presentation（D Code 会话呈现）**：
+Host 按确定的 D Code Session ID 返回的只读呈现投影，包含该会话自身、可选的 Runtime Adapter binding（运行时适配绑定）、活动 Runtime 状态以及可安全读取的 Adapter 会话快照。它不通过标题、cwd 或全局 active Session 猜测映射，也不会为查看行为抢占、暂停或迁移已有 Runtime。
+_Avoid_: `session.open` 抢占、Pi Session ID 猜测、全局当前会话、第二份会话数据库
+
 **Task Session（任务会话）**：
 附着于一个 D Code Task、用于讨论、协调或执行该任务的 D Code Session。一个任务可以没有会话，也可以拥有一个或多个任务会话；会话不拥有任务，关闭、归档或切换模型都不会结束任务。
 _Avoid_: Task、一个任务一条会话、无任务归属的耐久会话
 
 **Coordination Session（协调会话）**：
-一个 Task 当前用于用户与 Coordinator Agent 持续对齐、派发、收集问题和综合结果的默认 Task Session。它在界面中可以作为主任务对话并包含子 Agent 会话入口，但不拥有 Task、Agent Team 或其他 Session；更换协调会话也不会改写任务身份。
-_Avoid_: Task Root、唯一任务会话、Agent Team 所有者、历史 Main Agent Session
+一个 Task 当前用于用户与 Coordinator Agent 持续对齐、派发、收集问题和综合结果的默认 Task Session。它在界面中呈现为任务对话本身：点击 Task 主行即进入，导航不为它建立独立的子会话行，协调者就活在这个对话里。它不拥有 Task、Agent Team 或其他 Session；更换协调会话也不会改写任务身份。
+_Avoid_: Task Root、唯一任务会话、独立协调者子会话行、Agent Team 所有者、历史 Main Agent Session
 
 **Child Agent Session（子智能体会话）**：
 某个 Agent Run 为独立 Agent 工作创建的 D Code Session。它附着于所属 Task 和 Agent Run，拥有自己的消息与上下文；默认从对应任务与运行进入，不作为普通会话重复平铺到顶层列表。
@@ -47,6 +51,10 @@ _Avoid_: D Code Session、D Code 当前会话权威
 **Pi Session Import（Pi 会话导入）**：
 用户通过显式“导入为任务”动作，把选定 Pi Session 的可识别历史、来源和结构转换为一个新的 D Code Task，并在其中创建首个 D Code Session。用户选择 Project Scope 或 User Scope；导入保留来源证明但不修改源 JSONL，转换后的 Task / Session 使用 D Code 身份独立演化。
 _Avoid_: 静默发现即导入、只创建孤立 Session、双向同步、打开即复用、兼容导出
+
+**Imported History Projection（导入历史投影）**：
+导入 Pi Session 后，D Code 从 Product Store 当前 Session Path 上的已脱敏历史派生出的有界上下文证据。它明确标注为 lineage unknown（来源链未知）的外部历史，不是当前指令、D Code Raw Input 或新 Session Run 的模型回复；只以 digest、数量、截断和脱敏事实写入 Receipt，不把正文倒填进 Raw / Effective Input，也不重新读取或写回源 Pi JSONL。
+_Avoid_: Pi JSONL 续写、导入用户原话倒填 Raw Input、无界全文注入、隐藏思维链
 
 **Main Agent Session（主智能体会话）**（历史目标态术语）：
 ADR 0013 曾用来表示 D Team 协作根的 Pi Session。当前产品协作根是 Task，普通任务会话或协调会话都不拥有任务和团队。
@@ -267,7 +275,7 @@ D Code 在用户明确打开文件、Artifact、Diff 或其他需要连续检查
 _Avoid_: Task HUD、常驻任务概览、第二主工作区、所有状态的统一右栏
 
 **Task HUD（任务浮层）**：
-当前 Task 存在时持续显示的轻量任务概览浮层，展示进度、Agent Team、等待事项和交付物，并允许进入对应子会话或具体对象。正常宽度下它位于 Main Workspace 阅读画布右侧的留白区，不占结构栏位、不改变中央阅读宽度，也不遮挡正文；只有宽度不足时才覆盖阅读区域并提供收起 / 再打开入口。需要连续查看文件、Diff 或 Artifact 详情时转入 Information Inspector。
+当前 Task 存在时持续显示的轻量任务概览浮窗，展示进度、Agent Team、等待事项和交付物，并允许进入对应子会话或具体对象。它在任何宽度下都是与窗口边缘分离的独立浮窗，不进入普通文档流、不占结构栏位；正常宽度由 Main Workspace 为阅读画布与 Composer 预留左右安全宽度，使浮窗只落在安全区之外的留白上，不改变中央阅读宽度，也不遮挡正文。只有宽度不足时才允许覆盖阅读区域并提供收起 / 再打开入口。需要连续查看文件、Diff 或 Artifact 详情时转入 Information Inspector。
 _Avoid_: 可随意关闭的宽屏面板、全高右侧栏、任务数据库、Information Inspector、固定挤压中央画布
 
 **Foundation Console（基础设施控制面）**：
@@ -349,7 +357,7 @@ Task 按需组织一个或多个 Agent Run 的内置执行能力，可以串行�
 _Avoid_: dteam、隐藏思维链面板、独立任务数据库、模型列表
 
 **Coordinator Agent（协调智能体）**：
-在一个 Task 中承担面向用户的持续协调角色的 Agent：理解目标、维护任务边界、决定是否派发 Agent Run、合并重复问题、处理成员请求与冲突，并综合报告和证据供用户验收。它通常在 Coordination Session 中工作，但不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
+在一个 Task 中承担面向用户的持续协调角色的 Agent：理解目标、维护任务边界、决定是否派发 Agent Run、合并重复问题、处理成员请求与冲突，并综合报告和证据供用户验收。它就是活在任务对话（Coordination Session）中的 LLM，直接面对用户，不需要独立的会话入口或子窗口；它不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
 _Avoid_: Task Owner、永久 Manager 进程、所有成员的共享上下文、自动验收者
 
 **Coordinator Assignment（协调者指派）**：
@@ -397,16 +405,24 @@ _Avoid_: 当前产品术语、Agent Profile、Task
 _Avoid_: Permission Grant、云端插件市场、Team Member
 
 **Model Catalog（模型目录）**：
-D Code 对已接入供应商、可用模型、能力元数据与缓存状态的原生产品权威。Pi 或其他 Runtime 可以提供导入和发现结果，但不能成为目录身份、启用范围或界面语义的长期权威。
-_Avoid_: Pi Model Catalog、供应商官网镜像、静态模型白名单
+D Code Product Store 对已接入 Provider、可用 Model、非敏感能力元数据和未来 Runtime 选择的原生产品权威。Pi 或其他 Runtime 只可以在首次迁入 / 受控发现时提供安全目录事实；它们不再是 D Code 可写设置、目录身份或界面语义的长期权威。
+_Avoid_: Pi Model Catalog、Pi `models.json` 权威、供应商官网镜像、静态模型白名单
+
+**Credential Reference（凭据安全引用）**：
+Product Store 对某个 Provider 已配置凭据的安全、不可逆引用，记录 Keychain、环境或外部 Runtime Auth Bridge（认证桥）的类型、定位符、配置状态和可选来源摘要，但永不保存 API Key、OAuth Token、认证文件正文或交互输入值。引用缺失或失效时 D Code 显示需要认证，不能用空成功或 Pi 配置副本伪装可运行。
+_Avoid_: API Key 文本、`auth.json` 镜像、IPC 密码框、Provider 配置正文
+
+**Runtime Model Selection（未来运行模型选择）**：
+D Code Product Store 为未来 Coordinator / Agent Runtime 保存的 Provider / Model 对。它在 Runtime 启动时与 D Code Model Catalog、Credential Reference 一起校验，再显式应用到 Runtime Adapter；修改它不会回写 Pi `settings.json`、改写历史 Run 或热改已经运行的模型。
+_Avoid_: Pi 默认模型、当前 Session 临时切换、Agent Profile 身份、凭据设置
 
 **Enabled Model（已启用模型）**：
 由 D Code 模型资源设置允许进入 Composer、Agent Profile 与运行路由选择范围的模型。“未启用”只表示不进入新选择范围，不代表供应商认证失效、模型不存在或历史运行事实被撤销。
 _Avoid_: 禁用供应商、模型权限、认证状态
 
 **Custom Model Provider（自定义模型供应商）**：
-通过 D Code 原生供应商合同定义的模型供应商和模型集合。D Code 拥有目录、设置和认证状态语义，但不得在普通界面、会话、日志或模型上下文中展示凭据正文；Pi 等 Runtime 只消费运行所需的安全凭据引用。
-_Avoid_: Pi `models.json` 权威、任意 API 代理、凭据正文
+通过 D Code 原生 Provider 合同定义的模型供应商和模型集合。D Code 拥有目录、未来运行选择和认证状态语义，但不得在普通界面、会话、日志、模型上下文或 IPC 中展示 / 接收凭据正文；Pi 等 Runtime 只消费运行所需的安全凭据引用。
+_Avoid_: Pi `models.json` 可写入口、任意 API 代理、凭据正文、IPC API Key
 
 **D Code Capability Module（D Code 自有能力模块）**：
 D Code 为一个明确用户结果拥有的统一实现单位，可以贡献结构化工具、Host（宿主）服务、状态事件、存储与原生呈现。Capability Module 在架构上可以独立装配，但产品上仍必须归入 Basic Capability、Extension Capability、Capability Provider 或普通 Skill / 工具；只有真实注册进 Agent Loop 的结构化工具才可由模型调用。
