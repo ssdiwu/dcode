@@ -18,6 +18,8 @@
 
 [查看“0.0.29 任务工作台与 Task HUD”原型](dcode-task-hud-workbench-prototype.html)（新草稿，尚未人工验证；只表达 [PRD 0027](../../40-版本实施方案/0027-0.0.29-任务工作台与协调者协作体验产品需求.md) 已冻结的 UI/UX 合同，模拟数据不构成 `0.0.28` 基础设施或 SwiftUI 实现证据）
 
+[查看“任务-会话关系与主页面三区 A/B”原型](dcode-home-three-region-prototype.html)（[验证结论与边界](dcode-home-three-region-prototype-验证.md)；顶栏切换信息区“浮动 / 常驻”两种形态，用于 `0.0.30` 布局拍板；原样收存的浮动形态见 [dcode-task-session-relationship-prototype.html](dcode-task-session-relationship-prototype.html)，尚未人工确认）
+
 [查看 `0.0.2` 搜索索引技术验证](0.0.2-搜索索引技术验证.md)
 
 该原型使用模拟数据表达已经确认的目标交互，供后续设计、版本切割和 AI 实现参考。它不是当前 Swift App 的运行截图，也不能单独证明任何 Host、Pi 扩展、搜索索引、文件树或 Git 能力已经接通；版本状态与验收记录统一由[版本实施方案](../../40-版本实施方案/README.md)路由，当前实现仍以对应源码、测试和[架构文档](../../10-架构与运行/README.md)为证。
