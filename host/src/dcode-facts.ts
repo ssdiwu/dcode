@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { readFile, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -21,6 +21,22 @@ export interface DCodeFactsContext {
   cwd: () => string | undefined;
   paths: () => DCodeFactsPathSummary[];
 }
+
+type IndependentDocumentStatus = "available" | "missing" | "notRegularFile" | "unavailable";
+
+interface IndependentDocumentFact {
+  fileName: "PRODUCT.md" | "DESIGN.md";
+  status: IndependentDocumentStatus;
+}
+
+interface DistributedSourceInventory {
+  paths: string[];
+  isTruncated: boolean;
+  docDirectoryUnavailable: boolean;
+}
+
+const maximumDistributedSourceDocuments = 40;
+const maximumDocumentationDepth = 6;
 
 export const DCODE_FACTS_TOOL_NAME = "dcode_facts";
 
@@ -59,9 +75,9 @@ export function createDCodeFactsExtension(
       name: DCODE_FACTS_TOOL_NAME,
       label: "D Code 事实",
       description:
-        "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目及其项目目录。全部只读。",
+        "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目、项目目录、根目录 PRODUCT.md / DESIGN.md 的独立沉淀状态，以及根 AGENTS.md / README.md / doc/**/*.md 的分散依据路径。全部只读。",
       promptSnippet:
-        "dcode_facts: 读取 D Code 宿主独有的会话变更归因、验证证据、会话谱系与项目目录（只读）。",
+        "dcode_facts: 读取 D Code 宿主独有的会话变更归因、验证证据、会话谱系与项目目录；project 同时如实说明独立产品原则文档状态及待阅读的分散依据路径（只读）。",
       parameters: Type.Object({
         kind: Type.Union([
           Type.Literal("changes"),
@@ -240,5 +256,133 @@ async function projectFactsSummary(context: DCodeFactsContext, factsDir: string)
     const directories = projectDirectories(project).map((folder) => String(folder.path));
     return `- ${String(project.name ?? "(未命名项目)")}：${directories.join("、")}`;
   });
-  return `当前工作目录归属的 D Code 项目与项目目录：\n${sections.join("\n")}`;
+  const independentDocuments = await independentDocumentFacts(normalizedCwd);
+  const distributedSources = await distributedProductSourceInventory(normalizedCwd);
+  return [
+    `当前工作目录归属的 D Code 项目与项目目录：\n${sections.join("\n")}`,
+    independentDocumentSummary(independentDocuments),
+    distributedProductSourceSummary(distributedSources),
+  ].join("\n\n");
+}
+
+/**
+ * 只检查项目根目录的约定文件，不读取文件内容、也不把文件存在推断成权威。
+ * `lstat` 使符号链接和目录不能伪装成项目自己的独立沉淀。
+ */
+async function independentDocumentFacts(projectDirectory: string): Promise<IndependentDocumentFact[]> {
+  return await Promise.all(
+    (["PRODUCT.md", "DESIGN.md"] as const).map(async (fileName) => ({
+      fileName,
+      status: await independentDocumentStatus(join(projectDirectory, fileName)),
+    })),
+  );
+}
+
+async function independentDocumentStatus(path: string): Promise<IndependentDocumentStatus> {
+  try {
+    return (await lstat(path)).isFile() ? "available" : "notRegularFile";
+  } catch (error) {
+    return isMissingPathError(error) ? "missing" : "unavailable";
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
+function independentDocumentSummary(documents: IndependentDocumentFact[]): string {
+  const lines = documents.map(({ fileName, status }) => {
+    switch (status) {
+      case "available":
+        return `- ${fileName}：已找到（仅代表文件存在，不代表其内容是当前权威）`;
+      case "missing":
+        return `- ${fileName}：未找到`;
+      case "notRegularFile":
+        return `- ${fileName}：不是项目根目录中的普通文件，不能作为独立文档`;
+      case "unavailable":
+        return `- ${fileName}：无法确认是否存在`;
+    }
+  });
+  if (documents.every((document) => document.status === "missing")) {
+    return [
+      "独立产品原则文档：",
+      ...lines,
+      "结论：产品原则尚未独立沉淀。README、PRD、原型等可能保有分散依据，须按项目自身声明分别判断；不得将 Agent 总结或新生成的 PRODUCT.md / DESIGN.md 伪称为项目权威。",
+    ].join("\n");
+  }
+  return [
+    "独立产品原则文档：",
+    ...lines,
+    "文件存在不等于内容完整、当前或权威；仍须以项目现有文档声明与实现证据核验。",
+  ].join("\n");
+}
+
+/**
+ * 为“尚未独立沉淀”的项目列出可人工核验的来源，而不是读取后替用户拼出一份
+ * 假权威。只接受固定的根入口与 doc/ 下的普通 Markdown 文件，忽略符号链接。
+ */
+async function distributedProductSourceInventory(projectDirectory: string): Promise<DistributedSourceInventory> {
+  const paths: string[] = [];
+  for (const fileName of ["AGENTS.md", "README.md"] as const) {
+    if (await independentDocumentStatus(join(projectDirectory, fileName)) === "available") {
+      paths.push(fileName);
+    }
+  }
+  const inventory: DistributedSourceInventory = {
+    paths,
+    isTruncated: false,
+    docDirectoryUnavailable: false,
+  };
+  await collectDocumentationPaths(join(projectDirectory, "doc"), "doc", 0, inventory);
+  return inventory;
+}
+
+async function collectDocumentationPaths(
+  directory: string,
+  relativeDirectory: string,
+  depth: number,
+  inventory: DistributedSourceInventory,
+): Promise<void> {
+  let entries: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>;
+  try {
+    entries = await readdir(directory, { encoding: "utf8", withFileTypes: true });
+  } catch (error) {
+    if (!isMissingPathError(error)) inventory.docDirectoryUnavailable = true;
+    return;
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (inventory.paths.length >= maximumDistributedSourceDocuments) {
+      inventory.isTruncated = true;
+      return;
+    }
+    const relativePath = `${relativeDirectory}/${entry.name}`;
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      inventory.paths.push(relativePath);
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+    if (depth >= maximumDocumentationDepth) {
+      inventory.isTruncated = true;
+      continue;
+    }
+    await collectDocumentationPaths(join(directory, entry.name), relativePath, depth + 1, inventory);
+    if (inventory.isTruncated) return;
+  }
+}
+
+function distributedProductSourceSummary(inventory: DistributedSourceInventory): string {
+  const lines = inventory.paths.length > 0
+    ? inventory.paths.map((path) => `- ${path}`)
+    : ["- 未找到可列出的根 AGENTS.md、根 README.md 或 doc/**/*.md"];
+  if (inventory.isTruncated) {
+    lines.push(`- …来源清单已在 ${maximumDistributedSourceDocuments} 项或目录深度 ${maximumDocumentationDepth} 处停止`);
+  }
+  if (inventory.docDirectoryUnavailable) {
+    lines.push("- doc/：无法完整枚举；未将其视为没有文档");
+  }
+  return [
+    `分散依据候选（仅列路径，未读取、未合并内容；${inventory.paths.length} 项）：`,
+    ...lines,
+    "这些路径是后续阅读入口，不组成新的产品原则文档，也不自行决定其权威性。",
+  ].join("\n");
 }

@@ -112,6 +112,13 @@ export type TaskWorkbenchInspectorTarget =
   | { kind: "report"; id: string }
   | { kind: "context"; id: string };
 
+export interface TaskWorkbenchWorkspaceContent {
+  kind: "artifact" | "report";
+  id: string;
+  sourceRevision?: number;
+  anchorLine?: number;
+}
+
 /**
  * A small, credential-free view preference that belongs to the D Code Product
  * Store rather than the App sandbox. It restores object identity only — never
@@ -122,6 +129,7 @@ export interface TaskWorkbenchViewStateRecord {
   selection: { taskId: string | null; sessionId: string | null };
   expandedHudSections: string[];
   inspectorTarget: TaskWorkbenchInspectorTarget | null;
+  workspaceContent: TaskWorkbenchWorkspaceContent | null;
   revision: number;
 }
 
@@ -129,6 +137,7 @@ export interface TaskWorkbenchViewStatePatch {
   selection?: { taskId: string | null; sessionId: string | null };
   expandedHudSections?: string[];
   inspectorTarget?: TaskWorkbenchInspectorTarget | null;
+  workspaceContent?: TaskWorkbenchWorkspaceContent | null;
 }
 
 export interface ComposerDraftRecord {
@@ -504,6 +513,8 @@ export interface AgentReportRecord {
   createdAt: string;
 }
 
+export type AgentRequestKind = "choice" | "task_acceptance";
+
 export interface AgentRequestRecord {
   id: string;
   taskId: string;
@@ -512,7 +523,7 @@ export interface AgentRequestRecord {
   sessionId: string;
   sessionRunId: string;
   runtimeId: string;
-  kind: "choice";
+  kind: AgentRequestKind;
   prompt: string;
   options: AgentRequestOption[];
   status: "open" | "answered" | "cancelled";
@@ -529,10 +540,18 @@ export interface AgentRequestOption {
   recommended: boolean;
 }
 
-export interface AgentRequestAnswer {
+export interface AgentRequestChoiceAnswer {
   kind: "choice";
   optionId: string;
 }
+
+export interface TaskAcceptanceAnswer {
+  kind: "task_acceptance";
+  outcome: "accepted" | "feedback";
+  feedback?: string;
+}
+
+export type AgentRequestAnswer = AgentRequestChoiceAnswer | TaskAcceptanceAnswer;
 
 export interface FindingRecord {
   id: string;
@@ -805,6 +824,7 @@ function parseStringArray(value: unknown, field: string): string[] {
 const TASK_WORKBENCH_HUD_SECTIONS = new Set(["progress", "team", "waiting", "deliverables"]);
 const DEFAULT_TASK_WORKBENCH_HUD_SECTIONS = [...TASK_WORKBENCH_HUD_SECTIONS].sort();
 const TASK_WORKBENCH_INSPECTOR_KINDS = new Set(["artifact", "evidence", "report", "context"]);
+const TASK_WORKBENCH_CONTENT_KINDS = new Set(["artifact", "report"]);
 
 function normalizedTaskWorkbenchInspectorTarget(value: unknown): TaskWorkbenchInspectorTarget | null {
   if (value === null || value === undefined) return null;
@@ -820,6 +840,38 @@ function normalizedTaskWorkbenchInspectorTarget(value: unknown): TaskWorkbenchIn
   return { kind, id } as TaskWorkbenchInspectorTarget;
 }
 
+function normalizedTaskWorkbenchWorkspaceContent(value: unknown): TaskWorkbenchWorkspaceContent | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench workspaceContent must be an object or null");
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(["kind", "id", "sourceRevision", "anchorLine"]);
+  if (
+    Object.keys(record).some((key) => !allowed.has(key))
+    || !TASK_WORKBENCH_CONTENT_KINDS.has(record.kind as string)
+  ) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench workspaceContent is invalid");
+  }
+  const kind = record.kind as TaskWorkbenchWorkspaceContent["kind"];
+  const id = requiredCredentialFreeString(record.id, "Task Workbench workspaceContent.id", 200);
+  const sourceRevision = record.sourceRevision === undefined
+    ? undefined
+    : requiredRevision(record.sourceRevision, "Task Workbench workspaceContent.sourceRevision");
+  const anchorLine = record.anchorLine === undefined
+    ? undefined
+    : requiredRevision(record.anchorLine, "Task Workbench workspaceContent.anchorLine");
+  if (kind !== "artifact" && sourceRevision !== undefined) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Only Artifact workspace content can carry sourceRevision");
+  }
+  return {
+    kind,
+    id,
+    ...(sourceRevision === undefined ? {} : { sourceRevision }),
+    ...(anchorLine === undefined ? {} : { anchorLine }),
+  };
+}
+
 function normalizedTaskWorkbenchViewState(
   value: unknown,
   revision: number,
@@ -828,7 +880,7 @@ function normalizedTaskWorkbenchViewState(
     throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["version", "selection", "expandedHudSections", "inspectorTarget"]);
+  const allowed = new Set(["version", "selection", "expandedHudSections", "inspectorTarget", "workspaceContent"]);
   if (Object.keys(record).some((key) => !allowed.has(key)) || record.version !== 1) {
     throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State has an unsupported shape");
   }
@@ -863,6 +915,7 @@ function normalizedTaskWorkbenchViewState(
     selection: { taskId, sessionId },
     expandedHudSections,
     inspectorTarget: normalizedTaskWorkbenchInspectorTarget(record.inspectorTarget),
+    workspaceContent: normalizedTaskWorkbenchWorkspaceContent(record.workspaceContent),
     revision,
   };
 }
@@ -872,7 +925,7 @@ function normalizedTaskWorkbenchViewStatePatch(value: unknown): TaskWorkbenchVie
     throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["selection", "expandedHudSections", "inspectorTarget"]);
+  const allowed = new Set(["selection", "expandedHudSections", "inspectorTarget", "workspaceContent"]);
   if (Object.keys(record).length === 0 || Object.keys(record).some((key) => !allowed.has(key))) {
     throw new ProductStoreError("INVALID_ARGUMENT", "Task Workbench View State patch has an unsupported shape");
   }
@@ -902,11 +955,15 @@ function normalizedTaskWorkbenchViewStatePatch(value: unknown): TaskWorkbenchVie
       selection: { taskId: null, sessionId: null },
       expandedHudSections: record.expandedHudSections,
       inspectorTarget: null,
+      workspaceContent: null,
     }, 0);
     patch.expandedHudSections = state.expandedHudSections;
   }
   if ("inspectorTarget" in record) {
     patch.inspectorTarget = normalizedTaskWorkbenchInspectorTarget(record.inspectorTarget);
+  }
+  if ("workspaceContent" in record) {
+    patch.workspaceContent = normalizedTaskWorkbenchWorkspaceContent(record.workspaceContent);
   }
   return patch;
 }
@@ -1387,7 +1444,7 @@ function event(row: SQLiteRow): StoreEventRecord {
     sequence: integer(row, "sequence"),
     eventId: text(row, "event_id"),
     storeRevision: integer(row, "store_revision"),
-    kind: text(row, "kind") as "choice",
+    kind: text(row, "kind") as AgentRequestKind,
     entityKind: text(row, "entity_kind"),
     entityId: text(row, "entity_id"),
     ...(typeof taskId === "string" ? { taskId } : {}),
@@ -1904,7 +1961,12 @@ export class ProductStore {
       WHERE status IN ('prepared', 'active', 'waiting')
     `).get() as { count?: unknown } | undefined;
     const openRequests = this.database.prepare(`
-      SELECT COUNT(*) AS count FROM agent_requests WHERE status = 'open'
+      SELECT COUNT(*) AS count FROM agent_requests
+      WHERE status = 'open' AND kind <> 'task_acceptance'
+    `).get() as { count?: unknown } | undefined;
+    const openAcceptanceRequests = this.database.prepare(`
+      SELECT COUNT(*) AS count FROM agent_requests
+      WHERE status = 'open' AND kind = 'task_acceptance'
     `).get() as { count?: unknown } | undefined;
     if (
       (pending?.count ?? 0) === 0
@@ -1945,7 +2007,7 @@ export class ProductStore {
       this.database.prepare(`
         UPDATE agent_requests
         SET status = 'cancelled', answer_json = ?, revision = revision + 1, updated_at = ?
-        WHERE status = 'open'
+        WHERE status = 'open' AND kind <> 'task_acceptance'
       `).run(canonicalJSON({ reason: "runtime_interrupted" }), now);
       const storeRevision = this.metaInteger("store_revision") + 1;
       this.database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")
@@ -1965,6 +2027,9 @@ export class ProductStore {
           interruptedAgentRuns: typeof agentRunning?.count === "number" ? agentRunning.count : 0,
           interruptedTeamRuns: typeof teamRunning?.count === "number" ? teamRunning.count : 0,
           cancelledAgentRequests: typeof openRequests?.count === "number" ? openRequests.count : 0,
+          preservedTaskAcceptanceRequests: typeof openAcceptanceRequests?.count === "number"
+            ? openAcceptanceRequests.count
+            : 0,
           unknownManagedWorktrees,
         }),
         now,
@@ -2074,6 +2139,7 @@ export class ProductStore {
         selection: { taskId: null, sessionId: null },
         expandedHudSections: DEFAULT_TASK_WORKBENCH_HUD_SECTIONS,
         inspectorTarget: null,
+        workspaceContent: null,
         revision: 0,
       };
     }
@@ -2127,6 +2193,7 @@ export class ProductStore {
           selection: patch.selection ?? current.selection,
           expandedHudSections: patch.expandedHudSections ?? current.expandedHudSections,
           inspectorTarget: patch.inspectorTarget === undefined ? current.inspectorTarget : patch.inspectorTarget,
+          workspaceContent: patch.workspaceContent === undefined ? current.workspaceContent : patch.workspaceContent,
           revision: current.revision,
         };
         this.validateTaskWorkbenchViewStateReferences(state);
@@ -2147,6 +2214,7 @@ export class ProductStore {
           selection: state.selection,
           expandedHudSections: state.expandedHudSections,
           inspectorTarget: state.inspectorTarget,
+          workspaceContent: state.workspaceContent,
         }), revision, now, now);
         const taskWorkbenchViewState: TaskWorkbenchViewStateRecord = { ...state, revision };
         return {
@@ -2752,10 +2820,10 @@ export class ProductStore {
   private validateTaskWorkbenchViewStateReferences(state: TaskWorkbenchViewStateRecord): void {
     const { taskId, sessionId } = state.selection;
     if (taskId === null || sessionId === null) {
-      if (state.inspectorTarget !== null) {
+      if (state.inspectorTarget !== null || state.workspaceContent !== null) {
         throw new ProductStoreError(
           "INVALID_ARGUMENT",
-          "Task Workbench inspectorTarget requires an active Task selection",
+          "Task Workbench object selection requires an active Task selection",
         );
       }
       return;
@@ -2772,25 +2840,28 @@ export class ProductStore {
         { taskId, sessionId },
       );
     }
+    const validateTarget = (target: { kind: string; id: string }, field: string): void => {
+      const table = target.kind === "artifact"
+        ? "artifacts"
+        : target.kind === "evidence"
+          ? "evidence_records"
+          : target.kind === "report"
+            ? "agent_reports"
+            : "task_context_sources";
+      const targetRow = this.database.prepare(`
+        SELECT id FROM ${table} WHERE id = ? AND task_id = ?
+      `).get(target.id, taskId) as SQLiteRow | undefined;
+      if (!targetRow) {
+        throw new ProductStoreError(
+          "INVALID_ARGUMENT",
+          `Task Workbench ${field} does not belong to its selected Task`,
+          { taskId, [field]: target },
+        );
+      }
+    };
     const target = state.inspectorTarget;
-    if (!target) return;
-    const table = target.kind === "artifact"
-      ? "artifacts"
-      : target.kind === "evidence"
-        ? "evidence_records"
-        : target.kind === "report"
-          ? "agent_reports"
-          : "task_context_sources";
-    const targetRow = this.database.prepare(`
-      SELECT id FROM ${table} WHERE id = ? AND task_id = ?
-    `).get(target.id, taskId) as SQLiteRow | undefined;
-    if (!targetRow) {
-      throw new ProductStoreError(
-        "INVALID_ARGUMENT",
-        "Task Workbench inspectorTarget does not belong to its selected Task",
-        { taskId, inspectorTarget: target },
-      );
-    }
+    if (target) validateTarget(target, "inspectorTarget");
+    if (state.workspaceContent) validateTarget(state.workspaceContent, "workspaceContent");
   }
 
   private taskForScope(taskId: string, scope: TaskScope): TaskRecord {
@@ -5326,7 +5397,7 @@ export class ProductStore {
     sessionId: string;
     sessionRunId: string;
     runtimeId: string;
-    kind: "choice";
+    kind: AgentRequestKind;
     prompt: string;
     options: AgentRequestOption[];
   }): Promise<{ storeRevision: number; agentRequest: AgentRequestRecord }> {
@@ -5335,36 +5406,46 @@ export class ProductStore {
     const sessionId = requiredString(input.sessionId, "sessionId", 200);
     const sessionRunId = requiredString(input.sessionRunId, "sessionRunId", 200);
     const runtimeId = requiredString(input.runtimeId, "runtimeId", 200);
-    if (input.kind !== "choice") {
-      throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request kind must be choice");
+    if (input.kind !== "choice" && input.kind !== "task_acceptance") {
+      throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request kind is invalid");
     }
     const kind = input.kind;
     const prompt = requiredCredentialFreeString(input.prompt, "prompt", 20_000).trim();
-    if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 5) {
-      throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request requires 2 to 5 choices");
-    }
-    const optionIds = new Set<string>();
-    let recommendedCount = 0;
-    const options = input.options.map((option, index): AgentRequestOption => {
-      if (typeof option !== "object" || option === null || Array.isArray(option)) {
-        throw new ProductStoreError("INVALID_ARGUMENT", `Agent Request option ${index} is invalid`);
-      }
-      const id = requiredString(option.id, `options[${index}].id`, 100).trim();
-      const label = requiredCredentialFreeString(option.label, `options[${index}].label`, 500).trim();
-      const description = option.description === undefined
-        ? undefined
-        : requiredCredentialFreeString(option.description, `options[${index}].description`, 2_000).trim();
-      if (typeof option.recommended !== "boolean") {
-        throw new ProductStoreError("INVALID_ARGUMENT", `options[${index}].recommended must be boolean`);
-      }
-      if (optionIds.has(id)) throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request option IDs must be unique");
-      optionIds.add(id);
-      if (option.recommended) recommendedCount += 1;
-      return { id, label, ...(description ? { description } : {}), recommended: option.recommended };
-    });
-    if (recommendedCount > 1) {
-      throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request has more than one recommended option");
-    }
+    const options = kind === "choice"
+      ? (() => {
+        if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 5) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request requires 2 to 5 choices");
+        }
+        const optionIds = new Set<string>();
+        let recommendedCount = 0;
+        const normalized = input.options.map((option, index): AgentRequestOption => {
+          if (typeof option !== "object" || option === null || Array.isArray(option)) {
+            throw new ProductStoreError("INVALID_ARGUMENT", `Agent Request option ${index} is invalid`);
+          }
+          const id = requiredString(option.id, `options[${index}].id`, 100).trim();
+          const label = requiredCredentialFreeString(option.label, `options[${index}].label`, 500).trim();
+          const description = option.description === undefined
+            ? undefined
+            : requiredCredentialFreeString(option.description, `options[${index}].description`, 2_000).trim();
+          if (typeof option.recommended !== "boolean") {
+            throw new ProductStoreError("INVALID_ARGUMENT", `options[${index}].recommended must be boolean`);
+          }
+          if (optionIds.has(id)) throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request option IDs must be unique");
+          optionIds.add(id);
+          if (option.recommended) recommendedCount += 1;
+          return { id, label, ...(description ? { description } : {}), recommended: option.recommended };
+        });
+        if (recommendedCount > 1) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request has more than one recommended option");
+        }
+        return normalized;
+      })()
+      : (() => {
+        if (!Array.isArray(input.options) || input.options.length !== 0) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Task acceptance must not contain choice options");
+        }
+        return [] as AgentRequestOption[];
+      })();
     return await this.mutate(
       "agentRequest.create",
       input.requestId,
@@ -5372,13 +5453,15 @@ export class ProductStore {
       { taskId, agentRunId, sessionId, sessionRunId, runtimeId, kind, prompt, options },
       (_storeRevision, now) => {
         const run = this.database.prepare(`
-          SELECT g.id, g.team_run_id,
+          SELECT g.id, g.team_run_id, g.role AS agent_role, s.kind AS session_kind, t.state AS task_state,
             (SELECT id FROM team_runs
               WHERE coordinator_agent_run_id = g.id AND status IN ('prepared', 'active', 'waiting')
               ORDER BY created_at DESC, id DESC LIMIT 1) AS coordinator_team_run_id,
             g.status AS agent_status, r.status AS session_status
           FROM agent_runs g
           JOIN session_runs r ON r.agent_run_id = g.id
+          JOIN sessions s ON s.id = g.session_id
+          JOIN tasks t ON t.id = g.task_id
           WHERE g.id = ? AND g.task_id = ? AND g.session_id = ?
             AND r.id = ? AND r.runtime_id = ?
         `).get(agentRunId, taskId, sessionId, sessionRunId, runtimeId) as SQLiteRow | undefined;
@@ -5390,6 +5473,26 @@ export class ProductStore {
             agentStatus,
             sessionStatus,
           });
+        }
+        if (kind === "task_acceptance") {
+          if (text(run, "agent_role") !== "coordinator" || text(run, "session_kind") !== "coordination") {
+            throw new ProductStoreError(
+              "REVISION_CONFLICT",
+              "Only the Task Coordinator may request Task Acceptance from its Coordination Session",
+            );
+          }
+          if (text(run, "task_state") !== "active") {
+            throw new ProductStoreError("REVISION_CONFLICT", "Only an active Task may request acceptance");
+          }
+          const activeTeam = this.database.prepare(`
+            SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
+          `).get(taskId);
+          if (activeTeam) {
+            throw new ProductStoreError(
+              "REVISION_CONFLICT",
+              "Task Acceptance can only be requested after the active Agent Team has concluded",
+            );
+          }
         }
         const existingOpen = this.database.prepare(`
           SELECT id FROM agent_requests WHERE agent_run_id = ? AND status = 'open'
@@ -5548,6 +5651,9 @@ export class ProductStore {
             currentStatus: previous.status,
           });
         }
+        if (previous.kind !== "choice") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Acceptance must be answered through task.acceptance");
+        }
         if (!previous.options.some((option) => option.id === optionId)) {
           throw new ProductStoreError("INVALID_ARGUMENT", "Agent Request answer does not match an available choice");
         }
@@ -5650,59 +5756,141 @@ export class ProductStore {
     );
   }
 
-  async decideTaskAcceptance(input: {
+  async respondTaskAcceptance(input: {
     requestId: string;
     expectedStoreRevision: number;
     taskId: string;
     scope: TaskScope;
     expectedTaskRevision: number;
-    decision: "accepted" | "rejected";
-  }): Promise<{ storeRevision: number; task: TaskRecord }> {
+    agentRequestId: string;
+    expectedRequestRevision: number;
+    teamRunId?: string;
+    agentRunId: string;
+    sessionRunId: string;
+    runtimeId: string;
+    feedback?: string;
+  }): Promise<{ storeRevision: number; task: TaskRecord; agentRequest: AgentRequestRecord }> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const scope = normalizedTaskScope(input.scope);
     const expectedTaskRevision = requiredRevision(input.expectedTaskRevision, "expectedTaskRevision");
-    if (input.decision !== "accepted" && input.decision !== "rejected") {
-      throw new ProductStoreError("INVALID_ARGUMENT", "Task acceptance decision is invalid");
-    }
+    const agentRequestId = requiredString(input.agentRequestId, "agentRequestId", 200);
+    const expectedRequestRevision = requiredRevision(input.expectedRequestRevision, "expectedRequestRevision");
+    const teamRunId = input.teamRunId === undefined ? undefined : requiredString(input.teamRunId, "teamRunId", 200);
+    const agentRunId = requiredString(input.agentRunId, "agentRunId", 200);
+    const sessionRunId = requiredString(input.sessionRunId, "sessionRunId", 200);
+    const runtimeId = requiredString(input.runtimeId, "runtimeId", 200);
+    const feedback = input.feedback === undefined
+      ? undefined
+      : requiredCredentialFreeString(input.feedback, "feedback", 20_000).trim() || undefined;
+    const answer: TaskAcceptanceAnswer = feedback
+      ? { kind: "task_acceptance", outcome: "feedback", feedback }
+      : { kind: "task_acceptance", outcome: "accepted" };
     return await this.mutate(
       "task.acceptance",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, scope, expectedTaskRevision, decision: input.decision },
+      {
+        taskId,
+        scope,
+        expectedTaskRevision,
+        agentRequestId,
+        expectedRequestRevision,
+        teamRunId,
+        agentRunId,
+        sessionRunId,
+        runtimeId,
+        feedback: feedback ?? null,
+      },
       (_storeRevision, now) => {
-        const row = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
-        if (!row) throw new ProductStoreError("NOT_FOUND", "Task does not exist", { taskId });
-        const previous = task(row);
-        if (JSON.stringify(previous.scope) !== JSON.stringify(scope)) {
+        const requestRow = this.database.prepare("SELECT * FROM agent_requests WHERE id = ?")
+          .get(agentRequestId) as SQLiteRow | undefined;
+        if (!requestRow) throw new ProductStoreError("NOT_FOUND", "Task Acceptance Request does not exist", { agentRequestId });
+        const previousRequest = agentRequest(requestRow);
+        const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+        if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Task does not exist", { taskId });
+        const previousTask = task(taskRow);
+        if (JSON.stringify(previousTask.scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Task Scope changed before acceptance");
         }
-        if (previous.revision !== expectedTaskRevision) {
+        if (
+          previousRequest.taskId !== taskId
+          || previousRequest.teamRunId !== teamRunId
+          || previousRequest.agentRunId !== agentRunId
+          || previousRequest.sessionRunId !== sessionRunId
+          || previousRequest.runtimeId !== runtimeId
+        ) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Acceptance Request identity changed before response");
+        }
+        if (
+          previousRequest.kind !== "task_acceptance"
+          || previousRequest.status !== "open"
+          || previousRequest.revision !== expectedRequestRevision
+        ) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Task Acceptance Request changed before response", {
+            expectedRequestRevision,
+            currentRequestRevision: previousRequest.revision,
+            currentRequestStatus: previousRequest.status,
+            currentRequestKind: previousRequest.kind,
+          });
+        }
+        if (previousTask.revision !== expectedTaskRevision || previousTask.state !== "active") {
           throw new ProductStoreError("REVISION_CONFLICT", "Task changed before acceptance", {
             expectedTaskRevision,
-            currentTaskRevision: previous.revision,
+            currentTaskRevision: previousTask.revision,
+            currentTaskState: previousTask.state,
           });
         }
         const activeTeam = this.database.prepare(`
           SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
         `).get(taskId);
         if (activeTeam) throw new ProductStoreError("REVISION_CONFLICT", "Task still has an active Team Run");
-        const updated: TaskRecord = {
-          ...previous,
-          state: input.decision === "accepted" ? "completed" : "rejected",
-          revision: previous.revision + 1,
+
+        this.database.prepare(`
+          UPDATE agent_requests
+          SET status = 'answered', answer_json = ?, revision = revision + 1, updated_at = ?
+          WHERE id = ? AND revision = ? AND status = 'open'
+        `).run(canonicalJSON(answer), now, agentRequestId, expectedRequestRevision);
+        this.database.prepare(`
+          UPDATE agent_runs SET status = 'running', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND status = 'waiting'
+        `).run(now, previousRequest.agentRunId);
+        this.database.prepare(`
+          UPDATE session_runs SET status = 'running', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND status = 'waiting'
+        `).run(now, previousRequest.sessionRunId);
+        this.database.prepare(`
+          UPDATE sessions SET state = 'active', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND state = 'waiting'
+        `).run(now, previousRequest.sessionId);
+
+        const updatedTask: TaskRecord = answer.outcome === "accepted"
+          ? {
+            ...previousTask,
+            state: "completed",
+            revision: previousTask.revision + 1,
+            updatedAt: now,
+          }
+          : previousTask;
+        if (answer.outcome === "accepted") {
+          this.database.prepare(`
+            UPDATE tasks SET state = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ?
+          `).run(updatedTask.state, updatedTask.revision, now, taskId, expectedTaskRevision);
+        }
+        const updatedRequest: AgentRequestRecord = {
+          ...previousRequest,
+          status: "answered",
+          answer,
+          revision: previousRequest.revision + 1,
           updatedAt: now,
         };
-        this.database.prepare(`
-          UPDATE tasks SET state = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ?
-        `).run(updated.state, updated.revision, now, taskId, expectedTaskRevision);
         return {
-          value: { task: updated },
+          value: { task: updatedTask, agentRequest: updatedRequest },
           event: {
-            kind: input.decision === "accepted" ? "task.accepted" : "task.rejected",
+            kind: answer.outcome === "accepted" ? "task.accepted" : "task.acceptanceFeedback",
             entityKind: "task",
             entityId: taskId,
             taskId,
-            payload: { task: updated, decision: input.decision },
+            payload: { task: updatedTask, agentRequest: updatedRequest },
           },
         };
       },

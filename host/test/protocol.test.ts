@@ -246,6 +246,31 @@ test("method parameter validation rejects invalid values", () => {
     }),
     (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
   );
+  const taskAcceptance = {
+    requestId: "answer-task-acceptance",
+    expectedStoreRevision: 8,
+    runtimeId: "runtime-coordinator",
+    scope: { kind: "project", projectId: "project-a" },
+    taskId: "task-a",
+    expectedTaskRevision: 4,
+    agentRunId: "coordinator-a",
+    sessionRunId: "session-run-coordinator-a",
+    agentRequestId: "acceptance-request-a",
+    expectedRequestRevision: 1,
+  };
+  assert.doesNotThrow(() => validateMethodParams("task.acceptance", taskAcceptance));
+  assert.doesNotThrow(() => validateMethodParams("task.acceptance", {
+    ...taskAcceptance,
+    feedback: "请补一条可回查的验证证据",
+  }));
+  assert.throws(
+    () => validateMethodParams("task.acceptance", { ...taskAcceptance, decision: "accepted" }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("task.acceptance", { ...taskAcceptance, agentRequestId: undefined }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.throws(
     () => validateMethodParams("agentRequest.answer", {
       ...agentRequestAnswer,

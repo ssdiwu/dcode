@@ -73,7 +73,7 @@ struct FoundationConsoleView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("D Code")
                         .font(.headline)
-                    Text("0.0.29 · 基础合同")
+                    Text("0.0.28 · 基础合同")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -248,6 +248,9 @@ struct FoundationConsoleView: View {
         let requests = snapshot.agentRequests.filter {
             $0.taskId == task.id && $0.teamRunId == team?.id && $0.status == "open"
         }
+        let acceptanceRequests = snapshot.agentRequests.filter {
+            $0.taskId == task.id && $0.kind == "task_acceptance" && $0.status == "open"
+        }
         let reports = snapshot.agentReports.filter { $0.taskId == task.id }
         return FoundationSection(title: "会话与协调者", subtitle: "一个 Task 可以拥有多个 D Code Session；当前主会话不会等同于 Task 本身。") {
             VStack(alignment: .leading, spacing: 0) {
@@ -322,15 +325,6 @@ struct FoundationConsoleView: View {
                             Button("启动 Team") {
                                 Task { _ = await model.startFoundationTeam(task: task, teamRunId: team.id) }
                             }
-                        }
-                        if team.status == "completed" && task.state == "active" {
-                            Button("拒绝结果", role: .destructive) {
-                                Task { _ = await model.decideFoundationTask(task, accepted: false) }
-                            }
-                            Button("接受 Task") {
-                                Task { _ = await model.decideFoundationTask(task, accepted: true) }
-                            }
-                            .buttonStyle(.borderedProminent)
                         }
                     }
                     if let teamFailure {
@@ -449,6 +443,14 @@ struct FoundationConsoleView: View {
                         }
                         .disabled(selectedTeamProfileIDs.count < 2)
                         }
+                    }
+                }
+                if !acceptanceRequests.isEmpty {
+                    Divider().padding(.vertical, 8)
+                    Text("任务验收")
+                        .font(.subheadline.weight(.semibold))
+                    ForEach(acceptanceRequests) { request in
+                        FoundationTaskAcceptanceRequestCard(request: request)
                     }
                 }
             }
@@ -871,6 +873,53 @@ struct FoundationConsoleView: View {
         case let .project(projectId):
             snapshot.projects.first(where: { $0.id == projectId })?.title ?? "项目"
         }
+    }
+}
+
+private struct FoundationTaskAcceptanceRequestCard: View {
+    let request: FoundationAgentRequest
+    @Environment(AppModel.self) private var model
+    @State private var feedback = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("协调者请求验收", systemImage: "checkmark.seal")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(request.prompt)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $feedback)
+                .font(.caption)
+                .frame(minHeight: 52, maxHeight: 100)
+                .padding(7)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.62))
+                }
+                .overlay(alignment: .topLeading) {
+                    if feedback.isEmpty {
+                        Text("留空即接受；填写反馈后继续返工")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 11)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .accessibilityLabel("任务验收反馈")
+            Button(feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "接受 Task" : "提交反馈并继续") {
+                Task {
+                    if await model.respondFoundationTaskAcceptance(request, feedback: feedback) {
+                        feedback = ""
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityHint("这是绑定当前验收请求的唯一确认动作")
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

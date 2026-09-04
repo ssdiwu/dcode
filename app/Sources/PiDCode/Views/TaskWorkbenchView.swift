@@ -402,7 +402,6 @@ private struct TaskWorkbenchWorkspace: View {
     @Environment(AppModel.self) private var model
     @State private var mediumHUDCollapsed = false
     @State private var compactHUDPresented = false
-    @State private var contentTarget: TaskWorkbenchContentTarget?
 
     var body: some View {
         GeometryReader { proxy in
@@ -444,10 +443,10 @@ private struct TaskWorkbenchWorkspace: View {
                             task: task,
                             state: state,
                             persistViewState: persistViewState,
-                            openContent: { contentTarget = $0 }
+                            openContent: { openContent($0, snapshot: snapshot) }
                         )
                             .frame(width: TaskHUDLayoutPolicy.wideCardWidth)
-                            .frame(maxHeight: max(240, proxy.size.height - 90))
+                            .frame(maxHeight: TaskHUDLayoutPolicy.wideCardMaximumHeight(for: proxy.size.height))
                             .padding(.top, TaskHUDLayoutPolicy.wideCardTopInset)
                             .padding(.trailing, TaskHUDLayoutPolicy.wideCardTrailingInset)
                             .zIndex(2)
@@ -458,7 +457,7 @@ private struct TaskWorkbenchWorkspace: View {
                                 task: task,
                                 state: state,
                                 persistViewState: persistViewState,
-                                openContent: { contentTarget = $0 },
+                                openContent: { openContent($0, snapshot: snapshot) },
                                 dismiss: { mediumHUDCollapsed = true }
                             )
                                 .frame(width: min(332, proxy.size.width - 32))
@@ -480,7 +479,7 @@ private struct TaskWorkbenchWorkspace: View {
                                 task: task,
                                 state: state,
                                 persistViewState: persistViewState,
-                                openContent: { contentTarget = $0 },
+                                openContent: { openContent($0, snapshot: snapshot) },
                                 dismiss: { compactHUDPresented = false }
                             )
                                 .frame(width: min(360, proxy.size.width - 28))
@@ -514,9 +513,6 @@ private struct TaskWorkbenchWorkspace: View {
                 if next == .mediumOverlay { mediumHUDCollapsed = false }
                 if next == .compactEntry { compactHUDPresented = false }
             }
-            .onChange(of: state.selectedTaskID) { _, _ in
-                contentTarget = nil
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("任务工作区")
@@ -536,13 +532,17 @@ private struct TaskWorkbenchWorkspace: View {
         task: FoundationTask,
         session: FoundationSession
     ) -> some View {
-        if let contentTarget {
+        if let contentTarget = state.contentTarget {
             TaskWorkspaceContentView(
                 snapshot: snapshot,
                 task: task,
                 target: contentTarget,
-                close: { self.contentTarget = nil },
-                inspect: { persistViewState(state.openInspector($0)) }
+                anchorLine: state.contentAnchorLine,
+                close: { persistViewState(state.closeContent()) },
+                inspect: { persistViewState(state.openInspector($0)) },
+                updateAnchor: { line in
+                    if let patch = state.updateContentAnchor(line) { persistViewState(patch) }
+                }
             )
         } else {
             TaskConversationSurface(
@@ -554,6 +554,16 @@ private struct TaskWorkbenchWorkspace: View {
                 agentRun: snapshot.agentRuns.first(where: { $0.taskId == task.id && $0.sessionId == session.id })
             )
         }
+    }
+
+    private func openContent(_ target: TaskWorkbenchContentTarget, snapshot: FoundationSnapshot) {
+        let sourceRevision: Int?
+        if case let .artifact(id) = target {
+            sourceRevision = snapshot.artifacts.first(where: { $0.id == id })?.revision
+        } else {
+            sourceRevision = nil
+        }
+        persistViewState(state.openContent(target, sourceRevision: sourceRevision))
     }
 }
 
@@ -642,6 +652,52 @@ private struct TaskConversationSurface: View {
                         Text("\(model.provider)/\(model.id)")
                             .font(.caption2.monospaced())
                             .foregroundStyle(.tertiary)
+                    }
+                    let availableModels = model.foundationModels(for: runtime.runtimeId)
+                    if !availableModels.isEmpty {
+                        Menu {
+                            ForEach(availableModels) { candidate in
+                                Button(candidate.qualifiedName) {
+                                    Task {
+                                        _ = await model.setFoundationRuntimeModel(
+                                            runtimeID: runtime.runtimeId,
+                                            dcodeSessionID: session.id,
+                                            model: candidate
+                                        )
+                                    }
+                                }
+                                .disabled(candidate.provider == runtime.state.model?.provider && candidate.id == runtime.state.model?.id)
+                            }
+                        } label: {
+                            Label("模型", systemImage: "cpu")
+                                .font(.caption2)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .accessibilityLabel("当前 Runtime 模型")
+                        .accessibilityHint("只改变当前 Runtime，不会修改未来新 Runtime 的默认模型")
+                    }
+                    let thinkingLevels = model.foundationThinkingLevels(for: runtime.runtimeId)
+                    if !thinkingLevels.isEmpty {
+                        Menu {
+                            ForEach(thinkingLevels, id: \.self) { level in
+                                Button(level) {
+                                    Task {
+                                        _ = await model.setFoundationRuntimeThinking(
+                                            runtimeID: runtime.runtimeId,
+                                            dcodeSessionID: session.id,
+                                            level: level
+                                        )
+                                    }
+                                }
+                                .disabled(level == runtime.state.thinkingLevel)
+                            }
+                        } label: {
+                            Label("推理", systemImage: "brain")
+                                .font(.caption2)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .accessibilityLabel("当前 Runtime 推理强度")
+                        .accessibilityHint("只作用当前 Runtime；不可用档位不会显示")
                     }
                     if let agentRun, agentRun.status == "running" || agentRun.status == "waiting" {
                         Button("停止") {
@@ -837,8 +893,11 @@ private struct TaskWorkspaceContentView: View {
     let snapshot: FoundationSnapshot
     let task: FoundationTask
     let target: TaskWorkbenchContentTarget
+    let anchorLine: Int?
     let close: () -> Void
     let inspect: (TaskWorkbenchInspectorTarget) -> Void
+    let updateAnchor: (Int) -> Void
+    @State private var anchorWriteTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -866,48 +925,54 @@ private struct TaskWorkspaceContentView: View {
             .background(.bar)
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let artifact {
-                        InspectorRows(rows: [
-                            ("类型", artifact.kind),
-                            ("路径", artifact.managedPath ?? artifact.externalPath ?? "未提供"),
-                            ("摘要", artifact.digest ?? "未提供"),
-                            ("revision", "\(artifact.revision)"),
-                        ])
-                        Text("内容元数据")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(artifact.metadata.prettyPrinted)
-                            .font(.body.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                    } else if let report {
-                        InspectorRows(rows: [
-                            ("类别", report.reportKind),
-                            ("Agent Run", report.agentRunId),
-                            ("时间", report.createdAt),
-                        ])
-                        Text(report.body.prettyPrinted)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                    } else {
-                        ContentUnavailableView(
-                            "内容已不可用",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text("该对象不再属于当前任务。")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 80)
+            if let report {
+                TaskReportReader(
+                    text: reportText(report),
+                    anchorLine: anchorLine,
+                    visibleLineChanged: scheduleAnchorSave
+                )
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let artifact {
+                            InspectorRows(rows: [
+                                ("类型", artifact.kind),
+                                ("摘要", artifact.digest ?? "未提供"),
+                                ("revision", "\(artifact.revision)"),
+                            ])
+                            if artifact.kind == "managed_worker_worktree_v1" {
+                                Text("这是受管 Worker 工作空间记录，不是可阅读交付物。D Code 不会据此读取本机路径、列出目录，或把运行环境伪装成最终成品。")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text("这是一个 Artifact 记录。当前版本只显示其稳定身份、摘要和元数据；没有经过 Host 授权的文件内容不会被原生界面直接读取。")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text("记录元数据")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(artifact.metadata.prettyPrinted)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                        } else {
+                            ContentUnavailableView(
+                                "内容已不可用",
+                                systemImage: "exclamationmark.triangle",
+                                description: Text("该对象不再属于当前任务。")
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 80)
+                        }
                     }
+                    .frame(maxWidth: 680, alignment: .leading)
+                    .padding(22)
                 }
-                .frame(maxWidth: 680, alignment: .leading)
-                .padding(22)
             }
         }
         .accessibilityElement(children: .contain)
@@ -946,6 +1011,68 @@ private struct TaskWorkspaceContentView: View {
         }
         return "doc.text"
     }
+
+    private func reportText(_ report: FoundationAgentReport) -> String {
+        if let text = report.body["text"]?.stringValue, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
+        }
+        if let summary = report.body["summary"]?.stringValue, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return summary
+        }
+        return report.body.prettyPrinted
+    }
+
+    private func scheduleAnchorSave(_ line: Int) {
+        anchorWriteTask?.cancel()
+        anchorWriteTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            updateAnchor(line)
+        }
+    }
+}
+
+private struct TaskReportReader: View {
+    let text: String
+    let anchorLine: Int?
+    let visibleLineChanged: (Int) -> Void
+    @State private var restoredAnchor = false
+
+    private var lines: [String] {
+        let values = text.components(separatedBy: .newlines)
+        return values.isEmpty ? [""] : values
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(lines.indices, id: \.self) { index in
+                        Text(lines[index].isEmpty ? " " : lines[index])
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id(index + 1)
+                            .onAppear {
+                                guard restoredAnchor else { return }
+                                visibleLineChanged(index + 1)
+                            }
+                    }
+                }
+                .frame(maxWidth: 680, alignment: .leading)
+                .padding(22)
+            }
+            .task(id: "\(text.hashValue):\(anchorLine ?? 1)") {
+                restoredAnchor = false
+                if let anchorLine, lines.indices.contains(anchorLine - 1) {
+                    await Task.yield()
+                    proxy.scrollTo(anchorLine, anchor: .top)
+                }
+                restoredAnchor = true
+            }
+        }
+        .accessibilityLabel("智能体报告正文")
+    }
 }
 
 private struct TaskHUDEntryButton: View {
@@ -981,6 +1108,9 @@ private struct TaskHUDView: View {
     }
     private var artifacts: [FoundationArtifact] {
         snapshot.artifacts.filter { $0.taskId == task.id }
+    }
+    private var reports: [FoundationAgentReport] {
+        snapshot.agentReports.filter { $0.taskId == task.id }
     }
     private var evidence: [FoundationEvidence] {
         snapshot.evidence.filter { $0.taskId == task.id }
@@ -1078,17 +1208,33 @@ private struct TaskHUDView: View {
 
                 HUDSection(title: "交付物", id: "deliverables", state: state, toggle: {
                     persistViewState(state.toggleHUDSection("deliverables"))
-                }, count: artifacts.count) {
-                    if artifacts.isEmpty {
-                        Text("子成员报告收口后会出现稳定交付物。")
+                }, count: reports.count + artifacts.count) {
+                    if reports.isEmpty && artifacts.isEmpty {
+                        Text("子成员报告收口后会出现可阅读报告或稳定产物记录。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    ForEach(reports) { report in
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.text")
+                                .foregroundStyle(.secondary)
+                            Button("报告 · \(report.reportKind)") { openContent(.report(report.id)) }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text("报告")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     ForEach(artifacts) { artifact in
                         HStack(spacing: 8) {
                             Image(systemName: artifactSymbol(artifact.kind))
                                 .foregroundStyle(.secondary)
-                            Button(artifact.title) { openContent(.artifact(artifact.id)) }
+                            Button(artifact.kind == "managed_worker_worktree_v1" ? "Worker 工作空间 · \(artifact.title)" : artifact.title) {
+                                openContent(.artifact(artifact.id))
+                            }
                             .buttonStyle(.borderless)
                             .font(.caption)
                             .lineLimit(1)
@@ -1216,21 +1362,62 @@ private struct TaskAgentRequestCard: View {
     let request: FoundationAgentRequest
     let emphasis: Emphasis
     @Environment(AppModel.self) private var model
+    @State private var feedback = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(request.prompt)
-                .font(emphasis == .conversation ? .subheadline : .caption)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                ForEach(request.options) { option in
-                    Button(option.label) {
-                        answer(request: request, option: option)
+            if request.kind == "task_acceptance" {
+                Label("任务验收 · 协调者", systemImage: "checkmark.seal")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(request.prompt)
+                    .font(emphasis == .conversation ? .subheadline : .caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextEditor(text: $feedback)
+                    .font(.caption)
+                    .frame(minHeight: emphasis == .conversation ? 58 : 42, maxHeight: emphasis == .conversation ? 108 : 72)
+                    .padding(6)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color(nsColor: .separatorColor).opacity(0.62))
                     }
-                    .buttonStyle(.bordered)
-                    .tint(option.recommended ? .accentColor : .secondary)
-                    .controlSize(.mini)
-                    .accessibilityHint(option.description ?? "回答该成员请求")
+                    .overlay(alignment: .topLeading) {
+                        if feedback.isEmpty {
+                            Text("留空即接受；填写反馈后交给协调者继续处理")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 11)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .accessibilityLabel("任务验收反馈")
+                    .accessibilityHint("留空后确认即接受 Task；填写反馈后会交给协调者继续处理")
+                Button(feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "接受 Task" : "提交反馈并继续") {
+                    Task {
+                        if await model.respondFoundationTaskAcceptance(request, feedback: feedback) {
+                            feedback = ""
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(emphasis == .conversation ? .regular : .small)
+                .accessibilityHint("这是一项绑定当前验收请求的单一确认动作")
+            } else {
+                Text(request.prompt)
+                    .font(emphasis == .conversation ? .subheadline : .caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    ForEach(request.options) { option in
+                        Button(option.label) {
+                            answer(request: request, option: option)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(option.recommended ? .accentColor : .secondary)
+                        .controlSize(.mini)
+                        .accessibilityHint(option.description ?? "回答该成员请求")
+                    }
                 }
             }
         }

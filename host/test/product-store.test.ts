@@ -201,6 +201,7 @@ test("Task Workbench presentation stays in Product Store and patches one field w
       selection: { taskId: null, sessionId: null },
       expandedHudSections: ["deliverables", "progress", "team", "waiting"],
       inspectorTarget: null,
+      workspaceContent: null,
       revision: 0,
     });
     const created = await store.createTask({
@@ -1283,7 +1284,11 @@ test("Agent Request waits only its member, resumes from a valid choice, and canc
       answer: { kind: "choice", optionId: "bounded" },
     });
     snapshot = await store.snapshot();
-    assert.equal(answered.agentRequest.answer?.optionId, "bounded");
+    assert.equal(answered.agentRequest.answer?.kind, "choice");
+    assert.equal(
+      answered.agentRequest.answer?.kind === "choice" ? answered.agentRequest.answer.optionId : undefined,
+      "bounded",
+    );
     assert.equal(snapshot.agentRuns.find((run) => run.id === explore.id)?.status, "running");
     assert.equal(snapshot.sessionRuns.find((run) => run.id === exploreRun.sessionRunId)?.status, "running");
 
@@ -1332,6 +1337,163 @@ test("Agent Request waits only its member, resumes from a valid choice, and canc
     assert.equal(snapshot.agentRequests.find((request) => request.id === second.agentRequest.id)?.status, "cancelled");
     assert.equal(snapshot.agentRuns.find((run) => run.id === verifier.id)?.status, "aborted");
     assert.equal(snapshot.teamRuns.find((run) => run.id === team.teamRun.id)?.status, "interrupted");
+  } finally {
+    await store.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("Task Acceptance is a Coordinator-bound request: feedback resumes work, empty confirmation completes, and restart preserves an open card", async () => {
+  const f = await fixture();
+  let store = await open(f);
+  try {
+    const startCoordinator = async (suffix: string) => {
+      const initial = await store.snapshot();
+      const bundle = await store.createTask({
+        requestId: `acceptance-task-${suffix}`,
+        expectedStoreRevision: initial.storeRevision,
+        scope: { kind: "user", userId: initial.currentUser.id },
+        title: `Acceptance ${suffix}`,
+        goal: "The Coordinator requests a durable Task Acceptance decision",
+      });
+      const coordinator = await store.ensureCoordinatorAgentRun({
+        requestId: `acceptance-coordinator-${suffix}`,
+        taskId: bundle.task.id,
+        scope: bundle.task.scope,
+      });
+      const prepared = await store.prepareSessionRun({
+        requestId: `acceptance-prepare-${suffix}`,
+        taskId: bundle.task.id,
+        scope: bundle.task.scope,
+        sessionId: bundle.coordinationSession.id,
+        runtimeId: `runtime-acceptance-${suffix}`,
+        agentRunId: coordinator.agentRun.id,
+        workspaceId: `workspace-acceptance-${suffix}`,
+        cwd: f.home,
+        workspaceAccess: "sharedReadOnly",
+        message: "Prepare the Task for acceptance.",
+        attachmentRefs: [],
+        roleRevision: "builtin-coordinator:v1",
+        contextRevision: 1,
+        profileSnapshot: { role: "coordinator" },
+        tools: [{ name: "dcode_request_task_acceptance", description: "Request Task Acceptance", parameters: { type: "object" } }],
+        toolsWritable: false,
+        systemPromptDigest: `sha256:${"a".repeat(64)}`,
+        promptSources: [],
+      });
+      await store.startSessionRun(prepared.sessionRunId);
+      const snapshot = await store.snapshot();
+      const task = snapshot.tasks.find((candidate) => candidate.id === bundle.task.id);
+      assert.ok(task);
+      return { task, session: bundle.coordinationSession, coordinator: coordinator.agentRun, prepared };
+    };
+
+    const active = await startCoordinator("feedback");
+    const opened = await store.createAgentRequest({
+      requestId: "acceptance-open-feedback",
+      taskId: active.task.id,
+      agentRunId: active.coordinator.id,
+      sessionId: active.session.id,
+      sessionRunId: active.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-feedback",
+      kind: "task_acceptance",
+      prompt: "请验收当前结果。",
+      options: [],
+    });
+    let snapshot = await store.snapshot();
+    assert.equal(opened.agentRequest.kind, "task_acceptance");
+    assert.deepEqual(opened.agentRequest.options, []);
+    assert.equal(snapshot.agentRuns.find((run) => run.id === active.coordinator.id)?.status, "waiting");
+    assert.equal(snapshot.sessionRuns.find((run) => run.id === active.prepared.sessionRunId)?.status, "waiting");
+    const feedback = await store.respondTaskAcceptance({
+      requestId: "acceptance-feedback",
+      expectedStoreRevision: snapshot.storeRevision,
+      taskId: active.task.id,
+      scope: active.task.scope,
+      expectedTaskRevision: active.task.revision,
+      agentRequestId: opened.agentRequest.id,
+      expectedRequestRevision: opened.agentRequest.revision,
+      agentRunId: active.coordinator.id,
+      sessionRunId: active.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-feedback",
+      feedback: "请补一条可回查的验证证据。",
+    });
+    assert.equal(feedback.task.state, "active");
+    assert.equal(feedback.agentRequest.answer?.kind, "task_acceptance");
+    assert.equal(
+      feedback.agentRequest.answer?.kind === "task_acceptance" ? feedback.agentRequest.answer.outcome : undefined,
+      "feedback",
+    );
+    snapshot = await store.snapshot();
+    assert.equal(snapshot.agentRuns.find((run) => run.id === active.coordinator.id)?.status, "running");
+    assert.equal(snapshot.sessionRuns.find((run) => run.id === active.prepared.sessionRunId)?.status, "running");
+    assert.equal(snapshot.tasks.find((task) => task.id === active.task.id)?.state, "active");
+
+    const acceptedRequest = await store.createAgentRequest({
+      requestId: "acceptance-open-accepted",
+      taskId: active.task.id,
+      agentRunId: active.coordinator.id,
+      sessionId: active.session.id,
+      sessionRunId: active.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-feedback",
+      kind: "task_acceptance",
+      prompt: "请再次确认最终结果。",
+      options: [],
+    });
+    snapshot = await store.snapshot();
+    const accepted = await store.respondTaskAcceptance({
+      requestId: "acceptance-confirm",
+      expectedStoreRevision: snapshot.storeRevision,
+      taskId: active.task.id,
+      scope: active.task.scope,
+      expectedTaskRevision: snapshot.tasks.find((task) => task.id === active.task.id)!.revision,
+      agentRequestId: acceptedRequest.agentRequest.id,
+      expectedRequestRevision: acceptedRequest.agentRequest.revision,
+      agentRunId: active.coordinator.id,
+      sessionRunId: active.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-feedback",
+    });
+    assert.equal(accepted.task.state, "completed");
+    assert.deepEqual(accepted.agentRequest.answer, { kind: "task_acceptance", outcome: "accepted" });
+
+    const restart = await startCoordinator("restart");
+    const restartRequest = await store.createAgentRequest({
+      requestId: "acceptance-open-restart",
+      taskId: restart.task.id,
+      agentRunId: restart.coordinator.id,
+      sessionId: restart.session.id,
+      sessionRunId: restart.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-restart",
+      kind: "task_acceptance",
+      prompt: "请在重启后仍可处理这份验收。",
+      options: [],
+    });
+    await store.close();
+    store = await open(f);
+    snapshot = await store.snapshot();
+    const preserved = snapshot.agentRequests.find((request) => request.id === restartRequest.agentRequest.id);
+    assert.equal(preserved?.status, "open");
+    assert.equal(snapshot.agentRuns.find((run) => run.id === restart.coordinator.id)?.status, "interrupted");
+    const afterRestart = await store.respondTaskAcceptance({
+      requestId: "acceptance-feedback-after-restart",
+      expectedStoreRevision: snapshot.storeRevision,
+      taskId: restart.task.id,
+      scope: restart.task.scope,
+      expectedTaskRevision: snapshot.tasks.find((task) => task.id === restart.task.id)!.revision,
+      agentRequestId: restartRequest.agentRequest.id,
+      expectedRequestRevision: preserved!.revision,
+      agentRunId: restart.coordinator.id,
+      sessionRunId: restart.prepared.sessionRunId,
+      runtimeId: "runtime-acceptance-restart",
+      feedback: "重启后请继续补证据。",
+    });
+    assert.equal(afterRestart.task.state, "active");
+    assert.equal(
+      afterRestart.agentRequest.answer?.kind === "task_acceptance"
+        ? afterRestart.agentRequest.answer.feedback
+        : undefined,
+      "重启后请继续补证据。",
+    );
   } finally {
     await store.close();
     await rm(f.root, { recursive: true, force: true });

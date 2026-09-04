@@ -147,8 +147,8 @@
     .reading { flex: 1; overflow-y: auto; display: flex; justify-content: center; padding: 12px 28px 16px; }
     .reading-inner { width: min(720px, 100%); }
     /* 宽屏：为浮窗预留右侧安全宽度（浮窗只落在留白上） */
-    .frame[data-width="wide"] .reading  { padding-right: 372px; }
-    .frame[data-width="wide"] .composer-area { padding-right: 372px; }
+    .frame[data-width="wide"] .reading  { padding-right: 388px; }
+    .frame[data-width="wide"] .composer-area { padding-right: 388px; }
 
     .msg { margin-bottom: 16px; display: flex; flex-direction: column; }
     .msg .who { font-size: 11px; color: var(--hint); margin-bottom: 4px; }
@@ -223,8 +223,8 @@
 
     /* ── Task HUD：任何宽度都是独立浮窗 ── */
     .hud {
-      position: absolute; top: 52px; right: 16px;
-      width: 316px; max-height: calc(100% - 150px);
+      position: absolute; top: 58px; right: 24px;
+      width: 316px; max-height: min(620px, calc(100% - 90px));
       border: 1px solid var(--line-strong); border-radius: 14px;
       background: rgba(44,44,48,.97);
       box-shadow: var(--shadow);

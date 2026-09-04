@@ -37,7 +37,7 @@
 - `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
 - D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，API Key、OAuth 值和认证响应不经 D Code IPC；
 - 投影 Pi `resourceLoader` 真实加载的 Extension、Skill、Prompt 与 Command，按 Pi `SettingsManager.setPackages` 修改扩展包启停并热重载；D Code 自有隐藏扩展不进入用户清单；
-- 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade；当前生产合同只确认 `changes` / `lineage`，`evidence` / `project` 的 Swift 存储兼容缺口见 [0.0.15 PRD](../doc/40-版本实施方案/0016-0.0.15-界面即上下文与本机资源产品需求.md)；
+- 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade：`changes`、`evidence`、`lineage` 与 `project` 均为生产合同；`project` 检查项目根目录的 `PRODUCT.md` / `DESIGN.md` 是否为普通文件，并列出根 `AGENTS.md`、根 `README.md` 与有界 `doc/**/*.md` 的分散依据路径。二者都缺失时明确说明“产品原则尚未独立沉淀”；只列路径，不读取内容、不从 Agent 总结生成假权威；
 - `modelProviders.save / remove`、`modelSettings.set*` 与 `modelAuth.*` 是保留给旧 Protocol 的显式拒绝入口；D Code 不再改写 Pi `models.json` / `settings.json`，也不接受任何凭据正文或 Pi 认证响应；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；

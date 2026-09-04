@@ -105,6 +105,7 @@ import {
 } from "./operation-attempt-extension.js";
 import {
   DCODE_AGENT_REQUEST_TOOL_NAME,
+  DCODE_TASK_ACCEPTANCE_TOOL_NAME,
   DCodeAgentRequestController,
   createDCodeAgentRequestExtension,
   type DCodeAgentRequestInput,
@@ -121,6 +122,7 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
   "ls",
   "dcode_facts",
   DCODE_AGENT_REQUEST_TOOL_NAME,
+  DCODE_TASK_ACCEPTANCE_TOOL_NAME,
 ]);
 
 type Emit = (event: string, data?: unknown) => void;
@@ -151,6 +153,10 @@ const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
 ]);
 
 const RUNTIME_CONTROL_METHODS = new Set<HostMethod>([
+  "session.getModels",
+  "session.getThinkingLevels",
+  "session.setModel",
+  "session.setThinking",
   "session.steer",
   "session.abort",
   "extension.respond",
@@ -1089,6 +1095,25 @@ export class PiHost {
       }
       throw error;
     }
+    const taskAcceptanceFeedback = role === "coordinator"
+      ? snapshot.agentRequests
+        .filter((request) => (
+          request.taskId === task.id
+          && request.sessionId === session.id
+          && request.kind === "task_acceptance"
+          && request.status === "answered"
+          && request.answer?.kind === "task_acceptance"
+          && request.answer.outcome === "feedback"
+          && typeof request.answer.feedback === "string"
+          && request.answer.feedback.trim().length > 0
+        ))
+        .slice(-3)
+        .map((request) => ({
+          requestId: request.id,
+          feedback: request.answer?.kind === "task_acceptance" ? request.answer.feedback ?? "" : "",
+          updatedAt: request.updatedAt,
+        }))
+      : [];
     return {
       environment: {
         runtimeId: identity.runtimeId,
@@ -1105,6 +1130,7 @@ export class PiHost {
         roleRevision: `${storedProfileId}:v${profileVersion}`,
         roleContract,
         contextRevision: taskContextSet.revision,
+        ...(taskAcceptanceFeedback.length > 0 ? { taskAcceptanceFeedback } : {}),
       },
       documents,
       importedHistory,
@@ -1532,22 +1558,50 @@ export class PiHost {
         return result;
       }
       case "task.acceptance": {
-        const result = await (await this.getProductStore()).decideTaskAcceptance({
+        const feedback = typeof params.feedback === "string" ? params.feedback : undefined;
+        if (feedback && redactCredentialText(feedback).redacted) {
+          throw new PiHostError(
+            "CREDENTIAL_MATERIAL_REJECTED",
+            "D Code 检测到反馈中可能包含凭据。请移除密钥、Token 或密码。",
+          );
+        }
+        const result = await (await this.getProductStore()).respondTaskAcceptance({
           requestId: params.requestId as string,
           expectedStoreRevision: params.expectedStoreRevision as number,
           taskId: params.taskId as string,
           scope: params.scope as TaskScope,
           expectedTaskRevision: params.expectedTaskRevision as number,
-          decision: params.decision as "accepted" | "rejected",
+          agentRequestId: params.agentRequestId as string,
+          expectedRequestRevision: params.expectedRequestRevision as number,
+          ...(typeof params.teamRunId === "string" ? { teamRunId: params.teamRunId } : {}),
+          agentRunId: params.agentRunId as string,
+          sessionRunId: params.sessionRunId as string,
+          runtimeId: params.runtimeId as string,
+          ...(feedback === undefined ? {} : { feedback }),
         });
+        const pending = this.pendingAgentRequests.get(result.agentRequest.id);
+        let deliveredToRuntime = false;
+        if (pending) {
+          this.pendingAgentRequests.delete(result.agentRequest.id);
+          pending.removeAbortListener?.();
+          const runtime = this.runtimes.get(pending.runtimeId);
+          if (runtime?.currentRun?.sessionRunId === result.agentRequest.sessionRunId) {
+            this.updateRunState(runtime, runtime.currentRun, "running");
+          }
+          pending.resolve(result.agentRequest.answer);
+          deliveredToRuntime = true;
+        }
+        const acceptanceAnswer = result.agentRequest.answer;
         this.options.emit("foundation.changed", {
           storeRevision: result.storeRevision,
-          kind: result.task.state === "completed" ? "task.accepted" : "task.rejected",
+          kind: acceptanceAnswer?.kind === "task_acceptance" && acceptanceAnswer.outcome === "accepted"
+            ? "task.accepted"
+            : "task.acceptanceFeedback",
           entityKind: "task",
           entityId: result.task.id,
           taskId: result.task.id,
         });
-        return result;
+        return { ...result, deliveredToRuntime };
       }
       case "team.create": {
         const result = await (await this.getProductStore()).createTeamRun({
@@ -3425,7 +3479,9 @@ export class PiHost {
             ? [{
               name: "dcode-agent-request",
               hidden: true,
-              factory: createDCodeAgentRequestExtension(agentRequestController),
+              factory: createDCodeAgentRequestExtension(agentRequestController, {
+                allowTaskAcceptance: promptContext?.environment.role === "coordinator",
+              }),
             }]
             : []),
         ],
@@ -3440,7 +3496,17 @@ export class PiHost {
         settingsManager: sourceSettingsManager,
         resourceLoader,
         ...(promptContext && new Set(["coordinator", "explore", "verifier", "custom"]).has(promptContext.environment.role)
-          ? { tools: ["read", "grep", "find", "ls", "dcode_facts", DCODE_AGENT_REQUEST_TOOL_NAME] }
+          ? {
+            tools: [
+              "read",
+              "grep",
+              "find",
+              "ls",
+              "dcode_facts",
+              DCODE_AGENT_REQUEST_TOOL_NAME,
+              ...(promptContext.environment.role === "coordinator" ? [DCODE_TASK_ACCEPTANCE_TOOL_NAME] : []),
+            ],
+          }
           : {}),
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
       });
@@ -3643,7 +3709,7 @@ export class PiHost {
             ...(option.description ? { description: option.description } : {}),
             recommended: option.recommended === true,
           }));
-          const credentialProbe = JSON.stringify({ prompt: input.prompt, options: normalizedOptions });
+          const credentialProbe = JSON.stringify({ kind: input.kind, prompt: input.prompt, options: normalizedOptions });
           if (redactCredentialText(credentialProbe).redacted) {
             throw new PiHostError(
               "CREDENTIAL_MATERIAL_REJECTED",
@@ -3660,7 +3726,7 @@ export class PiHost {
             sessionId: runtimeIdentity.dcodeSessionId,
             sessionRunId: run.sessionRunId,
             runtimeId: runtimeIdentity.runtimeId,
-            kind: "choice",
+            kind: input.kind,
             prompt: input.prompt,
             options: normalizedOptions,
           });

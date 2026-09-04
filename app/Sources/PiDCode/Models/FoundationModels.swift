@@ -199,6 +199,7 @@ struct FoundationTaskWorkbenchViewState: Codable, Sendable {
     let selection: FoundationTaskWorkbenchSelection
     let expandedHudSections: [String]
     let inspectorTarget: FoundationTaskWorkbenchInspectorTarget?
+    let workspaceContent: FoundationTaskWorkbenchWorkspaceContent?
     let revision: Int
 }
 
@@ -210,6 +211,13 @@ struct FoundationTaskWorkbenchSelection: Codable, Sendable {
 struct FoundationTaskWorkbenchInspectorTarget: Codable, Hashable, Sendable {
     let kind: String
     let id: String
+}
+
+struct FoundationTaskWorkbenchWorkspaceContent: Codable, Hashable, Sendable {
+    let kind: String
+    let id: String
+    let sourceRevision: Int?
+    let anchorLine: Int?
 }
 
 struct FoundationTaskWorkbenchViewStateMutation: Codable, Sendable {
@@ -469,9 +477,11 @@ struct FoundationProjectCreation: Codable, Sendable {
     let project: FoundationProject
 }
 
-struct FoundationTaskDecision: Codable, Sendable {
+struct FoundationTaskAcceptanceResult: Codable, Sendable {
     let storeRevision: Int
     let task: FoundationTask
+    let agentRequest: FoundationAgentRequest
+    let deliveredToRuntime: Bool
 }
 
 struct FoundationAgentProfileUpdate: Codable, Sendable {

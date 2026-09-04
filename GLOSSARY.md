@@ -12,6 +12,14 @@ _Avoid_: Pi GUI、Pi CLI 桌面版、通用聊天客户端
 位于 Agent Runtime 之上的 D Code 产品层，拥有 Project、Task、D Code Session、Task View、Agent Run、能力模块、上下文组装、可见事件、报告、证据链接与原生界面；它不复制底层模型循环，但拥有模型循环所消费和产生的产品事实。
 _Avoid_: Pi UI、第二 Agent Loop、通用 Agent Runtime
 
+**Client Presentation（客户端呈现层）**：
+面向用户呈现 D Code 产品对象、接收用户意图并维护当前设备的纯呈现状态的客户端边界。它由 D Code 自有组件实现，但不预先指定 SwiftUI、React、WebView 或任何桌面壳；不得直接写 Product Store、Project Directory、Runtime 私有会话或凭据。
+_Avoid_: 产品数据库写入者、文件系统后门、Agent Runtime、特定 UI 框架
+
+**D Code Host（D Code 宿主）**：
+D Code 产品命令、结构性 Scope 校验、事务、事件归属与外部副作用的应用边界。它是 D Code Product Store 的唯一写入所有者，协调 Workspace Gateway 与 Runtime Supervisor；当前 Node `host/` 是这一边界的实现，不把实现目录或 Pi Host 旧名当作产品职责定义。
+_Avoid_: UI 框架、Pi Runtime 本身、第二产品数据库、逐动作审批器
+
 **D Code Product Store（D Code 产品数据仓）**：
 D Code 在当前用户 D Code Data Root 下，对 Project、User Scope Task、D Code Session、提交原文、生效输入、Agent Run、能力配置、模型资源、产物、证据与恢复事实的原生耐久权威。具体数据库与索引技术属于实现选择，不改变这条产品所有权。
 _Avoid_: Pi JSONL 镜像、搜索缓存、双向同步库
@@ -69,8 +77,8 @@ _Avoid_: 默认项目、会话目录、Product Store、`~/.dcode/` 文件浏览�
 _Avoid_: nullable Project、默认 Project、无归属 Task、`~/.dcode/` 执行目录、用户作用域分区
 
 **Project Scope（项目作用域）**：
-由一个 D Code Project 拥有、以其唯一 Project Directory 为默认执行目录的 Task 归属范围。Task 属于 Project Scope 时保存稳定 Project ID；它不等于目录本身、User Scope 或项目文件全文。
-_Avoid_: Project Directory、User Scope、多 Project Task、路径字符串归属
+由一个 D Code Project 拥有的 Task 归属范围。Task 属于 Project Scope 时保存稳定 Project ID；Project 存在 Primary Directory 时以它作为默认执行目录，涉及 Linked Directory 的工作必须由具体 Task / Agent Run 显式选择。Project Scope 不等于任一目录本身、User Scope 或项目文件全文。
+_Avoid_: Primary Directory、Linked Directory、User Scope、多 Project Task、路径字符串归属
 
 **Recent Sessions（最近会话）**：
 按最后活动时间排列的 D Code Session 快速入口视图。它不拥有或复制会话，也不替代 User Scope / Project Scope 下的 Task 列表；打开会话应能返回其所属任务。
@@ -81,8 +89,8 @@ _Avoid_: 最近任务、默认项目会话、任务真相源
 _Avoid_: 当前会话身份、当前导航权威
 
 **D Code Project（D Code 项目）**：
-由 D Code 管理、长期持续演化的产品与工作容器，拥有名称、唯一 Project Directory、一等项目文档、Project Knowledge、Project Vision 和 Task 集合。它不等于 D Code Session、Task 或独立 Goal。
-_Avoid_: Pi Project、多目录容器、会话文件夹、一次性任务
+由 D Code 管理、长期持续演化的产品与工作容器，拥有名称、可选的一个 Primary Directory、零个或多个 Linked Directory、一等项目文档、Project Knowledge、Project Vision 和 Task 集合。它不等于任何目录、D Code Session、Task 或独立 Goal。
+_Avoid_: Pi Project、目录集合、会话文件夹、一次性任务
 
 ## 一等项目文档
 
@@ -142,13 +150,29 @@ _Avoid_: Task Goal、Roadmap、提醒事项、当前版本计划
 Project 当前 checkout、branch、revision、未提交改动、在役 Task、规格、验证和发布门禁的动态事实投影。它不是 Knowledge 或 Vision，必须从当前文件、Git、代码、测试和平台证据读取。
 _Avoid_: 项目知识页、CHANGELOG、静态状态摘要
 
-**Project Directory（项目目录）**：
-一个 D Code Project 唯一关联的规范化本机目录，也是项目文件树根、新 Task 与 Agent Run 的默认执行目录。修改项目目录只改变 D Code 对项目和会话的关系；导入来源文件默认不随之改写。
-_Avoid_: Source Folder、Session Copy、项目显示路径
+**Primary Directory（项目主目录）**：
+一个 D Code Project 可选且至多一个的规范化本机工作目录。它存在时是 Project 新 Task、协调会话与未另行指定目录的 Agent Run 的默认执行目录，也是默认 Git、项目规则与文件发现锚点；它不拥有 Project，项目没有主目录时也不得伪造一个目录身份。
+_Avoid_: Linked Directory、Project Artifact Home、唯一 Project 身份、所有 Agent Run 的强制 cwd
+
+**Linked Directory（关联目录）**：
+一个 D Code Project 长期登记、但不作为默认执行锚点的规范化本机目录。关联只使目录可被 Project 发现并由 Task 显式选择，不自动加入模型上下文、不自动加载其中的项目规则，也不自动授予写入；当子 Agent Run 被指派处理该目录的工作时，其唯一执行目录以及 Pi `cwd` 使用该目录对应的受管工作树或经验证的目录。
+_Avoid_: 第二 Primary Directory、默认上下文、默认写入根、平权多目录
+
+**Execution Directory（执行目录）**：
+一个 Agent Run 在启动前确定、运行期间唯一且不可静默切换的规范化本机工作目录，也是该 Agent Run 在 Pi Runtime 中的 `cwd`。Project Scope 下未另行指定时使用 Primary Directory；处理 Linked Directory 的 Git 写入工作时使用该目录对应的受管工作树，符合边界的非 Git 工作才使用经验证的原目录。Shell 命令中的临时 `cd` 只影响该次命令，不改变 Agent Run 的执行目录；需要切换到另一目录继续工作时必须建立新的 Agent Run。
+_Avoid_: Primary Directory、Linked Directory、Task Scope、多个同时生效的 `cwd`、Shell 临时 `cd`
+
+**Project Directory（项目目录）**（兼容术语）：
+旧文档、协议或实现中对 Project 唯一工作目录的称呼；在当前产品模型中只映射为 Primary Directory，不包含 Linked Directory。新产品文案与规格应直接使用“项目主目录”或“关联目录”。
+_Avoid_: 项目全部目录、Linked Directory、Project Artifact Home
+
+**Workspace Gateway（工作区网关）**：
+由 D Code Host 调用、在已确定 Task Scope 与执行隔离内访问 Primary Directory、显式选择的 Linked Directory、Git worktree、Shell 与其他工作区外部副作用的受控边界。它执行已获结构性授权的动作，但不拥有产品对象、Runtime 生命周期或独立写入决策。
+_Avoid_: Client 直连文件系统、Agent 自主权限、Product Store、通用文件浏览器
 
 **Source Folder（源文件夹）**（历史）：
-`0.0.1–0.0.24` 的多目录 Project 概念，已由 `0.0.25` 的 Project Directory 取代。兼容代码或历史文档仍可能使用该名称，但当前产品不得重新暴露多 Source Folder 心智。
-_Avoid_: 当前 Project Directory、当前产品入口
+`0.0.1–0.0.24` 对没有主次、职责和选择边界的多目录 Project 概念。当前模型使用一个可选 Primary Directory 与多个显式 Linked Directory；兼容代码或历史文档仍可能使用 Source Folder，但当前产品不得用它混称两类目录。
+_Avoid_: Primary Directory、Linked Directory、当前产品入口
 
 **Session Path（会话路径）**：
 同一 D Code Session 内从根节点到当前节点的一条活动对话路径；切换或续写路径不会创建、切换或还原 Git 分支和项目文件。
@@ -183,8 +207,8 @@ D Code 为每个 Session Run 组装、定义 Agent 基础身份与运行合同�
 _Avoid_: Pi 默认系统提示词、静态品牌文案、全部项目文档、手写工具白名单
 
 **D Code Agent（D Code 智能体）**：
-在一次 Session Run 中接受 D Code System Prompt、Context Projection 与 Active Tool Set，并通过当前 Agent Runtime 执行工作的模型角色。`0.0.27` 只有单一普通 Agent Runtime；`0.0.28` 起真实 Agent Run 可以把 D Code Agent 具体化为 Coordinator、Explore、Worker、Verifier 或其他角色。它不是模型本身、Agent Profile、Task 所有者或可跨重启继续运行的进程。
-_Avoid_: Pi Agent、模型身份、Agent Profile、永久 Worker
+在一次 Session Run 中接受 D Code System Prompt、Context Projection 与 Active Tool Set，并通过当前 Agent Runtime 执行工作的角色。`0.0.27` 只有单一普通 Agent Runtime；`0.0.28` 起真实 Agent Run 可以把 D Code Agent 具体化为 Coordinator、Explore、Worker、Verifier 或其他角色。507 在普通讨论中说 Agent / agents 时，默认指一个或多个 D Code Agent 参与者；只有涉及保存档案、启动执行或选择模型时，才必须进一步区分 Agent Profile、Agent Run 与 LLM。D Code Agent 不是模型本身、Agent Profile、Task 所有者或可跨重启继续运行的进程。
+_Avoid_: Pi Agent、模型身份、Agent Profile、Agent Run、永久 Worker
 
 **Prompt Assembler（提示词组装器）**：
 D Code 在每次 Session Run 启动前，把 D Code 身份、Runtime Environment、Agent Role Contract、Active Tool Manifest 与强制 / 已选择 Context Projection 组装成 Effective System Prompt 的运行组件。它必须阻断未经选择的 Pi 默认与追加提示词来源，并在组装失败时阻止请求，不能回退成双重身份。
@@ -195,7 +219,7 @@ _Avoid_: Prompt 模板编辑器、字符串追加器、Pi SYSTEM loader、上下
 _Avoid_: Runtime Settings、System Prompt 全文、Context Projection、环境变量正文
 
 **Managed Worker Worktree（受管 Worker 工作树）**：
-由 D Code Host 在一条 Worker Agent Run 启动前，为符合条件的 Git Project Scope 在 `~/.dcode/runtime/` 下创建、验证并保留的 detached Git worktree（分离 Git 工作树）。它与稳定 Agent Run、受管 Artifact 和预写 External Side-effect Attempt（外部副作用尝试）一一关联；Worker 只能在该工作树中以 `exclusiveWrite` 运行。User Scope、非 Git、源目录未提交，或 Task 选中的 Scope Document 未能从冻结 Git revision 物化时必须显式拒绝；系统不会自动删除、提交、合并、推送或重试 unknown（结果未知）工作树操作。
+由 D Code Host 在一条 Worker Agent Run 启动前，为符合条件且由 Task 显式选择的 Git Primary Directory 或 Linked Directory，在 `~/.dcode/runtime/` 下创建、验证并保留的 detached Git worktree（分离 Git 工作树）。它与稳定 Agent Run、受管 Artifact 和预写 External Side-effect Attempt（外部副作用尝试）一一关联；Worker 只能以该工作树作为唯一执行目录与 Pi `cwd`，并以 `exclusiveWrite` 运行。User Scope、非 Git、源目录未提交，或 Task 选中的 Scope Document 未能从冻结 Git revision 物化时必须显式拒绝；系统不会自动删除、提交、合并、推送或重试 unknown（结果未知）工作树操作。
 _Avoid_: 原项目目录共享写入、临时复制目录、Worker Profile 设置、Git 自动提交
 
 **Agent Environment（智能体环境）**：
@@ -275,7 +299,7 @@ D Code 在用户明确打开文件、Artifact、Diff 或其他需要连续检查
 _Avoid_: Task HUD、常驻任务概览、第二主工作区、所有状态的统一右栏
 
 **Task HUD（任务浮层）**：
-当前 Task 存在时持续显示的轻量任务概览浮窗，展示进度、Agent Team、等待事项和交付物，并允许进入对应子会话或具体对象。它在任何宽度下都是与窗口边缘分离的独立浮窗，不进入普通文档流、不占结构栏位；正常宽度由 Main Workspace 为阅读画布与 Composer 预留左右安全宽度，使浮窗只落在安全区之外的留白上，不改变中央阅读宽度，也不遮挡正文。只有宽度不足时才允许覆盖阅读区域并提供收起 / 再打开入口。需要连续查看文件、Diff 或 Artifact 详情时转入 Information Inspector。
+当前 Task 存在时持续显示的轻量任务概览浮窗，展示进度、Agent Team、等待事项和交付物，并允许进入对应子会话或具体对象。它在任何宽度下都是与窗口边缘分离的独立浮窗，不进入普通文档流、不占结构栏位；正常宽度由 Main Workspace 为阅读画布与 Composer 预留左右安全宽度，使浮窗只落在安全区之外的留白上，不改变中央阅读宽度，也不遮挡正文。宽屏卡片保持可见的顶部、右侧和底部外缘，超出内容只在自身滚动，不能拉成全高第三栏；只有宽度不足时才允许覆盖阅读区域并提供收起 / 再打开入口。需要连续查看文件、Diff 或 Artifact 详情时转入 Information Inspector。
 _Avoid_: 可随意关闭的宽屏面板、全高右侧栏、任务数据库、Information Inspector、固定挤压中央画布
 
 **Foundation Console（基础设施控制面）**：
@@ -357,7 +381,7 @@ Task 按需组织一个或多个 Agent Run 的内置执行能力，可以串行�
 _Avoid_: dteam、隐藏思维链面板、独立任务数据库、模型列表
 
 **Coordinator Agent（协调智能体）**：
-在一个 Task 中承担面向用户的持续协调角色的 Agent：理解目标、维护任务边界、决定是否派发 Agent Run、合并重复问题、处理成员请求与冲突，并综合报告和证据供用户验收。它就是活在任务对话（Coordination Session）中的 LLM，直接面对用户，不需要独立的会话入口或子窗口；它不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
+在一个 Task 中承担面向用户的持续协调角色的 D Code Agent：理解目标、维护任务边界、决定是否派发 Agent Run、合并重复问题、处理成员请求与冲突，并综合报告和证据供用户验收。它就是活在任务对话（Coordination Session）中的智能体角色，直接面对用户，不需要独立的会话入口或子窗口；实际 LLM 只是每次 Agent Run / Session Run 的模型事实。协调智能体不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
 _Avoid_: Task Owner、永久 Manager 进程、所有成员的共享上下文、自动验收者
 
 **Coordinator Assignment（协调者指派）**：
@@ -372,9 +396,13 @@ _Avoid_: Prompt 文本、Work Item 本身、Permission Grant、自由 P2P 消息
 Task 显式启动、在一个有界执行阶段中组织多个 Agent Run 的一次团队执行，记录成员、串并行关系、子会话引用、来源上下文、可见事件和结构化报告。同一 Task 可以有多轮 Team Run；关闭一轮执行不会自动完成 Task。
 _Avoid_: Task 状态、Agent Team 配置、可跨重启继续的模型进程
 
-**Agent Run（Agent 运行）**：
-一个 Agent Profile 在某个 Task 中承担明确职责的一次临时执行记录，保存档案快照、实际模型、工具集合、Skill 身份与版本、声明范围、上下文来源、执行目录、运行状态、报告和 Child Agent Session 引用。模型是运行事实，不是 Agent Run 的稳定身份；进程结束后可以恢复记录，但不能伪装恢复运行中的模型与工具。
-_Avoid_: Task、Agent Profile、Child Agent Session、模型身份
+**Agent Run（智能体执行）**：
+一个 D Code Agent 在某个 Task 与相关 Task Session 中承担明确职责的一次稳定、可追溯执行记录，保存 Agent Profile 快照、实际模型、工具集合、Skill 身份与版本、声明范围、上下文来源、唯一执行目录、运行状态、报告和证据引用；一个 Agent Run 可以跨一个或多个 Session Run。它的执行目录是该 Agent Run 的 Pi `cwd`：未显式选择时使用 Project 的 Primary Directory，处理 Linked Directory 工作时使用该目录对应的受管工作树或经验证目录。Agent Run 可以关联 D Code Session 与 Runtime Adapter 私有会话，但不拥有、不等于也不负责命名用户可见会话。LLM 只是该次执行实际使用的模型事实，不是 Agent Run 的稳定身份；进程结束后可以恢复记录，但不能伪装恢复运行中的模型与工具。
+_Avoid_: Task、Agent Profile、D Code Session、Session Run、LLM、模型身份
+
+**Agent 口语映射规则（智能体口语映射规则）**：
+507 在日常讨论中说 Agent / agents 时，默认指 D Code Agent 参与者；说 Agent Run 时，用户界面主文案为“智能体执行”；说 LLM 或“模型”时，指本次执行实际调用的模型。任何会改变配置、启动运行或切换模型的动作都必须显示精确对象名：编辑“智能体档案”、启动“智能体执行”、选择“模型”，不能用一个含糊的“Agent”动作同时覆盖三者。
+_Avoid_: Agent 同时表示档案、执行与模型、Agents Run、LLM 身份
 
 **Finding（发现）**：
 Agent Run 对一项局部问题形成的结构化观察，包含结论、来源引用、置信边界和必要 Evidence；它可以被 Coordinator 比较或综合，但不等于最终 Report、Task 决定或隐藏推理。
@@ -407,6 +435,10 @@ _Avoid_: 当前产品术语、Agent Profile、Task
 **Skill（技能）**：
 由 D Code 管理、用于说明“如何完成某类工作”的版本化指令资源。Skill 可以从 Pi 或其他来源导入，也可以由 D Code 原生创建；它本身不授予工具、文件、网络或凭据权限，也不成为独立 Agent。
 _Avoid_: Permission Grant、云端插件市场、Team Member
+
+**LLM（大语言模型）**：
+由 Provider 提供、经 D Code Model Catalog 与 Runtime Model Selection 选择、在某次 Agent Run / Session Run 中实际生成内容或工具调用的模型。LLM 是运行资源与历史事实，不拥有 Task、D Code Session、Agent Profile 或 Agent Run；更换 LLM 不会自动创建新智能体、会话或任务。
+_Avoid_: D Code Agent、Agent Profile、Agent Run、会话身份、任务所有者
 
 **Model Catalog（模型目录）**：
 D Code Product Store 对已接入 Provider、可用 Model、非敏感能力元数据和未来 Runtime 选择的原生产品权威。Pi 或其他 Runtime 只可以在首次迁入 / 受控发现时提供安全目录事实；它们不再是 D Code 可写设置、目录身份或界面语义的长期权威。

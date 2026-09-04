@@ -7,6 +7,9 @@ final class TaskWorkbenchState {
     private(set) var selectedSessionID: String?
     private(set) var expandedHUDSections: Set<String>
     private(set) var inspectorTarget: TaskWorkbenchInspectorTarget?
+    private(set) var contentTarget: TaskWorkbenchContentTarget?
+    private(set) var contentSourceRevision: Int?
+    private(set) var contentAnchorLine: Int?
     private(set) var viewStateRevision = 0
 
     init() {
@@ -19,6 +22,9 @@ final class TaskWorkbenchState {
         selectedSessionID = remote.selection.sessionId
         expandedHUDSections = Set(remote.expandedHudSections)
         inspectorTarget = TaskWorkbenchInspectorTarget(remoteValue: remote.inspectorTarget)
+        contentTarget = TaskWorkbenchContentTarget(remoteValue: remote.workspaceContent)
+        contentSourceRevision = remote.workspaceContent?.sourceRevision
+        contentAnchorLine = remote.workspaceContent?.anchorLine
         viewStateRevision = remote.revision
     }
 
@@ -26,6 +32,9 @@ final class TaskWorkbenchState {
         let originalTaskID = selectedTaskID
         let originalSessionID = selectedSessionID
         let originalInspectorTarget = inspectorTarget
+        let originalContentTarget = contentTarget
+        let originalContentSourceRevision = contentSourceRevision
+        let originalContentAnchorLine = contentAnchorLine
         let taskIDs = Set(snapshot.tasks.map(\.id))
         if selectedTaskID == nil || !taskIDs.contains(selectedTaskID ?? "") {
             let next = snapshot.tasks.first(where: { $0.state == "active" || $0.state == "waiting" })?.id
@@ -35,10 +44,16 @@ final class TaskWorkbenchState {
         guard let selectedTaskID else {
             selectedSessionID = nil
             inspectorTarget = nil
+            contentTarget = nil
+            contentSourceRevision = nil
+            contentAnchorLine = nil
             return reconciliationPatch(
                 originalTaskID: originalTaskID,
                 originalSessionID: originalSessionID,
-                originalInspectorTarget: originalInspectorTarget
+                originalInspectorTarget: originalInspectorTarget,
+                originalContentTarget: originalContentTarget,
+                originalContentSourceRevision: originalContentSourceRevision,
+                originalContentAnchorLine: originalContentAnchorLine
             )
         }
         let taskSessions = TaskWorkbenchProjection.sessions(for: selectedTaskID, snapshot: snapshot)
@@ -48,10 +63,24 @@ final class TaskWorkbenchState {
         if let inspectorTarget, !contains(inspectorTarget, snapshot: snapshot, taskID: selectedTaskID) {
             self.inspectorTarget = nil
         }
+        if let contentTarget, !contains(contentTarget, snapshot: snapshot, taskID: selectedTaskID) {
+            self.contentTarget = nil
+            self.contentSourceRevision = nil
+            self.contentAnchorLine = nil
+        } else if case let .artifact(id) = contentTarget,
+                  let artifact = snapshot.artifacts.first(where: { $0.id == id && $0.taskId == selectedTaskID }),
+                  contentSourceRevision != nil,
+                  contentSourceRevision != artifact.revision {
+            contentSourceRevision = artifact.revision
+            contentAnchorLine = nil
+        }
         return reconciliationPatch(
             originalTaskID: originalTaskID,
             originalSessionID: originalSessionID,
-            originalInspectorTarget: originalInspectorTarget
+            originalInspectorTarget: originalInspectorTarget,
+            originalContentTarget: originalContentTarget,
+            originalContentSourceRevision: originalContentSourceRevision,
+            originalContentAnchorLine: originalContentAnchorLine
         )
     }
 
@@ -59,9 +88,17 @@ final class TaskWorkbenchState {
         let changedTask = selectedTaskID != task.id
         selectedTaskID = task.id
         selectedSessionID = sessionID ?? TaskWorkbenchProjection.defaultSessionID(for: task, snapshot: snapshot)
-        if changedTask { inspectorTarget = nil }
+        if changedTask {
+            inspectorTarget = nil
+            contentTarget = nil
+            contentSourceRevision = nil
+            contentAnchorLine = nil
+        }
         var patch = selectionPatch
-        if changedTask { patch["inspectorTarget"] = .null }
+        if changedTask {
+            patch["inspectorTarget"] = .null
+            patch["workspaceContent"] = .null
+        }
         return patch
     }
 
@@ -89,6 +126,29 @@ final class TaskWorkbenchState {
         return ["inspectorTarget": .null]
     }
 
+    func openContent(
+        _ target: TaskWorkbenchContentTarget,
+        sourceRevision: Int? = nil
+    ) -> [String: JSONValue] {
+        contentTarget = target
+        contentSourceRevision = sourceRevision
+        contentAnchorLine = nil
+        return ["workspaceContent": workspaceContentValue]
+    }
+
+    func closeContent() -> [String: JSONValue] {
+        contentTarget = nil
+        contentSourceRevision = nil
+        contentAnchorLine = nil
+        return ["workspaceContent": .null]
+    }
+
+    func updateContentAnchor(_ line: Int) -> [String: JSONValue]? {
+        guard contentTarget != nil, line >= 1, line != contentAnchorLine else { return nil }
+        contentAnchorLine = line
+        return ["workspaceContent": workspaceContentValue]
+    }
+
     func applyMutation(_ mutation: FoundationTaskWorkbenchViewStateMutation) {
         apply(remote: mutation.taskWorkbenchViewState)
     }
@@ -110,10 +170,24 @@ final class TaskWorkbenchState {
         ])
     }
 
+    private var workspaceContentValue: JSONValue {
+        guard let contentTarget else { return .null }
+        var value: [String: JSONValue] = [
+            "kind": .string(contentTarget.remoteKind),
+            "id": .string(contentTarget.id),
+        ]
+        if let contentSourceRevision { value["sourceRevision"] = .number(Double(contentSourceRevision)) }
+        if let contentAnchorLine { value["anchorLine"] = .number(Double(contentAnchorLine)) }
+        return .object(value)
+    }
+
     private func reconciliationPatch(
         originalTaskID: String?,
         originalSessionID: String?,
-        originalInspectorTarget: TaskWorkbenchInspectorTarget?
+        originalInspectorTarget: TaskWorkbenchInspectorTarget?,
+        originalContentTarget: TaskWorkbenchContentTarget?,
+        originalContentSourceRevision: Int?,
+        originalContentAnchorLine: Int?
     ) -> [String: JSONValue]? {
         var patch: [String: JSONValue] = [:]
         if originalTaskID != selectedTaskID || originalSessionID != selectedSessionID {
@@ -121,6 +195,11 @@ final class TaskWorkbenchState {
         }
         if originalInspectorTarget != inspectorTarget {
             patch["inspectorTarget"] = inspectorTargetValue
+        }
+        if originalContentTarget != contentTarget
+            || originalContentSourceRevision != contentSourceRevision
+            || originalContentAnchorLine != contentAnchorLine {
+            patch["workspaceContent"] = workspaceContentValue
         }
         return patch.isEmpty ? nil : patch
     }
@@ -130,6 +209,9 @@ final class TaskWorkbenchState {
         guard let taskID else {
             selectedSessionID = nil
             inspectorTarget = nil
+            contentTarget = nil
+            contentSourceRevision = nil
+            contentAnchorLine = nil
             return
         }
         let sessions = TaskWorkbenchProjection.sessions(for: taskID, snapshot: snapshot)
@@ -144,6 +226,13 @@ final class TaskWorkbenchState {
         case let .context(id): snapshot.taskContextSets
             .first(where: { $0.taskId == taskID })?
             .sources.contains(where: { $0.id == id }) == true
+        }
+    }
+
+    private func contains(_ target: TaskWorkbenchContentTarget, snapshot: FoundationSnapshot, taskID: String) -> Bool {
+        switch target {
+        case let .artifact(id): snapshot.artifacts.contains { $0.id == id && $0.taskId == taskID }
+        case let .report(id): snapshot.agentReports.contains { $0.id == id && $0.taskId == taskID }
         }
     }
 }

@@ -247,6 +247,9 @@ test("dcode_facts reads ledgers and reports missing files honestly", async () =>
     const project = await tool.execute("t4", { kind: "project" });
     assert.ok(project.content[0]!.text.includes("D Code"));
     assert.ok(project.content[0]!.text.includes("/repo"));
+    assert.ok(project.content[0]!.text.includes("PRODUCT.md：未找到"));
+    assert.ok(project.content[0]!.text.includes("DESIGN.md：未找到"));
+    assert.ok(project.content[0]!.text.includes("产品原则尚未独立沉淀"));
 
     const noSession = captureFactsTool(
       { sessionId: () => undefined, cwd: () => undefined, paths: () => [] },
@@ -305,6 +308,78 @@ test("dcode_facts project ownership resolves symlinks like Swift does", async ()
     const result = await tool.execute("t1", { kind: "project" });
     assert.ok(result.content[0]!.text.includes("Symlink 项目"), "符号链接路径归入登记项目");
     assert.ok(result.content[0]!.text.includes("项目目录"), "当前 Project schema 使用单个项目目录描述");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dcode_facts project reports independent-document presence without treating it as authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-facts-documents-"));
+  const factsDir = join(root, "facts");
+  const repo = join(root, "repo");
+  await mkdir(factsDir, { recursive: true });
+  await mkdir(repo);
+  try {
+    await writeFile(join(repo, "PRODUCT.md"), "untrusted product prose", "utf8");
+    await writeFile(join(repo, "DESIGN.md"), "untrusted design prose", "utf8");
+    await writeFile(
+      join(factsDir, "projects-v1.json"),
+      JSON.stringify({
+        version: 2,
+        projects: [{ id: "11111111-2222-3333-4444-555555555555", name: "有独立文档的项目", directory: { path: repo } }],
+      }),
+      "utf8",
+    );
+    const tool = captureFactsTool(
+      { sessionId: () => "session-a", cwd: () => repo, paths: () => [] },
+      factsDir,
+    );
+    const result = await tool.execute("t1", { kind: "project" });
+    const text = result.content[0]!.text;
+    assert.ok(text.includes("PRODUCT.md：已找到"));
+    assert.ok(text.includes("DESIGN.md：已找到"));
+    assert.ok(text.includes("不代表其内容是当前权威"));
+    assert.ok(!text.includes("untrusted product prose"), "不读取或转述项目文档内容");
+    assert.ok(!text.includes("untrusted design prose"), "不读取或转述项目文档内容");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dcode_facts project lists distributed product sources without reading or consolidating them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-facts-distributed-sources-"));
+  const factsDir = join(root, "facts");
+  const repo = join(root, "repo");
+  await mkdir(factsDir, { recursive: true });
+  await mkdir(join(repo, "doc", "40-实施"), { recursive: true });
+  try {
+    await writeFile(join(repo, "AGENTS.md"), "untrusted agent rule", "utf8");
+    await writeFile(join(repo, "README.md"), "untrusted readme prose", "utf8");
+    await writeFile(join(repo, "doc", "README.md"), "untrusted document map", "utf8");
+    await writeFile(join(repo, "doc", "40-实施", "0001-产品需求.md"), "untrusted product requirement", "utf8");
+    await writeFile(join(repo, "doc", "notes.txt"), "not a markdown source", "utf8");
+    await writeFile(
+      join(factsDir, "projects-v1.json"),
+      JSON.stringify({
+        version: 2,
+        projects: [{ id: "11111111-2222-3333-4444-555555555555", name: "分散依据项目", directory: { path: repo } }],
+      }),
+      "utf8",
+    );
+    const tool = captureFactsTool(
+      { sessionId: () => "session-a", cwd: () => repo, paths: () => [] },
+      factsDir,
+    );
+    const result = await tool.execute("t1", { kind: "project" });
+    const text = result.content[0]!.text;
+    assert.ok(text.includes("产品原则尚未独立沉淀"));
+    assert.ok(text.includes("AGENTS.md"));
+    assert.ok(text.includes("README.md"));
+    assert.ok(text.includes("doc/README.md"));
+    assert.ok(text.includes("doc/40-实施/0001-产品需求.md"));
+    assert.ok(!text.includes("notes.txt"), "只列 Markdown 文档");
+    assert.ok(!text.includes("untrusted agent rule"), "不读取或转述 AGENTS 内容");
+    assert.ok(!text.includes("untrusted product requirement"), "不读取或转述 doc 内容");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

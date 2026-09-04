@@ -107,6 +107,8 @@ final class AppModel {
     private(set) var isLoadingFoundation = false
     private(set) var foundationSessionPresentation: FoundationDCodeSessionPresentation?
     private(set) var isLoadingFoundationSessionPresentation = false
+    private(set) var foundationRuntimeModels: [String: [HostModel]] = [:]
+    private(set) var foundationRuntimeThinkingLevels: [String: [String]] = [:]
     var isFoundationMode: Bool { foundationSnapshot != nil }
     var projects: [DCodeProject] = []
     var recentSessions: [SessionSummary] = []
@@ -801,12 +803,95 @@ final class AppModel {
             )
             guard presentation.dcodeSession.id == dcodeSessionID else { return false }
             foundationSessionPresentation = presentation
+            if let runtimeID = presentation.runtime?.runtimeId {
+                await loadFoundationRuntimeControls(runtimeID)
+            }
             return true
         } catch {
             if foundationSessionPresentation?.dcodeSession.id == dcodeSessionID {
                 foundationSessionPresentation = nil
             }
             present(error, title: "任务会话暂时无法读取")
+            return false
+        }
+    }
+
+    func foundationModels(for runtimeID: String) -> [HostModel] {
+        foundationRuntimeModels[runtimeID] ?? []
+    }
+
+    func foundationThinkingLevels(for runtimeID: String) -> [String] {
+        foundationRuntimeThinkingLevels[runtimeID] ?? []
+    }
+
+    func loadFoundationRuntimeControls(_ runtimeID: String) async {
+        guard let client else { return }
+        do {
+            async let modelsRequest: ModelsResult = client.request(
+                "session.getModels",
+                params: ["runtimeId": .string(runtimeID)]
+            )
+            async let levelsRequest: ThinkingLevelsResult = client.request(
+                "session.getThinkingLevels",
+                params: ["runtimeId": .string(runtimeID)]
+            )
+            let (models, levels) = try await (modelsRequest, levelsRequest)
+            guard foundationSessionPresentation?.runtime?.runtimeId == runtimeID else { return }
+            foundationRuntimeModels[runtimeID] = models.models
+            foundationRuntimeThinkingLevels[runtimeID] = levels.levels
+        } catch {
+            // These menus are optional runtime affordances. A detached Runtime
+            // must not turn a stale menu fetch into a global workbench alert.
+        }
+    }
+
+    @discardableResult
+    func setFoundationRuntimeModel(
+        runtimeID: String,
+        dcodeSessionID: String,
+        model: HostModel
+    ) async -> Bool {
+        guard let client else { return false }
+        do {
+            let _: ModelSelectionResult = try await client.request(
+                "session.setModel",
+                params: [
+                    "runtimeId": .string(runtimeID),
+                    "provider": .string(model.provider),
+                    "modelId": .string(model.id),
+                ]
+            )
+            await loadFoundationRuntimeControls(runtimeID)
+            _ = await loadFoundationSessionPresentation(dcodeSessionID)
+            return true
+        } catch {
+            present(error, title: "当前 Runtime 模型未能切换")
+            return false
+        }
+    }
+
+    @discardableResult
+    func setFoundationRuntimeThinking(
+        runtimeID: String,
+        dcodeSessionID: String,
+        level: String
+    ) async -> Bool {
+        guard let client else { return false }
+        do {
+            let acknowledgement: Acknowledgement = try await client.request(
+                "session.setThinking",
+                params: [
+                    "runtimeId": .string(runtimeID),
+                    "level": .string(level),
+                ]
+            )
+            guard acknowledgement.level == level else {
+                throw PiHostClientError.invalidEnvelope("session.setThinking 未确认请求的推理强度")
+            }
+            _ = await loadFoundationSessionPresentation(dcodeSessionID)
+            return true
+        } catch {
+            present(error, title: "当前 Runtime 推理强度未能切换")
             return false
         }
     }
@@ -1160,24 +1245,43 @@ final class AppModel {
         }
     }
 
-    func decideFoundationTask(_ task: FoundationTask, accepted: Bool) async -> Bool {
-        guard let client, let snapshot = foundationSnapshot else { return false }
+    func respondFoundationTaskAcceptance(
+        _ request: FoundationAgentRequest,
+        feedback: String
+    ) async -> Bool {
+        guard
+            request.kind == "task_acceptance",
+            let client,
+            let snapshot = foundationSnapshot,
+            let task = snapshot.tasks.first(where: { $0.id == request.taskId })
+        else { return false }
         do {
-            let _: FoundationTaskDecision = try await client.request(
+            let teamRunID = request.teamRunId ?? snapshot.teamRuns.last(where: {
+                $0.taskId == request.taskId && $0.coordinatorAgentRunId == request.agentRunId
+            })?.id
+            let trimmedFeedback = feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+            var params: [String: JSONValue] = [
+                "requestId": .string(UUID().uuidString),
+                "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
+                "runtimeId": .string(request.runtimeId),
+                "scope": task.scope.jsonValue,
+                "taskId": .string(task.id),
+                "expectedTaskRevision": .number(Double(task.revision)),
+                "agentRunId": .string(request.agentRunId),
+                "sessionRunId": .string(request.sessionRunId),
+                "agentRequestId": .string(request.id),
+                "expectedRequestRevision": .number(Double(request.revision)),
+            ]
+            if let teamRunID { params["teamRunId"] = .string(teamRunID) }
+            if !trimmedFeedback.isEmpty { params["feedback"] = .string(trimmedFeedback) }
+            let _: FoundationTaskAcceptanceResult = try await client.request(
                 "task.acceptance",
-                params: [
-                    "requestId": .string(UUID().uuidString),
-                    "expectedStoreRevision": .number(Double(snapshot.storeRevision)),
-                    "taskId": .string(task.id),
-                    "scope": task.scope.jsonValue,
-                    "expectedTaskRevision": .number(Double(task.revision)),
-                    "decision": .string(accepted ? "accepted" : "rejected"),
-                ]
+                params: params
             )
             await reloadFoundation()
             return true
         } catch {
-            present(error, title: "Task 验收未能记录")
+            present(error, title: "Task 验收未能提交")
             return false
         }
     }
@@ -6215,7 +6319,14 @@ final class AppModel {
                 Task { [weak self] in await self?.reloadFoundation() }
             case "session.durableRunFinished", "session.runStateChanged",
                  "operationAttempt.prepared", "operationAttempt.finished":
-                Task { [weak self] in await self?.reloadFoundation() }
+                let dcodeSessionID = event.data?["runtime"]?["dcodeSessionId"]?.stringValue
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.reloadFoundation()
+                    guard let dcodeSessionID,
+                          self.foundationSessionPresentation?.dcodeSession.id == dcodeSessionID else { return }
+                    _ = await self.loadFoundationSessionPresentation(dcodeSessionID)
+                }
             case "host.stderr", "host.outputError", "protocol.decodeError",
                  "host.processEnded", "host.restartRequired":
                 handleHostLifecycleEvent(event)

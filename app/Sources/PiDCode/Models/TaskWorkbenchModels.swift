@@ -13,6 +13,10 @@ enum TaskHUDLayoutPolicy {
     static let wideCardWidth: CGFloat = 304
     static let wideCardTopInset: CGFloat = 66
     static let wideCardTrailingInset: CGFloat = 24
+    static let wideCardBottomInset: CGFloat = 32
+    /// A wide HUD is a finite floating card, not a full-height third rail. When
+    /// its sections exceed this height, its own scroll view absorbs the overflow.
+    static let wideCardPreferredMaximumHeight: CGFloat = 620
     static let wideConversationLeadingInset: CGFloat = 72
     static let wideConversationTrailingInset: CGFloat = 374
 
@@ -20,6 +24,11 @@ enum TaskHUDLayoutPolicy {
         if width >= wideMinimum { return .wideFloating }
         if width >= mediumMinimum { return .mediumOverlay }
         return .compactEntry
+    }
+
+    static func wideCardMaximumHeight(for workspaceHeight: CGFloat) -> CGFloat {
+        let available = max(0, workspaceHeight - wideCardTopInset - wideCardBottomInset)
+        return min(wideCardPreferredMaximumHeight, available)
     }
 }
 
@@ -76,6 +85,28 @@ enum TaskWorkbenchInspectorTarget: Hashable, Sendable {
 enum TaskWorkbenchContentTarget: Hashable, Sendable {
     case artifact(String)
     case report(String)
+
+    var remoteKind: String {
+        switch self {
+        case .artifact: "artifact"
+        case .report: "report"
+        }
+    }
+
+    var id: String {
+        switch self {
+        case let .artifact(id), let .report(id): id
+        }
+    }
+
+    init?(remoteValue: FoundationTaskWorkbenchWorkspaceContent?) {
+        guard let remoteValue else { return nil }
+        switch remoteValue.kind {
+        case "artifact": self = .artifact(remoteValue.id)
+        case "report": self = .report(remoteValue.id)
+        default: return nil
+        }
+    }
 }
 
 struct TaskWorkbenchProjection: Equatable, Sendable {

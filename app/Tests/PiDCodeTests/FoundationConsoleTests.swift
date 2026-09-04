@@ -7,7 +7,8 @@ final class FoundationConsoleTests: XCTestCase {
     private func snapshotValue(
         revision: Int = 0,
         withOpenRequest: Bool = false,
-        projectScope: Bool = false
+        projectScope: Bool = false,
+        requestKind: String = "choice"
     ) -> JSONValue {
         let task = taskValue(projectScope: projectScope)
         let session = sessionValue()
@@ -192,9 +193,9 @@ final class FoundationConsoleTests: XCTestCase {
                 "sessionId": .string("session-one"),
                 "sessionRunId": .string("session-run-one"),
                 "runtimeId": .string("runtime-agent-one"),
-                "kind": .string("choice"),
-                "prompt": .string("Choose one"),
-                "options": .array([
+                "kind": .string(requestKind),
+                "prompt": .string(requestKind == "task_acceptance" ? "请验收当前 Task" : "Choose one"),
+                "options": requestKind == "task_acceptance" ? .array([]) : .array([
                     .object([
                         "id": .string("one"),
                         "label": .string("First"),
@@ -317,6 +318,94 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertEqual(prompt.params["dcodeSessionId"]?.stringValue, "session-one")
         XCTAssertEqual(prompt.params["message"]?.stringValue, "向协调者继续任务")
         XCTAssertNotNil(prompt.params["promptId"]?.stringValue)
+    }
+
+    func testFoundationRuntimeControlsStayBoundToTheDisplayedRuntime() async throws {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 7, withOpenRequest: true)
+        let session = sessionValue()
+        let model = JSONValue.object([
+            "provider": .string("catalog"),
+            "id": .string("model-b"),
+            "name": .string("Model B"),
+            "reasoning": .bool(true),
+            "contextWindow": .number(200_000),
+            "maxTokens": .number(8_192),
+            "thinkingLevels": .array([.string("off"), .string("medium"), .string("high")]),
+            "fastModeSupported": .bool(false),
+        ])
+        let presentation = JSONValue.object([
+            "dcodeSession": session,
+            "binding": .null,
+            "runtime": .object([
+                "runtimeId": .string("runtime-agent-one"),
+                "state": .object([
+                    "mode": .string("writable"),
+                    "sessionId": .string("pi-session-one"),
+                    "sessionFile": .string("/tmp/pi-session-one.jsonl"),
+                    "sessionName": .null,
+                    "cwd": .string("/Users/tester"),
+                    "model": model,
+                    "thinkingLevel": .string("medium"),
+                    "activePlan": .null,
+                    "isStreaming": .bool(true),
+                    "runState": .null,
+                    "pendingMessageCount": .number(0),
+                    "contextUsage": .null,
+                    "fastMode": .null,
+                    "writable": .bool(true),
+                    "conflict": .null,
+                    "isCompacting": .bool(false),
+                ]),
+            ]),
+            "adapterState": .string("ready"),
+            "inspection": .null,
+        ])
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "dcodeSession.presentation": presentation
+            case "session.getModels": .object([
+                "models": .array([model]),
+                "defaultModel": .null,
+                "defaultThinkingLevel": .string("medium"),
+            ])
+            case "session.getThinkingLevels": .object([
+                "levels": .array([.string("off"), .string("medium"), .string("high")]),
+            ])
+            case "session.setModel": .object(["model": model])
+            case "session.setThinking": .object(["level": .string("high")])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        let loaded = await harness.model.loadFoundationSessionPresentation("session-one")
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(harness.model.foundationModels(for: "runtime-agent-one").first?.qualifiedName, "catalog/model-b")
+        XCTAssertEqual(harness.model.foundationThinkingLevels(for: "runtime-agent-one"), ["off", "medium", "high"])
+        let candidate = try XCTUnwrap(harness.model.foundationModels(for: "runtime-agent-one").first)
+        let modelChanged = await harness.model.setFoundationRuntimeModel(
+            runtimeID: "runtime-agent-one",
+            dcodeSessionID: "session-one",
+            model: candidate
+        )
+        XCTAssertTrue(modelChanged)
+        let thinkingChanged = await harness.model.setFoundationRuntimeThinking(
+            runtimeID: "runtime-agent-one",
+            dcodeSessionID: "session-one",
+            level: "high"
+        )
+        XCTAssertTrue(thinkingChanged)
+        let calls = await harness.client.requests
+        let modelCall = try XCTUnwrap(calls.first(where: { $0.method == "session.setModel" }))
+        XCTAssertEqual(modelCall.params["runtimeId"]?.stringValue, "runtime-agent-one")
+        XCTAssertEqual(modelCall.params["provider"]?.stringValue, "catalog")
+        XCTAssertEqual(modelCall.params["modelId"]?.stringValue, "model-b")
+        let thinkingCall = try XCTUnwrap(calls.first(where: { $0.method == "session.setThinking" }))
+        XCTAssertEqual(thinkingCall.params["runtimeId"]?.stringValue, "runtime-agent-one")
+        XCTAssertEqual(thinkingCall.params["level"]?.stringValue, "high")
     }
 
     func testTaskWorkbenchPresentationPatchesOnlyTheRequestedProductStoreField() async throws {
@@ -484,6 +573,44 @@ final class FoundationConsoleTests: XCTestCase {
         XCTAssertEqual(answer.params["sessionRunId"]?.stringValue, "session-run-one")
         XCTAssertEqual(answer.params["agentRequestId"]?.stringValue, "request-one")
         XCTAssertEqual(answer.params["answer"]?["optionId"]?.stringValue, "one")
+    }
+
+    func testFoundationTaskAcceptanceCarriesBoundRequestIdentityAndFeedback() async throws {
+        let harness = HostTestHarness(foundationMode: true)
+        let snapshot = snapshotValue(revision: 9, withOpenRequest: true, requestKind: "task_acceptance")
+        let acceptanceRequest = try XCTUnwrap(snapshot.objectValue?["agentRequests"]?.arrayValue?.first)
+        let taskResult = taskValue()
+        await harness.client.script { method, _ in
+            switch method {
+            case "host.hello": HostTestHarness.helloValue()
+            case "foundation.snapshot": snapshot
+            case "piImport.listCandidates": .object(["candidates": .array([])])
+            case "task.acceptance": .object([
+                "storeRevision": .number(10),
+                "task": taskResult,
+                "agentRequest": acceptanceRequest,
+                "deliveredToRuntime": .bool(true),
+            ])
+            default: .object([:])
+            }
+        }
+        await harness.model.start()
+        let request = try XCTUnwrap(harness.model.foundationSnapshot?.agentRequests.first)
+        XCTAssertEqual(request.kind, "task_acceptance")
+        XCTAssertTrue(request.options.isEmpty)
+        let submitted = await harness.model.respondFoundationTaskAcceptance(request, feedback: "补一条可回查证据")
+        XCTAssertTrue(submitted)
+        let calls = await harness.client.requests
+        let acceptance = try XCTUnwrap(calls.first(where: { $0.method == "task.acceptance" }))
+        XCTAssertEqual(acceptance.params["runtimeId"]?.stringValue, "runtime-agent-one")
+        XCTAssertEqual(acceptance.params["taskId"]?.stringValue, "task-one")
+        XCTAssertEqual(acceptance.params["teamRunId"]?.stringValue, "team-one")
+        XCTAssertEqual(acceptance.params["agentRunId"]?.stringValue, "agent-one")
+        XCTAssertEqual(acceptance.params["sessionRunId"]?.stringValue, "session-run-one")
+        XCTAssertEqual(acceptance.params["agentRequestId"]?.stringValue, "request-one")
+        XCTAssertEqual(acceptance.params["expectedRequestRevision"]?.intValue, 1)
+        XCTAssertEqual(acceptance.params["feedback"]?.stringValue, "补一条可回查证据")
+        XCTAssertNil(acceptance.params["decision"])
     }
 
     func testFoundationTaskContextUsesRevisionedHostMutation() async throws {

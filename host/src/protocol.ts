@@ -606,6 +606,25 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
           throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.inspectorTarget to contain kind and id");
         }
       }
+      if (patch.workspaceContent !== undefined && patch.workspaceContent !== null) {
+        if (!isRecord(patch.workspaceContent)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.workspaceContent to be an object or null");
+        }
+        const content = patch.workspaceContent;
+        const allowed = new Set(["kind", "id", "sourceRevision", "anchorLine"]);
+        if (
+          Object.keys(content).some((key) => !allowed.has(key))
+          || !["artifact", "report"].includes(content.kind as string)
+          || typeof content.id !== "string"
+          || content.id.length === 0
+          || content.id.length > 200
+          || (content.sourceRevision !== undefined && (!Number.isInteger(content.sourceRevision) || (content.sourceRevision as number) < 1))
+          || (content.anchorLine !== undefined && (!Number.isInteger(content.anchorLine) || (content.anchorLine as number) < 1))
+          || (content.kind !== "artifact" && content.sourceRevision !== undefined)
+        ) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.patch.workspaceContent to contain a valid content identity");
+        }
+      }
       return;
     }
     case "dcodeSession.presentation":
@@ -715,8 +734,28 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       validateTaskScope(params);
       requireBoundedString(params, "taskId", 200);
       requireInteger(params, "expectedTaskRevision", 1, Number.MAX_SAFE_INTEGER);
-      if (params.decision !== "accepted" && params.decision !== "rejected") {
-        throw new ProtocolValidationError("INVALID_PARAMS", "Task acceptance decision is invalid");
+      requireBoundedString(params, "runtimeId", 128);
+      {
+        const teamRunId = optionalString(params, "teamRunId");
+        if (teamRunId !== undefined && (teamRunId.length === 0 || teamRunId.length > 200)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.teamRunId to be a non-empty string up to 200 characters");
+        }
+      }
+      requireBoundedString(params, "agentRunId", 200);
+      requireBoundedString(params, "sessionRunId", 200);
+      requireBoundedString(params, "agentRequestId", 200);
+      requireInteger(params, "expectedRequestRevision", 1, Number.MAX_SAFE_INTEGER);
+      if (params.feedback !== undefined) {
+        const feedback = requireString(params, "feedback", { allowEmpty: true });
+        if (feedback.length > 20_000) {
+          throw new ProtocolValidationError("INVALID_PARAMS", "params.feedback exceeds the maximum length of 20000");
+        }
+      }
+      if (params.decision !== undefined) {
+        throw new ProtocolValidationError(
+          "INVALID_PARAMS",
+          "Task acceptance is bound to an acceptance request; legacy decision is not accepted",
+        );
       }
       return;
     case "team.create": {

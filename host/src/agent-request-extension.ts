@@ -2,8 +2,12 @@ import { Type } from "typebox";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 export const DCODE_AGENT_REQUEST_TOOL_NAME = "dcode_request";
+export const DCODE_TASK_ACCEPTANCE_TOOL_NAME = "dcode_request_task_acceptance";
+
+export type DCodeAgentRequestKind = "choice" | "task_acceptance";
 
 export interface DCodeAgentRequestInput {
+  kind: DCodeAgentRequestKind;
   prompt: string;
   options: Array<{
     id: string;
@@ -49,6 +53,7 @@ export class DCodeAgentRequestController {
 
 export function createDCodeAgentRequestExtension(
   controller: DCodeAgentRequestController,
+  options: { allowTaskAcceptance?: boolean } = {},
 ): ExtensionFactory {
   return (pi) => {
     pi.registerTool({
@@ -68,11 +73,37 @@ export function createDCodeAgentRequestExtension(
         }), { minItems: 2, maxItems: 5 }),
       }),
       async execute(toolCallId, input, signal) {
-        const resolution = await controller.request(toolCallId, input, signal);
+        const resolution = await controller.request(toolCallId, { kind: "choice", ...input }, signal);
         return {
           content: [{
             type: "text",
             text: `Agent Request ${resolution.requestId} 已回答：${JSON.stringify(resolution.answer)}`,
+          }],
+          details: resolution,
+        };
+      },
+    });
+    if (!options.allowTaskAcceptance) return;
+    pi.registerTool({
+      name: DCODE_TASK_ACCEPTANCE_TOOL_NAME,
+      label: "请求任务验收",
+      description:
+        "仅协调者可在已完成当前 Task 的工作后请求用户验收。调用会创建一个耐久验收请求并等待用户处理：空反馈表示接受；有反馈表示继续返工。不要把普通澄清或成员问题放在这里。",
+      promptSnippet:
+        "dcode_request_task_acceptance: 仅协调者在准备交付当前 Task 时调用；调用会等待用户接受或提交可回查反馈。",
+      parameters: Type.Object({
+        prompt: Type.String({ minLength: 1, maxLength: 20_000 }),
+      }),
+      async execute(toolCallId, input, signal) {
+        const resolution = await controller.request(toolCallId, {
+          kind: "task_acceptance",
+          prompt: input.prompt,
+          options: [],
+        }, signal);
+        return {
+          content: [{
+            type: "text",
+            text: `任务验收请求 ${resolution.requestId} 已处理：${JSON.stringify(resolution.answer)}`,
           }],
           details: resolution,
         };
