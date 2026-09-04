@@ -2,7 +2,7 @@
 
 本目录保存已经确认、用于指导当前版本交付与验收的 PRD 和专项规格，也是发布、实现候选、本地回归基线、人工验收与持续回归状态的唯一文档索引。具体测试与人工证据保留在对应 PRD 的 Verification Record（验证记录）中，其他 README 只链接本页，不复制动态状态。文档完成后只要仍是有效验收基准，就继续保留在本目录；仅在被取代、放弃或只供追溯时归档。
 
-> Target reset（目标架构重置）：ADR 0035–0040 已确认 User Scope / Project Scope → Task 主干、`~/.dcode/` 原生产品数据权威、Pi 单向导入、全局创造模式、一等项目文档以及 D Code System Prompt / Active Tool Set 边界。版本顺序固定为 `0.0.28` 先交付 Product Store、原生 Task / Session / Run、多 Runtime、Coordinator / Child Agent 与 Prompt / Tool 等基础设施；`0.0.29` 再消费这些真实事实完成任务工作台 UI/UX。当前 `0.0.29` 已形成 Implementation Candidate（实现候选）：`0.0.28` 基础设施继续作为同一 Product Store 合同被消费，原生人工验收、干净候选构建、tag 与发布仍未成立。
+> Target reset（目标架构重置）：ADR 0035–0040 已确认 User Scope / Project Scope → Task 主干、`~/.dcode/` 原生产品数据权威、Pi 单向导入、全局创造模式、一等项目文档以及 D Code System Prompt / Active Tool Set 边界。版本顺序固定为 `0.0.28` 先交付 Product Store、原生 Task / Session / Run、多 Runtime、Coordinator / Child Agent 与 Prompt / Tool 等基础设施；`0.0.29` 再消费这些真实事实完成任务工作台 UI/UX。当前 `0.0.29` 已形成 Implementation Candidate（实现候选）：`0.0.28` 基础设施继续作为同一 Product Store 合同被消费。2026-09-05 版本重切（507 确认）：`0.0.29` 候选在自动门禁全绿后收口为基线（`main@714a555`），HUD 浮窗形态的完整人工验收与 tag 取消；后续顺序为 `0.0.30` 主页面三区（纯 UI）、`0.0.31` 轻量派发、`0.0.32` 多目录项目，切割纪律与完成信号见[版本界面演进](../20-产品与交互/原型/版本演进/README.md)。
 
 `0.0.17`（`837af03`）、`0.0.18`（`617249e`）、`0.0.19`（`8f0c319`）与 `0.0.20` 已进入 `main`；`0.0.25`、`0.0.26`、`0.0.27` 已分别形成公开源码标签。Published Source 基线仍是 `v0.0.27` / `main@68237c3` / `origin/main`，其实现提交为 `8403710`。当前 checkout manifest 已统一为 `0.0.29`；本轮最终自动门禁结果与 revision 记录在各 PRD 的 Verification Record（验证记录）中。`0.0.28` 的结构化并行、导入续接、模型目录、D Code Session Presentation、Plan / Work List 与 Product Store 状态，已由 `0.0.29` 的 Project → Task → 任务对话 / Child Session、常驻 Task HUD、交付物内容区和 Information Inspector 直接消费。它不等于干净 App 候选、真实已认证 Provider 交接、原生界面人工验收、tag、GitHub Release、签名分发或发布。
 
@@ -14,7 +14,7 @@
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
-| [0027-0.0.29 任务工作台与协调者协作体验产品需求](0027-0.0.29-任务工作台与协调者协作体验产品需求.md) | Implementation Candidate consuming `0.0.28` | Host `222/222` + Swift `344/344`；Native Manual / Clean Candidate / Release Pending | 以 Project / Task 主干呈现协调者任务对话、Child Session、常驻 Task HUD、交付物内容区和具体对象 Inspector；宽屏 HUD 保持独立浮窗。 |
+| [0027-0.0.29 任务工作台与协调者协作体验产品需求](0027-0.0.29-任务工作台与协调者协作体验产品需求.md) | Baseline `main@714a555`（2026-09-05 收口，不再单独走 HUD 人工验收） | Host `225/225` + Swift `346/346`；HUD 浮窗形态人工验收取消，布局合同移交 `0.0.30` | 以 Project / Task 主干呈现协调者任务对话、Child Session、常驻 Task HUD、交付物内容区和具体对象 Inspector；其界面布局结论由 `0.0.30` 重审。 |
 | [0026-0.0.28 D Code 原生产品数据与多会话运行基础设施产品需求](0026-0.0.28-D-Code-原生产品数据与多会话运行基础设施产品需求.md) | Implementation Candidate consumed by `0.0.29` | Host `222/222` + Swift `344/344`；Native Manual / Real Auth / Clean Candidate Pending | Product Store、旧资料晋升、原生 Task / Session / Run、Pi 单向导入、多 Runtime、Coordinator 两阶段协作、D Code Prompt / Tools、Attempt / Request 与 Foundation contract 已接通；schema 不支持降级到 0.0.27。 |
 | [0025-0.0.27 Composer 模型选择与原生能力菜单修正产品需求](0025-0.0.27-Composer-模型选择与原生能力菜单修正产品需求.md) | Published Source Tag `v0.0.27`（implementation `8403710`） | Automated / Candidate + Cmd-V Isolated QA Passed；Native Menu / VoiceOver / Appearance Manual Pending | 恢复独立模型名选择，把 `+` 改为紧凑原生 Menu，Skill 显示普通名称，并接通剪贴板图片附件。 |
 | [0024-0.0.27 自进化运行回执与安全恢复产品需求](0024-0.0.27-自进化运行回执与安全恢复产品需求.md) | Published Source Tag `v0.0.27`（implementation `8403710`） | Automated / Candidate / Web Eval Passed；Native Manual Pending | 自进化运行身份、Bootstrap / Full Assurance、重启恢复回执、人工验收与连续门禁。 |

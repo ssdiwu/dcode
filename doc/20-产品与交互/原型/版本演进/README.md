@@ -14,6 +14,8 @@
 
 这里的“排期”首先定义交付顺序与版本差异，不承诺尚未进入 PRD 的日历日期。`0.0.10` 不是必须硬塞全部能力的终点；发现新的自用缺口时继续增加 `0.0.12`、`0.0.13`，乃至 `0.0.20+`，直到晋升条件真实成立。
 
+自 `0.0.30` 起执行三条切割纪律（2026-09-05 由 507 确认）：UI 版不加能力、能力版不动布局、基础设施版不带 UI。UI/UX 先经原型逐区确认并由 507 试玩拍板，版本只消费已拍板的合同；每版结束时仓库干净、可运行、验收记录诚实。
+
 | 版本 | 相比上一版新增什么 | 明确不包含 | 该版成立的完成信号 |
 |---|---|---|---|
 | `0.0.1` | 用户首页、Project、多 Source Folder、三栏工作台、只读文件树与 Git Changes（变更）、真实 Composer（输入区）运行参数。 | 中央文件打开、全文搜索。 | 本机 App 可完成项目与会话的首个日常闭环。 |
@@ -44,8 +46,11 @@
 | `0.0.26` | Sol 自迭代候选闭环：显式源码 checkout、脏工作树本机候选、Swift / Host 门禁、候选来源清单与重启后核对。 | 自动提交 / 发布、无人确认重启、模型文案冒充验证、网页 eval 冒充原生 App 验收。 | Sol 修改 D Code 后能形成来源稳定、门禁可核对且明确不可分发的候选，并在显式重启后恢复原任务。 |
 | `0.0.27` | 自进化运行回执与安全恢复；同时修正 Composer 模型入口与 `+` 菜单：恢复无图标模型名选择，推理强度独立相邻，`+` 改为紧凑原生 Menu。 | 把 Bootstrap 倒填为完整回执、自动验收 / 发布、第二套 Goal / Plan、运行中热迁移；恢复 CPU 图标、Fast 或大 Popover。 | Bootstrap 诚实不计数；模型可在任务入口直接选择；原生 `+` 菜单与参考层级一致。 |
 | `0.0.28` | 原生数据与多会话运行基础设施：把现有 D Code 数据单向晋升到 `~/.dcode/` Product Store，建立 User Scope / Project Task、D Code Session / 设置 / Profile / 能力配置，自动接管 D Code 已管理会话，其他 Pi Session 经显式“导入为任务”转换，并建立 Raw / Effective Input、多 Runtime Supervisor、Coordinator + 两个 Child Agent、Prompt Assembler、Active Tool Set、Artifact / Evidence 最小事实、结构化 query / mutation contract，以及可真实操作的 Foundation Console。 | 最终任务工作台视觉、常驻 HUD、复杂项目管理、Knowledge / Vision 全体验、第二 Runtime 或晋升后的 0.0.27 降级。 | 迁移提交前失败保持旧数据不变，提交后无双写且不支持降级；同一 App 内两个 Child Agent 真实并行；Foundation Console 可完成创建、导入、派发、回答、停止、报告与验收；Pi 源不变；Prompt / Tools / Receipt 同源且先持久化。 |
-| `0.0.29` | 任务工作台与协调者协作体验：复用 Foundation Console 的生产合同，完成 User Home / Project → Task → Child Sessions 导航（Task 主行即任务对话，协调会话无独立导航行）、显式“导入为任务”、协调者在其中工作的任务对话、宽屏常驻独立浮窗 Task HUD（Main Workspace 预留左右安全区）、窄屏覆盖、具体对象 Inspector 与并行运行控制。 | 修改 `0.0.28` 数据 / 并发 / mutation 合同、空 Task 状态、聊天文案推断进度或新增第二运行时。 | 正式工作台与 Foundation Console 操作同源；宽中窄三类窗口、真实两个子 Agent、对象检查、重启恢复和无障碍人工验收通过，旧普通控制入口退出。 |
-| `0.0.30+` | 继续按依赖与真实 dogfood 缺口切片；Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 分别进入独立 PRD。 | 为赶 `0.1.0` 预装空入口，或把多个未验证大系统重新混成一版。 | 每版只有一个可运行用户结果、明确失败边界与独立验收，不用目标文档冒充实现。 |
+| `0.0.29` | 任务工作台与协调者协作体验：复用 Foundation Console 的生产合同，完成 User Home / Project → Task → Child Sessions 导航（Task 主行即任务对话，协调会话无独立导航行）、显式“导入为任务”、协调者在其中工作的任务对话、宽屏常驻独立浮窗 Task HUD（Main Workspace 预留左右安全区）、窄屏覆盖、具体对象 Inspector 与并行运行控制。 | 修改 `0.0.28` 数据 / 并发 / mutation 合同、空 Task 状态、聊天文案推断进度或新增第二运行时。 | 正式工作台与 Foundation Console 操作同源；候选已于 2026-09-05 收口为基线：自动门禁与隔离冒烟通过后落库，HUD 浮窗形态的完整人工验收与 tag 取消，界面布局合同移交 `0.0.30` 重审。 |
+| `0.0.30` | 主页面三区（纯 UI 版）：消费原型逐区拍板结果，落地导航区 / 工作区 / 信息区的布局与文案映射；Task HUD 浮窗与常驻信息区由 507 对 A/B 原型拍板后二选一或收编。 | 新增任何能力、修改 `0.0.28` 数据合同、在拍板前冻结布局。 | 507 人工走查对三区布局满意；全量回归绿；[PRD 0027](../../../40-版本实施方案/0027-0.0.29-任务工作台与协调者协作体验产品需求.md) 被取代项标记 superseded。 |
+| `0.0.31` | 轻量派发（能力版）：在任务对话内一句话把临时小任务派发为 Child Agent Run，复用 `0.0.28` Agent Request / Run 合同与受管隔离工作树；同版裁决后续消息队列被派发吸收并沉淀决策。 | 改动工作台布局、新建独立 Queue UX、绕过结构化对象从聊天文案造运行。 | dogfood 中临时派发真实可用：运行、等待、报告与停止都走既有结构化事实，不新增 UI 私有状态。 |
+| `0.0.32` | 多目录项目（基础设施版）：以新 ADR 取代 ADR 0029，落地 Primary / Linked / Execution Directory 的 Product Store schema 与 Host / Swift 支持。 | 在 ADR 成立前实现多目录、把 Linked Directory 自动加入上下文或默认写入。 | 多目录 Project 可建立，Task 显式选择执行目录，回归与重启恢复绿。 |
+| `0.0.33+` | 继续按依赖与真实 dogfood 缺口切片；Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 分别进入独立 PRD。 | 为赶 `0.1.0` 预装空入口，或把多个未验证大系统重新混成一版。 | 每版只有一个可运行用户结果、明确失败边界与独立验收，不用目标文档冒充实现。 |
 | `0.1.0` | Promotion（晋升）版本：冻结并证明已经成立的自迭代闭环，不突然加入新主功能。 | 把尚未实现的目标架构能力一起打包成晋升理由。 | 见下方晋升门禁；全部成立后才可命名、提交、打标签和发布。 |
 
 ## Otty 参考的版本吸收
@@ -99,8 +104,8 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 当前依赖顺序固定为：
 
 1. `0.0.28` 一次建立 D Code Product Store、现有本机状态迁移、D Code Session、Raw Input / Effective Input、Pi 单向导入、Task / Agent Run、多 Runtime、Coordinator + 两个 Child Agent、Prompt / Tools / Receipt、结构化操作合同与可 dogfood 的 Foundation Console；
-2. `0.0.29` 只消费并重新呈现上述事实和操作，完成任务对话（Coordination Session，协调者活在其中、无独立导航行）、Child Session 树、宽屏持续可见的独立浮窗 Task HUD、窄屏覆盖与具体对象 Inspector；
-3. `0.0.30+` 再让 Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 按真实依赖进入独立 PRD。
+2. `0.0.29` 只消费并重新呈现上述事实和操作，建立任务对话（Coordination Session，协调者活在其中、无独立导航行）、Child Session 树、Task HUD、窄屏覆盖与具体对象 Inspector 的工作台候选；2026-09-05 起收口为基线，HUD 浮窗形态不再单独走完整人工验收；
+3. `0.0.30` 主页面三区、`0.0.31` 轻量派发、`0.0.32` 多目录项目依次切片；其后 Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 按真实依赖进入独立 PRD。
 
 Project → Task 的产品根、D Code 数据权威、能力吸收、全局创造模式、一等项目文档与系统提示词分别由 ADR 0035–0040 固定。ADR 0013 只保留旧主 Pi Session 编排方案及仍成立的子会话隔离、单写入、报告与诚实恢复经验，不再拥有当前产品路线。
 
@@ -127,7 +132,7 @@ Project → Task 的产品根、D Code 数据权威、能力吸收、全局创�
 ## 证据边界
 
 - 每个版本必须在上一版本可运行基线上增加真实能力，不能先显示没有数据和行为的空标签。
-- `0.0.1` 建立了当前 0.0.x 三栏实现基线；它不再被称为最终空间关系。长期目标已经把 Task 进度、Agent Team 与交付物收敛为右上 Task HUD，只有具体文件、Artifact、Diff 或 Context 来源详情进入全高 Information Inspector；该变化必须由后续版本 PRD、原生实现和人工验收成立，不能靠修改历史原型冒充交付。
+- `0.0.1` 建立了当前 0.0.x 三栏实现基线；它不再被称为最终空间关系。长期方向曾把 Task 进度、Agent Team 与交付物收敛为右上 Task HUD、具体对象详情进入全高 Information Inspector；`0.0.29` 收口后，最终布局由 `0.0.30` 依据导航区 / 工作区 / 信息区的原型拍板结果重审，不能靠修改历史原型冒充交付。
 - 工作检查器中的具体值仍是原型样例；“真实”指字段与状态在该版本必须接通真实数据，不表示本 HTML 已读取本机会话。
 - 本文件只表达当前版本切割草案；版本范围在对齐完成并进入 `40-版本实施方案/` 前不是交付承诺。
 - 当前实现与测试事实仍以项目源码、[架构与运行](../../../10-架构与运行/README.md)和实际验证结果为准。
