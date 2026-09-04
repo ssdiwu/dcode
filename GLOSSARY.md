@@ -16,6 +16,10 @@ _Avoid_: Pi UI、第二 Agent Loop、通用 Agent Runtime
 面向用户呈现 D Code 产品对象、接收用户意图并维护当前设备的纯呈现状态的客户端边界。它由 D Code 自有组件实现，但不预先指定 SwiftUI、React、WebView 或任何桌面壳；不得直接写 Product Store、Project Directory、Runtime 私有会话或凭据。
 _Avoid_: 产品数据库写入者、文件系统后门、Agent Runtime、特定 UI 框架
 
+**Platform Shell（平台壳）**：
+客户端实现中只提供操作系统集成的边界：窗口、菜单、快捷键、通知、文件选择与系统权限。平台壳不拥有 Project / Task / Session / Run 产品语义，也不是绕过 D Code Host 的文件或数据库入口；具体壳技术属于实现选型，不改变这条职责边界。
+_Avoid_: 产品语义拥有者、第二写入者、特定桌面壳技术、跨平台抽象承诺
+
 **D Code Host（D Code 宿主）**：
 D Code 产品命令、结构性 Scope 校验、事务、事件归属与外部副作用的应用边界。它是 D Code Product Store 的唯一写入所有者，协调 Workspace Gateway 与 Runtime Supervisor；当前 Node `host/` 是这一边界的实现，不把实现目录或 Pi Host 旧名当作产品职责定义。
 _Avoid_: UI 框架、Pi Runtime 本身、第二产品数据库、逐动作审批器

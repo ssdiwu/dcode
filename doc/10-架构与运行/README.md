@@ -51,3 +51,4 @@ flowchart LR
 
 - [Node/Pi 宿主与 IPC](0001-Node-Pi-宿主与-IPC.md)：Host 进程职责、Protocol v1、会话生命周期、可见会话搜索、路径协议、完整会话复制、归档可见性排除、本机草稿/归档边界与验证入口。
 - [D Code 原生界面设计系统](0002-D-Code-原生界面设计系统.md)：当前 SwiftUI/AppKit 界面的设计性格、共享 token、组件几何、状态矩阵、无障碍边界与视觉验收方法。
+- [D Code Web 客户端技术栈](0003-Web客户端技术栈.md)：Design Candidate——Electron + React 初版选型、参照实证、与 `host/` 的关系立场与待决细节；由 [ADR 0044](../决策档案/0044-Web客户端与桌面壳技术栈边界.md) 立项，尚未构成当前运行事实。

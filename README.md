@@ -33,7 +33,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 ## 目录
 
 - `host/`：固定 Pi 0.84.1 的 Node 运行宿主、Protocol v1 与测试。
-- `app/`：macOS 原生 SwiftUI/AppKit 界面、Host 桥、状态与测试。
+- `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 回退基线）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
 - `Package.swift`：macOS 14+ SwiftPM 可执行包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。
 - `GLOSSARY.md`：项目专有术语的根目录唯一权威；机器索引只能从它派生。
@@ -44,8 +44,8 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 - 平台：macOS。
 - 产品数据与配置权威：D Code Product Store；Pi 配置与 JSONL 只服务适配运行、旧来源和显式单向导入。
 - 数据根与用户任务：产品数据统一进入当前用户的 `~/.dcode/`；未选择 Project 的 Task 属于 User Scope 并默认在用户 Home Directory 工作，不建立“未选项目”伪 Project。
-- 界面：Swift 原生界面；HTML 原型等内容可在后续使用系统提供的嵌入式视图。
-- 呈现：D Code 不直接依赖或调用 `pi-tui`；所有用户可见界面由自有 SwiftUI/AppKit 组件或受控内容渲染器实现。
+- 界面：自有客户端界面，技术选型由[架构与运行](doc/10-架构与运行/README.md)拥有；HTML 原型等内容可在后续使用系统提供的嵌入式视图。
+- 呈现：D Code 不直接依赖或调用 `pi-tui`；所有用户可见界面由自有客户端组件或受控内容渲染器实现。
 - 扩展：Goal、Agent Team 等成立机制由 D Code 原生重做；Pi 扩展只作为迁移与机制来源，不成为产品身份或永久运行时依赖。
 - Agent 身份：每个 D Code Runtime 使用 D Code 自有 System Prompt，完整替换 Pi 通用身份，并从本轮真实注册工具生成活动工具清单与 Prompt Receipt。
 - 会话迁移：Pi Session 可以一次性导入为新的 D Code Session；导入后不双写、不持续同步，完整导出以 D Code 自有格式为准。
