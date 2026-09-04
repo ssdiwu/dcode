@@ -14,6 +14,7 @@
 
 | 文档 | Source（源码） | Acceptance（验收） | 职责 |
 |---|---|---|---|
+| [0028-0.0.30 Web 客户端初版产品需求](0028-0.0.30-Web客户端初版产品需求.md) | Not Started（范围已冻结，[ADR 0044](../决策档案/0044-Web客户端与桌面壳技术栈边界.md) Proposed） | 待实现 | Electron + React 壳消费既有 `host/` 与 Protocol v1，落地三区布局、浮动梗概（进度 + 团队）与详情侧栏，验证打包链与动效基线；Swift 按面替换、验证即删。 |
 | [0027-0.0.29 任务工作台与协调者协作体验产品需求](0027-0.0.29-任务工作台与协调者协作体验产品需求.md) | Baseline `main@714a555`（2026-09-05 收口，不再单独走 HUD 人工验收） | Host `225/225` + Swift `346/346`；HUD 浮窗形态人工验收取消，布局合同移交 `0.0.30` | 以 Project / Task 主干呈现协调者任务对话、Child Session、常驻 Task HUD、交付物内容区和具体对象 Inspector；其界面布局结论由 `0.0.30` 重审。 |
 | [0026-0.0.28 D Code 原生产品数据与多会话运行基础设施产品需求](0026-0.0.28-D-Code-原生产品数据与多会话运行基础设施产品需求.md) | Implementation Candidate consumed by `0.0.29` | Host `222/222` + Swift `344/344`；Native Manual / Real Auth / Clean Candidate Pending | Product Store、旧资料晋升、原生 Task / Session / Run、Pi 单向导入、多 Runtime、Coordinator 两阶段协作、D Code Prompt / Tools、Attempt / Request 与 Foundation contract 已接通；schema 不支持降级到 0.0.27。 |
 | [0025-0.0.27 Composer 模型选择与原生能力菜单修正产品需求](0025-0.0.27-Composer-模型选择与原生能力菜单修正产品需求.md) | Published Source Tag `v0.0.27`（implementation `8403710`） | Automated / Candidate + Cmd-V Isolated QA Passed；Native Menu / VoiceOver / Appearance Manual Pending | 恢复独立模型名选择，把 `+` 改为紧凑原生 Menu，Skill 显示普通名称，并接通剪贴板图片附件。 |
