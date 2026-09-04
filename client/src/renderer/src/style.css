@@ -1,0 +1,132 @@
+/* 骨架级样式：仅表达三区结构；正式视觉随 Tailwind v4 + 设计系统 token 接入。 */
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  height: 100%;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px;
+  background: light-dark(#f2f2f7, #1c1c1e);
+  overflow-y: auto;
+}
+
+.nav-identity {
+  padding: 0 8px 12px;
+}
+
+.nav-section {
+  padding: 16px 8px 4px;
+  color: light-dark(#8d8d96, #777780);
+  font-size: 11px;
+}
+
+.nav-project-name {
+  padding: 6px 8px;
+  font-weight: 600;
+}
+
+.nav-row {
+  width: 100%;
+  padding: 6px 8px 6px 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-row.is-active {
+  background: light-dark(rgba(0, 122, 255, 0.12), rgba(10, 132, 255, 0.19));
+  color: light-dark(#007aff, #0a84ff);
+}
+
+.nav-footer {
+  margin-top: auto;
+  padding: 10px 8px 0;
+  color: light-dark(#8d8d96, #777780);
+}
+
+.workspace {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  overflow-y: auto;
+  transition: padding-right 0.2s ease;
+}
+
+.workspace.is-narrowed {
+  margin-right: 320px;
+}
+
+.conversation {
+  width: min(680px, 100%);
+}
+
+.goal {
+  color: light-dark(#66666d, #aaaab2);
+}
+
+.meta {
+  color: light-dark(#8d8d96, #777780);
+  font-size: 12px;
+}
+
+.state-card {
+  padding: 18px;
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+}
+
+.hud-card {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  width: 260px;
+  padding: 14px;
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  background: light-dark(#ffffff, #303035);
+}
+
+.detail-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  padding: 18px;
+  border-left: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
+  background: light-dark(#f2f2f7, #1c1c1e);
+}
+
+button {
+  appearance: none;
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: transparent;
+  cursor: pointer;
+}

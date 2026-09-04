@@ -1,0 +1,23 @@
+{
+  "name": "@dcode/client",
+  "version": "0.0.30",
+  "private": true,
+  "type": "module",
+  "description": "D Code Web 客户端：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 host/。",
+  "main": "dist/src/main/index.js",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "../host/node_modules/.bin/tsc -p tsconfig.json",
+    "typecheck": "../host/node_modules/.bin/tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "smoke:host": "npm run build && node scripts/smoke-host.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "electron": "^41.0.0",
+    "typescript": "^5.9.3"
+  }
+}
