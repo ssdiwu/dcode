@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-09-04T19:57:54.836Z",
+  "sessionId": "sess_e56e9454-52b9-45fa-8346-a1864f50af64",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "/Users/diwu/Workspace/Codes/Apps/dcode/host/test/README.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 3,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

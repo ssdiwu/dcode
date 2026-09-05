@@ -12,5 +12,11 @@
     "rootDir": ".",
     "skipLibCheck": true
   },
-  "include": ["src/protocol/**/*.ts", "src/host/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "src/protocol/**/*.ts",
+    "src/host/**/*.ts",
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

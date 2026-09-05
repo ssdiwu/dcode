@@ -10,14 +10,32 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "../host/node_modules/.bin/tsc -p tsconfig.json",
     "typecheck": "../host/node_modules/.bin/tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "smoke:host": "npm run build && node scripts/smoke-host.mjs"
+    "build": "npm run typecheck && ../host/node_modules/.bin/tsc -p tsconfig.json && node_modules/.bin/vite build",
+    "build:main": "../host/node_modules/.bin/tsc -p tsconfig.json",
+    "build:renderer": "node_modules/.bin/vite build",
+    "test": "npm run build:main && node --test dist/test/*.test.js",
+    "smoke:host": "npm run build:main && node scripts/smoke-host.mjs",
+    "dev": "node scripts/dev.mjs",
+    "start": "npm run build && node scripts/dev.mjs --no-vite",
+    "capture": "npm run build && node scripts/dev.mjs --capture"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.12.4",
-    "electron": "^41.0.0",
-    "typescript": "^5.9.3"
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^41.10.7",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "motion": "^13.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "swr": "^2.5.1",
+    "zustand": "^5.0.15"
   }
 }

@@ -1,5 +1,7 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HostBridge } from "../host/bridge.js";
 
@@ -9,6 +11,7 @@ import { HostBridge } from "../host/bridge.js";
  */
 const here = fileURLToPath(new URL(".", import.meta.url));
 const DEV_RENDERER_URL = process.env.DCODE_RENDERER_URL;
+const CAPTURE_PATH = process.env.DCODE_CAPTURE;
 
 let mainWindow: BrowserWindow | null = null;
 let bridge: HostBridge | null = null;
@@ -26,12 +29,20 @@ function resolveAgentDirPath(): string {
   );
 }
 
+function resolveDataRootPath(): string | undefined {
+  return process.env.DCODE_DATA_ROOT;
+}
+
 async function createWindow(): Promise<void> {
+  const width = Number.parseInt(process.env.DCODE_WIDTH ?? "1440", 10);
   mainWindow = new BrowserWindow({
-    width: 1440,
+    width: Number.isFinite(width) ? width : 1440,
     height: 900,
+    minWidth: 640,
+    minHeight: 480,
     title: "D Code",
     show: false,
+    backgroundColor: "#1c1c1e",
     webPreferences: {
       preload: join(here, "..", "preload", "index.js"),
       contextIsolation: true,
@@ -40,19 +51,90 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  const query: Record<string, string> = {};
+  if (process.env.DCODE_OPEN_DETAIL === "1") query["detail"] = "1";
+  if (process.env.DCODE_OPEN_HUD === "1") query["hud"] = "1";
   if (DEV_RENDERER_URL) {
-    await mainWindow.loadURL(DEV_RENDERER_URL);
+    const url = new URL(DEV_RENDERER_URL);
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, value);
+    }
+    await mainWindow.loadURL(url.toString());
   } else {
-    await mainWindow.loadFile(join(here, "..", "renderer", "index.html"));
+    await mainWindow.loadFile(join(here, "..", "..", "renderer", "index.html"), {
+      query,
+    });
   }
 }
 
+/** DCODE_CAPTURE=path 时截取主窗口画面后退出（视觉验收用，不开截图应用）。 */
+async function captureThenQuit(): Promise<void> {
+  if (!CAPTURE_PATH || !mainWindow) return;
+  await delay(3_500);
+  if (!mainWindow) return;
+  const diagnostics = await mainWindow.webContents
+    .executeJavaScript(
+      `(() => {
+        const pick = selector => {
+          const el = document.querySelector(selector);
+          if (!el) return null;
+          const style = getComputedStyle(el);
+          return style.backgroundColor || style.color;
+        };
+        return {
+          dark: matchMedia("(prefers-color-scheme: dark)").matches,
+          rootColorScheme: getComputedStyle(document.documentElement).colorScheme,
+          nav: pick(".bg-nav"),
+          canvas: pick(".bg-canvas"),
+          raised: pick(".bg-raised"),
+          rootVars: (() => {
+            const style = getComputedStyle(document.documentElement);
+            return { nav: style.getPropertyValue("--c-nav").trim(), raised: style.getPropertyValue("--c-raised").trim() };
+          })(),
+          geometry: (() => {
+            const root = document.getElementById("root");
+            const body = document.body;
+            const app = root?.firstElementChild;
+            const rect = (el: Element | null | undefined) => {
+              const box = el?.getBoundingClientRect();
+              return box
+                ? Math.round(box.width) + "x" + Math.round(box.height)
+                : "null";
+            };
+            return {
+              body: rect(body),
+              root: rect(root),
+              app: rect(app),
+              appClass: app?.className ?? "",
+              bodyBg: body ? getComputedStyle(body).backgroundColor : "",
+            };
+          })(),
+        };
+      })()`,
+    )
+    .catch((error: unknown) => ({ error: String(error) }));
+  console.log(`[dcode] diagnostics ${JSON.stringify(diagnostics)}`);
+  const image = await mainWindow.webContents.capturePage();
+  const target = CAPTURE_PATH.replace("{width}", String(mainWindow.getContentBounds().width));
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, image.toPNG());
+  console.log(`[dcode] captured ${target}`);
+  app.quit();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 void app.whenReady().then(async () => {
+  const theme = process.env.DCODE_THEME;
+  if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
   bridge = await HostBridge.start({
     executablePath: process.execPath,
     executableIsElectron: true,
     hostEntryPath: resolveHostEntryPath(),
     agentDirPath: resolveAgentDirPath(),
+    dataRootPath: resolveDataRootPath(),
     onStderr: text => console.error(`[host] ${text.trimEnd()}`),
   });
   bridge.onEvent(event => {
@@ -77,6 +159,7 @@ void app.whenReady().then(async () => {
   );
 
   await createWindow();
+  await captureThenQuit();
 });
 
 app.on("window-all-closed", () => {

@@ -1,12 +1,53 @@
-/* 骨架级样式：仅表达三区结构；正式视觉随 Tailwind v4 + 设计系统 token 接入。 */
+@import "tailwindcss";
+
+/*
+ * D Code 视觉基线（源自原生设计系统与三区原型的 token 语义）。
+ * 运行时可切换的双态变量：:root 浅色 + 深色媒体查询；@theme inline 让
+ * utility 直接引用变量（不经过 light-dark 编译降级）。
+ */
 :root {
   color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    sans-serif;
+  --c-nav: #f2f2f7;
+  --c-canvas: #ffffff;
+  --c-raised: #ffffff;
+  --c-ink: #17171a;
+  --c-muted: #66666d;
+  --c-hint: #8d8d96;
+  --c-line: rgba(0, 0, 0, 0.11);
+  --c-accent: #007aff;
+  --c-accent-fill: rgba(0, 122, 255, 0.12);
+  --c-violet: #7840bd;
+  --c-warn: #a95300;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-nav: #1c1c1e;
+    --c-canvas: #242427;
+    --c-raised: #303035;
+    --c-ink: #f1f1f4;
+    --c-muted: #aaaab2;
+    --c-hint: #777780;
+    --c-line: rgba(255, 255, 255, 0.1);
+    --c-accent: #0a84ff;
+    --c-accent-fill: rgba(10, 132, 255, 0.19);
+    --c-violet: #c094ff;
+    --c-warn: #ff9f0a;
+  }
+}
+
+@theme inline {
+  --color-nav: var(--c-nav);
+  --color-canvas: var(--c-canvas);
+  --color-raised: var(--c-raised);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-hint: var(--c-hint);
+  --color-line: var(--c-line);
+  --color-accent: var(--c-accent);
+  --color-accent-fill: var(--c-accent-fill);
+  --color-violet: var(--c-violet);
+  --color-warn: var(--c-warn);
 }
 
 html,
@@ -14,119 +55,11 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  background: var(--c-canvas);
 }
 
-.app {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  height: 100%;
-}
-
-.nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 16px 10px;
-  background: light-dark(#f2f2f7, #1c1c1e);
-  overflow-y: auto;
-}
-
-.nav-identity {
-  padding: 0 8px 12px;
-}
-
-.nav-section {
-  padding: 16px 8px 4px;
-  color: light-dark(#8d8d96, #777780);
-  font-size: 11px;
-}
-
-.nav-project-name {
-  padding: 6px 8px;
-  font-weight: 600;
-}
-
-.nav-row {
-  width: 100%;
-  padding: 6px 8px 6px 20px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.nav-row.is-active {
-  background: light-dark(rgba(0, 122, 255, 0.12), rgba(10, 132, 255, 0.19));
-  color: light-dark(#007aff, #0a84ff);
-}
-
-.nav-footer {
-  margin-top: auto;
-  padding: 10px 8px 0;
-  color: light-dark(#8d8d96, #777780);
-}
-
-.workspace {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-  overflow-y: auto;
-  transition: padding-right 0.2s ease;
-}
-
-.workspace.is-narrowed {
-  margin-right: 320px;
-}
-
-.conversation {
-  width: min(680px, 100%);
-}
-
-.goal {
-  color: light-dark(#66666d, #aaaab2);
-}
-
-.meta {
-  color: light-dark(#8d8d96, #777780);
-  font-size: 12px;
-}
-
-.state-card {
-  padding: 18px;
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
-  border-radius: 12px;
-}
-
-.hud-card {
-  position: absolute;
-  top: 18px;
-  right: 24px;
-  width: 260px;
-  padding: 14px;
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
-  border-radius: 12px;
-  background: light-dark(#ffffff, #303035);
-}
-
-.detail-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 320px;
-  padding: 18px;
-  border-left: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
-  background: light-dark(#f2f2f7, #1c1c1e);
-}
-
-button {
-  appearance: none;
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-  padding: 4px 8px;
-  background: transparent;
-  cursor: pointer;
+body {
+  color: var(--c-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    sans-serif;
 }
