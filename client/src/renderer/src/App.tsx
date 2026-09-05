@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, Paperclip, X } from "lucide-react";
+import { ArrowUp, Paperclip, Plus, Settings, X } from "lucide-react";
 import { SelectMenu } from "./components/SelectMenu";
 import { ImportPanel } from "./components/ImportPanel";
 import { Markdown } from "./components/Markdown";
@@ -529,11 +529,13 @@ function NavRow({
   label,
   meta,
   active,
+  icon,
   onClick,
 }: {
   label: string;
   meta?: string;
   active?: boolean;
+  icon?: React.ReactNode;
   onClick?: () => void;
 }) {
   return (
@@ -545,6 +547,7 @@ function NavRow({
           : "text-ink/80 hover:bg-ink/5"
       }`}
     >
+      {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {meta ? <span className="shrink-0 text-hint">{meta}</span> : null}
     </button>
@@ -1295,7 +1298,7 @@ export function App() {
       >
         <div className="drag-region h-[38px] shrink-0" />
         <div className="px-2 pb-3 text-[14px] font-semibold">D Code</div>
-        <NavRow label="＋ 新建任务" />
+        <NavRow label="新建任务" icon={<Plus size={13} />} />
         <div className="px-2 pt-4 pb-1 text-[10.5px] font-medium text-hint">
           最近工作
         </div>
@@ -1362,7 +1365,14 @@ export function App() {
           本机 · Provider{" "}
           {(snapshot?.modelProviders ?? []).length} 个
         </div>
-        <div className="px-2 pt-1 text-[12px] text-hint">设置（占位）</div>
+        <button
+          onClick={() => setView("settings")}
+          className={`mt-1 flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] ${
+            view === "settings" ? "bg-accent-fill text-accent" : "text-ink/80 hover:bg-ink/5"
+          }`}
+        >
+          <Settings size={13} /> 设置
+        </button>
       </nav>
 
       <main
