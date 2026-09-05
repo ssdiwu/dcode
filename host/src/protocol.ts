@@ -11,6 +11,7 @@ export const HOST_METHODS = [
   "dcodeSession.composerDraft.set",
   "dcodeSession.prompt",
   "project.create",
+  "project.gitBranch",
   "task.create",
   "task.context.replace",
   "task.plan.create",
@@ -654,6 +655,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       validatePromptImages(params, "images");
       return;
     }
+    case "project.gitBranch":
+      requireBoundedString(params, "projectId", 200);
+      return;
     case "project.create":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);

@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { link, lstat, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
@@ -1423,6 +1425,8 @@ export class PiHost {
         });
         return result;
       }
+      case "project.gitBranch":
+        return await this.projectGitBranch(params.projectId as string);
       case "task.create": {
         const result = await (await this.getProductStore()).createTask({
           requestId: params.requestId as string,
@@ -2080,6 +2084,40 @@ export class PiHost {
       };
     } catch {
       return { rendered: false, kind, error: "Mermaid rendering failed" };
+    }
+  }
+
+  /** 只读 Git 事实：注册项目目录的当前分支（面二上下文条/只读 Git 页共用）。 */
+  private async projectGitBranch(projectIdValue: string): Promise<unknown> {
+    const projectId = projectIdValue.trim();
+    const store = await this.getProductStore();
+    const snapshot = await store.snapshot();
+    const project = snapshot.projects.find(
+      (candidate) => candidate.id === projectId,
+    );
+    if (!project) {
+      throw new PiHostError(
+        "PROJECT_NOT_FOUND",
+        "Project does not exist",
+        { projectId },
+      );
+    }
+    const execFile = promisify(execFileCallback);
+    try {
+      const { stdout } = await execFile(
+        "git",
+        ["-C", project.directory, "rev-parse", "--abbrev-ref", "HEAD"],
+        { timeout: 5_000, maxBuffer: 1024 * 64 },
+      );
+      const branch = stdout.trim();
+      return {
+        projectId: project.id,
+        directory: project.directory,
+        branch: branch.length > 0 ? branch : null,
+      };
+    } catch {
+      // 目录不是 Git 仓库或 git 不可用：如实返回空分支，不猜测。
+      return { projectId: project.id, directory: project.directory, branch: null };
     }
   }
 
