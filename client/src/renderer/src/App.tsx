@@ -1665,7 +1665,6 @@ export function App() {
             </div>
           </div>
         ) : null}
-        </AnimatePresence>
         </div>
         </>
         )}
