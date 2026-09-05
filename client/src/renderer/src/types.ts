@@ -26,6 +26,20 @@ export interface TaskRecord {
 export interface ProjectRecord {
   id: string;
   title: string;
+  directory: string;
+}
+
+export interface ProviderView {
+  id: string;
+  name: string | null;
+  authConfigured: boolean;
+  models: { id?: string; name?: string }[];
+}
+
+export interface GitBranchResult {
+  projectId: string;
+  directory: string;
+  branch: string | null;
 }
 
 export type TaskWorkItemState =

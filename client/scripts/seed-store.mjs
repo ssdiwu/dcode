@@ -11,7 +11,7 @@ import { HostBridge } from "../dist/src/host/bridge.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const hostEntry = join(repoRoot, "host", "dist", "src", "index.js");
-const storeRoot = "/tmp/dcode-visual-store";
+const storeRoot = process.env.DCODE_VISUAL_ROOT ?? "/tmp/dcode-visual-store";
 const agentDir = join(storeRoot, "agent");
 
 await mkdir(join(agentDir, "sessions"), { recursive: true });

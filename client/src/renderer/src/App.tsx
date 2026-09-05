@@ -8,6 +8,8 @@ import {
   taskProjectId,
   type DCodeSessionPresentation,
   type FoundationSnapshot,
+  type GitBranchResult,
+  type ProviderView,
   type SessionEntry,
   type TaskRecord,
 } from "./types";
@@ -688,6 +690,117 @@ const FIXTURE_ENTRIES: SessionEntry[] = [
   } as unknown as SessionEntry,
 ];
 
+function SettingsView({
+  snapshot,
+  providers,
+  currentModel,
+  onModelChange,
+}: {
+  snapshot: FoundationSnapshot | null;
+  providers: ProviderView[];
+  currentModel: string | null;
+  onModelChange: (providerId: string, modelId: string) => void;
+}) {
+  const catalog = snapshot?.modelCatalogEntries ?? [];
+  const selection = snapshot?.runtimeModelSelection ?? null;
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto w-[min(760px,100%)] py-8">
+        <h1 className="text-[19px] font-semibold">设置</h1>
+        <p className="mt-1 text-[12px] leading-5 text-muted">
+          凭据正文永不进入 D Code 画面；供应商认证状态由 Host 只读投影。
+        </p>
+
+        <h2 className="mt-8 text-[13px] font-semibold">模型</h2>
+        <p className="mt-1 text-[11.5px] text-muted">
+          点击「设为当前」切换任务对话使用的模型；已认证供应商下的模型才可被选择。
+        </p>
+        <div className="mt-3 overflow-hidden rounded-xl border border-line">
+          {catalog.length === 0 ? (
+            <p className="px-4 py-3 text-[12px] text-muted">
+              模型目录为空：先在核心侧完成 Provider 认证与目录发现。
+            </p>
+          ) : (
+            catalog.map(entry => {
+              const isCurrent =
+                selection?.providerId === entry.providerId &&
+                selection?.modelId === entry.modelId;
+              const authed =
+                providers.find(provider => provider.id === entry.providerId)
+                  ?.authConfigured ?? false;
+              return (
+                <div
+                  key={entry.id}
+                  className="flex h-11 items-center gap-3 border-b border-line px-4 last:border-b-0"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
+                    {entry.name}
+                  </span>
+                  <span className="text-[11px] text-hint">
+                    {entry.providerId}
+                  </span>
+                  {entry.reasoning ? (
+                    <span className="rounded bg-violet/15 px-1.5 py-0.5 text-[10px] text-violet">
+                      推理
+                    </span>
+                  ) : null}
+                  {authed ? null : (
+                    <span className="text-[10px] text-warn">未认证</span>
+                  )}
+                  {isCurrent ? (
+                    <span className="rounded bg-accent-fill px-1.5 py-0.5 text-[10.5px] text-accent">
+                      当前
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        onModelChange(entry.providerId, entry.modelId)
+                      }
+                      className="rounded border border-line px-1.5 py-0.5 text-[10.5px] text-muted hover:bg-ink/5"
+                    >
+                      设为当前
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <h2 className="mt-8 text-[13px] font-semibold">智能体供应商</h2>
+        <div className="mt-3 overflow-hidden rounded-xl border border-line">
+          {providers.length === 0 ? (
+            <p className="px-4 py-3 text-[12px] text-muted">暂无已注册供应商。</p>
+          ) : (
+            providers.map(provider => (
+              <div
+                key={provider.id}
+                className="flex h-11 items-center gap-3 border-b border-line px-4 last:border-b-0"
+              >
+                <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
+                  {provider.name ?? provider.id}
+                </span>
+                <span className="text-[11px] text-hint">
+                  模型 {provider.models.length}
+                </span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10.5px] ${
+                    provider.authConfigured
+                      ? "bg-violet/15 text-violet"
+                      : "text-hint"
+                  }`}
+                >
+                  {provider.authConfigured ? "已认证" : "未配置"}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const { snapshot, error, reload } = useFoundation();
   const [searchParams] = useState(
@@ -695,6 +808,15 @@ export function App() {
   );
   const fixtures = searchParams.get("fixtures") === "1";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [view, setView] = useState<"task" | "settings">(() =>
+    new URLSearchParams(window.location.search).get("view") === "settings"
+      ? "settings"
+      : "task",
+  );
+  const [providers, setProviders] = useState<ProviderView[]>([]);
+  const [branchByProject, setBranchByProject] = useState<
+    Record<string, string | null>
+  >({});
   const [detailOpen, setDetailOpen] = useState(
     () => new URLSearchParams(window.location.search).get("detail") === "1",
   );
@@ -710,7 +832,9 @@ export function App() {
   const hudMode: HudMode =
     width >= WIDE_MIN ? "wide" : width >= MEDIUM_MIN ? "medium" : "compact";
   const hudVisible =
-    !detailOpen && (hudMode === "wide" || (hudMode !== "compact" && hudOpen));
+    view === "task" &&
+    !detailOpen &&
+    (hudMode === "wide" || (hudMode !== "compact" && hudOpen));
 
   const tasks = snapshot?.tasks ?? [];
   const selectedTask =
@@ -766,7 +890,20 @@ export function App() {
     };
   }, [coordinationSession?.id, fixtures]);
 
-  const modelOptions = (snapshot?.modelCatalogEntries ?? []).map(entry => ({
+  // 只出现已认证（authConfigured）供应商下的模型；当前选择始终保留。
+  const modelOptions = (snapshot?.modelCatalogEntries ?? []).filter(entry => {
+    if (
+      snapshot?.runtimeModelSelection &&
+      snapshot.runtimeModelSelection.providerId === entry.providerId &&
+      snapshot.runtimeModelSelection.modelId === entry.modelId
+    ) {
+      return true;
+    }
+    return (
+      (providers.find(provider => provider.id === entry.providerId)
+        ?.authConfigured ?? false) === true
+    );
+  }).map(entry => ({
     providerId: entry.providerId,
     modelId: entry.modelId,
     name: entry.name,
@@ -834,6 +971,49 @@ export function App() {
     fixtures
       ? FIXTURE_ENTRIES.length
       : (presentation?.inspection?.context.messageCount ?? 0);
+
+  const selectedProject = selectedTask
+    ? (snapshot?.projects.find(
+        project => project.id === taskProjectId(selectedTask),
+      ) ?? null)
+    : null;
+
+  useEffect(() => {
+    let alive = true;
+    api()
+      .request("modelProviders.list")
+      .then(value => {
+        if (alive) {
+          setProviders(
+            (value as { providers?: ProviderView[] }).providers ?? [],
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [snapshot?.storeRevision]);
+  useEffect(() => {
+    const projectId = selectedProject?.id;
+    if (!projectId || branchByProject[projectId] !== undefined) return;
+    let alive = true;
+    api()
+      .request("project.gitBranch", { projectId })
+      .then(value => {
+        if (alive) {
+          const result = value as GitBranchResult;
+          setBranchByProject(prev => ({
+            ...prev,
+            [projectId]: result.branch,
+          }));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [selectedProject?.id, branchByProject]);
   const conversationPresentation = fixtures
     ? ({
         dcodeSession: coordinationSession ?? {
@@ -871,7 +1051,7 @@ export function App() {
               label={task.title}
               meta={relTime(task.updatedAt)}
               active={selectedTask?.id === task.id}
-              onClick={() => setSelectedTaskId(task.id)}
+              onClick={() => { setSelectedTaskId(task.id); setView("task"); }}
             />
           </div>
         ))}
@@ -896,7 +1076,7 @@ export function App() {
                         session.taskId === task.id &&
                         session.kind === "child",
                     )}
-                    onSelect={() => setSelectedTaskId(task.id)}
+                    onSelect={() => { setSelectedTaskId(task.id); setView("task"); }}
                   />
                 ))}
               </div>
@@ -917,7 +1097,7 @@ export function App() {
                 session =>
                   session.taskId === task.id && session.kind === "child",
               )}
-              onSelect={() => setSelectedTaskId(task.id)}
+              onSelect={() => { setSelectedTaskId(task.id); setView("task"); }}
             />
           ))}
         <div className="mt-auto px-2 pt-4 text-[11px] text-hint">
@@ -929,8 +1109,35 @@ export function App() {
 
       <main
         aria-label="D Code 工作区"
-        className="relative flex min-w-0 flex-row"
+        className="relative flex min-w-0 flex-col"
       >
+        {view === "settings" ? (
+          <SettingsView
+            snapshot={snapshot}
+            providers={providers}
+            currentModel={currentModel}
+            onModelChange={changeModel}
+          />
+        ) : (
+        <>
+        {snapshot ? (
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4 text-[11.5px] text-muted">
+            <strong className="text-ink">
+              {selectedTask ? selectedTask.title : "D Code"}
+            </strong>
+            {selectedProject ? (
+              <span className="text-hint">· {selectedProject.title}</span>
+            ) : null}
+            {selectedProject ? (
+              <span className="rounded bg-ink/5 px-1.5 py-0.5 text-[10.5px] text-accent">
+                ⎇ {branchByProject[selectedProject.id] ?? "无 Git"}
+              </span>
+            ) : null}
+            <span className="flex-1" />
+            <span className="text-hint">任务对话</span>
+          </div>
+        ) : null}
+        <div className="relative flex min-w-0 flex-1 flex-row">
         <section
           className={`flex min-w-0 flex-1 flex-col overflow-y-auto py-7 ${
             hudMode === "wide" ? "pl-[72px] pr-[374px]" : "px-9"
@@ -1066,6 +1273,9 @@ export function App() {
             </motion.aside>
           ) : null}
         </AnimatePresence>
+        </div>
+        </>
+        )}
       </main>
     </div>
   );

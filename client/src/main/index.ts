@@ -57,6 +57,7 @@ async function createWindow(): Promise<void> {
   if (process.env.DCODE_OPEN_DETAIL === "1") query["detail"] = "1";
   if (process.env.DCODE_OPEN_HUD === "1") query["hud"] = "1";
   if (process.env.DCODE_FIXTURES === "1") query["fixtures"] = "1";
+  if (process.env.DCODE_VIEW) query["view"] = process.env.DCODE_VIEW;
   if (DEV_RENDERER_URL) {
     const url = new URL(DEV_RENDERER_URL);
     for (const [key, value] of Object.entries(query)) {
@@ -133,41 +134,49 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-void app.whenReady().then(async () => {
-  const theme = process.env.DCODE_THEME;
-  if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
-  bridge = await HostBridge.start({
-    executablePath: process.execPath,
-    executableIsElectron: true,
-    hostEntryPath: resolveHostEntryPath(),
-    agentDirPath: resolveAgentDirPath(),
-    dataRootPath: resolveDataRootPath(),
-    onStderr: text => console.error(`[host] ${text.trimEnd()}`),
-  });
-  bridge.onEvent(event => {
-    mainWindow?.webContents.send("dcode:event", event);
-  });
-  bridge.onExit((code, signal) => {
-    // 崩溃域分离：壳存活，如实把核心退出事件交给界面呈现恢复入口。
-    mainWindow?.webContents.send("dcode:event", {
-      version: 1,
-      type: "event",
-      event: "host.exit",
-      data: { code, signal: signal ?? null },
+void app
+  .whenReady()
+  .then(async () => {
+    const theme = process.env.DCODE_THEME;
+    if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
+    bridge = await HostBridge.start({
+      executablePath: process.execPath,
+      executableIsElectron: true,
+      hostEntryPath: resolveHostEntryPath(),
+      agentDirPath: resolveAgentDirPath(),
+      dataRootPath: resolveDataRootPath(),
+      onStderr: text => console.error(`[host] ${text.trimEnd()}`),
     });
+    bridge.onEvent(event => {
+      mainWindow?.webContents.send("dcode:event", event);
+    });
+    bridge.onExit((code, signal) => {
+      // 崩溃域分离：壳存活，如实把核心退出事件交给界面呈现恢复入口。
+      mainWindow?.webContents.send("dcode:event", {
+        version: 1,
+        type: "event",
+        event: "host.exit",
+        data: { code, signal: signal ?? null },
+      });
+    });
+
+    ipcMain.handle(
+      "dcode:request",
+      (_event, method: string, params?: Record<string, unknown>) => {
+        if (!bridge) throw new Error("host bridge is not ready");
+        return bridge.request(method, params ?? {});
+      },
+    );
+
+    await createWindow();
+    await captureThenQuit();
+  })
+  .catch((error: unknown) => {
+    console.error(
+      `[dcode] startup failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    app.quit();
   });
-
-  ipcMain.handle(
-    "dcode:request",
-    (_event, method: string, params?: Record<string, unknown>) => {
-      if (!bridge) throw new Error("host bridge is not ready");
-      return bridge.request(method, params ?? {});
-    },
-  );
-
-  await createWindow();
-  await captureThenQuit();
-});
 
 app.on("window-all-closed", () => {
   void (async () => {
