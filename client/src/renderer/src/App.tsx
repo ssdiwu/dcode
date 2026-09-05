@@ -11,17 +11,55 @@ import {
 } from "./types";
 
 /**
- * 验收面一：导航区 + 任务对话真实消息流（PRD 0028 §3）。
- * - 导航区：项目树 / 独立任务 / 最近工作占位；选中任务固定行高、纯色选中。
- * - 任务对话：协调会话真实消息（dcodeSession.presentation → inspection.entries），
- *   composer 经 dcodeSession.prompt 发起真实运行；草稿经 composerDraft.set 入库。
- * - 梗概浮卡 / 详情侧栏两态合同不变。
+ * 验收面一（完整版）：导航区 + 任务对话富消息流。
+ * - 消息渲染 Pi 会话条目：文本 / 思考（折叠）/ 工具调用与结果（折叠）/
+ *   模型与思考等级变更系统行。
+ * - Composer：模型与思考等级选择（runtimeModelSelection / setThinking）、
+ *   发送（dcodeSession.prompt）、运行中停止（session.abort）。
+ * - 梗概浮卡活数字：运行计时、工作项 n/m、成员、等待占位。
+ * - 稳定几何与两态合同不变。
  */
 
 const WIDE_MIN = 1320;
 const MEDIUM_MIN = 880;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 type HudMode = "wide" | "medium" | "compact";
+
+function relTime(iso?: string): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min} 分钟前`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "昨天";
+  return `${days} 天前`;
+}
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h} 小时 ${m} 分 ${s} 秒`
+    : m > 0
+      ? `${m} 分 ${s} 秒`
+      : `${s} 秒`;
+}
+
+function useNowInterval(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
 
 function useWorkspaceWidth(): number {
   const [width, setWidth] = useState(() =>
@@ -74,24 +112,318 @@ function useFoundation(): {
   return { snapshot, error, reload: () => setNonce(n => n + 1) };
 }
 
-function entryText(entry: SessionEntry): { role: string; text: string } | null {
-  if (entry.type !== "message" || !entry.message) return null;
-  const role = entry.message.role === "assistant" ? "assistant" : "user";
-  const content = entry.message.content;
-  let text = "";
-  if (typeof content === "string") {
-    text = content;
-  } else if (Array.isArray(content)) {
-    text = content
-      .map(part => {
-        const candidate = part as { type?: string; text?: string };
-        return candidate.type === "text" ? (candidate.text ?? "") : "";
-      })
-      .join("");
-  }
-  if (text.trim().length === 0) return null;
-  return { role, text };
+interface RenderedBlock {
+  kind: "text" | "thinking" | "toolCall" | "toolResult" | "system";
+  role?: string;
+  text: string;
 }
+
+function renderEntry(entry: SessionEntry): RenderedBlock[] | null {
+  if (entry.type === "model_change") {
+    const value = entry as unknown as { provider?: string; modelId?: string };
+    return [
+      {
+        kind: "system",
+        text: `模型切换至 ${value.provider ?? "?"} / ${value.modelId ?? "?"}`,
+      },
+    ];
+  }
+  if (entry.type === "thinking_level_change") {
+    const value = entry as unknown as { thinkingLevel?: string };
+    return [
+      { kind: "system", text: `思考强度调整为 ${value.thinkingLevel ?? "?"}` },
+    ];
+  }
+  if (entry.type !== "message" || !entry.message) return null;
+  const role = String(entry.message.role ?? "");
+  const content = entry.message.content;
+  const blocks: RenderedBlock[] = [];
+  const push = (kind: RenderedBlock["kind"], text: string) => {
+    if (text.trim().length > 0) blocks.push({ kind, role, text });
+  };
+  if (typeof content === "string") {
+    push(role === "assistant" ? "text" : "text", content);
+  } else if (Array.isArray(content)) {
+    for (const part of content) {
+      const block = part as {
+        type?: string;
+        text?: string;
+        thinking?: string;
+        toolName?: string;
+        name?: string;
+        arguments?: unknown;
+        input?: unknown;
+        output?: unknown;
+      };
+      if (block.type === "text") push("text", block.text ?? "");
+      else if (block.type === "thinking")
+        push("thinking", block.thinking ?? "");
+      else if (block.type === "toolCall") {
+        const args =
+          block.arguments ??
+          block.input ??
+          {};
+        let summary = "";
+        try {
+          summary = JSON.stringify(args);
+        } catch {
+          summary = String(args);
+        }
+        push(
+          "toolCall",
+          `${block.toolName ?? block.name ?? "工具调用"} ${summary}`.trim(),
+        );
+      } else if (block.type === "toolResult" || block.type === "tool_result") {
+        let output = "";
+        if (typeof block.output === "string") output = block.output;
+        else {
+          try {
+            output = JSON.stringify(block.output ?? block);
+          } catch {
+            output = String(block.output ?? "");
+          }
+        }
+        push("toolResult", output);
+      }
+    }
+  }
+  if (blocks.length === 0 && role === "toolResult") {
+    blocks.push({ kind: "toolResult", text: "（工具已执行，无输出内容）" });
+  }
+  return blocks.length > 0 ? blocks : null;
+}
+
+function CollapsibleRow({
+  label,
+  text,
+  monospace,
+  defaultOpen = false,
+}: {
+  label: string;
+  text: string;
+  monospace?: boolean;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="my-1.5 overflow-hidden rounded-lg border border-line bg-nav/60">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex h-7 w-full items-center gap-1.5 px-2.5 text-left text-[11px] text-hint hover:bg-ink/5"
+      >
+        <span
+          className={`inline-block transition-transform ${open ? "rotate-90" : ""}`}
+        >
+          ›
+        </span>
+        {label}
+        <span className="ml-1 min-w-0 flex-1 truncate font-normal opacity-70">
+          {text.split("\n")[0]}
+        </span>
+      </button>
+      {open ? (
+        <div
+          className={`border-t border-line px-3 py-2 text-[11.5px] leading-5 text-muted ${
+            monospace
+              ? "overflow-x-auto whitespace-pre font-mono"
+              : "whitespace-pre-wrap"
+          }`}
+        >
+          {text}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Conversation({
+  presentation,
+  draft,
+  onDraftChange,
+  onSend,
+  sending,
+  running,
+  onStop,
+  modelOptions,
+  currentModel,
+  onModelChange,
+  currentThinking,
+  onThinkingChange,
+}: {
+  presentation: DCodeSessionPresentation | null;
+  draft: string;
+  onDraftChange: (text: string) => void;
+  onSend: () => void;
+  sending: boolean;
+  running: boolean;
+  onStop: () => void;
+  modelOptions: { providerId: string; modelId: string; name: string }[];
+  currentModel: string | null;
+  onModelChange: (providerId: string, modelId: string) => void;
+  currentThinking: string | null;
+  onThinkingChange: (level: string) => void;
+}) {
+  const entries = presentation?.inspection?.entries ?? [];
+  const rendered = entries
+    .map(renderEntry)
+    .filter((value): value is RenderedBlock[] => value !== null)
+    .flat();
+
+  const canSend =
+    presentation !== null && draft.trim().length > 0 && !sending && !running;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {rendered.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="max-w-[460px] text-center">
+              <h2 className="text-[19px] font-semibold">想完成什么？</h2>
+              <p className="mt-2 text-[12.5px] leading-5 text-muted">
+                发送第一条消息后开始任务；标题可稍后调整。
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4 pb-4">
+            {rendered.map((block, index) => {
+              if (block.kind === "system") {
+                return (
+                  <div
+                    key={index}
+                    className="text-center text-[10.5px] text-hint"
+                  >
+                    — {block.text} —
+                  </div>
+                );
+              }
+              if (block.kind === "thinking") {
+                return (
+                  <CollapsibleRow
+                    key={index}
+                    label="思考"
+                    text={block.text}
+                  />
+                );
+              }
+              if (block.kind === "toolCall") {
+                return (
+                  <CollapsibleRow
+                    key={index}
+                    label="工具调用"
+                    text={block.text}
+                    monospace
+                  />
+                );
+              }
+              if (block.kind === "toolResult") {
+                return (
+                  <CollapsibleRow
+                    key={index}
+                    label="工具输出"
+                    text={block.text}
+                    monospace
+                  />
+                );
+              }
+              return (
+                <div key={index} className="text-[13px] leading-6">
+                  <div className="mb-0.5 text-[11px] font-semibold text-hint">
+                    {block.role === "assistant" ? "D Code" : "507"}
+                  </div>
+                  <div className="whitespace-pre-wrap">{block.text}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="pt-4">
+        {running ? (
+          <p className="pb-1.5 text-[11px] text-warn">
+            任务正在运行，可随时停止。
+          </p>
+        ) : null}
+        <div className="rounded-xl border border-line bg-raised p-3 shadow-sm">
+          <textarea
+            value={draft}
+            onChange={event => onDraftChange(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSend();
+              }
+            }}
+            placeholder={
+              presentation ? "继续说明你的判断…" : "选择任务后开始对话…"
+            }
+            rows={2}
+            className="w-full resize-none bg-transparent text-[12.5px] leading-5 outline-none placeholder:text-hint"
+          />
+          <div className="flex items-center gap-2 pt-1">
+            {modelOptions.length > 0 ? (
+              <select
+                aria-label="模型"
+                value={currentModel ?? ""}
+                onChange={event => {
+                  const [providerId, modelId] = event.target.value.split("::");
+                  if (providerId && modelId) onModelChange(providerId, modelId);
+                }}
+                className="h-6 max-w-[220px] rounded border border-line bg-transparent px-1 text-[11px] text-muted"
+              >
+                {currentModel === null ? (
+                  <option value="">模型（未选择）</option>
+                ) : null}
+                {modelOptions.map(option => (
+                  <option
+                    key={option.providerId + "::" + option.modelId}
+                    value={option.providerId + "::" + option.modelId}
+                  >
+                    {option.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <select
+              aria-label="思考强度"
+              value={currentThinking ?? "medium"}
+              onChange={event => onThinkingChange(event.target.value)}
+              className="h-6 rounded border border-line bg-transparent px-1 text-[11px] text-muted"
+            >
+              {THINKING_LEVELS.map(level => (
+                <option key={level} value={level}>
+                  思考 · {level}
+                </option>
+              ))}
+            </select>
+            <span className="flex-1" />
+            {running ? (
+              <button
+                onClick={onStop}
+                className="rounded-md bg-warn px-3 py-1 text-[12px] font-medium text-white"
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                onClick={onSend}
+                disabled={!canSend}
+                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white disabled:opacity-40"
+              >
+                {sending ? "发送中…" : "发送"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function sendHint(running: boolean): string | null {
+  return running ? "任务正在运行，可随时停止。" : null;
+}
+void sendHint;
 
 function NavRow({
   label,
@@ -194,6 +526,8 @@ function HudCard({
   snapshot,
   task,
   messageCount,
+  runElapsed,
+  runActive,
   onOpenDetail,
   onClose,
   floating,
@@ -201,6 +535,8 @@ function HudCard({
   snapshot: FoundationSnapshot;
   task: TaskRecord | null;
   messageCount: number;
+  runElapsed: string | null;
+  runActive: boolean;
   onOpenDetail: () => void;
   onClose: () => void;
   floating: boolean;
@@ -270,6 +606,7 @@ function HudCard({
             <div className="font-medium">{task.title}</div>
             <div className="text-muted">{task.goal}</div>
             <div className="text-hint">
+              {runActive && runElapsed ? `运行中 · ${runElapsed} · ` : ""}
               消息 {messageCount} · 工作项 完成 {done} / 进行 {inProgress}
               {blocked > 0 ? ` / 阻塞 ${blocked}` : ""}
               {items.length === 0 ? " · 暂无工作项" : ""}
@@ -317,83 +654,53 @@ function HudCard({
   );
 }
 
-function Conversation({
-  presentation,
-  draft,
-  onDraftChange,
-  onSend,
-  sending,
-}: {
-  presentation: DCodeSessionPresentation | null;
-  draft: string;
-  onDraftChange: (text: string) => void;
-  onSend: () => void;
-  sending: boolean;
-}) {
-  const entries = presentation?.inspection?.entries ?? [];
-  const messages = entries
-    .map(entryText)
-    .filter((value): value is { role: string; text: string } => value !== null);
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="max-w-[460px] text-center">
-              <h2 className="text-[19px] font-semibold">想完成什么？</h2>
-              <p className="mt-2 text-[12.5px] leading-5 text-muted">
-                发送第一条消息后开始任务；标题可稍后调整。
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {messages.map((message, index) => (
-              <div key={index} className="text-[13px] leading-6">
-                <div className="mb-0.5 text-[11px] font-semibold text-hint">
-                  {message.role === "assistant" ? "D Code" : "507"}
-                </div>
-                <div className="whitespace-pre-wrap">{message.text}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="pt-4">
-        <div className="rounded-xl border border-line bg-raised p-3 shadow-sm">
-          <textarea
-            value={draft}
-            onChange={event => onDraftChange(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                onSend();
-              }
-            }}
-            placeholder={
-              presentation ? "继续说明你的判断…" : "选择任务后开始对话…"
-            }
-            rows={2}
-            className="w-full resize-none bg-transparent text-[12.5px] leading-5 outline-none placeholder:text-hint"
-          />
-          <div className="flex justify-end">
-            <button
-              onClick={onSend}
-              disabled={sending || draft.trim().length === 0}
-              className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white disabled:opacity-40"
-            >
-              {sending ? "发送中…" : "发送"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+const FIXTURE_ENTRIES: SessionEntry[] = [
+  {
+    id: "f1",
+    type: "message",
+    message: {
+      role: "user",
+      content: [{ type: "text", text: "把视觉摘要的默认关系收口一下，先说结论。" }],
+    },
+  } as unknown as SessionEntry,
+  {
+    id: "f2",
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "先看现有摘要管线的分组逻辑，确认默认关系写在哪里。" },
+        { type: "text", text: "结论：默认关系应由「视觉方向」决定分组，摘要只做引用。\n\n我先读一遍现有实现确认。" },
+        { type: "toolCall", toolName: "read", arguments: { path: "Sources/SummaryCardView.swift" } },
+      ],
+    },
+  } as unknown as SessionEntry,
+  {
+    id: "f3",
+    type: "message",
+    message: {
+      role: "toolResult",
+      content: [
+        { type: "toolResult", toolName: "read", output: "struct SummaryCardView: View {\n  // 42 行\n}" },
+      ],
+    },
+  } as unknown as SessionEntry,
+  {
+    id: "f4",
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "已确认：分组逻辑集中在 SummaryCardView。建议直接把默认关系常量收敛到一个文件。" }],
+    },
+  } as unknown as SessionEntry,
+];
 
 export function App() {
   const { snapshot, error, reload } = useFoundation();
+  const [searchParams] = useState(
+    () => new URLSearchParams(window.location.search),
+  );
+  const fixtures = searchParams.get("fixtures") === "1";
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(
     () => new URLSearchParams(window.location.search).get("detail") === "1",
@@ -425,8 +732,27 @@ export function App() {
       ) ?? null
     );
   }, [snapshot, selectedTask]);
+  const sessionRun = useMemo(() => {
+    if (!snapshot || !coordinationSession) return null;
+    const runs = snapshot.sessionRuns.filter(
+      run => run.sessionId === coordinationSession.id,
+    );
+    return runs.length > 0 ? runs[runs.length - 1] : null;
+  }, [snapshot, coordinationSession]);
+  const runActive =
+    sessionRun !== null &&
+    sessionRun.status === "running" &&
+    sessionRun.startedAt !== undefined;
+  const now = useNowInterval(runActive);
+  const runElapsed = sessionRun?.startedAt
+    ? formatElapsed(now - new Date(sessionRun.startedAt).getTime())
+    : null;
 
   useEffect(() => {
+    if (fixtures) {
+      setPresentation(null);
+      return;
+    }
     if (!coordinationSession) {
       setPresentation(null);
       return;
@@ -445,7 +771,51 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [coordinationSession?.id]);
+  }, [coordinationSession?.id, fixtures]);
+
+  const modelOptions = (snapshot?.modelCatalogEntries ?? []).map(entry => ({
+    providerId: entry.providerId,
+    modelId: entry.modelId,
+    name: entry.name,
+  }));
+  const currentModel = snapshot?.runtimeModelSelection
+    ? `${snapshot.runtimeModelSelection.providerId}::${snapshot.runtimeModelSelection.modelId}`
+    : null;
+  const currentThinking = presentation?.inspection?.context.thinkingLevel ?? null;
+
+  const changeModel = async (providerId: string, modelId: string) => {
+    if (!snapshot) return;
+    try {
+      await api().request("runtimeModelSelection.set", {
+        requestId: `web-model-${Date.now()}`,
+        expectedStoreRevision: snapshot.storeRevision,
+        providerId,
+        modelId,
+      });
+      reload();
+    } catch (reason) {
+      setSendError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const changeThinking = async (level: string) => {
+    try {
+      await api().request("session.setThinking", { level });
+    } catch (reason) {
+      setSendError(
+        `思考强度尚未生效（需要运行中的会话）：${reason instanceof Error ? reason.message : String(reason)}`,
+      );
+    }
+  };
+
+  const stop = async () => {
+    try {
+      await api().request("session.abort", {});
+      reload();
+    } catch (reason) {
+      setSendError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
 
   const send = async () => {
     const text = draft.trim();
@@ -467,7 +837,28 @@ export function App() {
     }
   };
 
-  const messageCount = presentation?.inspection?.context.messageCount ?? 0;
+  const messageCount =
+    fixtures
+      ? FIXTURE_ENTRIES.length
+      : (presentation?.inspection?.context.messageCount ?? 0);
+  const conversationPresentation = fixtures
+    ? ({
+        dcodeSession: coordinationSession ?? {
+          id: "fixture",
+          taskId: "fixture",
+          kind: "coordination",
+          title: "样式样例",
+          state: "idle",
+          updatedAt: "",
+        },
+        adapterState: "ready",
+        runtime: null,
+        binding: null,
+        inspection: { leafId: null, entries: FIXTURE_ENTRIES, context: { messageCount: FIXTURE_ENTRIES.length, model: null, thinkingLevel: "medium" } },
+      } as DCodeSessionPresentation)
+    : presentation;
+  const runElapsedForHud = fixtures ? "1 分 24 秒" : runElapsed;
+  const runActiveForHud = fixtures ? true : runActive;
 
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] bg-canvas text-ink">
@@ -482,12 +873,14 @@ export function App() {
           最近工作
         </div>
         {tasks.slice(0, 3).map(task => (
-          <NavRow
-            key={task.id}
-            label={task.title}
-            active={selectedTask?.id === task.id}
-            onClick={() => setSelectedTaskId(task.id)}
-          />
+          <div key={task.id}>
+            <NavRow
+              label={task.title}
+              meta={relTime(task.updatedAt)}
+              active={selectedTask?.id === task.id}
+              onClick={() => setSelectedTaskId(task.id)}
+            />
+          </div>
         ))}
         <div className="px-2 pt-4 pb-1 text-[10.5px] font-medium text-hint">
           项目
@@ -534,7 +927,11 @@ export function App() {
               onSelect={() => setSelectedTaskId(task.id)}
             />
           ))}
-        <div className="mt-auto px-2 pt-4 text-[12px] text-hint">设置（占位）</div>
+        <div className="mt-auto px-2 pt-4 text-[11px] text-hint">
+          本机 · Provider{" "}
+          {(snapshot?.modelProviders ?? []).length} 个
+        </div>
+        <div className="px-2 pt-1 text-[12px] text-hint">设置（占位）</div>
       </nav>
 
       <main
@@ -547,6 +944,11 @@ export function App() {
           }`}
         >
           <div className="mx-auto flex h-full w-[min(680px,100%)] flex-col">
+            {fixtures ? (
+              <div className="mb-3 rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-center text-[10.5px] text-warn">
+                样式样例（非真实数据）——用于验收消息渲染形态
+              </div>
+            ) : null}
             {error ? (
               <div className="rounded-xl border border-line bg-raised p-5">
                 <strong className="text-warn">Host 连接失败</strong>
@@ -565,18 +967,38 @@ export function App() {
             ) : (
               <>
                 <div className="text-[10.5px] text-hint">
-                  {selectedTask ? "任务对话" : "暂无任务"}
+                  {selectedTask
+                    ? `${
+                        selectedTask.scope.kind === "project"
+                          ? (snapshot.projects.find(
+                              project =>
+                                project.id === selectedTask.scope.projectId,
+                            )?.title ?? "项目")
+                          : "独立任务"
+                      } / ${selectedTask.title} · 任务对话`
+                    : "暂无任务"}
                 </div>
                 <h1 className="mb-4 mt-1 text-[17px] font-semibold">
                   {selectedTask ? selectedTask.title : "D Code"}
                 </h1>
                 <div className="min-h-0 flex-1">
                   <Conversation
-                    presentation={coordinationSession ? presentation : null}
+                    presentation={
+                      fixtures || coordinationSession
+                        ? conversationPresentation
+                        : null
+                    }
                     draft={draft}
                     onDraftChange={setDraft}
                     onSend={send}
                     sending={sending}
+                    running={runActiveForHud}
+                    onStop={stop}
+                    modelOptions={modelOptions}
+                    currentModel={currentModel}
+                    onModelChange={changeModel}
+                    currentThinking={currentThinking}
+                    onThinkingChange={changeThinking}
                   />
                 </div>
                 {sendError ? (
@@ -600,6 +1022,8 @@ export function App() {
                 snapshot={snapshot}
                 task={selectedTask}
                 messageCount={messageCount}
+                runElapsed={runElapsedForHud}
+                runActive={runActiveForHud}
                 floating={hudMode === "wide"}
                 onOpenDetail={() => {
                   setDetailOpen(true);

@@ -80,13 +80,41 @@ export interface SessionEntry {
 export interface SessionInspection {
   leafId: string | null;
   entries: SessionEntry[];
-  context: { messageCount: number };
+  context: {
+    messageCount: number;
+    model: { provider: string; modelId: string } | null;
+    thinkingLevel: string;
+  };
 }
 
 export interface DCodeSessionPresentation {
   dcodeSession: DCodeSessionRecord;
   adapterState: "ready" | "unbound" | "unavailable";
+  runtime: { runtimeId: string; state: string } | null;
+  binding: { sessionId?: string; adapterSessionId?: string } | null;
   inspection: SessionInspection | null;
+}
+
+export interface SessionRunRecord {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  status: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface ModelCatalogEntryRecord {
+  id: string;
+  providerId: string;
+  modelId: string;
+  name: string;
+  reasoning: boolean;
+}
+
+export interface RuntimeModelSelectionRecord {
+  providerId: string;
+  modelId: string;
 }
 
 export interface FoundationSnapshot {
@@ -100,6 +128,10 @@ export interface FoundationSnapshot {
   agentProfiles: AgentProfileRecord[];
   coordinatorAssignments: CoordinatorAssignmentRecord[];
   sessions: DCodeSessionRecord[];
+  sessionRuns: SessionRunRecord[];
+  modelCatalogEntries: ModelCatalogEntryRecord[];
+  modelProviders: { id: string }[];
+  runtimeModelSelection?: RuntimeModelSelectionRecord;
 }
 
 export interface DcodeApi {

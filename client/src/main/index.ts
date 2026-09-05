@@ -56,6 +56,7 @@ async function createWindow(): Promise<void> {
   const query: Record<string, string> = {};
   if (process.env.DCODE_OPEN_DETAIL === "1") query["detail"] = "1";
   if (process.env.DCODE_OPEN_HUD === "1") query["hud"] = "1";
+  if (process.env.DCODE_FIXTURES === "1") query["fixtures"] = "1";
   if (DEV_RENDERER_URL) {
     const url = new URL(DEV_RENDERER_URL);
     for (const [key, value] of Object.entries(query)) {
