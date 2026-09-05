@@ -16,6 +16,7 @@
     "build:renderer": "node_modules/.bin/vite build",
     "test": "npm run build:main && node --test dist/test/*.test.js",
     "smoke:host": "npm run build:main && node scripts/smoke-host.mjs",
+    "seed:visual": "npm run build:main && node scripts/seed-store.mjs",
     "dev": "node scripts/dev.mjs",
     "start": "npm run build && node scripts/dev.mjs --no-vite",
     "capture": "npm run build && node scripts/dev.mjs --capture"

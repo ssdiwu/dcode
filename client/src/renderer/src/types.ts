@@ -55,6 +55,40 @@ export interface CoordinatorAssignmentRecord {
   profileId: string;
 }
 
+export type DCodeSessionKind = "coordination" | "child" | "standard";
+
+export interface DCodeSessionRecord {
+  id: string;
+  taskId: string;
+  kind: DCodeSessionKind;
+  title: string;
+  state: "idle" | "active" | "waiting" | "completed" | "failed" | "archived";
+  updatedAt: string;
+}
+
+export interface SessionTextPart {
+  type: "text";
+  text?: string;
+}
+
+export interface SessionEntry {
+  id: string;
+  type: string;
+  message?: { role?: string; content?: unknown };
+}
+
+export interface SessionInspection {
+  leafId: string | null;
+  entries: SessionEntry[];
+  context: { messageCount: number };
+}
+
+export interface DCodeSessionPresentation {
+  dcodeSession: DCodeSessionRecord;
+  adapterState: "ready" | "unbound" | "unavailable";
+  inspection: SessionInspection | null;
+}
+
 export interface FoundationSnapshot {
   schemaVersion: number;
   storeRevision: number;
@@ -65,7 +99,7 @@ export interface FoundationSnapshot {
   taskWorkItems: TaskWorkItemRecord[];
   agentProfiles: AgentProfileRecord[];
   coordinatorAssignments: CoordinatorAssignmentRecord[];
-  sessions: { id: string; taskId?: string }[];
+  sessions: DCodeSessionRecord[];
 }
 
 export interface DcodeApi {
