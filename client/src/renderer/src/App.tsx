@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp, Paperclip, X } from "lucide-react";
 import { SelectMenu } from "./components/SelectMenu";
+import { ImportPanel } from "./components/ImportPanel";
 import { Markdown } from "./components/Markdown";
 import {
   api,
@@ -922,6 +923,9 @@ export function App() {
       ? "settings"
       : "task",
   );
+  const [importOpen, setImportOpen] = useState(
+    () => new URLSearchParams(window.location.search).get("import") === "1",
+  );
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [branchByProject, setBranchByProject] = useState<
     Record<string, string | null>
@@ -1316,6 +1320,10 @@ export function App() {
               onSelect={() => { setSelectedTaskId(task.id); setView("task"); }}
             />
           ))}
+        <div className="px-2 pt-4 pb-1 text-[10.5px] font-medium text-hint">
+          导入
+        </div>
+        <NavRow label="导入 Pi 会话…" onClick={() => setImportOpen(true)} />
         <div className="mt-auto px-2 pt-4 text-[11px] text-hint">
           本机 · Provider{" "}
           {(snapshot?.modelProviders ?? []).length} 个
@@ -1336,6 +1344,24 @@ export function App() {
           />
         ) : (
         <>
+        <AnimatePresence>
+          {importOpen ? (
+            <motion.div
+              key="import"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-30 flex items-center justify-center bg-ink/40"
+              onClick={() => setImportOpen(false)}
+            >
+              <ImportPanel
+                onClose={() => setImportOpen(false)}
+                onImported={reload}
+                userId={snapshot.currentUser.id}
+              />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
         {snapshot ? (
           <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4 text-[11.5px] text-muted">
             <strong className="text-ink">
@@ -1350,7 +1376,97 @@ export function App() {
               </span>
             ) : null}
             <span className="flex-1" />
+            {coordinationSession && presentation?.inspection ? (
+              <span className="text-hint">
+                路径 ·{" "}
+                {
+                  presentation.inspection.paths.find(
+                    path => path.id === presentation.inspection?.currentPathId,
+                  )?.title ?? "主路径"
+                }
+              </span>
+            ) : null}
             <span className="text-hint">任务对话</span>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  aria-label="会话操作"
+                  className="rounded px-1.5 py-0.5 text-hint hover:bg-ink/5"
+                >
+                  ⋯
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  align="end"
+                  className="z-50 min-w-[160px] rounded-lg border border-line bg-raised p-1 shadow-xl"
+                >
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      const title = window.prompt("重命名任务", task?.title ?? "");
+                      if (title && coordinationSession) {
+                        void api()
+                          .request("session.setName", { name: title })
+                          .then(() => reload())
+                          .catch((reason: unknown) =>
+                            setSendError(
+                              reason instanceof Error
+                                ? reason.message
+                                : String(reason),
+                            ),
+                          );
+                      }
+                    }}
+                    className="flex h-7 cursor-pointer items-center rounded-md px-2 text-[12px] outline-none data-[highlighted]:bg-accent-fill"
+                  >
+                    重命名会话
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      if (coordinationSession && task) {
+                        void api()
+                          .request("session.copy", {
+                            sessionId: coordinationSession.id,
+                            targetCwd: task.cwd,
+                          })
+                          .then(() => reload())
+                          .catch((reason: unknown) =>
+                            setSendError(
+                              reason instanceof Error
+                                ? reason.message
+                                : String(reason),
+                            ),
+                          );
+                      }
+                    }}
+                    className="flex h-7 cursor-pointer items-center rounded-md px-2 text-[12px] outline-none data-[highlighted]:bg-accent-fill"
+                  >
+                    复制完整会话
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    onSelect={() => {
+                      if (coordinationSession) {
+                        void api()
+                          .request("session.trash", {
+                            sessionId: coordinationSession.id,
+                          })
+                          .then(() => reload())
+                          .catch((reason: unknown) =>
+                            setSendError(
+                              reason instanceof Error
+                                ? reason.message
+                                : String(reason),
+                            ),
+                          );
+                      }
+                    }}
+                    className="flex h-7 cursor-pointer items-center rounded-md px-2 text-[12px] text-warn outline-none data-[highlighted]:bg-warn/10"
+                  >
+                    移入废纸篓（仅空会话）
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
         ) : null}
         <div className="relative flex min-w-0 flex-1 flex-row">
