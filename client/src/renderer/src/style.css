@@ -58,6 +58,15 @@ body,
   background: var(--c-canvas);
 }
 
+/* macOS hiddenInset：红绿灯落在导航区顶部，此条为窗口拖拽区 */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.drag-region button {
+  -webkit-app-region: no-drag;
+}
+
 body {
   color: var(--c-ink);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",

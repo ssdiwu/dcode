@@ -119,6 +119,48 @@ function NavRow({
   );
 }
 
+function TaskNavGroup({
+  task,
+  selected,
+  childSessions,
+  onSelect,
+}: {
+  task: TaskRecord;
+  selected: boolean;
+  childSessions: { id: string; title?: string; state: string }[];
+  onSelect: () => void;
+}) {
+  return (
+    <div>
+      <NavRow label={task.title} active={selected} onClick={onSelect} />
+      {selected && childSessions.length > 0 ? (
+        <div className="ml-3 border-l border-line pl-1.5">
+          {childSessions.map(session => (
+            <div
+              key={session.id}
+              className="flex h-7 items-center gap-2 rounded-md px-2 text-[11.5px] text-muted"
+            >
+              <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-violet" />
+              <span className="min-w-0 flex-1 truncate">
+                {session.title || "子会话"}
+              </span>
+              <span className="shrink-0 text-[10px] text-hint">
+                {session.state === "active"
+                  ? "进行中"
+                  : session.state === "waiting"
+                    ? "等待"
+                    : session.state === "completed"
+                      ? "已完成"
+                      : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function HudSection({
   title,
   children,
@@ -131,10 +173,10 @@ function HudSection({
   onToggle: () => void;
 }) {
   return (
-    <div className="border-b border-line px-3 py-2 last:border-b-0">
+    <div className="border-b border-line px-3 py-1.5 last:border-b-0">
       <button
         onClick={onToggle}
-        className="flex h-6 w-full items-center gap-1.5 rounded px-1 text-left text-[10.5px] font-semibold tracking-wide text-hint hover:bg-ink/5"
+        className="flex h-5 w-full items-center gap-1.5 rounded px-1 text-left text-[10.5px] font-semibold tracking-wide text-hint hover:bg-ink/5"
       >
         <span
           className={`inline-block transition-transform ${expanded ? "rotate-90" : ""}`}
@@ -143,7 +185,7 @@ function HudSection({
         </span>
         {title}
       </button>
-      {expanded ? <div className="pt-1.5">{children}</div> : null}
+      {expanded ? <div className="pt-1">{children}</div> : null}
     </div>
   );
 }
@@ -297,11 +339,13 @@ function Conversation({
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {messages.length === 0 ? (
-          <div className="mx-auto mt-24 max-w-[460px] text-center">
-            <h2 className="text-[19px] font-semibold">想完成什么？</h2>
-            <p className="mt-2 text-[12.5px] leading-5 text-muted">
-              发送第一条消息后开始任务；标题可稍后调整。
-            </p>
+          <div className="flex h-full items-center justify-center">
+            <div className="max-w-[460px] text-center">
+              <h2 className="text-[19px] font-semibold">想完成什么？</h2>
+              <p className="mt-2 text-[12.5px] leading-5 text-muted">
+                发送第一条消息后开始任务；标题可稍后调整。
+              </p>
+            </div>
           </div>
         ) : (
           <div className="space-y-5">
@@ -429,8 +473,9 @@ export function App() {
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] bg-canvas text-ink">
       <nav
         aria-label="D Code 导航区"
-        className="flex flex-col gap-0.5 overflow-y-auto bg-nav px-2.5 py-4"
+        className="flex flex-col gap-0.5 overflow-y-auto bg-nav px-2.5 pb-4"
       >
+        <div className="drag-region h-[38px] shrink-0" />
         <div className="px-2 pb-3 text-[14px] font-semibold">D Code</div>
         <NavRow label="＋ 新建任务" />
         <div className="px-2 pt-4 pb-1 text-[10.5px] font-medium text-hint">
@@ -456,11 +501,16 @@ export function App() {
               <NavRow label={project.title} meta={`${owned.length}`} />
               <div className="ml-3 border-l border-line pl-1.5">
                 {owned.map(task => (
-                  <NavRow
+                  <TaskNavGroup
                     key={task.id}
-                    label={task.title}
-                    active={selectedTask?.id === task.id}
-                    onClick={() => setSelectedTaskId(task.id)}
+                    task={task}
+                    selected={selectedTask?.id === task.id}
+                    childSessions={(snapshot?.sessions ?? []).filter(
+                      session =>
+                        session.taskId === task.id &&
+                        session.kind === "child",
+                    )}
+                    onSelect={() => setSelectedTaskId(task.id)}
                   />
                 ))}
               </div>
@@ -473,11 +523,15 @@ export function App() {
         {tasks
           .filter(task => taskProjectId(task) === null)
           .map(task => (
-            <NavRow
+            <TaskNavGroup
               key={task.id}
-              label={task.title}
-              active={selectedTask?.id === task.id}
-              onClick={() => setSelectedTaskId(task.id)}
+              task={task}
+              selected={selectedTask?.id === task.id}
+              childSessions={(snapshot?.sessions ?? []).filter(
+                session =>
+                  session.taskId === task.id && session.kind === "child",
+              )}
+              onSelect={() => setSelectedTaskId(task.id)}
             />
           ))}
         <div className="mt-auto px-2 pt-4 text-[12px] text-hint">设置（占位）</div>
@@ -487,7 +541,11 @@ export function App() {
         aria-label="D Code 工作区"
         className="relative flex min-w-0 flex-row"
       >
-        <section className="flex min-w-0 flex-1 flex-col px-9 py-7">
+        <section
+          className={`flex min-w-0 flex-1 flex-col overflow-y-auto py-7 ${
+            hudMode === "wide" ? "pl-[72px] pr-[374px]" : "px-9"
+          }`}
+        >
           <div className="mx-auto flex h-full w-[min(680px,100%)] flex-col">
             {error ? (
               <div className="rounded-xl border border-line bg-raised p-5">

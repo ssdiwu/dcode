@@ -43,6 +43,8 @@ async function createWindow(): Promise<void> {
     title: "D Code",
     show: false,
     backgroundColor: "#1c1c1e",
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 14, y: 12 },
     webPreferences: {
       preload: join(here, "..", "preload", "index.js"),
       contextIsolation: true,
