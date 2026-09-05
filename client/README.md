@@ -2,14 +2,16 @@
 
 `client/` 是 [PRD 0028（0.0.30 Web 客户端初版）](../doc/40-版本实施方案/0028-0.0.30-Web客户端初版产品需求.md)的实现目录：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 `host/`，不写 Product Store、Project Directory 或凭据。选型与七题结论见 [0003 技术栈](../doc/10-架构与运行/0003-Web客户端技术栈.md)。
 
-## 当前状态（骨架，2026-09-05 起）
+## 当前状态（2026-09-05，验收面一已通过机器自验、待 507 人工确认）
 
 已落并经自动验证：
 
 - `src/protocol/`：传输无关的 Protocol v1 客户端（JSONL 解码 + 请求关联 + 事件分发），单测覆盖分片、超限恢复、关联与超时。
 - `src/host/`：Host 启动计划（Electron 二进制 `ELECTRON_RUN_AS_NODE` Node 模式或纯 Node；环境合同平移自 Swift `HostLocator`）与 Host 桥（`host.ready` 握手、优雅停机、崩溃上抛）。
 - `scripts/smoke-host.mjs`：壳冒烟——拉起真实 `host/` 构建产物 → 握手 → `foundation.snapshot` → 优雅退出，全程隔离临时 data-root，不触碰真实 `~/.dcode`。
-- `src/main/`、`src/preload/`、`src/renderer/`：Electron 主进程、预载与三区布局骨架（数据真实、形态占位）。**渲染工具链（electron / vite / react / tailwind / motion / swr）尚未安装**，主进程与渲染层尚未编译运行。
+- `scripts/seed-store.mjs`（`npm run seed:visual`）：在隔离数据根 `/tmp/dcode-visual-store/` 用真实协议（`project.create` / `task.create`）产出含协调会话的验收数据。
+- `src/main/`、`src/preload/`、`src/renderer/`：Electron 主进程、预载与三区布局——**验收面一（导航区 + 任务对话真实消息流）已实现并机器自验通过**：真实 Product Store 数据、梗概浮卡（进度 + Agent Team）、详情侧栏挤压任务区、稳定几何、深浅双主题；渲染工具链（electron / vite / react / tailwind / motion / zustand / swr）已安装并接入构建。
+- 视觉自验截图：`/tmp/dcode-shots/`（七态）；人工确认后按 PRD 0028 §5 执行 Swift 对应面拆除。
 
 ## 命令
 
