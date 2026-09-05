@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp, Paperclip, Plus, Settings, X } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { SelectMenu } from "./components/SelectMenu";
 import { ImportPanel } from "./components/ImportPanel";
 import { Markdown } from "./components/Markdown";
@@ -1193,16 +1194,6 @@ export function App() {
   const [hostDead, setHostDead] = useState(false);
   const prevRunActiveRef = useRef(false);
   useEffect(() => {
-    const active = runActiveForHud || streaming.active;
-    if (prevRunActiveRef.current && !active && selectedTask) {
-      void api()
-        .notify({ title: "任务已收口", body: selectedTask.title })
-        .catch(() => undefined);
-    }
-    prevRunActiveRef.current = active;
-  }, [runActiveForHud, streaming.active, selectedTask]);
-
-  useEffect(() => {
     const unsubscribe = api().subscribe(envelope => {
       const message = envelope as { event?: string };
       if (message.event === "host.exit") setHostDead(true);
@@ -1289,6 +1280,17 @@ export function App() {
     : presentation;
   const runElapsedForHud = fixtures ? "1 分 24 秒" : runElapsed;
   const runActiveForHud = fixtures ? true : runActive;
+
+  useEffect(() => {
+    const active = runActiveForHud || streaming.active;
+    if (prevRunActiveRef.current && !active && selectedTask) {
+      void api()
+        .notify({ title: "任务已收口", body: selectedTask.title })
+        .catch(() => undefined);
+    }
+    prevRunActiveRef.current = active;
+  }, [runActiveForHud, streaming.active, selectedTask]);
+
 
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] bg-canvas text-ink">
