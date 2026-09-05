@@ -30,6 +30,10 @@ function resolveHostEntryPath(): string {
   return join(here, "..", "..", "..", "..", "host", "dist", "src", "index.js");
 }
 
+function resolveIconPath(): string {
+  return join(here, "..", "..", "..", "build", "icon.png");
+}
+
 function resolveAgentDirPath(): string {
   return (
     process.env.DCODE_AGENT_DIR ?? join(app.getPath("home"), ".pi", "agent")
@@ -49,6 +53,7 @@ async function createWindow(): Promise<void> {
     minHeight: 480,
     title: "D Code",
     show: false,
+    icon: resolveIconPath(),
     backgroundColor: "#1c1c1e",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 14, y: 12 },
@@ -187,6 +192,9 @@ function buildMenu(
 void app
   .whenReady()
   .then(async () => {
+    if (process.platform === "darwin" && app.dock) {
+      app.dock.setIcon(resolveIconPath());
+    }
     const theme = process.env.DCODE_THEME;
     if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
     bridge = await HostBridge.start({

@@ -5,6 +5,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { SelectMenu } from "./components/SelectMenu";
 import { ImportPanel } from "./components/ImportPanel";
 import { Markdown } from "./components/Markdown";
+import logoUrl from "./assets/logo.png";
 import {
   api,
   fetchSnapshot,
@@ -1299,7 +1300,10 @@ export function App() {
         className="flex flex-col gap-0.5 overflow-y-auto bg-nav px-2.5 pb-4"
       >
         <div className="drag-region h-[38px] shrink-0" />
-        <div className="px-2 pb-3 text-[14px] font-semibold">D Code</div>
+        <div className="flex items-center gap-2 px-2 pb-3">
+          <img src={logoUrl} alt="" className="h-5 w-5 rounded-md" />
+          <span className="text-[14px] font-semibold">D Code</span>
+        </div>
         <NavRow label="新建任务" icon={<Plus size={13} />} />
         <div className="px-2 pt-4 pb-1 text-[10.5px] font-medium text-hint">
           最近工作
