@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { ArrowUp } from "lucide-react";
+import { SelectMenu } from "./components/SelectMenu";
 import {
   api,
   fetchSnapshot,
@@ -360,57 +362,48 @@ function Conversation({
             rows={2}
             className="w-full resize-none bg-transparent text-[12.5px] leading-5 outline-none placeholder:text-hint"
           />
-          <div className="flex items-center gap-2 pt-1">
-            {modelOptions.length > 0 ? (
-              <select
-                aria-label="模型"
-                value={currentModel ?? ""}
-                onChange={event => {
-                  const [providerId, modelId] = event.target.value.split("::");
-                  if (providerId && modelId) onModelChange(providerId, modelId);
-                }}
-                className="h-6 max-w-[220px] rounded border border-line bg-transparent px-1 text-[11px] text-muted"
-              >
-                {currentModel === null ? (
-                  <option value="">模型（未选择）</option>
-                ) : null}
-                {modelOptions.map(option => (
-                  <option
-                    key={option.providerId + "::" + option.modelId}
-                    value={option.providerId + "::" + option.modelId}
-                  >
-                    {option.name}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <select
-              aria-label="思考强度"
+          <div className="flex items-center gap-1 pt-1">
+            <SelectMenu
+              ariaLabel="选择模型"
+              accent
+              placeholder="模型（未选择）"
+              value={currentModel}
+              options={modelOptions.map(option => ({
+                value: option.providerId + "::" + option.modelId,
+                label: option.name,
+              }))}
+              onChange={value => {
+                const [providerId, modelId] = value.split("::");
+                if (providerId && modelId) onModelChange(providerId, modelId);
+              }}
+            />
+            <SelectMenu
+              ariaLabel="选择思考强度"
+              placeholder="思考"
               value={currentThinking ?? "medium"}
-              onChange={event => onThinkingChange(event.target.value)}
-              className="h-6 rounded border border-line bg-transparent px-1 text-[11px] text-muted"
-            >
-              {THINKING_LEVELS.map(level => (
-                <option key={level} value={level}>
-                  思考 · {level}
-                </option>
-              ))}
-            </select>
+              options={THINKING_LEVELS.map(level => ({
+                value: level,
+                label: `思考 · ${level}`,
+              }))}
+              onChange={onThinkingChange}
+            />
             <span className="flex-1" />
             {running ? (
               <button
                 onClick={onStop}
-                className="rounded-md bg-warn px-3 py-1 text-[12px] font-medium text-white"
+                className="flex h-7 w-7 items-center justify-center rounded-md bg-warn text-white"
+                aria-label="停止"
               >
-                停止
+                <span className="inline-block h-2.5 w-2.5 rounded-[2px] bg-white" />
               </button>
             ) : (
               <button
                 onClick={onSend}
                 disabled={!canSend}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white disabled:opacity-40"
+                aria-label="发送"
+                className="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-white disabled:opacity-40"
               >
-                {sending ? "发送中…" : "发送"}
+                <ArrowUp size={14} />
               </button>
             )}
           </div>
