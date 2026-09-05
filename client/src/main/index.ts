@@ -75,44 +75,48 @@ async function captureThenQuit(): Promise<void> {
   const diagnostics = await mainWindow.webContents
     .executeJavaScript(
       `(() => {
-        const pick = selector => {
-          const el = document.querySelector(selector);
-          if (!el) return null;
-          const style = getComputedStyle(el);
-          return style.backgroundColor || style.color;
-        };
-        return {
-          dark: matchMedia("(prefers-color-scheme: dark)").matches,
-          rootColorScheme: getComputedStyle(document.documentElement).colorScheme,
-          nav: pick(".bg-nav"),
-          canvas: pick(".bg-canvas"),
-          raised: pick(".bg-raised"),
-          rootVars: (() => {
-            const style = getComputedStyle(document.documentElement);
-            return { nav: style.getPropertyValue("--c-nav").trim(), raised: style.getPropertyValue("--c-raised").trim() };
-          })(),
-          geometry: (() => {
-            const root = document.getElementById("root");
-            const body = document.body;
-            const app = root?.firstElementChild;
-            const rect = (el: Element | null | undefined) => {
-              const box = el?.getBoundingClientRect();
-              return box
-                ? Math.round(box.width) + "x" + Math.round(box.height)
-                : "null";
-            };
-            return {
-              body: rect(body),
-              root: rect(root),
-              app: rect(app),
-              appClass: app?.className ?? "",
-              bodyBg: body ? getComputedStyle(body).backgroundColor : "",
-            };
-          })(),
-        };
+        try {
+          const pick = selector => {
+            const el = document.querySelector(selector);
+            if (!el) return null;
+            const style = getComputedStyle(el);
+            return style.backgroundColor || style.color;
+          };
+          return {
+            ok: true,
+            dark: matchMedia("(prefers-color-scheme: dark)").matches,
+            rootColorScheme: getComputedStyle(document.documentElement).colorScheme,
+            nav: pick(".bg-nav"),
+            canvas: pick(".bg-canvas"),
+            raised: pick(".bg-raised"),
+            rootVars: (() => {
+              const style = getComputedStyle(document.documentElement);
+              return { nav: style.getPropertyValue("--c-nav").trim(), raised: style.getPropertyValue("--c-raised").trim() };
+            })(),
+            geometry: (() => {
+              const root = document.getElementById("root");
+              const body = document.body;
+              const appEl = root ? root.firstElementChild : null;
+              const rect = el => {
+                if (!el) return "null";
+                const box = el.getBoundingClientRect();
+                return Math.round(box.width) + "x" + Math.round(box.height);
+              };
+              return {
+                body: rect(body),
+                root: rect(root),
+                app: rect(appEl),
+                appClass: appEl ? appEl.className : "",
+                bodyBg: body ? getComputedStyle(body).backgroundColor : "",
+              };
+            })(),
+          };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
       })()`,
     )
-    .catch((error: unknown) => ({ error: String(error) }));
+    .catch((error: unknown) => ({ ok: false, error: String(error) }));
   console.log(`[dcode] diagnostics ${JSON.stringify(diagnostics)}`);
   const image = await mainWindow.webContents.capturePage();
   const target = CAPTURE_PATH.replace("{width}", String(mainWindow.getContentBounds().width));
