@@ -22,7 +22,7 @@
 - [ADR 0038](决策档案/0038-全局创造模式与-D-Code-自举开发边界.md) 已确认全局创造模式只开发和自进化 D Code 自身。
 - [ADR 0039](决策档案/0039-一等项目文档与根目录-GLOSSARY-权威边界.md) 已确认一等项目文档和根 `GLOSSARY.md` 的 Markdown 权威。
 - [ADR 0040](决策档案/0040-D-Code-系统提示词与活动工具同源边界.md) 已确认 D Code 完整替换 Pi 通用系统提示词，并从真实活动工具快照生成工具说明。
-- 当前 checkout 的 `0.0.29` 候选已在 `0.0.28` 的 Product Store、多 Runtime、D Code Prompt / Tools 和单向导入基础上，接入原生 Task Workbench（任务工作台）；`10-架构与运行/` 记录这些已通过自动验证的实现事实。commit、候选 App、人工验收、tag 与发布仍分别成立，精确状态只由 `40-版本实施方案/` 记录。
+- 当前 checkout 的 `0.0.29` 基线（`main@714a555`，2026-09-05 收口）已在 `0.0.28` 的 Product Store、多 Runtime、D Code Prompt / Tools 和单向导入基础上，接入原生 Task Workbench（任务工作台）；`10-架构与运行/` 记录这些已通过自动验证的实现事实。commit、候选 App、人工验收、tag 与发布仍分别成立，精确状态只由 `40-版本实施方案/` 记录。
 
 ## 权威关系
 

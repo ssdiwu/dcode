@@ -10,7 +10,7 @@
 
 D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能力配置，通过 Runtime Adapter 使用 Pi SDK 等 Agent Runtime；Pi JSONL 只作为可选择的单向导入来源。难逆转边界见 [ADR 0037](doc/决策档案/0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md)。
 
-当前 checkout 的 App / Host manifest 为 `0.0.29` Implementation Candidate（实现候选）：`0.0.28` 的 Product Store、Task / Session / Run、多 Runtime、D Code Prompt / Tool Manifest、Raw / Effective Input、显式 Pi 导入与模型选择基础设施，已被 Project → Task → 协调者任务对话、Child Session、Task HUD（任务浮层）、中间交付物内容区和按需 Information Inspector（信息检查器）消费。产品数据与 Task Workbench（任务工作台）的恢复状态归当前用户 `~/.dcode/`；Pi JSONL 不双写。`v0.0.27` 仍是已发布源码基线；当前候选尚未 tag、发布或完成原生人工验收，精确状态见[版本实施方案](doc/40-版本实施方案/README.md)。
+当前 checkout 的 App / Host manifest 为 `0.0.29` Baseline（基线，2026-09-05 以 `main@714a555` 收口）：`0.0.28` 的 Product Store、Task / Session / Run、多 Runtime、D Code Prompt / Tool Manifest、Raw / Effective Input、显式 Pi 导入与模型选择基础设施，已被 Project → Task → 协调者任务对话、Child Session、Task HUD（任务浮层）、中间交付物内容区和按需 Information Inspector（信息检查器）消费。产品数据与 Task Workbench（任务工作台）的恢复状态归当前用户 `~/.dcode/`；Pi JSONL 不双写。`v0.0.27` 仍是已发布源码基线；`0.0.29` 未 tag、未发布，HUD 浮窗形态的完整人工验收已取消、布局合同移交 `0.0.30`，精确状态见[版本实施方案](doc/40-版本实施方案/README.md)。
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 
@@ -34,7 +34,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 - `host/`：固定 Pi 0.84.1 的 Node 运行宿主、Protocol v1 与测试。
 - `client/`：`0.0.30` Web 客户端（Electron 平台壳 + React 呈现层）骨架，经 Protocol v1 消费既有 `host/`；状态见其 README。
-- `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 回退基线）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
+- `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 基线；`0.0.30` 起按面替换、验证即删）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
 - `Package.swift`：macOS 14+ SwiftPM 可执行包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。
 - `GLOSSARY.md`：项目专有术语的根目录唯一权威；机器索引只能从它派生。

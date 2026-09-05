@@ -61,16 +61,21 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/product-store.ts` / `src/product-store-schema.ts`：D Code 原生产品数据库、事务、迁移、投影与恢复合同。
 - `src/dcode-data-root.ts` / `src/product-store-lease.ts`：`~/.dcode/` 安全目录与 Product Store 单写入所有权。
 - `src/legacy-migration.ts` / `src/pi-session-import.ts`：旧 D Code 资料晋升与外部 Pi Session 显式单向导入。
+- `src/credential-material.ts` / `src/imported-history-projection.ts`：常见凭据形态的识别与正文脱敏，以及外部导入历史进入 Prompt 与 Product Store 的有界、脱敏投影。
 - `src/prompt-assembler.ts`：D Code 身份、环境、一等项目文档来源与活动工具同源组装。
+- `src/prompt-source-status.ts`：Prompt 来源文档的存在性、大小与 Git revision 状态快照，产出有界 Source Receipt。
 - `src/agent-request-extension.ts` / `src/operation-attempt-extension.ts`：耐久输入请求与工具执行前置 Attempt。
 - `src/jsonl.ts`：JSONL 解码与有序输出。
 - `src/session-reader.ts`：安全会话扫描、快照和 Active Plan 恢复。
+- `src/session-title.ts`：会话显示标题与有界预览文本。
 - `src/session-copy.ts`：完整会话的有界流式校验、隐藏暂存与原子发布。
+- `src/atomic-file.ts`：新文件的同目录暂存与 hard link 一次发布，不暴露半成品、拒绝替换既有目标。
 - `src/project-directory-migration.ts`：Project 目录迁移的 Header `cwd` 原地改写、可选目录项移动与可恢复事务。
 - `src/session-origin.ts`：D Code 创建来源标记的共享协议常量。
 - `src/session-change.ts`：DHashline-compatible 工具结果到会话变更元数据的有界、安全投影。
 - `src/session-search-index.ts`：搜索 Worker 生命周期、请求关联、失败恢复与缓存位置。
 - `src/session-search-worker.ts`：可见范围发现、当前路径解析、SQLite FTS5 索引和查询。
+- `src/search-entry-digest.ts`：可搜索消息的有界提取与摘要，供会话读取与搜索 Worker 复用。
 - `src/dcode-fast.ts`：D Code 自有极速状态、会话持久化与 Provider Request 注入边界。
 - `src/dcode-facts.ts`：在同一 Agent Loop 注册 D Code 独有事实的只读工具 facade。
 - `src/resource-policy.ts`：在 Extension Factory（扩展工厂）执行前排除外部 `pi-dfast`，其余启用扩展仍交由固定 Pi SDK 加载。
@@ -79,6 +84,7 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/session-lease.ts`：会话租约、静默检查和外部写入检测。
 - `src/extension-ui.ts`：标准结构化扩展 UI，以及 TUI 能力的显式 unsupported 边界。
 - `src/model-auth.ts`：旧 Pi Provider 认证桥；D Code 产品 IPC 显式拒绝认证交互和认证正文。
+- `src/managed-worker-worktree.ts`：Project Worker 受管 detached Git worktree 的创建、验证与 Artifact 记录。
 - `src/pi-host.ts`：Pi SDK 会话生命周期与协议动作。
 - `src/index.ts`：stdin/stdout Host 进程入口。
 - `test/`：只使用临时写入范围的公开行为测试。

@@ -2,7 +2,7 @@
 
 本目录记录已经由源码和运行验证成立的当前架构，不承载未来设想或版本需求。
 
-> Candidate boundary（候选边界）：当前 checkout 已实现 `0.0.28` Product Store 与多 Runtime 纵切，并通过 Host / Swift 自动测试；它尚未形成 commit、发布产物或原生人工验收。以下只描述源码和自动验证已经成立的结构，不把候选等同于发布。
+> Candidate boundary（候选边界）：当前 checkout 已实现 `0.0.28` Product Store 与多 Runtime 纵切、`0.0.29` 任务工作台，并通过 Host / Swift 自动测试；`0.0.29` 候选已于 2026-09-05 收口为基线（`main@714a555`），HUD 浮窗形态的完整人工验收与 tag 取消，尚未形成发布产物。以下只描述源码和自动验证已经成立的结构，不把基线等同于发布。
 
 ## D Code Harness 当前边界
 
@@ -34,7 +34,7 @@ flowchart LR
 | Pi Adapter（Pi 适配层） | 通过固定 Pi SDK 运行独立 AgentSession，提供模型、工具与流式事件；外部 Pi Session 只作为显式导入来源 | [`host/src/`](../../host/src/)、[Node/Pi 宿主与 IPC](0001-Node-Pi-宿主与-IPC.md) |
 | Native Presentation（原生呈现） | 把消息、Plan、Mermaid、工具结果和受支持扩展交互投影成 D Code 自有组件 | [`Views/`](../../app/Sources/PiDCode/Views/)、[原生界面设计系统](0002-D-Code-原生界面设计系统.md) |
 
-同一 Host 现在可以保持多个显式 Runtime 活动；同一 Team 由 Coordinator 先规划、两个以上成员并行执行、成员 Report 落库后再由 Coordination Session 综合。切换 Foundation Console 的观察 Session / Run 只改变呈现选择，不关闭 Runtime。最终 Project → Task 导航、协调者主对话、常驻 Task HUD 与对象 Inspector 仍属于 `0.0.29`，不能从基础控制台推断为已经交付。
+同一 Host 现在可以保持多个显式 Runtime 活动；同一 Team 由 Coordinator 先规划、两个以上成员并行执行、成员 Report 落库后再由 Coordination Session 综合。切换 Foundation Console 的观察 Session / Run 只改变呈现选择，不关闭 Runtime。Project → Task 导航、协调者主对话、常驻 Task HUD 与对象 Inspector 已随 `0.0.29` 任务工作台交付并收口为基线（`main@714a555`），基础控制台不再是当前界面。
 
 ## 权威与数据所有权
 
