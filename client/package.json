@@ -19,7 +19,8 @@
     "seed:visual": "npm run build:main && node scripts/seed-store.mjs",
     "dev": "node scripts/dev.mjs",
     "start": "npm run build && node scripts/dev.mjs --no-vite",
-    "capture": "npm run build && node scripts/dev.mjs --capture"
+    "capture": "npm run build && node scripts/dev.mjs --capture",
+    "dist": "npm run build && electron-builder --mac --config electron-builder.yml"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -28,6 +29,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^41.10.7",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^8.2.2"

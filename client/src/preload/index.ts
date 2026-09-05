@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld("dcode", {
       ipcRenderer.removeListener("dcode:event", listener as never);
     };
   },
+  notify: (options: { title: string; body?: string }) =>
+    ipcRenderer.invoke("dcode:notify", options),
+  restartHost: () => ipcRenderer.invoke("dcode:restartHost"),
 });

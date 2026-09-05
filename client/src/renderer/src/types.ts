@@ -154,6 +154,8 @@ export interface DcodeApi {
     params?: Record<string, unknown>,
   ) => Promise<unknown>;
   subscribe: (handler: (envelope: unknown) => void) => () => void;
+  notify: (options: { title: string; body?: string }) => Promise<boolean>;
+  restartHost: () => Promise<boolean>;
 }
 
 export function api(): DcodeApi {

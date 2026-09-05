@@ -1187,6 +1187,40 @@ export function App() {
     );
   };
 
+  const [hostDead, setHostDead] = useState(false);
+  const prevRunActiveRef = useRef(false);
+  useEffect(() => {
+    const active = runActiveForHud || streaming.active;
+    if (prevRunActiveRef.current && !active && selectedTask) {
+      void api()
+        .notify({ title: "任务已收口", body: selectedTask.title })
+        .catch(() => undefined);
+    }
+    prevRunActiveRef.current = active;
+  }, [runActiveForHud, streaming.active, selectedTask]);
+
+  useEffect(() => {
+    const unsubscribe = api().subscribe(envelope => {
+      const message = envelope as { event?: string };
+      if (message.event === "host.exit") setHostDead(true);
+      if (message.event === "shell.focusComposer") {
+        document.querySelector("textarea")?.focus();
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!hostDead) return;
+    setStreaming({ active: false, thinking: "", text: "" });
+  }, [hostDead]);
+
+  const restartHost = async () => {
+    await api().restartHost();
+    setHostDead(false);
+    reload();
+  };
+
   const messageCount =
     fixtures
       ? FIXTURE_ENTRIES.length
@@ -1614,6 +1648,23 @@ export function App() {
               </div>
             </motion.aside>
           ) : null}
+        </AnimatePresence>
+        {hostDead ? (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-ink/50">
+            <div className="rounded-xl border border-line bg-raised p-6 text-center shadow-2xl">
+              <strong className="text-[14px]">核心已退出</strong>
+              <p className="mt-2 max-w-[320px] text-[12px] leading-5 text-muted">
+                界面仍在。正在运行的任务随核心退出而中断，恢复以最近安全点为准。
+              </p>
+              <button
+                onClick={() => void restartHost()}
+                className="mt-4 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white"
+              >
+                重启核心
+              </button>
+            </div>
+          </div>
+        ) : null}
         </AnimatePresence>
         </div>
         </>

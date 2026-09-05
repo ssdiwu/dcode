@@ -1,4 +1,11 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  Notification,
+} from "electron";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -13,7 +20,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const DEV_RENDERER_URL = process.env.DCODE_RENDERER_URL;
 const CAPTURE_PATH = process.env.DCODE_CAPTURE;
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: import("electron").BrowserWindow | null = null;
 let bridge: HostBridge | null = null;
 
 function resolveHostEntryPath(): string {
@@ -137,6 +144,46 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+let notifyEnabled = true;
+
+function buildMenu(
+  notifyGetter: () => boolean,
+  onToggleNotify: (value: boolean) => void,
+): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { role: "appMenu" },
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    {
+      label: "任务",
+      submenu: [
+        {
+          label: "新建任务",
+          accelerator: "CmdOrCtrl+N",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow as import("electron").BrowserWindow | undefined;
+            win?.webContents.send("dcode:event", {
+              version: 1,
+              type: "event",
+              event: "shell.focusComposer",
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "任务完成通知",
+          type: "checkbox",
+          checked: notifyGetter(),
+          click: item => onToggleNotify(item.checked),
+        },
+      ],
+    },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 void app
   .whenReady()
   .then(async () => {
@@ -170,6 +217,46 @@ void app
         return bridge.request(method, params ?? {});
       },
     );
+
+    ipcMain.handle(
+      "dcode:notify",
+      (_event, options: { title: string; body?: string }) => {
+        if (!notifyEnabled) return false;
+        if (Notification.isSupported()) {
+          new Notification({
+            title: options.title,
+            body: options.body ?? "",
+          }).show();
+        }
+        return true;
+      },
+    );
+
+    ipcMain.handle("dcode:restartHost", async () => {
+      const old = bridge;
+      bridge = null;
+      old?.kill();
+      bridge = await HostBridge.start({
+        executablePath: process.execPath,
+        executableIsElectron: true,
+        hostEntryPath: resolveHostEntryPath(),
+        agentDirPath: resolveAgentDirPath(),
+        dataRootPath: resolveDataRootPath(),
+        onStderr: text => console.error(`[host] ${text.trimEnd()}`),
+      });
+      bridge.onEvent(event => {
+        mainWindow?.webContents.send("dcode:event", event);
+      });
+      bridge.onExit((code, signal) => {
+        mainWindow?.webContents.send("dcode:event", {
+          version: 1,
+          type: "event",
+          event: "host.exit",
+          data: { code, signal: signal ?? null },
+        });
+      });
+      return true;
+    });
 
     await createWindow();
     await captureThenQuit();
