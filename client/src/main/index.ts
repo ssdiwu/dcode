@@ -73,6 +73,8 @@ async function createWindow(): Promise<void> {
   if (process.env.DCODE_OPEN_HUD === "1") query["hud"] = "1";
   if (process.env.DCODE_FIXTURES === "1") query["fixtures"] = "1";
   if (process.env.DCODE_VIEW) query["view"] = process.env.DCODE_VIEW;
+  if (process.env.DCODE_OPEN_SEARCH === "1") query["search"] = "1";
+  if (process.env.DCODE_SEARCH_QUERY) query["q"] = process.env.DCODE_SEARCH_QUERY;
   if (DEV_RENDERER_URL) {
     const url = new URL(DEV_RENDERER_URL);
     for (const [key, value] of Object.entries(query)) {
@@ -171,6 +173,18 @@ function buildMenu(
               version: 1,
               type: "event",
               event: "shell.focusComposer",
+            });
+          },
+        },
+        {
+          label: "搜索会话",
+          accelerator: "CmdOrCtrl+K",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow as import("electron").BrowserWindow | undefined;
+            win?.webContents.send("dcode:event", {
+              version: 1,
+              type: "event",
+              event: "shell.focusSearch",
             });
           },
         },

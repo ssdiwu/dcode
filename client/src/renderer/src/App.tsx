@@ -356,17 +356,17 @@ function Conversation({
                     <span className="text-[11px] font-semibold text-hint">
                       {block.role === "assistant" ? "D Code" : "507"}
                     </span>
-                    {block.role === "user" ? (
-                      <span className="hidden gap-1 group-hover/msg:flex">
-                        <button
-                          aria-label="复制"
-                          className="text-[10px] text-hint hover:text-accent"
-                          onClick={() => {
-                            void navigator.clipboard.writeText(block.text);
-                          }}
-                        >
-                          复制
-                        </button>
+                    <span className="hidden gap-1 group-hover/msg:flex">
+                      <button
+                        aria-label="复制"
+                        className="text-[10px] text-hint hover:text-accent"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(block.text);
+                        }}
+                      >
+                        复制
+                      </button>
+                      {block.role === "user" ? (
                         <button
                           aria-label="引用到输入框"
                           className="text-[10px] text-hint hover:text-accent"
@@ -374,6 +374,11 @@ function Conversation({
                         >
                           引用
                         </button>
+                      ) : null}
+                    </span>
+                    {block.time ? (
+                      <span className="ml-auto text-[10px] text-hint opacity-0 transition-opacity group-hover/msg:opacity-100">
+                        {block.time}
                       </span>
                     ) : null}
                   </div>
@@ -755,6 +760,33 @@ function HudCard({
               {blocked > 0 ? ` / 阻塞 ${blocked}` : ""}
               {items.length === 0 ? " · 暂无工作项" : ""}
             </div>
+            {items.length > 0 ? (
+              <ul className="mt-1 space-y-0.5">
+                {items.map(item => (
+                  <li
+                    key={item.id}
+                    className="flex items-center gap-1.5 text-[11px] text-muted"
+                  >
+                    <span className="w-3 shrink-0 text-center">
+                      {item.state === "completed"
+                        ? "☑"
+                        : item.state === "in_progress"
+                          ? "◐"
+                          : item.state === "blocked"
+                            ? "⚠"
+                            : "○"}
+                    </span>
+                    <span
+                      className={`min-w-0 truncate ${
+                        item.state === "completed" ? "line-through opacity-60" : ""
+                      }`}
+                    >
+                      {item.title}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ) : (
           <p className="px-1 pb-1 text-[11.5px] text-muted">尚未选择任务。</p>
@@ -970,6 +1002,22 @@ export function App() {
   const [importOpen, setImportOpen] = useState(
     () => new URLSearchParams(window.location.search).get("import") === "1",
   );
+  const [searchOpen, setSearchOpen] = useState(
+    () => new URLSearchParams(window.location.search).get("search") === "1",
+  );
+  const [searchQuery, setSearchQuery] = useState(
+    () => new URLSearchParams(window.location.search).get("q") ?? "",
+  );
+  const [searchResults, setSearchResults] = useState<
+    {
+      sessionId: string;
+      title: string;
+      snippet: string;
+      matchKind: string;
+      role?: string;
+    }[]
+  >([]);
+  const [searching, setSearching] = useState(false);
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [branchByProject, setBranchByProject] = useState<
     Record<string, string | null>
@@ -1274,6 +1322,56 @@ export function App() {
     : null;
 
   useEffect(() => {
+    const unsubscribe = api().subscribe(envelope => {
+      const message = envelope as { event?: string };
+      if (message.event === "shell.focusSearch") setSearchOpen(true);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const query = searchQuery.trim();
+    if (query.length === 0) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      let alive = true;
+      api()
+        .request("session.search", {
+          query,
+          requestToken: `web-k-${Date.now()}`,
+          limit: 20,
+        })
+        .then(value => {
+          if (!alive) return;
+          const result = value as { results?: Record<string, unknown>[] };
+          setSearchResults(
+            (result.results ?? []).map(item => ({
+              sessionId: String(item.sessionId ?? ""),
+              title: String(item.title ?? item.sessionId ?? ""),
+              snippet: String(
+                (item as { snippet?: string }).snippet ?? "",
+              ).slice(0, 160),
+              matchKind: String((item as { matchKind?: string }).matchKind ?? ""),
+              role: typeof (item as { role?: string }).role === "string" ? (item as { role?: string }).role : undefined,
+            })),
+          );
+          setSearching(false);
+        })
+        .catch(() => {
+          if (alive) setSearching(false);
+        });
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [searchOpen, searchQuery]);
+
+  useEffect(() => {
     let alive = true;
     api()
       .request("modelProviders.list")
@@ -1472,6 +1570,13 @@ export function App() {
               </span>
             ) : null}
             <span className="flex-1" />
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="rounded px-1.5 py-0.5 text-hint hover:bg-ink/5"
+              aria-label="搜索会话"
+            >
+              搜索
+            </button>
             {coordinationSession && presentation?.inspection ? (
               <span className="text-hint">
                 路径 ·{" "}
@@ -1710,6 +1815,78 @@ export function App() {
                 </p>
               </div>
             </motion.aside>
+          ) : null}
+        </AnimatePresence>
+        <AnimatePresence>
+          {searchOpen ? (
+            <motion.div
+              key="search"
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.15 }}
+              className="absolute inset-x-0 top-14 z-40 mx-auto w-[min(640px,90%)]"
+              onMouseDown={event => event.stopPropagation()}
+            >
+              <div className="overflow-hidden rounded-xl border border-line bg-raised shadow-2xl">
+                <div className="border-b border-line px-3 py-2">
+                  <input
+                    autoFocus
+                    value={searchQuery}
+                    onChange={event => setSearchQuery(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === "Escape") {
+                        setSearchOpen(false);
+                        setSearchQuery("");
+                      }
+                    }}
+                    placeholder="搜索任务与会话内容…"
+                    className="h-8 w-full bg-transparent text-[13px] outline-none placeholder:text-hint"
+                  />
+                </div>
+                <div className="max-h-[380px] overflow-y-auto p-1.5">
+                  {searching ? (
+                    <p className="px-3 py-2 text-[12px] text-muted">搜索中…</p>
+                  ) : searchResults.length === 0 ? (
+                    <p className="px-3 py-2 text-[12px] text-muted">
+                      {searchQuery.trim().length === 0
+                        ? "输入关键词搜索任务与会话。"
+                        : "没有匹配结果。"}
+                    </p>
+                  ) : (
+                    searchResults.map((result, index) => (
+                      <button
+                        key={result.sessionId + String(index)}
+                        onClick={() => {
+                          void api()
+                            .request("session.open", {
+                              sessionId: result.sessionId,
+                            })
+                            .then(() => reload())
+                            .catch(() => undefined);
+                          setSearchOpen(false);
+                        }}
+                        className="block w-full rounded-lg px-3 py-2 text-left hover:bg-ink/5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
+                            {result.title}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-hint">
+                            {result.matchKind === "title" ? "标题" : "正文"}
+                          </span>
+                        </div>
+                        {result.snippet ? (
+                          <div className="mt-0.5 truncate text-[11px] text-muted">
+                            {result.snippet}
+                          </div>
+                        ) : null}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </motion.div>
           ) : null}
         </AnimatePresence>
         {hostDead ? (
