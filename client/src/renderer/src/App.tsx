@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Paperclip, X } from "lucide-react";
 import { SelectMenu } from "./components/SelectMenu";
 import { Markdown } from "./components/Markdown";
 import {
@@ -244,6 +244,11 @@ function CollapsibleRow({
 function Conversation({
   presentation,
   streaming,
+  pendingImages,
+  onRemoveImage,
+  onAddImageFiles,
+  onQuote,
+  imageInputRef,
   draft,
   onDraftChange,
   onSend,
@@ -258,6 +263,11 @@ function Conversation({
 }: {
   presentation: DCodeSessionPresentation | null;
   streaming: { active: boolean; thinking: string; text: string };
+  pendingImages: { mimeType: string; data: string }[];
+  onRemoveImage: (index: number) => void;
+  onAddImageFiles: (files: File[]) => void;
+  onQuote: (text: string) => void;
+  imageInputRef: React.RefObject<HTMLInputElement | null>;
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
@@ -334,9 +344,31 @@ function Conversation({
                 );
               }
               return (
-                <div key={index} className="text-[13px] leading-6">
-                  <div className="mb-0.5 text-[11px] font-semibold text-hint">
-                    {block.role === "assistant" ? "D Code" : "507"}
+                <div key={index} className="group/msg text-[13px] leading-6">
+                  <div className="mb-0.5 flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-hint">
+                      {block.role === "assistant" ? "D Code" : "507"}
+                    </span>
+                    {block.role === "user" ? (
+                      <span className="hidden gap-1 group-hover/msg:flex">
+                        <button
+                          aria-label="复制"
+                          className="text-[10px] text-hint hover:text-accent"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(block.text);
+                          }}
+                        >
+                          复制
+                        </button>
+                        <button
+                          aria-label="引用到输入框"
+                          className="text-[10px] text-hint hover:text-accent"
+                          onClick={() => onQuote(block.text)}
+                        >
+                          引用
+                        </button>
+                      </span>
+                    ) : null}
                   </div>
                   {block.role === "assistant" ? (
                     <Markdown text={block.text} />
@@ -373,8 +405,37 @@ function Conversation({
           </p>
         ) : null}
         <div className="rounded-xl border border-line bg-raised p-3 shadow-sm">
+          {pendingImages.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {pendingImages.map((image, index) => (
+                <div key={index} className="relative">
+                  <img
+                    src={`data:${image.mimeType};base64,${image.data}`}
+                    alt={`附件 ${index + 1}`}
+                    className="h-12 w-12 rounded-md border border-line object-cover"
+                  />
+                  <button
+                    aria-label="移除图片"
+                    onClick={() => onRemoveImage(index)}
+                    className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-ink/70 text-[9px] text-canvas"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <textarea
             value={draft}
+            onPaste={event => {
+              const files = Array.from(event.clipboardData.files).filter(file =>
+                file.type.startsWith("image/"),
+              );
+              if (files.length > 0) {
+                event.preventDefault();
+                onAddImageFiles(files);
+              }
+            }}
             onChange={event => onDraftChange(event.target.value)}
             onKeyDown={event => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -389,6 +450,25 @@ function Conversation({
             className="w-full resize-none bg-transparent text-[12.5px] leading-5 outline-none placeholder:text-hint"
           />
           <div className="flex items-center gap-1 pt-1">
+            <button
+              aria-label="添加图片"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-hint hover:bg-ink/5"
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Paperclip size={13} />
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={event => {
+                const files = Array.from(event.target.files ?? []);
+                if (files.length > 0) onAddImageFiles(files);
+                event.target.value = "";
+              }}
+            />
             <SelectMenu
               ariaLabel="选择模型"
               accent
@@ -857,6 +937,10 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<
+    { mimeType: string; data: string }[]
+  >([]);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const width = useWorkspaceWidth();
   const hudMode: HudMode =
     width >= WIDE_MIN ? "wide" : width >= MEDIUM_MIN ? "medium" : "compact";
@@ -1059,14 +1143,44 @@ export function App() {
         dcodeSessionId: coordinationSession.id,
         message: text,
         promptId: `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ...(pendingImages.length > 0 ? { images: pendingImages } : {}),
       });
       setDraft("");
+      setPendingImages([]);
       reload();
     } catch (reason) {
       setSendError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSending(false);
     }
+  };
+
+  const addImageFiles = (files: File[]) => {
+    for (const file of files.slice(0, 8 - pendingImages.length)) {
+      if (!file.type.startsWith("image/")) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result ?? "");
+        const base64 = dataUrl.split(",")[1] ?? "";
+        if (base64.length > 7_000_000) {
+          setSendError("图片过大（base64 上限 7,000,000 字符）");
+          return;
+        }
+        setPendingImages(prev =>
+          prev.length >= 8
+            ? prev
+            : [...prev, { mimeType: file.type, data: base64 }],
+        );
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const quoteToComposer = (text: string) => {
+    setDraft(
+      prev =>
+        `${prev}${prev.length > 0 && !prev.endsWith("\n") ? "\n" : ""}> ${text}\n`,
+    );
   };
 
   const messageCount =
@@ -1291,6 +1405,15 @@ export function App() {
                         : null
                     }
                     streaming={streaming}
+                    pendingImages={pendingImages}
+                    onRemoveImage={index =>
+                      setPendingImages(prev =>
+                        prev.filter((_, i) => i !== index),
+                      )
+                    }
+                    onAddImageFiles={addImageFiles}
+                    onQuote={quoteToComposer}
+                    imageInputRef={imageInputRef}
                     draft={draft}
                     onDraftChange={setDraft}
                     onSend={send}
