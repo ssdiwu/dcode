@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp } from "lucide-react";
 import { SelectMenu } from "./components/SelectMenu";
@@ -243,6 +243,7 @@ function CollapsibleRow({
 
 function Conversation({
   presentation,
+  streaming,
   draft,
   onDraftChange,
   onSend,
@@ -256,6 +257,7 @@ function Conversation({
   onThinkingChange,
 }: {
   presentation: DCodeSessionPresentation | null;
+  streaming: { active: boolean; thinking: string; text: string };
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
@@ -344,6 +346,23 @@ function Conversation({
                 </div>
               );
             })}
+            {streaming.active && streaming.thinking ? (
+              <CollapsibleRow
+                label="思考中…"
+                text={streaming.thinking}
+              />
+            ) : null}
+            {streaming.active && streaming.text ? (
+              <div className="text-[13px] leading-6">
+                <div className="mb-0.5 text-[11px] font-semibold text-hint">
+                  D Code
+                </div>
+                <div className="whitespace-pre-wrap">
+                  {streaming.text}
+                  <span className="animate-pulse">▍</span>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -875,6 +894,23 @@ export function App() {
     ? formatElapsed(now - new Date(sessionRun.startedAt).getTime())
     : null;
 
+  const [streaming, setStreaming] = useState({
+    active: false,
+    thinking: "",
+    text: "",
+  });
+  const lastDeltaRef = useRef(Date.now());
+
+  const refreshPresentation = useCallback(
+    (sessionId: string) => {
+      api()
+        .request("dcodeSession.presentation", { dcodeSessionId: sessionId })
+        .then(value => setPresentation(value as DCodeSessionPresentation))
+        .catch(() => undefined);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (fixtures) {
       setPresentation(null);
@@ -884,21 +920,77 @@ export function App() {
       setPresentation(null);
       return;
     }
-    let alive = true;
-    api()
-      .request("dcodeSession.presentation", {
-        dcodeSessionId: coordinationSession.id,
-      })
-      .then(value => {
-        if (alive) setPresentation(value as DCodeSessionPresentation);
-      })
-      .catch(() => {
-        if (alive) setPresentation(null);
-      });
-    return () => {
-      alive = false;
+    refreshPresentation(coordinationSession.id);
+  }, [coordinationSession?.id, fixtures, refreshPresentation]);
+
+  // 流式管道（议题：直播而非快照）：增量事件实时累积，节流回读落库条目。
+  const adapterSessionId = presentation?.binding?.adapterSessionId ?? null;
+  useEffect(() => {
+    if (!adapterSessionId || fixtures) return;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        refreshPresentation(coordinationSession?.id ?? "");
+      }, 800);
     };
-  }, [coordinationSession?.id, fixtures]);
+    const unsubscribe = api().subscribe(envelope => {
+      const message = envelope as { event?: string; data?: unknown };
+      if (message.event !== "session.event") return;
+      const data = message.data as {
+        sessionId?: string;
+        type?: string;
+        delta?: string;
+        toolName?: string;
+      };
+      if (data?.sessionId !== adapterSessionId) return;
+      switch (data.type) {
+        case "thinking_delta":
+          lastDeltaRef.current = Date.now();
+          setStreaming(prev => ({
+            ...prev,
+            active: true,
+            thinking: prev.thinking + (data.delta ?? ""),
+          }));
+          break;
+        case "text_delta":
+          lastDeltaRef.current = Date.now();
+          setStreaming(prev => ({
+            ...prev,
+            active: true,
+            thinking: "",
+            text: prev.text + (data.delta ?? ""),
+          }));
+          break;
+        case "message_end":
+          scheduleRefresh();
+          setStreaming(prev => ({ ...prev, thinking: "", text: "" }));
+          break;
+        case "tool_execution_start":
+          scheduleRefresh();
+          break;
+        case "tool_execution_end":
+          scheduleRefresh();
+          break;
+        default:
+          break;
+      }
+    });
+    return unsubscribe;
+  }, [adapterSessionId, fixtures, coordinationSession?.id, refreshPresentation]);
+
+  // 流式停滞（2 秒无增量）且已不活跃 → 清空直播缓冲并回读一次。
+  useEffect(() => {
+    if (!streaming.active) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lastDeltaRef.current > 2_000) {
+        setStreaming({ active: false, thinking: "", text: "" });
+        if (coordinationSession) refreshPresentation(coordinationSession.id);
+      }
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [streaming.active, coordinationSession, refreshPresentation]);
 
   // 只出现已认证（authConfigured）供应商下的模型；当前选择始终保留。
   const modelOptions = (snapshot?.modelCatalogEntries ?? []).filter(entry => {
@@ -1198,11 +1290,12 @@ export function App() {
                         ? conversationPresentation
                         : null
                     }
+                    streaming={streaming}
                     draft={draft}
                     onDraftChange={setDraft}
                     onSend={send}
                     sending={sending}
-                    running={runActiveForHud}
+                    running={runActiveForHud || streaming.active}
                     onStop={stop}
                     modelOptions={modelOptions}
                     currentModel={currentModel}
