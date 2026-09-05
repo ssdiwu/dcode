@@ -53,6 +53,9 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.webContents.on("console-message", (_event, level, message) => {
+    if (level >= 2) console.error(`[renderer] ${message}`);
+  });
   const query: Record<string, string> = {};
   if (process.env.DCODE_OPEN_DETAIL === "1") query["detail"] = "1";
   if (process.env.DCODE_OPEN_HUD === "1") query["hud"] = "1";

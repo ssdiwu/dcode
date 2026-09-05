@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp } from "lucide-react";
 import { SelectMenu } from "./components/SelectMenu";
+import { Markdown } from "./components/Markdown";
 import {
   api,
   fetchSnapshot,
@@ -335,7 +336,11 @@ function Conversation({
                   <div className="mb-0.5 text-[11px] font-semibold text-hint">
                     {block.role === "assistant" ? "D Code" : "507"}
                   </div>
-                  <div className="whitespace-pre-wrap">{block.text}</div>
+                  {block.role === "assistant" ? (
+                    <Markdown text={block.text} />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{block.text}</div>
+                  )}
                 </div>
               );
             })}
@@ -685,7 +690,12 @@ const FIXTURE_ENTRIES: SessionEntry[] = [
     type: "message",
     message: {
       role: "assistant",
-      content: [{ type: "text", text: "已确认：分组逻辑集中在 SummaryCardView。建议直接把默认关系常量收敛到一个文件。" }],
+      content: [
+          {
+            type: "text",
+            text: "已确认：分组逻辑集中在 SummaryCardView。建议直接把默认关系常量收敛到一个文件。\n\n## 收口方案\n\n1. 常量收敛到 `DefaultRelations.swift`\n2. 摘要卡片只读引用\n\n| 方案 | 影响 |\n|---|---|\n| 常量收敛 | 低 |\n| 重写分组 | 高 |\n\n```swift\nenum DefaultRelation {\n    static let group = \"visual\"\n}\n```\n\n```mermaid\nflowchart LR\n  A[视觉方向] --> B[摘要卡片]\n```\n",
+          },
+        ],
     },
   } as unknown as SessionEntry,
 ];
