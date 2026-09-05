@@ -155,6 +155,7 @@ export interface DcodeApi {
   ) => Promise<unknown>;
   subscribe: (handler: (envelope: unknown) => void) => () => void;
   notify: (options: { title: string; body?: string }) => Promise<boolean>;
+  getPathForFile: (file: File) => string;
   restartHost: () => Promise<boolean>;
 }
 

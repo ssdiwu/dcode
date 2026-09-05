@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 /**
  * 渲染层唯一通道（电话线预铺约束之二）：一切 Host 交互经主进程桥接的
@@ -16,5 +16,6 @@ contextBridge.exposeInMainWorld("dcode", {
   },
   notify: (options: { title: string; body?: string }) =>
     ipcRenderer.invoke("dcode:notify", options),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   restartHost: () => ipcRenderer.invoke("dcode:restartHost"),
 });

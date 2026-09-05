@@ -250,8 +250,10 @@ function Conversation({
   pendingImages,
   onRemoveImage,
   onAddImageFiles,
+  onInsertPath,
   onQuote,
   imageInputRef,
+  pathInputRef,
   draft,
   onDraftChange,
   onSend,
@@ -270,7 +272,9 @@ function Conversation({
   onRemoveImage: (index: number) => void;
   onAddImageFiles: (files: File[]) => void;
   onQuote: (text: string) => void;
+  onInsertPath: (path: string) => void;
   imageInputRef: React.RefObject<HTMLInputElement | null>;
+  pathInputRef: React.RefObject<HTMLInputElement | null>;
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => void;
@@ -453,13 +457,36 @@ function Conversation({
             className="w-full resize-none bg-transparent text-[12.5px] leading-5 outline-none placeholder:text-hint"
           />
           <div className="flex items-center gap-1 pt-1">
-            <button
-              aria-label="添加图片"
-              className="flex h-6 w-6 items-center justify-center rounded-md text-hint hover:bg-ink/5"
-              onClick={() => imageInputRef.current?.click()}
-            >
-              <Paperclip size={13} />
-            </button>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  aria-label="添加附件"
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-hint hover:bg-ink/5"
+                >
+                  <Paperclip size={13} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="top"
+                  align="start"
+                  className="z-50 min-w-[180px] rounded-lg border border-line bg-raised p-1 shadow-xl"
+                >
+                  <DropdownMenu.Item
+                    onSelect={() => imageInputRef.current?.click()}
+                    className="flex h-7 cursor-pointer items-center rounded-md px-2 text-[12px] outline-none data-[highlighted]:bg-accent-fill"
+                  >
+                    图片…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    onSelect={() => pathInputRef.current?.click()}
+                    className="flex h-7 cursor-pointer items-center rounded-md px-2 text-[12px] outline-none data-[highlighted]:bg-accent-fill"
+                  >
+                    文件路径引用…
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
             <input
               ref={imageInputRef}
               type="file"
@@ -469,6 +496,18 @@ function Conversation({
               onChange={event => {
                 const files = Array.from(event.target.files ?? []);
                 if (files.length > 0) onAddImageFiles(files);
+                event.target.value = "";
+              }}
+            />
+            <input
+              ref={pathInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={event => {
+                for (const file of Array.from(event.target.files ?? [])) {
+                  onInsertPath(api().getPathForFile(file));
+                }
                 event.target.value = "";
               }}
             />
@@ -950,6 +989,7 @@ export function App() {
     { mimeType: string; data: string }[]
   >([]);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const pathInputRef = useRef<HTMLInputElement | null>(null);
   const width = useWorkspaceWidth();
   const hudMode: HudMode =
     width >= WIDE_MIN ? "wide" : width >= MEDIUM_MIN ? "medium" : "compact";
@@ -1183,6 +1223,12 @@ export function App() {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const insertPath = (path: string) => {
+    setDraft(
+      prev => `${prev}${prev.length > 0 && !prev.endsWith("\n") ? "\n" : ""}${path}`,
+    );
   };
 
   const quoteToComposer = (text: string) => {
@@ -1578,6 +1624,7 @@ export function App() {
                       )
                     }
                     onAddImageFiles={addImageFiles}
+                    onInsertPath={insertPath}
                     onQuote={quoteToComposer}
                     imageInputRef={imageInputRef}
                     draft={draft}
