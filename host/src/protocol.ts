@@ -14,6 +14,11 @@ export const HOST_METHODS = [
   "clientPreferences.importLegacy",
   "clientPreferences.set",
   "taskDraft.set",
+  "inspiration.get",
+  "inspiration.mutate",
+  "inspiration.reference",
+  "inspiration.media",
+  "inspiration.export",
   "attachment.import",
   "attachment.get",
   "attachment.resolve",
@@ -618,6 +623,23 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
 
       return;
     }
+    case "inspiration.get": return;
+    case "inspiration.mutate":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      if(!params.operation||typeof params.operation!=="object"||Array.isArray(params.operation))throw new ProtocolValidationError("INVALID_PARAMS","Expected inspiration operation");
+      return;
+    case "inspiration.reference":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"taskId",200);
+      requireInteger(params,"nodeRevision",1,Number.MAX_SAFE_INTEGER);
+      // fall through to the shared node identity check
+    case "inspiration.media":
+    case "inspiration.export":
+      requireBoundedString(params,"nodeId",80);
+      if(!/^idea-[a-f0-9-]{36}$/.test(params.nodeId as string))throw new ProtocolValidationError("INVALID_PARAMS","Invalid idea id");
+      return;
     case "attachment.import": {
       requireBoundedString(params,"requestId",128);
       requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);

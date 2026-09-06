@@ -10,6 +10,8 @@
 
 Web 修复回归：`client-recovery.test.ts` 验证新任务草稿、阅读位置、通知偏好的作用域与跨重启恢复；`../../client/test/ui-flow.test.mjs` 接入真实 React 与 PiHost，用隔离模型响应验证创建、流式、停止后续接、模型切换和草稿恢复。
 
+灵感回归：`inspiration.test.ts` 覆盖内容/布局分离、重启草稿、陈旧编辑冲突、媒体副本、归档与不可变任务引用、实际 Prompt 来源加载、导出篡改拒绝、草稿字段白名单及任务上下文数量限制。`../../client/test/inspiration-ui.test.mjs` 通过真实 React → Host → Store 验证新建、重复编辑、拖动、任务引用、归档恢复和重启；不调用供应商。
+
 设置恢复回归：`settings-restoration.test.ts` 覆盖旧偏好继承、新偏好优先、供应商原生编辑/接管、元数据优先级、嵌套凭据拒绝以及原生操作不回写 Pi 设置。`self-evolution-web.test.ts` 覆盖真实形态候选路径、回滚取消不影响原回执。client 的候选切换/停机回归分别验证资源身份、失败恢复与确认进程退出。`runtime-supervisor.test.ts` 的停止重放断言同时约束团队收尾与停止确认的竞态。
 
 

@@ -1,3 +1,4 @@
+import { INSPIRATION_KEY, emptyInspiration, changeInspiration, exportIdeaMarkdown, publishIdeaMedia, removeUnreferencedIdeaMedia, resolveIdeaMedia, inspirationRoot, assertIdeaSnapshotDigest, InspirationError, type InspirationDocument, type InspirationOperation, type InspirationView } from "./inspiration.js";
 import { stageAttachment, readAttachment, sweepAttachmentFiles, stagedAttachmentBytes, discardStagedAttachment, attachmentPath, attachmentPrompt, ATTACHMENT_DAY, ATTACHMENT_RETENTION_DAYS, type ManagedAttachment, type AttachmentSource } from "./attachment-files.js";
 import type { MaintenanceState } from "./maintenance.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -2377,6 +2378,71 @@ export class ProductStore {
     });
   }
 
+  inspirationView(): InspirationView {
+    const row=this.database.prepare("SELECT value_json,revision FROM product_settings WHERE key=?").get(INSPIRATION_KEY) as SQLiteRow|undefined;
+    const document:InspirationDocument=row?JSON.parse(text(row,"value_json")):emptyInspiration();
+    if(document.version!==1||!Array.isArray(document.nodes))throw new InspirationError("INVALID_INSPIRATION","灵感资料暂时无法读取，原始数据已保留。");
+    return {...document,revision:row?integer(row,"revision"):0,documentRoot:inspirationRoot(this.layout)};
+  }
+
+  async mutateInspiration(input:{requestId:string;expectedStoreRevision:number;operation:InspirationOperation}):Promise<{storeRevision:number;view:InspirationView}> {
+    return await this.serializeMutation(async()=>{
+      const params={operation:input.operation};
+      const replay=await this.replayReceipt<{storeRevision:number;view:InspirationView}>("inspiration.mutate",input.requestId,params);if(replay)return replay;
+      const current=this.inspirationView(),operation=input.operation;
+      const sourceTaskId=operation.kind==="save"?operation.node?.sourceTaskId:operation.kind==="draft"?operation.draft?.sourceTaskId:undefined;
+      if(sourceTaskId!==undefined&&(typeof sourceTaskId!=="string"||!this.database.prepare("SELECT id FROM tasks WHERE id=?").get(sourceTaskId)))throw new InspirationError("IDEA_SOURCE_NOT_FOUND","来源任务已不存在。");
+      let published:Awaited<ReturnType<typeof publishIdeaMedia>>|undefined;
+      try {
+        if(operation.kind==="save"&&operation.mediaPath)published=await publishIdeaMedia(this.layout,operation.mediaPath,operation.node.kind);
+        const next=changeInspiration(current,operation,this.now(),published?.media);
+        // Only the typed document is persisted, never the returned projection fields.
+        const {revision:_revision,documentRoot:_root,...document}=next as InspirationView;
+        return await this.mutateNow("inspiration.mutate",input.requestId,input.expectedStoreRevision,params,(_revision,now)=>{
+          this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES (?,?,'user',1,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,revision=product_settings.revision+1,updated_at=excluded.updated_at").run(INSPIRATION_KEY,canonicalJSON(document),now,now);
+          return {value:{view:this.inspirationView()},event:{kind:"inspiration.updated",entityKind:"inspiration",entityId:"global",payload:{operation:operation.kind}}};
+        });
+      }catch(error){if(published?.created&&!this.inspirationView().nodes.some(node=>node.media?.fileName===published!.media.fileName))await removeUnreferencedIdeaMedia(this.layout,published.media);throw error;}
+    });
+  }
+
+  async inspirationMedia(nodeId:string):Promise<Awaited<ReturnType<typeof resolveIdeaMedia>>> {
+    return await this.serializeMutation(async()=>{await this.lease.assertOwned();const node=this.inspirationView().nodes.find(node=>node.id===nodeId);if(!node?.media)throw new InspirationError("IDEA_MEDIA_NOT_FOUND","这条灵感没有本地媒体。");return await resolveIdeaMedia(this.layout,node.media);});
+  }
+
+  async inspirationMarkdown(nodeId:string):Promise<Awaited<ReturnType<typeof exportIdeaMarkdown>>> {
+    return await this.serializeMutation(async()=>{await this.lease.assertOwned();const node=this.inspirationView().nodes.find(node=>node.id===nodeId);if(!node)throw new InspirationError("IDEA_NOT_FOUND","灵感不存在。");return await exportIdeaMarkdown(this.layout,node);});
+  }
+
+  async referenceInspiration(input:{requestId:string;expectedStoreRevision:number;nodeId:string;nodeRevision:number;taskId:string}):Promise<{storeRevision:number;contextRevision:number}> {
+    return await this.serializeMutation(async()=>{
+      const params={nodeId:input.nodeId,nodeRevision:input.nodeRevision,taskId:input.taskId};
+      const replay=await this.replayReceipt<{storeRevision:number;contextRevision:number}>("inspiration.reference",input.requestId,params);if(replay)return replay;
+      const node=this.inspirationView().nodes.find(node=>node.id===input.nodeId);
+      if(!node||node.archived)throw new InspirationError("IDEA_NOT_FOUND","请先恢复这条灵感，再引用到任务。");
+      if(node.revision!==input.nodeRevision)throw new InspirationError("IDEA_REVISION_CONFLICT","灵感已经更新，请重新选择引用版本。");
+      const taskRow=this.database.prepare("SELECT * FROM tasks WHERE id=?").get(input.taskId) as SQLiteRow|undefined;
+      if(!taskRow||task(taskRow).state==="archived")throw new InspirationError("IDEA_TASK_NOT_FOUND","请先选择一个可用任务。");
+      const exported=await exportIdeaMarkdown(this.layout,node);
+      const [source]=await normalizeTaskContextSources([{kind:"global_knowledge",rootPath:exported.rootPath,relativePath:exported.relativePath,title:node.title}],this.currentUser().homeDirectory,task(taskRow).cwd);
+      if(!source)throw new InspirationError("INVALID_IDEA","灵感引用无效。");
+      return await this.mutateNow("inspiration.reference",input.requestId,input.expectedStoreRevision,params,(_revision,now)=>{
+        const context=this.database.prepare("SELECT * FROM task_context_sets WHERE task_id=?").get(input.taskId) as SQLiteRow|undefined;
+        if(!context)throw new InspirationError("IDEA_TASK_NOT_FOUND","任务上下文不存在。");
+        const matching=this.database.prepare("SELECT id,ordinal FROM task_context_sources WHERE task_id=? AND source_kind='global_knowledge' AND root_path=? AND relative_path LIKE ? ORDER BY ordinal").all(input.taskId,source.rootPath!,`${node.id}/%`) as SQLiteRow[];
+        const count=this.database.prepare("SELECT COUNT(*) AS total FROM task_context_sources WHERE task_id=?").get(input.taskId) as SQLiteRow;
+        if(integer(count,"total")-matching.length+1>32)throw new InspirationError("TASK_CONTEXT_LIMIT","任务已选满 32 项上下文，请先移除其他引用。");
+        const maximum=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS next FROM task_context_sources WHERE task_id=?").get(input.taskId) as SQLiteRow;
+        const ordinal=matching[0]?integer(matching[0],"ordinal"):integer(maximum,"next");
+        for(const row of matching)this.database.prepare("DELETE FROM task_context_sources WHERE id=?").run(text(row,"id"));
+        this.database.prepare("INSERT INTO task_context_sources(id,task_id,source_kind,root_path,relative_path,title,ordinal,created_at,updated_at) VALUES (?,?,'global_knowledge',?,?,?,?,?,?)").run(`context-source-${randomUUID()}`,input.taskId,source.rootPath!,source.relativePath,node.title,ordinal,now,now);
+        const revision=integer(context,"revision")+1;
+        this.database.prepare("UPDATE task_context_sets SET revision=?,updated_at=? WHERE task_id=?").run(revision,now,input.taskId);
+        return {value:{contextRevision:revision},event:{kind:"task.context.replaced",entityKind:"taskContext",entityId:input.taskId,taskId:input.taskId,payload:{nodeId:node.id,nodeRevision:node.revision}}};
+      });
+    });
+  }
+
   private attachmentDraftTarget(key: string): {id:string;scope?:TaskScope;taskId?:string;sessionId?:string} {
     if (key.startsWith("new:")) {
       const scope:TaskScope = key === "new:user" ? {kind:"user",userId:this.currentUser().id} : {kind:"project",projectId:key.slice(4)};
@@ -4552,6 +4618,7 @@ export class ProductStore {
       throw new ProductStoreError("INVALID_ARGUMENT", "Current D Code user home is unavailable for Prompt Source validation");
     }
     for (const [index, source] of promptSources.entries()) {
+      await assertIdeaSnapshotDigest(this.layout,source.path,source.digest);
       const sourceRoot = resolve(source.rootPath ?? resolvedCwd);
       if (source.rootPath && !strictlyInside(canonicalUserHome, sourceRoot) && sourceRoot !== resolvedCwd) {
         throw new ProductStoreError("INVALID_ARGUMENT", `promptSources[${index}] source root is outside the current user home`);

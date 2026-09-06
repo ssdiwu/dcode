@@ -1403,6 +1403,19 @@ export class PiHost {
         this.options.emit("foundation.changed", { kind: "clientPreferences.updated", storeRevision: result.storeRevision });
         return result;
       }
+      case "inspiration.get": return (await this.getProductStore()).inspirationView();
+      case "inspiration.mutate": {
+        const result=await (await this.getProductStore()).mutateInspiration(params as unknown as Parameters<ProductStore["mutateInspiration"]>[0]);
+        this.options.emit("inspiration.changed",{revision:result.view.revision});
+        return result;
+      }
+      case "inspiration.reference": {
+        const result=await (await this.getProductStore()).referenceInspiration(params as unknown as Parameters<ProductStore["referenceInspiration"]>[0]);
+        this.options.emit("foundation.changed",{kind:"task.context.replaced",storeRevision:result.storeRevision});
+        return result;
+      }
+      case "inspiration.media": return await (await this.getProductStore()).inspirationMedia(params.nodeId as string);
+      case "inspiration.export": return await (await this.getProductStore()).inspirationMarkdown(params.nodeId as string);
       case "attachment.import": {
         const result=await (await this.getProductStore()).importAttachment(params as unknown as Parameters<ProductStore["importAttachment"]>[0]);
         this.options.emit("foundation.changed",{storeRevision:result.storeRevision,kind:"attachment.imported"});

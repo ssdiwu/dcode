@@ -9,6 +9,7 @@
 ## 当前能力
 
 - 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
+- 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；沿用 Schema 2。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
 - 原生拥有 User Scope / Project、Task、Coordination / Child Session、Session Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence 投影；
 - 外部 Pi Session 先预览、再经显式 `piImport.importAsTask` 单向导入；D Code 已管理的旧会话在首次晋升时自动接管，其他 Pi 会话不自动进入产品数据库；
 - Runtime Supervisor 按 Task / Session / Agent Run / Runtime 身份同时维护多个 AgentSession；同一 Session 单写、workspace 写入冲突、12 个活动 Runtime 上限和 shared-read-only 工具证明均在启动前阻断；
