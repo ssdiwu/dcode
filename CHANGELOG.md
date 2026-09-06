@@ -25,6 +25,8 @@
 
 ### Changed
 
+- 按 507 确认的 C-A 黑白变色龙方案统一 D Code 系统图标和 Web / Swift 品牌标志；保留唯一 SVG 母版和可复验导出脚本，避免资源分叉。
+
 - App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.29`；`0.0.27` 起动候选与 `0.0.28` Product Store schema 明确不支持降级混用。
 - Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
 - Pi `models.json` / `settings.json` 的 D Code 写入口、Pi 认证启动与认证响应全部改为明确拒绝；Swift 不再将 Provider API Key 或认证值通过 Host IPC 发送，旧 Pi 模型接口只保留安全只读诊断 / 迁入来源。

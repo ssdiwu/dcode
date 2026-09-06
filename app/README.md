@@ -9,7 +9,7 @@
 - `Sources/PiDCode/State/`：`AppModel` 作为 UI 事务协调点，并由 `SearchModel`、`ActivityModel`、`FollowUpModel`、`ModelSettingsState`、`SelfBuildModel`、`ResourcesModel`、`ModelProvidersModel` 等领域状态承载各自生命周期；既有会话打开即接管，没有共享观察 / 按需写入模式，冲突后关闭失效所有权并保留草稿供重新接管。
 - `Sources/PiDCode/Views/`：原生响应式工作台、会话 / Activity 导航、信息检查器、Conversation、文件与 Exact Git Diff、Composer / Plan / Run 控制、搜索、路径 / 复制 / 归档，以及同一工作台内的模型、本机资源、自定义供应商、自构建、Host 诊断和 About 设置页面。
 - `Tests/PiDCodeTests/`：纯模型、Fake-host 集成与 ViewInspector 渲染回归。自动测试覆盖协议、状态、文件 / Git、搜索、资源、自构建与供应商等路径，但不替代跨 Swift / Host 真实存储合同、完整 JSONL Protocol 组合或人工视觉 / 无障碍验收；当前缺口见[版本实施方案](../doc/40-版本实施方案/README.md)。
-- `Resources/`：App 图标的 `1024 × 1024` PNG 母版与构建使用的 `.icns` 资源；SwiftPM target 内的 `Sources/PiDCode/Resources/` 保存首页品牌资产。
+- [`Resources/`](Resources/README.md)：C-A 黑白变色龙矢量母版、统一导出命令和 App 图标的 PNG / ICNS；SwiftPM target 内的 `Sources/PiDCode/Resources/` 保存同源透明品牌标志。
 - `Info.plist`：本机 App bundle metadata。
 - `build.sh`：release 构建、生产 Node 依赖装配与本地签名。
 

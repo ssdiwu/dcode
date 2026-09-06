@@ -12,6 +12,10 @@ The workbench has two persistent structural regions: Navigation Sidebar（导航
 
 Each structural rail owns one Shared Rail Geometry（共享栏位几何）across the whole window. Settings navigation inherits the Navigation Sidebar's actual width, and every full-height Information Inspector uses one shared width. Task HUD is content-sized and never creates a second stored rail width.
 
+## Brand identity
+
+507 于 2026-09-06 选定 C-A 黑白变色龙作为 D Code 标志：头部保持空心，卷尾承担实心视觉分量，`</>` 与四肢共用造型。系统图标使用浅色底板，界面内使用随主题变色的透明标志。母版、导出命令与全端消费入口由 [品牌资源](app/Resources/README.md) 维护。
+
 ## Principles
 
 - **Hierarchy before decoration**：先用布局、排版和渐进披露建立层级，再考虑表面效果。
