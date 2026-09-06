@@ -16,7 +16,7 @@ function MermaidView({ code }: { code: string }) {
     let alive = true;
     api()
       .request("content.renderMermaid", { source: code })
-      .then(value => {
+      .then((value) => {
         const result = value as {
           rendered?: boolean;
           lines?: string[];
@@ -65,7 +65,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       lang,
       themes: { light: "github-light", dark: "github-dark" },
     })
-      .then(value => {
+      .then((value) => {
         if (alive) setHtml(value);
       })
       .catch(() => {
@@ -96,8 +96,28 @@ function MarkdownInner({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          pre: props => <>{props.children}</>,
-          code: props => {
+          pre: (props) => <>{props.children}</>,
+          a: (props) =>
+            !/^https?:\/\//i.test(props.href ?? "") ? (
+              <span>{props.children}</span>
+            ) : (
+              <a
+                href={props.href}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (props.href)
+                    void api()
+                      .openExternal(props.href)
+                      .catch(() => {});
+                }}
+              >
+                {props.children}
+              </a>
+            ),
+          img: (props) => (
+            <span className="text-hint">{props.alt || "图片链接"}</span>
+          ),
+          code: (props) => {
             const { className, children } = props as {
               className?: string;
               children?: React.ReactNode;

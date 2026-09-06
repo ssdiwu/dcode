@@ -14,7 +14,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 
-验证入口：`cd host && npm test`、`swift test`。开发运行入口：先构建 Host，再执行 `swift run PiDCode`；本机 App 构建入口：`./app/build.sh`，产物位于 `dist/D Code.app`。项目目录使用 `dcode` 技术名；`PiDCode` 仅保留为内部 Swift 可执行目标名，Host 包名、环境变量与租约目录继续保留既有 `pi-dcode` 兼容标识。
+验证入口：`cd host && npm test`、`swift test`；Web 客户端的开发、测试与打包入口见 [client/README](client/README.md)。开发运行入口：先构建 Host，再执行 `swift run PiDCode`；本机 App 构建入口：`./app/build.sh`，产物位于 `dist/D Code.app`。项目目录使用 `dcode` 技术名；`PiDCode` 仅保留为内部 Swift 可执行目标名，Host 包名、环境变量与租约目录继续保留既有 `pi-dcode` 兼容标识。
 
 ## 文档入口
 
@@ -32,8 +32,8 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 ## 目录
 
-- `host/`：固定 Pi 0.84.1 的 Node 运行宿主、Protocol v1 与测试。
-- `client/`：`0.0.30` Web 客户端（Electron 平台壳 + React 呈现层）骨架，经 Protocol v1 消费既有 `host/`；状态见其 README。
+- `host/`：固定 Pi 0.84.4 的 Node 运行宿主、Protocol v1 与测试。
+- `client/`：`0.0.30` Web 客户端修复候选（Electron 平台壳 + React 呈现层），经 Protocol v1 消费既有 `host/`；状态见其 README。
 - `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 基线；`0.0.30` 起按面替换、验证即删）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
 - `Package.swift`：macOS 14+ SwiftPM 可执行包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。

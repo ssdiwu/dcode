@@ -5,15 +5,9 @@ directories:
 files:
   - dist/**/*
   - package.json
-extraResources:
-  - from: ../host/dist
-    to: host-dist
-  - from: ../host/package.json
-    to: host-package.json
 mac:
   category: public.app-category.developer-tools
-  icon: build/icon.icns
+  icon: ../app/Resources/AppIcon.icns
   target:
     - target: dir
-    - target: dmg
   identity: null

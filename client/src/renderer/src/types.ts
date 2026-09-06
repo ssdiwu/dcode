@@ -1,174 +1,86 @@
-/** 与 host/src/product-store.ts 对齐的呈现层只读投影类型（子集）。 */
-
-export type TaskScope =
-  | { kind: "user"; userId: string }
-  | { kind: "project"; projectId: string };
-
-export type TaskState =
-  | "draft"
-  | "active"
-  | "waiting"
-  | "completed"
-  | "rejected"
-  | "archived";
-
-export interface TaskRecord {
-  id: string;
-  scope: TaskScope;
-  title: string;
-  goal: string;
-  acceptance: string[];
-  cwd: string;
-  state: TaskState;
-  updatedAt: string;
-}
-
-export interface ProjectRecord {
-  id: string;
-  title: string;
-  directory: string;
-}
-
-export interface ProviderView {
-  id: string;
-  name: string | null;
-  authConfigured: boolean;
-  models: { id?: string; name?: string }[];
-}
-
-export interface GitBranchResult {
-  projectId: string;
-  directory: string;
-  branch: string | null;
-}
-
-export type TaskWorkItemState =
-  | "pending"
-  | "in_progress"
-  | "completed"
-  | "blocked"
-  | "cancelled";
-
-export interface TaskWorkItemRecord {
-  id: string;
-  taskId: string;
-  ordinal: number;
-  title: string;
-  state: TaskWorkItemState;
-}
-
-export interface AgentProfileRecord {
-  id: string;
-  name: string;
-}
-
-export interface CoordinatorAssignmentRecord {
-  id: string;
-  taskId: string;
-  sessionId: string;
-  profileId: string;
-}
-
-export type DCodeSessionKind = "coordination" | "child" | "standard";
-
-export interface DCodeSessionRecord {
-  id: string;
-  taskId: string;
-  kind: DCodeSessionKind;
-  title: string;
-  state: "idle" | "active" | "waiting" | "completed" | "failed" | "archived";
-  updatedAt: string;
-}
-
-export interface SessionTextPart {
-  type: "text";
-  text?: string;
-}
-
-export interface SessionEntry {
-  id: string;
-  type: string;
-  message?: { role?: string; content?: unknown };
-}
-
-export interface SessionInspection {
-  leafId: string | null;
-  entries: SessionEntry[];
-  context: {
-    messageCount: number;
-    model: { provider: string; modelId: string } | null;
-    thinkingLevel: string;
-  };
-}
+/** Type-only imports keep the Host contract authoritative without bundling it. */
+import type {
+  FoundationSnapshot,
+  TaskRecord,
+  DCodeSessionRecord,
+} from "../../../../host/src/product-store.js";
+import type { SessionInspection } from "../../../../host/src/session-reader.js";
+import type {
+  HostEvent,
+  HostMethod,
+  PromptImageInput,
+} from "../../../../host/src/protocol.js";
+export type {
+  FoundationSnapshot,
+  TaskRecord,
+  TaskScope,
+  TaskBundle,
+  TaskWorkbenchViewStatePatch,
+  TaskWorkbenchInspectorTarget,
+  DCodeSessionRecord,
+  AgentRequestRecord,
+  ClientPreferences,
+  SessionEntryRecord,
+} from "../../../../host/src/product-store.js";
+export type { SessionInspection, HostEvent, PromptImageInput };
+export type { ManagedAttachment, AttachmentSource } from "../../../../host/src/attachment-files.js";
+export type SessionEntry = SessionInspection["entries"][number];
+export type ProviderView =
+  import("../../../../host/src/model-providers.js").ProviderView;
 
 export interface DCodeSessionPresentation {
   dcodeSession: DCodeSessionRecord;
   adapterState: "ready" | "unbound" | "unavailable";
-  runtime: { runtimeId: string; state: string } | null;
-  binding: { sessionId?: string; adapterSessionId?: string } | null;
+  runtime: { runtimeId: string; state: unknown } | null;
+  binding: { sessionId: string; adapterSessionId: string } | null;
   inspection: SessionInspection | null;
+  submissions?: {text:string;effectiveText:string;attachments:import("../../../../host/src/attachment-files.js").ManagedAttachment[]}[];
 }
-
-export interface SessionRunRecord {
-  id: string;
-  taskId: string;
-  sessionId: string;
-  status: string;
-  startedAt?: string;
-  completedAt?: string;
-}
-
-export interface ModelCatalogEntryRecord {
-  id: string;
-  providerId: string;
-  modelId: string;
-  name: string;
-  reasoning: boolean;
-}
-
-export interface RuntimeModelSelectionRecord {
-  providerId: string;
-  modelId: string;
-}
-
-export interface FoundationSnapshot {
-  schemaVersion: number;
-  storeRevision: number;
-  dataRoot: string;
-  currentUser: { id: string };
-  projects: ProjectRecord[];
-  tasks: TaskRecord[];
-  taskWorkItems: TaskWorkItemRecord[];
-  agentProfiles: AgentProfileRecord[];
-  coordinatorAssignments: CoordinatorAssignmentRecord[];
-  sessions: DCodeSessionRecord[];
-  sessionRuns: SessionRunRecord[];
-  modelCatalogEntries: ModelCatalogEntryRecord[];
-  modelProviders: { id: string }[];
-  runtimeModelSelection?: RuntimeModelSelectionRecord;
-}
-
 export interface DcodeApi {
-  request: (
-    method: string,
+  request: <T = unknown>(
+    method: HostMethod,
     params?: Record<string, unknown>,
-  ) => Promise<unknown>;
-  subscribe: (handler: (envelope: unknown) => void) => () => void;
+  ) => Promise<T>;
+  subscribe: (handler: (envelope: HostEvent) => void) => () => void;
   notify: (options: { title: string; body?: string }) => Promise<boolean>;
   getPathForFile: (file: File) => string;
+  previewAttachment: (id: string) => Promise<void>;
+  switchCandidate: (direction: "candidate" | "rollback") => Promise<boolean>;
+  signalRestoreFailed: () => Promise<void>;
+  signalReady: (selection: {
+    taskId: string | null;
+    sessionId: string | null;
+  }) => Promise<void>;
+  diagnostics: () => Promise<{
+    version: string;
+    packaged?: boolean;
+    hostReady: boolean;
+    events: { time: string; message: string }[];
+  }>;
+  clearDiagnostics: () => Promise<boolean>;
+  openNotificationSettings: () => Promise<void>;
+  revealCandidate: (path: string) => Promise<void>;
+  chooseDirectory: () => Promise<string | null>;
+  openExternal: (url: string) => Promise<void>;
   restartHost: () => Promise<boolean>;
+  readyToQuit: (error?: string) => void;
 }
-
 export function api(): DcodeApi {
   const value = (window as unknown as { dcode?: DcodeApi }).dcode;
-  if (!value) throw new Error("dcode bridge missing: preload 未加载");
+  if (!value) throw new Error("无法连接应用，请重新打开 D Code。");
   return value;
 }
-
-export async function fetchSnapshot(): Promise<FoundationSnapshot> {
-  return (await api().request("foundation.snapshot")) as FoundationSnapshot;
+export function fetchSnapshot(): Promise<FoundationSnapshot> {
+  return api().request<FoundationSnapshot>("foundation.snapshot");
 }
-
 export function taskProjectId(task: TaskRecord): string | null {
   return task.scope.kind === "project" ? task.scope.projectId : null;
+}
+export function errorText(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (/REVISION_CONFLICT/.test(message))
+    return "数据刚刚更新，请重试。输入内容已保留。";
+  if (/MODEL|model.*not|API key|authentication/i.test(message))
+    return "模型暂不可用，请检查模型选择和供应商连接。输入内容已保留。";
+  return message;
 }

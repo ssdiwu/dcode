@@ -1,48 +1,69 @@
 # D Code Web 客户端
 
-`client/` 是 [PRD 0028（0.0.30 Web 客户端初版）](../doc/40-版本实施方案/0028-0.0.30-Web客户端初版产品需求.md)的实现目录：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 `host/`，不写 Product Store、Project Directory 或凭据。选型与七题结论见 [0003 技术栈](../doc/10-架构与运行/0003-Web客户端技术栈.md)。
+`client/` 是 [PRD 0028](../doc/40-版本实施方案/0028-0.0.30-Web客户端初版产品需求.md) 的 Electron + React 客户端，通过版本化 IPC 消费 D Code Host。产品事实、草稿、阅读位置、通知偏好由 Host 写入 Product Store；React 只消费投影，zustand 只保存瞬时面板状态。技术边界见 [0003](../doc/10-架构与运行/0003-Web客户端技术栈.md)。
 
-## 当前状态（2026-09-05，验收面一已通过机器自验、待 507 人工确认）
-
-已落并经自动验证：
-
-- `src/protocol/`：传输无关的 Protocol v1 客户端（JSONL 解码 + 请求关联 + 事件分发），单测覆盖分片、超限恢复、关联与超时。
-- `src/host/`：Host 启动计划（Electron 二进制 `ELECTRON_RUN_AS_NODE` Node 模式或纯 Node；环境合同平移自 Swift `HostLocator`）与 Host 桥（`host.ready` 握手、优雅停机、崩溃上抛）。
-- `scripts/smoke-host.mjs`：壳冒烟——拉起真实 `host/` 构建产物 → 握手 → `foundation.snapshot` → 优雅退出，全程隔离临时 data-root，不触碰真实 `~/.dcode`。
-- `scripts/seed-store.mjs`（`npm run seed:visual`）：在隔离数据根 `/tmp/dcode-visual-store/` 用真实协议（`project.create` / `task.create`）产出含协调会话的验收数据。
-- `src/main/`、`src/preload/`、`src/renderer/`：Electron 主进程、预载与三区布局——**验收面一（导航区 + 任务对话真实消息流）已实现并机器自验通过**：真实 Product Store 数据、梗概浮卡（进度 + Agent Team）、详情侧栏挤压任务区、稳定几何、深浅双主题；渲染工具链（electron / vite / react / tailwind / motion / zustand / swr）已安装并接入构建。
-- 视觉自验截图：`/tmp/dcode-shots/`（七态）；人工确认后按 PRD 0028 §5 执行 Swift 对应面拆除。
-
-## 命令
+## 开发与验证
 
 ```bash
-# 构建（暂时借用 host/ 的 tsc，client 自有 node_modules 落地后切换）
-npm run build
+# 从仓库根目录安装依赖并构建 Host
+npm --prefix host ci
+npm --prefix host run build
+npm --prefix client ci
 
-# 协议客户端单测
-npm test
-
-# 壳冒烟（需先 cd ../host && npm run build）
-npm run smoke:host
+# 从 client/ 执行
+npm run dev         # 编译主进程，再启动 Vite 与 Electron
+npm run build       # 主进程和整个 React 界面类型检查 + 构建
+npm test            # 协议、呈现与真实 Host 的隔离交互回归
+npm run test:layout # 构建后，用隔离 Chromium 检查真实布局几何
+npm run smoke:host  # 不开窗口的 Host 启动、握手、查询、停机
+npm run dist        # 本地未签名候选；不是正式发布
 ```
 
-启动窗口（待渲染工具链安装后补全）：
+`npm test` 的 UI 回归在 jsdom 中运行真实 React 控制器与 App，接入真实 PiHost / Product Store，只有模型网络响应被隔离替换。覆盖创建、流式消息、停止、草稿隔离与重启恢复、搜索连续输入、创建入口和中文输入法确认。不接触真实账户、真实 `~/.dcode` 或供应商额度。候选摘要另有真实 Electron 子进程回归；字体、窗口行为与视觉验收仍另行成立。
+
+隔离窗口和截图：
 
 ```bash
-npm install        # 安装 electron / vite / react 等 devDependencies
-npm run dev        # vite dev server + electron（入口待接入）
+DCODE_VISUAL_ROOT=/tmp/dcode-web-acceptance npm run seed:visual
+DCODE_DATA_ROOT=/tmp/dcode-web-acceptance/.dcode \
+DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 ```
+
+已有构建截图可使用 `node scripts/dev.mjs --capture /tmp/dcode.png`，并传同样的隔离变量。所有图片 / 内容都来自实际隔离 Store；生产界面没有样式样例开关。`DCODE_WIDTH` 与 `DCODE_THEME` 用于检查宽度和深浅色。
+
+## 当前修复范围
+
+- 使用 [C-A 黑白变色龙品牌资源](../app/Resources/README.md)，系统图标与导航、新任务/空对话、“关于”均由同一母版导出；界面标志随深浅主题变色。
+- 新任务先进入草稿，首次提交创建 Task 与协调会话；新项目从项目分组 `+` 或 `⇧⌘N` 创建。任务/子会话切换不停止其他 Runtime。
+- 会话及新任务文字草稿按身份保存；工作台选择、梗概分区、阅读位置与通知开关可恢复。图片和文件附件由 Host 复制到 `~/.dcode/tmp/attachments/`，随草稿恢复；未发送保留 24 小时，提交后保留 30 天。
+- 真实 `message_update.assistantMessageEvent` 增量、运行失败、停止和实际模型选择接入；用户提交、执行过程与最终回答按轮次区分；过程默认一行实时预览，展开显示非空思考、中途说明和成对工具记录。复制、引用、图片与文件预览可用。
+- 搜索等待索引就绪后重查，通过 Runtime 绑定返回 D Code Task；Pi 导入只走单向导入合同。
+- 信息概览按需打开；成员、工作清单、等待事项、产物与报告消费 Store。对象详情展示已有记录，尚未迁移通用文件阅读器或编辑器。
+- 系统菜单、目录选择、外链限制、退出前保存、Host 重启和打包资源路径接入。
+
+- 恢复任务重命名、复制会话为新任务、归档及空任务移入废纸篓；均由 D Code 原生产品接口写入，可在已归档任务中恢复，不改 Pi 私有会话作为产品权威。
+- 设置使用同一窗口内的完整分类：模型、自定义供应商、本机资源、智能体档案、外观、工作台、已归档任务、自进化、通知、Host 诊断、关于 D Code。分类连接实际读写与错误反馈，不以占位页替代。
+- 模型保留完整目录、认证态、启用范围及默认选择；旧供应商可显式接管非敏感配置并保留认证引用，新认证使用环境变量引用。凭据正文不进入客户端。旧 Swift 的界面偏好单向继承，已保存的新偏好优先。
+- 本机资源保留来源清单，技能和提示词启停实际影响原生资源加载；外部可执行扩展继续服从现有禁用策略。
+- 自进化提供隔离检查与构建、候选身份及数据版本校验、停机后重启恢复、人工确认和回滚回执。候选输出可用 `DCODE_PACKAGE_OUTPUT` 指定，不能覆盖正在运行的构建。
+
+Swift 保留为尚未迁移面的基线，拆除仍须 507 人工验收。
 
 ## 结构
 
-- `src/protocol/`：信封类型、JSONL 解码、传输无关客户端（电话线预铺约束一）。
-- `src/host/`：启动计划与 Host 桥；stdio 管道直迁（议题一 / 议题六）。
-- `src/main/`：Electron 主进程——平台壳七项职责（议题二）。
-- `src/preload/`：渲染层唯一通道，版本化 IPC（预铺约束二）。
-- `src/renderer/`：三区布局骨架；Tailwind / Motion / swr 接入后替换骨架样式。
+- `src/protocol/`：传输无关 Protocol v1 编解码和请求关联。
+- `src/host/`：Electron Node 模式启动、握手、停机、退出事件。
+- `src/main/`：平台窗口、可信 IPC、菜单、通知、目录选择与生命周期。
+- `src/preload/`：渲染层允许使用的系统和 Host 通道。
+- `src/renderer/src/useWorkbench.ts`：投影查询、目标身份、草稿保存、提交和运行事件协调。
+- `src/renderer/src/workbench.ts`：可单独测试的消息投影、增量事件和 Store 写入排序。
+- `src/renderer/src/workbench/useModels.ts`：模型目录、连接与选择的呈现逻辑；模型设置及输入区共用，展示组件不直接调用模型协议。
+- `src/renderer/src/workbench/useComposerAttachments.ts`：附件选择、粘贴、拖入、缩略图查询和提交期间的草稿归属；上传期间退出会等待保存完成。
+- `src/renderer/src/components/conversation/`：消息流、执行过程、旧图片放大与对话导航条；`workbench/conversation-navigation.ts` 和 `useConversationNavigation.ts` 管理轮次投影、锚点与阅读跟随。
+- `src/renderer/src/components/`：输入区、Markdown、导入、完整设置及选择菜单。
+- `src/renderer/src/style.css`：Web 共享几何、角色层级、响应式和减少动态效果。
+- `scripts/package.mjs`：临时目录中安装 Host 生产依赖，打包原图标与完整 Host；产物在 `release/mac-arm64/D Code.app`，临时目录自动清理。
 
-## 边界
+## 验收边界
 
-- 渲染层不得触碰传输、文件系统或 Product Store；一切经预载 IPC。
-- 凭据零接触；本目录不引入终端部件与编辑引擎（PRD 0028）。
-- 修改 `host/` 时在 `host/` 运行其测试；本目录验证入口为 `npm test` 与 `npm run smoke:host`。
+修复候选尚未由 507 人工确认，不是已发布版本。正式验证记录与剩余范围由 PRD 0028 维护。`npm run dist` 不签名、不公证、不推送、不分发。

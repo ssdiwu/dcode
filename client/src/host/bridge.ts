@@ -12,7 +12,7 @@ export interface HostBridgeOptions extends HostLaunchInput {
 const DEFAULT_READY_TIMEOUT_MS = 60_000;
 
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -46,8 +46,8 @@ export class HostBridge {
       stdio: ["pipe", "pipe", "pipe"],
     });
     const client = new ProtocolClient({
-      sendLine: line => child.stdin.write(`${line}\n`),
-      onParseError: error =>
+      sendLine: (line) => child.stdin.write(`${line}\n`),
+      onParseError: (error) =>
         process.stderr.write(
           `[dcode-client] host line decode error ${error.code}: ${error.message}\n`,
         ),
@@ -59,7 +59,9 @@ export class HostBridge {
 
     const bridge = new HostBridge(child, client);
     try {
-      await bridge.waitForReady(options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+      await bridge.waitForReady(
+        options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+      );
     } catch (error) {
       bridge.kill();
       throw error;
@@ -93,20 +95,42 @@ export class HostBridge {
   /** 优雅停机：host.shutdown → 等待退出 → 超时 SIGTERM。 */
   async shutdown(gracefulTimeoutMs = 5_000): Promise<void> {
     if (this.hasExited) return;
+    const exit = once(this.child, "exit")
+      .then(() => true)
+      .catch(() => true);
     try {
-      await this.client.request("host.shutdown", {}, {
-        timeoutMs: gracefulTimeoutMs,
-      });
+      await this.client.request(
+        "host.shutdown",
+        {},
+        {
+          timeoutMs: gracefulTimeoutMs,
+        },
+      );
     } catch {
       // shutdown 请求失败也要继续走退出等待；进程级收尾不依赖协议配合。
     }
+    if (this.hasExited) return;
     const exited = await Promise.race([
-      once(this.child, "exit").then(() => true),
+      exit,
       delay(gracefulTimeoutMs).then(() => false),
     ]);
     if (!exited && !this.hasExited) {
       this.child.kill("SIGTERM");
-      await once(this.child, "exit").catch(() => undefined);
+      const terminated = await Promise.race([
+        exit,
+        delay(1_000).then(() => false),
+      ]);
+      if (!terminated && !this.hasExited) {
+        this.child.kill("SIGKILL");
+        const killed = await Promise.race([
+          exit,
+          delay(3_000).then(() => false),
+        ]);
+        if (!killed && !this.hasExited)
+          throw new Error(
+            "Host did not exit after SIGKILL; another Host must not be started",
+          );
+      }
     }
   }
 
@@ -116,13 +140,16 @@ export class HostBridge {
 
   private waitForReady(timeoutMs: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      this.child.once("error", onError);
       const timer = setTimeout(() => {
         cleanup();
         this.kill();
         reject(
-          new Error(
-            `Host did not signal host.ready within ${timeoutMs}ms`,
-          ),
+          new Error(`Host did not signal host.ready within ${timeoutMs}ms`),
         );
       }, timeoutMs);
       const offExit = this.onExit((code, signal) => {
@@ -133,7 +160,7 @@ export class HostBridge {
           ),
         );
       });
-      const offEvent = this.onEvent(event => {
+      const offEvent = this.onEvent((event) => {
         if (event.event === "host.ready") {
           cleanup();
           resolve();
@@ -141,6 +168,7 @@ export class HostBridge {
       });
       const cleanup = () => {
         clearTimeout(timer);
+        this.child.removeListener("error", onError);
         offExit();
         offEvent();
       };
