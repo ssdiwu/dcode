@@ -1,3 +1,8 @@
+import { type ManagedAttachment, attachmentPrompt } from "./attachment-files.js";
+import type { ClientPreferences } from "./product-store.js";
+import type { DCodeModelsView, ModelChoice } from "./model-catalog-view.js";
+import { MaintenanceController } from "./maintenance.js";
+import { catalogProviderInput, providerCatalogSeed, registerCatalogProviders } from "./model-catalog-configuration.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -534,6 +539,7 @@ export class PiHost {
   private readonly modelAuth: ModelAuthBridge;
   private productStore?: ProductStore;
   private productStoreOpening?: Promise<ProductStore>;
+  private attachmentSweep?: ReturnType<typeof setInterval>;
   /** ADR 0027 决定 5：已见 promptId / steerId 的幂等登记（有界 LRU），
    * 重复提交返回诚实错误而不是重复执行。 */
   private static readonly seenIdLimit = 256;
@@ -670,6 +676,9 @@ export class PiHost {
   async start(): Promise<void> {
     await this.getProductStore();
     await this.ensureDCodeRuntimeModelCatalog();
+    await this.productStore?.sweepAttachments().catch(error=>this.options.emit("attachment.cleanupFailed",{message:error instanceof Error?error.message:String(error)}));
+    this.attachmentSweep=setInterval(()=>{void this.productStore?.sweepAttachments().catch(error=>this.options.emit("attachment.cleanupFailed",{message:error instanceof Error?error.message:String(error)}));},60*60*1000);
+    this.attachmentSweep.unref();
   }
 
   private async getProductStore(): Promise<ProductStore> {
@@ -1057,7 +1066,7 @@ export class PiHost {
     const credentialReference = snapshot.credentialReferences.find((candidate) => (
       candidate.providerId === runtimeModelSelection.providerId && candidate.configured
     ));
-    if (!credentialReference) {
+    if (!credentialReference || (credentialReference.locator.startsWith("environment:") && !process.env[credentialReference.locator.slice("environment:".length)])) {
       throw new PiHostError(
         "D_CODE_MODEL_AUTH_REQUIRED",
         "D Code has no configured credential reference for the selected Provider",
@@ -1255,6 +1264,8 @@ export class PiHost {
   }
 
   async close(): Promise<void> {
+    clearInterval(this.attachmentSweep);
+    await this.maintenance?.close();
     this.modelAuth.close();
     const searchClose = this.searchShutdown ?? this.searchIndex.close();
     this.searchShutdown = searchClose;
@@ -1321,6 +1332,7 @@ export class PiHost {
             taskWorkbenchViewState: true,
             dcodeSessionComposerDrafts: true,
             dcodeSessionPresentation: true,
+            managedAttachments: true,
             piSessionImport: true,
             sessionPathFacts: true,
             multiRuntime: true,
@@ -1354,6 +1366,77 @@ export class PiHost {
         return await this.foundationSnapshot(
           typeof params.afterEventSequence === "number" ? params.afterEventSequence : 0,
         );
+      case "selfEvolution.list": return {receipts:(await this.getProductStore()).webEvolutionReceipts()};
+      case "selfEvolution.prepare": {
+        if(typeof params.fromApp!=="string"||process.execPath!==join(params.fromApp,"Contents/MacOS/D Code"))throw new PiHostError("EVOLUTION_APP_MISMATCH","重启来源必须是当前运行应用");
+        const snapshot=await (await this.getProductStore()).snapshot();
+        if(this.openingDCodeSessionIds.size||[...this.runtimes.values()].some(runtime=>runtime.currentRun)||snapshot.sessionRuns.some(r=>["prepared","running","waiting"].includes(r.status))||snapshot.teamRuns.some(r=>["prepared","active","waiting"].includes(r.status))||(await this.maintenance?.status())?.status==="running")throw new PiHostError("HOST_BUSY","请先停止所有运行和维护操作");
+        return await (await this.getProductStore()).prepareWebEvolution(params as unknown as Parameters<ProductStore["prepareWebEvolution"]>[0]);
+      }
+      case "selfEvolution.transition": {
+        const store=await this.getProductStore();const receipt=store.webEvolutionReceipts().find(r=>r.id===params.id);
+        if(receipt&&(params.state==="session_restored"||params.state==="manual_accepted")&&process.execPath!==join(receipt.toApp,"Contents/MacOS/D Code"))throw new PiHostError("EVOLUTION_APP_MISMATCH","当前应用不是该候选，不能确认其恢复或验收");
+        return await store.transitionWebEvolution(params as unknown as Parameters<ProductStore["transitionWebEvolution"]>[0]);
+      }
+      case "maintenance.status":
+      case "maintenance.start": {
+        this.maintenance ??= new MaintenanceController(await this.getProductStore(), (event,data)=>this.options.emit(event,data));
+        return method === "maintenance.status" ? await this.maintenance.status() : await this.maintenance.start(params.sourceDirectory as string,params.action as "verify"|"build");
+      }
+      case "clientPreferences.importLegacy":return await (await this.getProductStore()).importLegacyPreferences(params as unknown as Parameters<ProductStore["importLegacyPreferences"]>[0]);
+      case "clientPreferences.get": {
+        const store=await this.getProductStore();const preferences=store.clientPreferences();const patterns=store.importedSetting("runtime.enabledModels");
+        if(preferences.enabledModels===undefined&&Array.isArray(patterns)&&patterns.length&&patterns.every(value=>typeof value==="string")){
+          const runtime=await this.sharedModelRuntime();await registerCatalogProviders(runtime,await store.snapshot());
+          const resolved=await resolveModelScopeWithDiagnostics(patterns,runtime);
+          return {...preferences,enabledModels:resolved.scopedModels.map(({model})=>`${model.provider}::${model.id}`),enabledModelPatterns:patterns};
+        }
+        return preferences;
+      }
+      case "clientPreferences.set": {
+        const result = await (await this.getProductStore()).setClientPreferences({
+          requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number,
+          ...(typeof params.notificationsEnabled === "boolean" ? { notificationsEnabled: params.notificationsEnabled } : {}),
+          ...Object.fromEntries(["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"].filter(key => params[key] !== undefined).map(key => [key, params[key]])),
+          ...(params.readingPosition ? { readingPosition: params.readingPosition as { sessionId: string; offset: number } } : {}),
+        });
+        this.options.emit("foundation.changed", { kind: "clientPreferences.updated", storeRevision: result.storeRevision });
+        return result;
+      }
+      case "attachment.import": {
+        const result=await (await this.getProductStore()).importAttachment(params as unknown as Parameters<ProductStore["importAttachment"]>[0]);
+        this.options.emit("foundation.changed",{storeRevision:result.storeRevision,kind:"attachment.imported"});
+        return result;
+      }
+      case "attachment.get": {
+        const value=await (await this.getProductStore()).resolveAttachment(params.id as string);
+        return {attachment:value.attachment,...(value.data?{data:value.data}:{})};
+      }
+      case "attachment.resolve": {
+        const value=await (await this.getProductStore()).resolveAttachment(params.id as string);
+        return {path:value.path,name:value.attachment.name};
+      }
+      case "taskDraft.set": {
+        const result = await (await this.getProductStore()).setTaskDraft({ requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number, scope: params.scope as TaskScope, text: params.text as string, attachmentIds:params.attachmentIds as string[]|undefined });
+        this.options.emit("foundation.changed", { kind: "taskDraft.updated", storeRevision: result.storeRevision });
+        return result;
+      }
+      case "dcodeModelProvider.save": {
+        const input = catalogProviderInput(params.provider);
+        const legacy = (await this.modelProviders().list()).providers.find(p=>p.id===input.id);
+        const existing=(await (await this.getProductStore()).snapshot()).modelProviders.find(p=>p.id===input.id);
+        if(input.adoptExisting&&!legacy)throw new PiHostError("PROVIDER_SOURCE_NOT_FOUND","找不到可接管的旧供应商配置");
+        if(input.keepExistingAuth&&!legacy&&(existing?.nonsecret as {keepExistingAuth?:boolean})?.keepExistingAuth!==true)throw new PiHostError("PROVIDER_AUTH_REFERENCE_REQUIRED","请选择已有认证来源或填写环境变量名称");
+        const runtime=await this.sharedModelRuntime();
+        const result = await (await this.getProductStore()).seedRuntimeModelCatalog({ requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number, ...(input.adoptExisting?{adoptExistingProviderIds:[input.id]}:{}), providers: [await (async()=>{const seed=providerCatalogSeed(input,runtime.getProviderAuthStatus(input.id).configured);if(input.adoptExisting){const metadata=await this.modelProviders().modelMetadata(input.id);seed.models=seed.models.map(model=>({...model,nonsecret:{...metadata[model.modelId],...model.nonsecret as Record<string,unknown>}}));}return seed;})()] });
+        this.options.emit("foundation.changed", { kind: "modelProvider.updated", storeRevision: result.storeRevision });
+        return result;
+      }
+      case "dcodeModelProvider.remove": {
+        const result = await (await this.getProductStore()).removeCatalogProvider({ requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number, providerId: params.providerId as string });
+        this.options.emit("foundation.changed", { kind: "modelProvider.removed", storeRevision: result.storeRevision });
+        return result;
+      }
       case "runtimeModelSelection.set": {
         const result = await (await this.getProductStore()).setRuntimeModelSelection({
           requestId: params.requestId as string,
@@ -1384,6 +1467,28 @@ export class PiHost {
         });
         return result;
       }
+      case "dcodeSession.copy": {
+        const store=await this.getProductStore();const sourceSessionId=params.dcodeSessionId as string;
+        const replayed=await store.replaySessionCopy(params.requestId as string,sourceSessionId);if(replayed)return replayed;
+        const snapshot=await store.snapshot();const source=snapshot.sessions.find(s=>s.id===sourceSessionId);const task=snapshot.tasks.find(t=>t.id===source?.taskId);
+        if(!source||!task)throw new PiHostError("DCODE_SESSION_NOT_FOUND","Source task/session does not exist");
+        const binding=snapshot.sessionRuntimeBindings.find(b=>b.sessionId===sourceSessionId);
+        const runtimeId=this.runtimeByDCodeSessionId.get(sourceSessionId);
+        const copied=binding ? await this.runtimeContext.run(runtimeId??"",async()=>await this.copySession(binding.adapterSessionId,task.cwd)) as import("./session-copy.js").SessionCopyResult : undefined;
+        let result;
+        try { result=await store.copyTaskSession({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,sourceSessionId,...(copied?{adapter:{id:copied.target.id,path:copied.target.path}}:{})}); }
+        catch(error) {
+          if(copied){
+            const current=await store.snapshot();
+            if(!current.sessionRuntimeBindings.some(b=>b.adapterSessionId===copied.target.id)){
+              const lease=await SessionLease.acquire({agentDir:this.leaseAgentDir,sessionId:copied.target.id,sessionPath:copied.target.path,quietWindowMs:this.leaseQuietWindowMs});
+              try{await lease.assertUnchanged();await unlink(copied.target.path);}finally{await lease.release();}
+            }
+          }
+          throw error;
+        }
+        this.options.emit("foundation.changed",{kind:"dcodeSession.copied",storeRevision:result.storeRevision,taskId:result.task.id});return result;
+      }
       case "dcodeSession.presentation":
         return await this.dcodeSessionPresentation(params.dcodeSessionId as string);
       case "dcodeSession.composerDraft.set": {
@@ -1393,6 +1498,7 @@ export class PiHost {
           taskId: params.taskId as string,
           sessionId: params.dcodeSessionId as string,
           text: params.text as string,
+          attachmentIds:params.attachmentIds as string[]|undefined,
         });
         this.options.emit("foundation.changed", {
           storeRevision: result.storeRevision,
@@ -1408,6 +1514,7 @@ export class PiHost {
           dcodeSessionId: params.dcodeSessionId as string,
           promptId: params.promptId as string,
           message: params.message as string,
+          attachmentIds:params.attachmentIds as string[]|undefined,
           ...(Array.isArray(params.images) ? { images: params.images as PromptImageInput[] } : {}),
         });
       case "project.create": {
@@ -1427,6 +1534,12 @@ export class PiHost {
       }
       case "project.gitBranch":
         return await this.projectGitBranch(params.projectId as string);
+      case "task.manage": {
+        if(params.action!=="rename"&&[...this.runtimes.values()].some(runtime=>runtime.runtimeIdentity?.taskId===params.taskId&&runtime.currentRun))throw new PiHostError("TASK_BUSY","该任务仍在收尾，请稍后再归档或恢复");
+        const result = await (await this.getProductStore()).manageTask({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,taskId:params.taskId as string,action:params.action as "rename"|"archive"|"restore"|"trash",...(typeof params.title === "string" ? {title:params.title} : {})});
+        this.options.emit("foundation.changed",{kind:"task.updated",storeRevision:result.storeRevision,taskId:result.task.id});
+        return result;
+      }
       case "task.create": {
         const result = await (await this.getProductStore()).createTask({
           requestId: params.requestId as string,
@@ -1876,6 +1989,7 @@ export class PiHost {
             ? params.pathAction as unknown as SessionPathAction
             : undefined,
           params.images as PromptImageInput[] | undefined,
+          params.attachmentIds as string[] | undefined,
         );
       case "session.steer":
         return await this.steer(
@@ -1911,6 +2025,51 @@ export class PiHost {
         return await this.getCompactionInfo();
       case "session.compact":
         return await this.compactSession();
+      case "dcodeModels.get": return await this.dcodeModelsView(params.dcodeSessionId as string | undefined);
+      case "dcodeModels.refresh": {
+        const runtime=await this.sharedModelRuntime();
+        const offline=process.env.PI_OFFLINE !== undefined;
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),12000);
+        try {
+          await registerCatalogProviders(runtime,await (await this.getProductStore()).snapshot());
+          const result=await runtime.refresh({allowNetwork:!offline,force:params.force === true,signal:controller.signal});
+          this.modelRefreshState={updatedAt:!offline&&!result.aborted?new Date().toISOString():undefined,failedProviders:[...result.errors.keys()],offline};
+          await this.ensureDCodeRuntimeModelCatalog(true);
+          this.options.emit("foundation.changed",{kind:"runtimeModelCatalog.updated"});
+        } finally {clearTimeout(timeout);}
+        return await this.dcodeModelsView(params.dcodeSessionId as string | undefined);
+      }
+      case "dcodeModels.select":
+      case "dcodeModels.setThinking": {
+        const store=await this.getProductStore();
+        const sessionId=params.dcodeSessionId as string | undefined;
+        if(sessionId){const session=(await store.snapshot()).sessions.find(s=>s.id===sessionId);if(!session||session.state==="archived")throw new PiHostError("SESSION_NOT_AVAILABLE","会话不存在或已归档");}
+        const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
+        const view=await this.dcodeModelsView(sessionId);
+        if(method === "dcodeModels.select"){
+          const model=view.models.find(m=>m.providerId===params.providerId&&m.modelId===params.modelId);
+          if(!model?.available)throw new PiHostError("MODEL_NOT_AVAILABLE","模型尚未连接，请刷新连接或配置供应商");
+        } else if(!view.thinkingLevels.includes(params.level as string))throw new PiHostError("THINKING_NOT_SUPPORTED","当前模型不支持这个思考强度");
+        if(runtimeId && sessionId) {
+          const command=await store.prepareRuntimeModelControl({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,method,sessionId,runtimeId,values:method==="dcodeModels.select"?{providerId:params.providerId,modelId:params.modelId}:{level:params.level}});
+          if(command.replayed){
+            const attempt=(await store.snapshot()).operationAttempts.find(a=>a.id===command.attemptId);
+            if(attempt?.status!=="succeeded")throw new PiHostError("MODEL_COMMAND_UNKNOWN","上次选择未确认完成，请重新选择模型");
+            return await this.dcodeModelsView(sessionId);
+          }
+          try {
+            const active=this.runtimes.get(runtimeId);
+            if(active)await registerCatalogProviders(active.session.modelRuntime,await store.snapshot());
+            if(method==="dcodeModels.select")await this.handleRuntimeRequest("session.setModel",{runtimeId,provider:params.providerId,modelId:params.modelId});
+            else await this.handleRuntimeRequest("session.setThinking",{runtimeId,level:params.level});
+            await store.finishOperationAttempt({attemptId:command.attemptId,outcome:"succeeded"});
+          } catch(error){await store.finishOperationAttempt({attemptId:command.attemptId,outcome:"unknown"});throw error;}
+        } else if(method === "dcodeModels.select")await store.setRuntimeModelSelection({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,providerId:params.providerId as string,modelId:params.modelId as string});
+        else await store.setClientPreferences({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,defaultThinking:params.level as string});
+        this.options.emit("foundation.changed",{kind:"runtimeModelSelection.updated"});
+        return await this.dcodeModelsView(sessionId);
+      }
       case "modelProviders.list":
         return await this.modelProviders().list();
       case "modelProviders.save":
@@ -1959,6 +2118,10 @@ export class PiHost {
       case "session.setFastMode":
         return await this.setFastMode(params.enabled as boolean);
       case "host.shutdown":
+        if(params.requireIdle===true){
+          const snapshot=await (await this.getProductStore()).snapshot();
+          if(this.openingDCodeSessionIds.size>0||[...this.runtimes.values()].some(runtime=>runtime.currentRun)||snapshot.sessionRuns.some(run=>["prepared","running","waiting"].includes(run.status))||snapshot.teamRuns.some(run=>["prepared","active","waiting"].includes(run.status))||(await this.maintenance?.status())?.status==="running")throw new PiHostError("HOST_BUSY","还有任务或维护操作正在运行，请先停止后重启服务");
+        }
         this.shutdownRequested = true;
         this.searchShutdown ??= this.searchIndex.close();
         void this.searchShutdown.catch(() => undefined);
@@ -2041,6 +2204,7 @@ export class PiHost {
       const finished = await store.finishOperationAttempt({
         attemptId: prepared.attemptId,
         outcome: "succeeded",
+        confirmedRuntimeAbort: identity.runtimeId,
       });
       this.options.emit("foundation.changed", {
         storeRevision: finished.storeRevision,
@@ -2129,6 +2293,14 @@ export class PiHost {
     if (!dcodeSession) {
       throw new PiHostError("DCODE_SESSION_NOT_FOUND", "D Code Session does not exist", { dcodeSessionId });
     }
+    const catalog=store.attachmentCatalog();
+    const submissions=(await store.importedSessionEntries(dcodeSessionId)).filter(entry=>entry.sourceKind === "native" && entry.messageRole === "user").flatMap(entry=>{
+      const content=entry.content as {text?:string;attachmentRefs?:ManagedAttachment[]};
+      const attachments=(content.attachmentRefs??[]).filter(item=>item.id?.startsWith("attachment-")).map(item=>catalog.find(current=>current.id===item.id)??item);
+      if(!attachments.length)return [];
+      const text=content.text??"";
+      return [{text,effectiveText:attachmentPrompt(text,attachments,store.layout),attachments}];
+    });
     const binding = snapshot.sessionRuntimeBindings.find((candidate) => candidate.sessionId === dcodeSession.id);
     const active = [...this.runtimes.values()].find((candidate) => (
       candidate.runtimeIdentity?.dcodeSessionId === dcodeSession.id
@@ -2136,6 +2308,7 @@ export class PiHost {
     if (!binding) {
       return {
         dcodeSession,
+        submissions,
         binding: null,
         runtime: active?.runtimeIdentity
           ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
@@ -2147,6 +2320,7 @@ export class PiHost {
     try {
       return {
         dcodeSession,
+        submissions,
         binding,
         runtime: active?.runtimeIdentity
           ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
@@ -2158,6 +2332,7 @@ export class PiHost {
       if (error instanceof SessionReadError) {
         return {
           dcodeSession,
+        submissions,
           binding,
           runtime: active?.runtimeIdentity
             ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
@@ -2175,6 +2350,7 @@ export class PiHost {
     promptId: string;
     message: string;
     images?: PromptImageInput[];
+    attachmentIds?: string[];
   }): Promise<unknown> {
     const store = await this.getProductStore();
     const snapshot = await store.snapshot();
@@ -2185,9 +2361,34 @@ export class PiHost {
         dcodeSessionId: input.dcodeSessionId,
       });
     }
+    if(task.state==="archived")throw new PiHostError("TASK_ARCHIVED","请先恢复归档任务，再发送消息");
     let runtimeId = this.runtimeByDCodeSessionId.get(dcodeSession.id);
-    const existingRuntime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
+    let existingRuntime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
     let agentRunId = existingRuntime?.runtimeIdentity?.agentRunId;
+    let settledModel: { provider: string; modelId: string } | undefined;
+    let settledThinking: ThinkingLevel | undefined;
+    const previousAgent = snapshot.agentRuns.find((candidate) => candidate.id === agentRunId);
+    if (
+      runtimeId && existingRuntime && dcodeSession.kind === "coordination"
+      && previousAgent && ["aborted", "failed", "interrupted", "unknown"].includes(previousAgent.status)
+    ) {
+      const activeTeam = snapshot.teamRuns.some((team) => (
+        team.coordinatorAgentRunId === previousAgent.id && ["prepared", "active", "waiting"].includes(team.status)
+      ));
+      if (existingRuntime.currentRun || activeTeam) {
+        throw new PiHostError("DCODE_SESSION_SETTLING", "The previous Coordinator run is still settling; retry after it finishes");
+      }
+      // A stopped/failed Agent Run remains terminal evidence. A new explicit
+      // prompt starts a fresh owner after closing only the settled Runtime.
+      if (existingRuntime.session.model) {
+        settledModel = { provider: existingRuntime.session.model.provider, modelId: existingRuntime.session.model.id };
+      }
+      settledThinking = existingRuntime.session.thinkingLevel;
+      await this.closeRuntime(runtimeId);
+      runtimeId = undefined;
+      existingRuntime = undefined;
+      agentRunId = undefined;
+    }
     if (runtimeId && !agentRunId) {
       throw new PiHostError(
         "DCODE_SESSION_RUNTIME_UNMANAGED",
@@ -2210,7 +2411,7 @@ export class PiHost {
         );
       }
       const coordinator = await store.ensureCoordinatorAgentRun({
-        requestId: `coordinator-agent-run:${dcodeSession.id}`,
+        requestId: `coordinator-agent-run:${createHash("sha256").update(`${dcodeSession.id}\0${input.promptId}`).digest("hex")}`,
         taskId: task.id,
         scope: task.scope,
       });
@@ -2236,11 +2437,16 @@ export class PiHost {
         },
       }));
       started = true;
+      const thinking = store.clientPreferences().defaultThinking;
+      if (thinking) await this.handleRuntimeRequest("session.setThinking", { runtimeId, level: thinking });
     }
+    if (settledModel) await this.handleRuntimeRequest("session.setModel", { runtimeId, ...settledModel });
+    if (settledThinking) await this.handleRuntimeRequest("session.setThinking", { runtimeId, level: settledThinking });
     const result = await this.handleRuntimeRequest("session.prompt", {
       runtimeId,
       promptId: input.promptId,
       message: input.message,
+      ...(input.attachmentIds?.length ? {attachmentIds:input.attachmentIds} : {}),
       ...(input.images ? { images: input.images } : {}),
     });
     return { runtimeId, started, result };
@@ -3498,7 +3704,21 @@ export class PiHost {
           entryCount: path.entryCount,
         })),
       };
-      const sourceSettingsManager = SettingsManager.create(manager.getCwd(), this.agentDir);
+      const legacySettings = SettingsManager.create(manager.getCwd(), this.agentDir);
+      // Pi may save defaults from setModel/setThinking. Native Runtime settings
+      // are private copies: D Code Product Store remains the persistent owner.
+      const privateSettings = {
+        global: JSON.stringify(legacySettings.getGlobalSettings()),
+        project: JSON.stringify(legacySettings.getProjectSettings()),
+      };
+      const sourceSettingsManager = runtimeIdentity
+        ? SettingsManager.fromStorage({
+          withLock: (scope, update) => {
+            const next = update(privateSettings[scope]);
+            if (next !== undefined) privateSettings[scope] = next;
+          },
+        }, { projectTrusted: legacySettings.isProjectTrusted() })
+        : legacySettings;
       const resourceLoader = new DCodeResourceLoader({
         cwd: manager.getCwd(),
         agentDir: this.agentDir,
@@ -3524,10 +3744,11 @@ export class PiHost {
             : []),
         ],
         ...(runtimeIdentity ? { systemPromptOverride: () => assembledPrompt?.text } : {}),
-        ...(runtimeIdentity ? { allowExternalExtensions: false } : {}),
+        ...(runtimeIdentity ? { allowExternalExtensions: false, disabledResources: () => new Set(this.productStore?.clientPreferences().disabledResources ?? []) } : {}),
       });
       await resourceLoader.reload();
       const created = await createAgentSession({
+        ...(runtimeIdentity ? {modelRuntime:await ModelRuntime.create({authPath:join(this.agentDir,"auth.json"),modelsPath:join(this.agentDir,"models.json"),modelsStorePath:join((await this.getProductStore()).layout.root,"models-cache.json"),allowModelNetwork:false})} : {}),
         cwd: manager.getCwd(),
         agentDir: this.agentDir,
         sessionManager: manager,
@@ -3550,6 +3771,7 @@ export class PiHost {
       });
       session = created.session;
       if (promptContext) {
+        await registerCatalogProviders(session.modelRuntime, await (await this.getProductStore()).snapshot());
         const selectedModel = session.modelRuntime.getAvailableSnapshot().find((candidate) => (
           candidate.provider === promptContext.runtimeModelSelection.providerId
           && candidate.id === promptContext.runtimeModelSelection.modelId
@@ -4127,7 +4349,14 @@ export class PiHost {
     promptId: string,
     pathAction?: SessionPathAction,
     images?: PromptImageInput[],
+    attachmentIds?: string[],
   ): Promise<unknown> {
+    const attachmentStore=attachmentIds?.length?await this.getProductStore():undefined;
+    const managed = attachmentStore?await Promise.all((attachmentIds??[]).map(id=>attachmentStore.resolveAttachment(id))):[];
+    const rawMessage=message;
+    const effectiveMessage=attachmentStore?attachmentPrompt(message,managed.map(item=>item.attachment),attachmentStore.layout):message;
+    images=[...(images??[]),...managed.filter(item=>item.data).map(item=>({type:"image" as const,mimeType:item.attachment.mimeType,data:item.data!}))];
+    if(images.length>8||images.reduce((sum,item)=>sum+item.data.length,0)>12_000_000)throw new PiHostError("ATTACHMENT_LIMIT","图片附件超过本次提交上限，请减少后重试。");
     if (pathAction && message.trim().length === 0) {
       throw new PiHostError("EMPTY_PATH_PROMPT", "路径草稿不能为空");
     }
@@ -4171,12 +4400,12 @@ export class PiHost {
       if (!assembledPrompt || !promptEnvironment) {
         throw new PiHostError("PROMPT_ASSEMBLY_FAILED", "Runtime has no D Code Prompt Receipt source");
       }
-      const attachmentRefs = (images ?? []).map((image) => ({
+      const attachmentRefs: unknown[] = [...managed.map(item=>item.attachment),...(images ?? []).filter(image=>!managed.some(item=>item.data===image.data)).map((image) => ({
         type: "image",
         mimeType: image.mimeType,
         digest: `sha256:${createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex")}`,
         bytes: Buffer.byteLength(image.data, "base64"),
-      }));
+      }))];
       preparedRun = await (await this.getProductStore()).prepareSessionRun({
         requestId: `provider-${createHash("sha256")
           .update(`${runtimeIdentity.runtimeId}\0${promptId}`)
@@ -4190,7 +4419,8 @@ export class PiHost {
         workspaceId: runtimeIdentity.workspace.workspaceId,
         cwd: runtimeIdentity.workspace.cwd,
         workspaceAccess: runtimeIdentity.workspace.access,
-        message,
+        message: rawMessage,
+        managedAttachmentIds: attachmentIds,
         attachmentRefs,
         ...(active.session.model
           ? { modelProvider: active.session.model.provider, modelId: active.session.model.id }
@@ -4260,7 +4490,7 @@ export class PiHost {
             runtimeId: runtimeIdentity?.runtimeId,
           });
         }
-        return await active.session.prompt(message, {
+        return await active.session.prompt(effectiveMessage, {
           source: "rpc",
           ...(runtimeIdentity ? { expandPromptTemplates: false } : {}),
           ...(images && images.length > 0 ? { images } : {}),
@@ -4597,13 +4827,14 @@ export class PiHost {
    * Prompt / 命令与诊断。隐藏的 D Code 内联扩展不出现在用户面。
    */
   private async listResources(): Promise<unknown> {
-    const cwd = this.active?.inspection.summary.cwd ?? homedir();
+    const cwd = this.options.userHome ?? homedir();
     const settingsManager = SettingsManager.create(cwd, this.agentDir);
     const loader = new DCodeResourceLoader({
       cwd,
       agentDir: this.agentDir,
       sourceSettingsManager: settingsManager,
       extensionFactories: [],
+      allowExternalExtensions: false,
     });
     await loader.reload();
     const disabledStore = new DisabledPackageStore(disabledPackageStorePath(this.agentDir));
@@ -4761,16 +4992,18 @@ export class PiHost {
     }
   }
 
+  private maintenance: MaintenanceController | undefined;
+
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
   /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
   private sharedModelRuntime(): Promise<ModelRuntime> {
-    this.modelRuntimePromise ??= ModelRuntime.create({
+    this.modelRuntimePromise ??= this.getProductStore().then(store => ModelRuntime.create({
       authPath: join(this.agentDir, "auth.json"),
       modelsPath: join(this.agentDir, "models.json"),
-      modelsStorePath: join(this.agentDir, "models-store.json"),
+      modelsStorePath: join(store.layout.root, "models-cache.json"),
       allowModelNetwork: false,
-    });
+    }));
     return this.modelRuntimePromise;
   }
 
@@ -4778,13 +5011,15 @@ export class PiHost {
     return await this.sharedModelRuntime();
   }
 
-  private async ensureDCodeRuntimeModelCatalog(): Promise<void> {
+  private async ensureDCodeRuntimeModelCatalog(force = false): Promise<void> {
     const store = await this.getProductStore();
     const current = await store.snapshot();
-    if (current.modelCatalogEntries.length > 0 && current.runtimeModelSelection) return;
+    if (!force && current.modelCatalogEntries.length > 0 && current.runtimeModelSelection) return;
 
     const runtime = await this.createModelSettingsRuntime();
+    const removedProviderIds=store.removedModelProviderIds();
     const providers: RuntimeModelCatalogProviderInput[] = runtime.getProviders().flatMap((provider) => {
+      if(removedProviderIds.has(provider.id)||current.modelProviders.some(p=>p.id===provider.id&&(p.nonsecret as {source?:string}).source==="dcode_custom"))return [];
       const raw = provider as unknown as Record<string, unknown>;
       const providerId = redactCredentialText(provider.id);
       if (providerId.redacted) return [];
@@ -4848,7 +5083,31 @@ export class PiHost {
       .update(JSON.stringify({ providers, defaultSelection }))
       .digest("hex")
       .slice(0, 48)}`;
-    await store.seedRuntimeModelCatalog({ requestId, providers, ...(defaultSelection ? { defaultSelection } : {}) });
+    await store.seedRuntimeModelCatalog({ requestId: force ? `catalog-refresh-${randomUUID()}` : requestId, providers, ...(defaultSelection ? { defaultSelection } : {}) });
+  }
+
+  private modelRefreshState: DCodeModelsView["refresh"] = {failedProviders:[],offline:false};
+
+  private async dcodeModelsView(sessionId?: string): Promise<DCodeModelsView> {
+    const store=await this.getProductStore();
+    const snapshot=await store.snapshot();
+    const runtime=await this.sharedModelRuntime();
+    await registerCatalogProviders(runtime,snapshot);
+    const available=new Set((await runtime.getAvailable()).map(m=>`${m.provider}::${m.id}`));
+    const preferences=await this.handleSerial("clientPreferences.get",{}) as ClientPreferences;
+    const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
+    const active=runtimeId?this.runtimes.get(runtimeId):undefined;
+    const defaultKey=snapshot.runtimeModelSelection?`${snapshot.runtimeModelSelection.providerId}::${snapshot.runtimeModelSelection.modelId}`:null;
+    const selectedKey=active?.session.model?`${active.session.model.provider}::${active.session.model.id}`:defaultKey;
+    const models:ModelChoice[]=snapshot.modelCatalogEntries.map(model=>{
+      const key=`${model.providerId}::${model.modelId}`;
+      const definition=runtime.getModel(model.providerId,model.modelId);
+      return {key,providerId:model.providerId,providerName:snapshot.modelProviders.find(p=>p.id===model.providerId)?.name??model.providerId,modelId:model.modelId,name:model.name,available:available.has(key),enabled:preferences.enabledModels==null||preferences.enabledModels.includes(key),reasoning:model.reasoning,contextWindow:model.contextWindow??null,thinkingLevels:definition?[...getSupportedThinkingLevels(definition)]:["off"]};
+    });
+    const thinkingLevels=models.find(m=>m.key===selectedKey)?.thinkingLevels??["off","minimal","low","medium","high","xhigh","max"];
+    const defaultThinking=preferences.defaultThinking??"medium";
+    const desired=active?.session.thinkingLevel??defaultThinking;
+    return {models,providers:snapshot.modelProviders.map(p=>({id:p.id,name:p.name,connected:models.some(m=>m.providerId===p.id&&m.available)})),legacyProviders:(await this.modelProviders().list()).providers,selectedKey,defaultKey,defaultThinking,thinking:thinkingLevels.includes(desired)?desired:(thinkingLevels.includes("medium")?"medium":thinkingLevels[0]??"off"),thinkingLevels,refresh:{...this.modelRefreshState,offline:process.env.PI_OFFLINE!==undefined}};
   }
 
   private async projectModelScope(

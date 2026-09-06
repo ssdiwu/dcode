@@ -183,7 +183,11 @@ export class ExtensionUIBridge {
       addAutocompleteProvider() { bridge.reportUnsupported("addAutocompleteProvider", "ignored"); },
       setEditorComponent() { bridge.reportUnsupported("setEditorComponent", "ignored"); },
       getEditorComponent() { return bridge.blockUnsupported("getEditorComponent"); },
-      get theme() { return bridge.blockUnsupported("theme"); },
+      // Pi 0.84.4 copies the UI context while binding prompt events. Merely
+      // copying a capability must be safe; using a TUI theme remains blocked.
+      theme: new Proxy({} as ExtensionUIContext["theme"], {
+        get() { return bridge.blockUnsupported("theme"); },
+      }),
       getAllThemes() { return bridge.blockUnsupported("getAllThemes"); },
       getTheme() { return bridge.blockUnsupported("getTheme"); },
       setTheme() {

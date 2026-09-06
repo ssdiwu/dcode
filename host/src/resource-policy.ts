@@ -95,6 +95,7 @@ export class DCodeResourceLoader {
     extensionFactories: NonNullable<LoaderOptions["extensionFactories"]>;
     systemPromptOverride?: NonNullable<LoaderOptions["systemPromptOverride"]>;
     allowExternalExtensions?: boolean;
+    disabledResources?: () => ReadonlySet<string>;
   }) {
     this.resourceSettingsManager = createDCodeResourceSettingsManager({
       cwd: options.cwd,
@@ -117,11 +118,15 @@ export class DCodeResourceLoader {
   }
 
   getSkills(): ReturnType<DefaultResourceLoader["getSkills"]> {
-    return this.loader.getSkills();
+    const value = this.loader.getSkills();
+    const disabled = this.options.disabledResources?.();
+    return disabled ? {...value,skills:value.skills.filter(skill=>!disabled.has(`skill:${skill.filePath}`))} : value;
   }
 
   getPrompts(): ReturnType<DefaultResourceLoader["getPrompts"]> {
-    return this.loader.getPrompts();
+    const value = this.loader.getPrompts();
+    const disabled = this.options.disabledResources?.();
+    return disabled ? {...value,prompts:value.prompts.filter(prompt=>!disabled.has(`prompt:${prompt.filePath}`))} : value;
   }
 
   getThemes(): ReturnType<DefaultResourceLoader["getThemes"]> {

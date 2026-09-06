@@ -1,3 +1,5 @@
+import { stageAttachment, readAttachment, sweepAttachmentFiles, stagedAttachmentBytes, discardStagedAttachment, attachmentPath, attachmentPrompt, ATTACHMENT_DAY, ATTACHMENT_RETENTION_DAYS, type ManagedAttachment, type AttachmentSource } from "./attachment-files.js";
+import type { MaintenanceState } from "./maintenance.js";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -140,7 +142,32 @@ export interface TaskWorkbenchViewStatePatch {
   workspaceContent?: TaskWorkbenchWorkspaceContent | null;
 }
 
+export interface WebEvolutionReceipt {
+  id:string;kind:"web_switch";state:"restart_requested"|"session_restored"|"manual_accepted"|"recovery_required"|"rolled_back"|"cancelled";
+  fromApp:string;toApp:string;fromDigest:string;toDigest:string;rollbackOf?:string;
+  selection:{taskId:string|null;sessionId:string|null};createdAt:string;updatedAt:string;
+  events:{kind:string;occurredAt:string;issue?:string}[];
+}
+
+export interface ClientPreferences {
+  appearance?: "system" | "light" | "dark";
+  fontScale?: "compact" | "standard" | "large";
+  sidebarVisible?: boolean;
+  overviewVisible?: boolean;
+  sidebarWidth?: number;
+  inspectorWidth?: number;
+  defaultThinking?: string;
+  enabledModels?: string[] | null;
+  /** Derived from one-way imported rules; not a mutable preference field. */
+  enabledModelPatterns?: string[];
+  disabledResources?: string[];
+  notificationsEnabled: boolean;
+  readingPositions: Record<string, number>;
+}
+
 export interface ComposerDraftRecord {
+  attachments?: ManagedAttachment[];
+  scope?: TaskScope;
   id: string;
   taskId?: string;
   sessionId?: string;
@@ -714,7 +741,8 @@ export class ProductStoreError extends Error {
       | "CREDENTIAL_MATERIAL_REJECTED"
       | "IDEMPOTENCY_KEY_REUSED"
       | "PI_SESSION_ALREADY_IMPORTED"
-      | "SESSION_RUNTIME_ALREADY_BOUND",
+      | "SESSION_RUNTIME_ALREADY_BOUND"
+      | "ATTACHMENT_STORAGE_FULL" | "ATTACHMENT_LIMIT" | "ATTACHMENT_EXPIRED",
     message: string,
     readonly details?: unknown,
   ) {
@@ -1321,7 +1349,10 @@ function taskWorkItem(row: SQLiteRow): TaskWorkItemRecord {
 }
 
 function composerDraft(row: SQLiteRow): ComposerDraftRecord {
+  const payload = JSON.parse(text(row, "payload_json")) as { scope?: unknown; attachments?: ManagedAttachment[] };
   return {
+    ...(payload?.scope ? { scope: normalizedTaskScope(payload.scope) } : {}),
+    ...(payload.attachments?.length ? {attachments:payload.attachments} : {}),
     id: text(row, "id"),
     ...(typeof row.task_id === "string" ? { taskId: row.task_id } : {}),
     ...(typeof row.session_id === "string" ? { sessionId: row.session_id } : {}),
@@ -2230,12 +2261,226 @@ export class ProductStore {
     );
   }
 
+  webEvolutionReceipts(): WebEvolutionReceipt[] {
+    return (this.database.prepare("SELECT payload_json FROM self_evolution_runs WHERE json_extract(payload_json,'$.kind')='web_switch' ORDER BY created_at DESC LIMIT 50").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")) as WebEvolutionReceipt);
+  }
+  async prepareWebEvolution(input:{requestId:string;expectedStoreRevision:number;fromApp:string;toApp:string;fromDigest:string;toDigest:string;rollbackOf?:string}):Promise<{storeRevision:number;receipt:WebEvolutionReceipt}> {
+    for(const key of ["fromApp","toApp"] as const)if(!isAbsolute(input[key])||!input[key].endsWith(".app"))throw new ProductStoreError("INVALID_ARGUMENT","Invalid application bundle");
+    for(const key of ["fromDigest","toDigest"] as const)if(!/^sha256:[a-f0-9]{64}$/.test(input[key]))throw new ProductStoreError("INVALID_ARGUMENT","Invalid application digest");
+    return this.mutate("selfEvolution.prepare",input.requestId,input.expectedStoreRevision,input,(_revision,now)=>{
+      const history=this.webEvolutionReceipts();
+      if(!input.rollbackOf&&history.some(r=>["restart_requested","session_restored","recovery_required"].includes(r.state)))throw new ProductStoreError("REVISION_CONFLICT","请先验收或回滚上一次候选");
+      if(input.rollbackOf){const previous=history.find(r=>r.id===input.rollbackOf);if(!previous||previous.fromApp!==input.toApp||previous.toApp!==input.fromApp||previous.fromDigest!==input.toDigest)throw new ProductStoreError("INVALID_ARGUMENT","Rollback identity does not match previous application");}
+      else if(this.maintenanceState()?.candidatePath!==input.toApp||this.maintenanceState()?.status!=="succeeded")throw new ProductStoreError("INVALID_ARGUMENT","Candidate has not completed the local build");
+      const id=`evolution-${randomUUID()}`;
+      const receipt:WebEvolutionReceipt={id,kind:"web_switch",state:"restart_requested",fromApp:input.fromApp,toApp:input.toApp,fromDigest:input.fromDigest,toDigest:input.toDigest,...(input.rollbackOf?{rollbackOf:input.rollbackOf}:{}),selection:this.taskWorkbenchViewState().selection,createdAt:now,updatedAt:now,events:[{kind:"restart_requested",occurredAt:now}]};
+      this.database.prepare("INSERT INTO self_evolution_runs(id,source_run_id,state,document_revision,payload_json,created_at,updated_at) VALUES (?,?,?,1,?,?,?)").run(id,id,receipt.state,canonicalJSON(receipt),now,now);
+      this.database.prepare("INSERT INTO self_evolution_events(id,self_evolution_run_id,ordinal,event_json,created_at) VALUES (?,?,0,?,?)").run(`event-${randomUUID()}`,id,canonicalJSON(receipt.events[0]),now);
+      return {value:{receipt},event:{kind:"selfEvolution.restartRequested",entityKind:"selfEvolution",entityId:id,payload:{fromApp:input.fromApp,toApp:input.toApp}}};
+    });
+  }
+  async transitionWebEvolution(input:{requestId:string;expectedStoreRevision:number;id:string;state:WebEvolutionReceipt["state"];selection?:WebEvolutionReceipt["selection"];issue?:string}):Promise<{storeRevision:number;receipt:WebEvolutionReceipt}> {
+    return this.mutate("selfEvolution.transition",input.requestId,input.expectedStoreRevision,input,(_revision,now)=>{
+      const previous=this.webEvolutionReceipts().find(r=>r.id===input.id);if(!previous)throw new ProductStoreError("NOT_FOUND","Evolution receipt not found");
+      const allowed:Record<string,string[]>={restart_requested:["session_restored","recovery_required","rolled_back","cancelled"],session_restored:["manual_accepted","recovery_required","rolled_back","cancelled"],manual_accepted:[],recovery_required:["rolled_back","session_restored","cancelled"],rolled_back:[],cancelled:[]};
+      if(!(allowed[previous.state]??[]).includes(input.state))throw new ProductStoreError("REVISION_CONFLICT","Evolution state has changed");
+      if(input.state==="session_restored"&&(previous.selection.taskId!==input.selection?.taskId||previous.selection.sessionId!==input.selection?.sessionId))throw new ProductStoreError("REVISION_CONFLICT","原任务尚未恢复");
+      if(input.issue)requiredCredentialFreeString(input.issue,"issue",2000);
+      const event={kind:input.state,occurredAt:now,...(input.issue?{issue:input.issue}:{})};const receipt={...previous,state:input.state,updatedAt:now,events:[...previous.events,event]};
+      this.database.prepare("UPDATE self_evolution_runs SET state=?,document_revision=document_revision+1,payload_json=?,updated_at=? WHERE id=?").run(receipt.state,canonicalJSON(receipt),now,receipt.id);
+      this.database.prepare("INSERT INTO self_evolution_events(id,self_evolution_run_id,ordinal,event_json,created_at) VALUES (?,?,?,?,?)").run(`event-${randomUUID()}`,receipt.id,receipt.events.length-1,canonicalJSON(event),now);
+      if(previous.rollbackOf&&input.state==="rolled_back"){
+        const original=this.webEvolutionReceipts().find(r=>r.id===previous.rollbackOf);if(original){const updated={...original,state:"rolled_back",updatedAt:now,events:[...original.events,event]};this.database.prepare("UPDATE self_evolution_runs SET state='rolled_back',document_revision=document_revision+1,payload_json=?,updated_at=? WHERE id=?").run(canonicalJSON(updated),now,original.id);}
+      }
+      return {value:{receipt},event:{kind:`selfEvolution.${input.state}`,entityKind:"selfEvolution",entityId:input.id,payload:{state:input.state}}};
+    });
+  }
+
+  maintenanceState(): MaintenanceState | undefined {
+    const row=this.database.prepare("SELECT value_json FROM product_settings WHERE key='maintenance.latest'").get() as SQLiteRow | undefined;
+    return row ? JSON.parse(text(row,"value_json")) as MaintenanceState : undefined;
+  }
+  async recordMaintenance(state: MaintenanceState): Promise<void> {
+    const {sourceDirectory,candidatePath,...details}=state;
+    assertCredentialFreeValue(details,"maintenance");
+    for(const [key,path] of Object.entries({sourceDirectory,candidatePath}))if(path!==undefined){
+      if(!isAbsolute(path)||/[\r\n\0]/.test(path))throw new ProductStoreError("INVALID_ARGUMENT","Invalid maintenance path");
+      // Validate path components separately: a full source path plus build UUID
+      // resembles a mixed-case token to the generic credential detector.
+      assertCredentialFreeValue(path.split("/"),`maintenance.${key}`);
+    }
+    await this.mutate("maintenance.record",`maintenance-${randomUUID()}`,undefined,{id:state.id,status:state.status,updatedAt:state.updatedAt},(_revision,now)=>{
+      this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES ('maintenance.latest',?,'user',1,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,revision=product_settings.revision+1,updated_at=excluded.updated_at").run(canonicalJSON(state),now,now);
+      return {value:{},event:{kind:"maintenance.updated",entityKind:"maintenance",entityId:state.id??"latest",payload:{status:state.status}}};
+    });
+  }
+
+  importedSetting(key:string): unknown {
+    const row=this.database.prepare("SELECT value_json FROM product_settings WHERE key=?").get(key) as SQLiteRow|undefined;
+    return row ? JSON.parse(text(row,"value_json")) : undefined;
+  }
+  async importLegacyPreferences(input:{requestId:string;expectedStoreRevision:number;values:Record<string,unknown>}):Promise<{storeRevision:number;imported:boolean}> {
+    if(this.importedSetting("workbench.webLegacyPreferencesImported")===true)return {storeRevision:this.metaInteger("store_revision"),imported:false};
+    const allowed=new Set(["dcode.appearance","dcode.appearance.fontScale","dcode.sidebar.userHidden","dcode.inspector.userHidden","dcode.sidebar.width","dcode.inspector.width","dcode.notifications.completionEnabled"]);
+    const entries=Object.entries(input.values).filter(([key])=>allowed.has(key));
+    for(const [key,value] of entries){if(key.endsWith("width")?typeof value!=="number"||!Number.isFinite(value)||value<180||value>600:key.endsWith("userHidden")||key.endsWith("completionEnabled")?typeof value!=="boolean":key.endsWith("fontScale")?!["compact","standard","large"].includes(value as string):!["system","light","dark"].includes(value as string))throw new ProductStoreError("INVALID_ARGUMENT","Invalid legacy preference");}
+    return this.mutate<{imported:boolean}>("clientPreferences.importLegacy",input.requestId,input.expectedStoreRevision,{entries},(_revision,now)=>{
+      if(this.importedSetting("workbench.webLegacyPreferencesImported")===true)return {value:{imported:false},event:{kind:"clientPreferences.imported",entityKind:"productSetting",entityId:"workbench.webLegacyPreferencesImported",payload:{keys:[]}}};
+      for(const [key,value] of entries)this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES (?,?,'legacy_user_defaults',1,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,revision=product_settings.revision+1,updated_at=excluded.updated_at WHERE product_settings.source_kind='legacy_user_defaults'").run(key,canonicalJSON(value),now,now);
+      this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES ('workbench.webLegacyPreferencesImported','true','user',1,?,?)").run(now,now);
+      return {value:{imported:true},event:{kind:"clientPreferences.imported",entityKind:"productSetting",entityId:"workbench.webLegacyPreferencesImported",payload:{keys:entries.map(([key])=>key)}}};
+    });
+  }
+
+  clientPreferences(): ClientPreferences {
+    const row = this.database.prepare("SELECT value_json FROM product_settings WHERE key = 'workbench.clientPreferences'").get() as SQLiteRow | undefined;
+    const defaults:ClientPreferences={notificationsEnabled:typeof this.importedSetting("dcode.notifications.completionEnabled")==="boolean" ? this.importedSetting("dcode.notifications.completionEnabled") as boolean : true,readingPositions:{}};
+    const appearance=this.importedSetting("dcode.appearance"),fontScale=this.importedSetting("dcode.appearance.fontScale");
+    if(["system","light","dark"].includes(appearance as string))defaults.appearance=appearance as ClientPreferences["appearance"];
+    if(["compact","standard","large"].includes(fontScale as string))defaults.fontScale=fontScale as ClientPreferences["fontScale"];
+    const left=this.importedSetting("dcode.sidebar.width"),right=this.importedSetting("dcode.inspector.width");
+    if(typeof left==="number")defaults.sidebarWidth=Math.max(180,Math.min(600,Math.round(left)));
+    if(typeof right==="number")defaults.inspectorWidth=Math.max(180,Math.min(600,Math.round(right)));
+    const hidden=this.importedSetting("dcode.sidebar.userHidden");if(typeof hidden==="boolean")defaults.sidebarVisible=!hidden;
+    const inspectorHidden=this.importedSetting("dcode.inspector.userHidden");if(typeof inspectorHidden==="boolean")defaults.overviewVisible=!inspectorHidden;
+    const thinking=this.importedSetting("runtime.defaultThinkingLevel");if(typeof thinking==="string")defaults.defaultThinking=thinking;
+    if (!row) return defaults;
+    try {
+      const value = JSON.parse(text(row, "value_json")) as ClientPreferences;
+      if (typeof value.notificationsEnabled !== "boolean" || !value.readingPositions || Object.values(value.readingPositions).some(offset => !Number.isInteger(offset) || offset < 0 || offset > 100_000_000)) throw new Error("invalid shape");
+      return {...defaults,...value};
+    } catch { throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Client preferences are invalid"); }
+  }
+
+  async setClientPreferences(input: { requestId: string; expectedStoreRevision: number; notificationsEnabled?: boolean; appearance?: ClientPreferences["appearance"]; fontScale?: ClientPreferences["fontScale"]; sidebarVisible?: boolean; overviewVisible?: boolean; sidebarWidth?: number; inspectorWidth?: number; defaultThinking?: string; enabledModels?: string[] | null; disabledResources?: string[]; readingPosition?: { sessionId: string; offset: number } }): Promise<{ storeRevision: number; preferences: ClientPreferences }> {
+    if (input.notificationsEnabled !== undefined && typeof input.notificationsEnabled !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "notificationsEnabled must be boolean");
+    const settingKeys = ["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"] as const;
+    const changes: Partial<ClientPreferences> = {};
+    for (const key of settingKeys) if (input[key] !== undefined) Object.assign(changes, { [key]: input[key] });
+    if (changes.appearance && !["system", "light", "dark"].includes(changes.appearance)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid appearance");
+    if (changes.fontScale && !["compact", "standard", "large"].includes(changes.fontScale)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid font scale");
+    for (const key of ["sidebarVisible", "overviewVisible"] as const) if (changes[key] !== undefined && typeof changes[key] !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "Invalid visibility preference");
+    for (const key of ["sidebarWidth", "inspectorWidth"] as const) if (changes[key] !== undefined && (!Number.isInteger(changes[key]) || changes[key]! < 180 || changes[key]! > 600)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid rail width");
+    if (changes.enabledModels !== undefined && changes.enabledModels !== null && (!Array.isArray(changes.enabledModels) || changes.enabledModels.length > 4096 || changes.enabledModels.some(id => typeof id !== "string" || id.length > 500))) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid enabled models");
+    if (changes.defaultThinking && !["off","minimal","low","medium","high","xhigh","max"].includes(changes.defaultThinking)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid thinking level");
+    if(changes.disabledResources && (!Array.isArray(changes.disabledResources)||changes.disabledResources.length>4096||changes.disabledResources.some(key=>typeof key!=="string"||key.length>5000||!/^skill:|^prompt:/.test(key))))throw new ProductStoreError("INVALID_ARGUMENT","Invalid resource selection");
+    const position = input.readingPosition;
+    if (position && (!Number.isInteger(position.offset) || position.offset < 0 || position.offset > 100_000_000)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid reading offset");
+    return await this.mutate("clientPreferences.set", input.requestId, input.expectedStoreRevision, { notificationsEnabled: input.notificationsEnabled, readingPosition: position, ...changes }, (_revision, now) => {
+      const current = this.clientPreferences();
+      if (position && !this.database.prepare("SELECT id FROM sessions WHERE id = ?").get(position.sessionId)) throw new ProductStoreError("NOT_FOUND", "Reading position session does not exist");
+      const entries = Object.entries(current.readingPositions).filter(([id]) => id !== position?.sessionId);
+      if (position) entries.push([position.sessionId, position.offset]);
+      const preferences: ClientPreferences = { ...current, ...changes, notificationsEnabled: input.notificationsEnabled ?? current.notificationsEnabled, readingPositions: Object.fromEntries(entries.slice(-200)) };
+      this.database.prepare(`INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES ('workbench.clientPreferences',?,'user',1,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,revision=product_settings.revision+1,updated_at=excluded.updated_at`).run(canonicalJSON(preferences),now,now);
+      return { value: { preferences }, event: { kind: "clientPreferences.updated", entityKind: "productSetting", entityId: "workbench.clientPreferences", payload: {} } };
+    });
+  }
+
+  private attachmentDraftTarget(key: string): {id:string;scope?:TaskScope;taskId?:string;sessionId?:string} {
+    if (key.startsWith("new:")) {
+      const scope:TaskScope = key === "new:user" ? {kind:"user",userId:this.currentUser().id} : {kind:"project",projectId:key.slice(4)};
+      if (scope.kind === "project" && !this.database.prepare("SELECT id FROM projects WHERE id=? AND user_id=?").get(scope.projectId,this.currentUser().id)) throw new ProductStoreError("NOT_FOUND","附件的项目不存在");
+      return {id:`task-draft:${scope.kind}:${scope.kind === "user" ? scope.userId : scope.projectId}`,scope};
+    }
+    const session=this.database.prepare("SELECT task_id FROM sessions WHERE id=?").get(key) as SQLiteRow|undefined;
+    if (!session) throw new ProductStoreError("NOT_FOUND","附件的任务不存在");
+    const draft=this.database.prepare("SELECT id FROM composer_drafts WHERE session_id=? AND draft_kind='session_path' ORDER BY updated_at DESC LIMIT 1").get(key) as SQLiteRow|undefined;
+    return {id:draft?text(draft,"id"):`composer-draft:${key}`,sessionId:key,taskId:text(session,"task_id")};
+  }
+
+  attachmentCatalog(): ManagedAttachment[] {
+    const result=new Map<string,ManagedAttachment>();
+    for(const row of this.database.prepare("SELECT payload_json FROM composer_drafts").all() as SQLiteRow[]){
+      const payload=JSON.parse(text(row,"payload_json"));
+      for(const item of payload.attachments??[]) if(item?.id) result.set(item.id,item);
+    }
+    for(const row of this.database.prepare("SELECT metadata_json FROM artifacts WHERE kind='attachment'").all() as SQLiteRow[]){
+      const item=JSON.parse(text(row,"metadata_json")) as ManagedAttachment;
+      if (!result.has(item.id)||Date.parse(item.expiresAt)>=Date.parse(result.get(item.id)!.expiresAt)) result.set(item.id,item);
+    }
+    return [...result.values()];
+  }
+
+  private attachmentsForIds(ids: string[] | undefined, previous: ManagedAttachment[] = []): ManagedAttachment[] {
+    if(ids === undefined)return previous;
+    if(!Array.isArray(ids)||ids.length>32||ids.some(id=>typeof id!=="string"))throw new ProductStoreError("INVALID_ARGUMENT","附件列表无效");
+    const records=this.attachmentCatalog();
+    return [...new Set(ids)].map(id=>{const item=records.find(item=>item.id===id);if(!item)throw new ProductStoreError("NOT_FOUND","附件不存在，请重新添加");return item;});
+  }
+
+  async importAttachment(input: {requestId:string;expectedStoreRevision:number;draftKey:string;source:AttachmentSource}):Promise<{attachment:ManagedAttachment;storeRevision:number}> {
+    return await this.serializeMutation(async()=>{
+      const params={draftKey:input.draftKey,source:input.source};
+      const replay=await this.replayReceipt<{attachment:ManagedAttachment;storeRevision:number}>("attachment.import",input.requestId,params);
+      if(replay)return replay;
+      const target=this.attachmentDraftTarget(input.draftKey);
+      const now=this.now();
+      await sweepAttachmentFiles(this.layout,this.attachmentCatalog(),now);
+      const id=`attachment-${createHash("sha256").update(input.requestId).digest("hex").slice(0,32)}`;
+      const total=await stagedAttachmentBytes(this.layout,id);
+      const current=this.database.prepare("SELECT payload_json FROM composer_drafts WHERE id=?").get(target.id) as SQLiteRow|undefined;
+      const existing:ManagedAttachment[]=current?JSON.parse(text(current,"payload_json")).attachments??[]:[];
+      try {
+      const attachment=await stageAttachment(this.layout,input.source,id,now,item=>{
+        const attachments=[...existing.filter(value=>value.id!==id),item];
+        if(attachments.length>32||attachments.filter(value=>value.mimeType.startsWith("image/")).length>8||attachments.filter(value=>value.mimeType.startsWith("image/")).reduce((n,value)=>n+Math.ceil(value.bytes/3)*4,0)>12_000_000)throw new ProductStoreError("ATTACHMENT_LIMIT","最多添加 8 张图片、32 个附件；请减少附件后重试。");
+        if(total+item.bytes+16_000>500_000_000)throw new ProductStoreError("ATTACHMENT_STORAGE_FULL","附件暂存空间已满，请等待过期清理后重试。");
+      });
+      return await this.mutateNow("attachment.import",input.requestId,input.expectedStoreRevision,params,(_revision,now)=>{
+        const row=this.database.prepare("SELECT * FROM composer_drafts WHERE id=?").get(target.id) as SQLiteRow|undefined;
+        const payload=row?JSON.parse(text(row,"payload_json")):target.scope?{scope:target.scope}:{source:"dcode_task_workbench"};
+        const attachments:ManagedAttachment[]=[...(payload.attachments??[]).filter((item:ManagedAttachment)=>item.id!==attachment.id),attachment];
+        if(attachments.length>32||attachments.filter(item=>item.mimeType.startsWith("image/")).length>8||attachments.filter(item=>item.mimeType.startsWith("image/")).reduce((n,item)=>n+Math.ceil(item.bytes/3)*4,0)>12_000_000)throw new ProductStoreError("ATTACHMENT_LIMIT","最多添加 8 张图片、32 个附件；请减少附件后重试。");
+        const body=canonicalJSON({...payload,attachments});
+        if(row)this.database.prepare("UPDATE composer_drafts SET payload_json=?,revision=revision+1,updated_at=? WHERE id=?").run(body,now,target.id);
+        else this.database.prepare("INSERT INTO composer_drafts(id,task_id,session_id,draft_kind,text,payload_json,source_ordinal,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,NULL,1,?,?)").run(target.id,target.taskId??null,target.sessionId??null,target.scope?"new_task":"session_path","",body,now,now);
+        return {value:{attachment},event:{kind:"attachment.imported",entityKind:"attachment",entityId:attachment.id,payload:{draftKey:input.draftKey}}};
+      });
+      } catch(error) {if(!this.attachmentCatalog().some(item=>item.id===id))await discardStagedAttachment(this.layout,id);throw error;}
+
+    });
+  }
+
+  async resolveAttachment(id:string):Promise<{attachment:ManagedAttachment;path:string;data?:string}> {
+    return await this.serializeMutation(async()=>{
+      const attachment=this.attachmentCatalog().find(item=>item.id===id);
+      if(!attachment)throw new ProductStoreError("NOT_FOUND","附件不存在，请重新添加。");
+      const file=await readAttachment(this.layout,attachment,this.now());
+      return {attachment,path:file.path,...(attachment.mimeType.startsWith("image/")?{data:file.bytes.toString("base64")}: {})};
+    });
+  }
+
+  async sweepAttachments():Promise<number> {
+    return await this.serializeMutation(()=>sweepAttachmentFiles(this.layout,this.attachmentCatalog(),this.now()));
+  }
+
+  async setTaskDraft(input: { requestId: string; expectedStoreRevision: number; scope: TaskScope; text: string; attachmentIds?: string[] }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
+    const scope = normalizedTaskScope(input.scope);
+    if (typeof input.text !== "string" || input.text.length > 200_000) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid task draft text");
+    if (redactCredentialText(input.text).redacted) throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED", "Task draft contains credential material");
+    const scopeId = scope.kind === "user" ? scope.userId : scope.projectId;
+    const id = `task-draft:${scope.kind}:${scopeId}`;
+    return await this.mutate<{ composerDraft?: ComposerDraftRecord }>("taskDraft.set", input.requestId, input.expectedStoreRevision, { scope, text: input.text, attachmentIds:input.attachmentIds??null }, (_revision, now) => {
+      const user = this.currentUser();
+      if (scope.kind === "user" ? scope.userId !== user.id : !this.database.prepare("SELECT id FROM projects WHERE id = ? AND user_id = ?").get(scope.projectId, user.id)) throw new ProductStoreError("NOT_FOUND", "Task draft scope does not exist");
+      const existing=this.database.prepare("SELECT payload_json FROM composer_drafts WHERE id=?").get(id) as SQLiteRow|undefined;
+      const payload=existing?JSON.parse(text(existing,"payload_json")):{};
+      const attachments=this.attachmentsForIds(input.attachmentIds,payload.attachments??[]);
+      if (input.text.length === 0 && !attachments.length) this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(id);
+      else this.database.prepare(`INSERT INTO composer_drafts(id,task_id,session_id,draft_kind,text,payload_json,source_ordinal,revision,created_at,updated_at) VALUES (?,NULL,NULL,'new_task',?,?,NULL,1,?,?) ON CONFLICT(id) DO UPDATE SET text=excluded.text,payload_json=excluded.payload_json,revision=composer_drafts.revision+1,updated_at=excluded.updated_at`).run(id,input.text,canonicalJSON({ ...payload, scope, attachments }),now,now);
+      const row = this.database.prepare("SELECT * FROM composer_drafts WHERE id = ?").get(id) as SQLiteRow | undefined;
+      return { value: row ? { composerDraft: composerDraft(row) } : {}, event: { kind: "taskDraft.updated", entityKind: "composerDraft", entityId: id, payload: { textBytes: Buffer.byteLength(input.text, "utf8") } } };
+    });
+  }
+
   async setDCodeSessionComposerDraft(input: {
     requestId: string;
     expectedStoreRevision: number;
     taskId: string;
     sessionId: string;
     text: string;
+    attachmentIds?: string[];
   }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const sessionId = requiredString(input.sessionId, "sessionId", 200);
@@ -2250,7 +2495,7 @@ export class ProductStore {
       "dcodeSession.composerDraft.set",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, sessionId, text: textValue },
+      { taskId, sessionId, text: textValue, attachmentIds:input.attachmentIds??null },
       (_storeRevision, now) => {
         const sessionRow = this.database.prepare(`
           SELECT id FROM sessions WHERE id = ? AND task_id = ?
@@ -2263,7 +2508,9 @@ export class ProductStore {
           WHERE session_id = ? AND draft_kind = 'session_path'
           ORDER BY updated_at DESC, id DESC LIMIT 1
         `).get(sessionId) as SQLiteRow | undefined;
-        if (textValue.length === 0) {
+        const payload=existing?JSON.parse(text(existing,"payload_json")):{};
+        const attachments=this.attachmentsForIds(input.attachmentIds,payload.attachments??[]);
+        if (textValue.length === 0 && !attachments.length) {
           if (existing) {
             this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(text(existing, "id"));
           }
@@ -2285,20 +2532,21 @@ export class ProductStore {
             UPDATE composer_drafts
             SET task_id = ?, text = ?, payload_json = ?, revision = ?, updated_at = ?
             WHERE id = ? AND revision = ?
-          `).run(taskId, textValue, canonicalJSON({ source: "dcode_task_workbench" }), revision, now, id, integer(existing, "revision"));
+          `).run(taskId, textValue, canonicalJSON({ ...payload, source: "dcode_task_workbench", attachments }), revision, now, id, integer(existing, "revision"));
         } else {
           this.database.prepare(`
             INSERT INTO composer_drafts(
               id, task_id, session_id, draft_kind, text, payload_json,
               source_ordinal, revision, created_at, updated_at
             ) VALUES (?, ?, ?, 'session_path', ?, ?, NULL, 1, ?, ?)
-          `).run(id, taskId, sessionId, textValue, canonicalJSON({ source: "dcode_task_workbench" }), now, now);
+          `).run(id, taskId, sessionId, textValue, canonicalJSON({ ...payload, source: "dcode_task_workbench", attachments }), now, now);
         }
         const composerDraft: ComposerDraftRecord = {
           id,
           taskId,
           sessionId,
           draftKind: "session_path",
+          attachments,
           text: textValue,
           revision,
           createdAt: existing ? text(existing, "created_at") : now,
@@ -2329,8 +2577,45 @@ export class ProductStore {
     );
   }
 
+  removedModelProviderIds(): Set<string> {
+    return new Set((this.database.prepare("SELECT DISTINCT entity_id FROM store_events WHERE kind='modelProvider.removed'").all() as SQLiteRow[]).map(row=>text(row,"entity_id")));
+  }
+
+  async prepareRuntimeModelControl(input:{requestId:string;expectedStoreRevision:number;method:"dcodeModels.select"|"dcodeModels.setThinking";sessionId:string;runtimeId:string;values:Record<string,unknown>}):Promise<{attemptId:string;storeRevision:number;replayed:boolean}> {
+    const params={sessionId:input.sessionId,values:input.values};
+    assertCredentialFreeValue(params,"modelControl");
+    return await this.serializeMutation(async()=>{
+      const previous=this.receipt<{attemptId:string;storeRevision:number}>(input.requestId,input.method,payloadHash(params));
+      if(previous)return {...previous,replayed:true};
+      const result=await this.mutateNow(input.method,input.requestId,input.expectedStoreRevision,params,(_revision,now)=>{
+        const row=this.database.prepare("SELECT task_id,state FROM sessions WHERE id=?").get(input.sessionId) as SQLiteRow|undefined;
+        if(!row||text(row,"state")==="archived")throw new ProductStoreError("NOT_FOUND","Session is unavailable");
+        const taskId=text(row,"task_id");const attemptId=`attempt-${randomUUID()}`;
+        this.database.prepare("INSERT INTO operation_attempts(id,task_id,session_id,operation_kind,target_identity,parameter_digest,replay_policy,status,prepared_at,updated_at) VALUES (?,?,?,'external_side_effect',?,?,'explicit_idempotent','prepared',?,?)").run(attemptId,taskId,input.sessionId,`${input.method}:${input.runtimeId}`,`sha256:${payloadHash(params)}`,now,now);
+        return {value:{attemptId},event:{kind:"runtimeModelSelection.prepared",entityKind:"operationAttempt",entityId:attemptId,taskId,payload:{sessionId:input.sessionId}}};
+      });
+      return {...result,replayed:false};
+    });
+  }
+
+  async removeCatalogProvider(input: { requestId: string; expectedStoreRevision: number; providerId: string }): Promise<{ storeRevision: number; removed: boolean }> {
+    const providerId = requiredString(input.providerId, "providerId", 200);
+    return this.mutate("dcodeModelProvider.remove", input.requestId, input.expectedStoreRevision, { providerId }, () => {
+      const row = this.database.prepare("SELECT nonsecret_json FROM model_providers WHERE id = ?").get(providerId) as SQLiteRow | undefined;
+      if (!row || (JSON.parse(text(row, "nonsecret_json")) as { source?: string }).source !== "dcode_custom") throw new ProductStoreError("INVALID_ARGUMENT", "Only D Code custom providers can be removed here");
+      if(this.runtimeModelSelection()?.providerId===providerId)throw new ProductStoreError("INVALID_ARGUMENT","请先切换默认供应商，再删除当前默认供应商");
+      this.database.prepare("DELETE FROM model_catalog_entries WHERE provider_id = ?").run(providerId);
+      this.database.prepare("DELETE FROM credential_references WHERE provider_id = ?").run(providerId);
+      this.database.prepare("DELETE FROM model_providers WHERE id = ?").run(providerId);
+      if (this.runtimeModelSelection()?.providerId === providerId) this.database.prepare("DELETE FROM product_settings WHERE key = 'runtime.modelSelection'").run();
+      return { value: { removed: true }, event: { kind: "modelProvider.removed", entityKind: "modelProvider", entityId: providerId, payload: {} } };
+    });
+  }
+
   async seedRuntimeModelCatalog(input: {
     requestId: string;
+    expectedStoreRevision?: number;
+    adoptExistingProviderIds?: readonly string[];
     providers: RuntimeModelCatalogProviderInput[];
     defaultSelection?: { providerId: string; modelId: string };
   }): Promise<{ storeRevision: number; runtimeModelSelection?: RuntimeModelSelectionRecord }> {
@@ -2424,7 +2709,7 @@ export class ProductStore {
     return await this.mutate(
       "runtimeModelCatalog.seed",
       input.requestId,
-      undefined,
+      input.expectedStoreRevision,
       { providers, ...(defaultSelection ? { defaultSelection } : {}) },
       (_storeRevision, now) => {
         const upsertProvider = this.database.prepare(`
@@ -2457,21 +2742,27 @@ export class ProductStore {
         `);
         const existingCredential = this.database.prepare(`
           SELECT id, revision FROM credential_references
-          WHERE provider_id = ? AND reference_kind = 'external_auth_bridge'
+          WHERE provider_id = ?
           ORDER BY created_at, id LIMIT 1
         `);
         const insertCredential = this.database.prepare(`
           INSERT INTO credential_references(
             id, provider_id, reference_kind, locator, configured,
             source_digest, revision, created_at, updated_at
-          ) VALUES (?, ?, 'external_auth_bridge', ?, ?, ?, 1, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
         `);
         const updateCredential = this.database.prepare(`
           UPDATE credential_references
-          SET locator = ?, configured = ?, source_digest = ?, revision = ?, updated_at = ?
+          SET reference_kind = ?, locator = ?, configured = ?, source_digest = ?, revision = ?, updated_at = ?
           WHERE id = ?
         `);
         for (const provider of providers) {
+          if ((provider.nonsecret as {source?:string}).source === "dcode_custom") {
+            const existing=this.database.prepare("SELECT nonsecret_json FROM model_providers WHERE id=?").get(provider.id) as SQLiteRow|undefined;
+            if(existing && (JSON.parse(text(existing,"nonsecret_json")) as {source?:string}).source !== "dcode_custom" && !input.adoptExistingProviderIds?.includes(provider.id)) throw new ProductStoreError("INVALID_ARGUMENT","该供应商 ID 已被内置或导入目录使用，请选择新的 ID");
+            const selected=this.runtimeModelSelection();
+            if(selected?.providerId===provider.id && !provider.models.some(m=>m.modelId===selected.modelId)) throw new ProductStoreError("INVALID_ARGUMENT","请先切换默认模型，再移除原默认模型");
+          }
           upsertProvider.run(
             provider.id,
             provider.name,
@@ -2482,7 +2773,13 @@ export class ProductStore {
             now,
             now,
           );
+          if ((provider.nonsecret as { source?: string }).source === "dcode_custom") {
+            const ids = provider.models.map(model => model.modelId);
+            this.database.prepare(`DELETE FROM model_catalog_entries WHERE provider_id = ? AND model_id NOT IN (${ids.map(() => "?").join(",")})`).run(provider.id, ...ids);
+          }
           for (const model of provider.models) {
+            const priorModel=(provider.nonsecret as {source?:string}).source==="dcode_custom" ? this.database.prepare("SELECT nonsecret_json FROM model_catalog_entries WHERE provider_id=? AND model_id=?").get(provider.id,model.modelId) as SQLiteRow|undefined : undefined;
+            const preservedMetadata=priorModel?JSON.parse(text(priorModel,"nonsecret_json")):{};
             upsertModel.run(
               `model-${createHash("sha256").update(`${provider.id}\0${model.modelId}`).digest("hex").slice(0, 32)}`,
               provider.id,
@@ -2491,7 +2788,7 @@ export class ProductStore {
               model.contextWindow ?? null,
               model.maxTokens ?? null,
               model.reasoning ? 1 : 0,
-              canonicalJSON(model.nonsecret),
+              canonicalJSON({...preservedMetadata,...model.nonsecret as Record<string,unknown>}),
               now,
               now,
             );
@@ -2499,6 +2796,7 @@ export class ProductStore {
           const credential = existingCredential.get(provider.id) as SQLiteRow | undefined;
           if (credential) {
             updateCredential.run(
+              provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
               provider.credential.locator,
               provider.credential.configured ? 1 : 0,
               provider.credential.sourceDigest ?? null,
@@ -2510,6 +2808,7 @@ export class ProductStore {
             insertCredential.run(
               `credential-${createHash("sha256").update(provider.id).digest("hex").slice(0, 32)}`,
               provider.id,
+              provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
               provider.credential.locator,
               provider.credential.configured ? 1 : 0,
               provider.credential.sourceDigest ?? null,
@@ -2643,7 +2942,7 @@ export class ProductStore {
       ).map(modelCatalogEntry),
       credentialReferences: (
         this.database.prepare("SELECT * FROM credential_references ORDER BY provider_id, id").all() as SQLiteRow[]
-      ).map(credentialReference),
+      ).map(credentialReference).map(reference => reference.locator.startsWith("environment:") ? {...reference,configured:!!process.env[reference.locator.slice("environment:".length)]} : reference),
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
       taskWorkbenchViewState,
       agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
@@ -2738,7 +3037,16 @@ export class ProductStore {
       SELECT * FROM session_provenance
       WHERE session_id = ?
     `).get(sessionId) as SQLiteRow | undefined;
-    if (!provenance || text(provenance, "source_kind") !== "pi_import") return undefined;
+    if (!provenance) return undefined;
+    const copyDetails=JSON.parse(text(provenance,"details_json")) as {copiedFrom?:string;adapterContainsHistory?:boolean;copiedEntryIds?:string[]};
+    if(text(provenance,"source_kind")==="native" && copyDetails.copiedFrom){
+      if(copyDetails.adapterContainsHistory)return undefined;
+      const copiedIds=new Set(copyDetails.copiedEntryIds??[]);
+      const current=this.database.prepare("SELECT * FROM session_paths WHERE session_id=? AND is_current=1").get(sessionId) as SQLiteRow;
+      const entries=(this.database.prepare("SELECT e.* FROM session_path_entries p JOIN session_entries e ON e.id=p.entry_id WHERE p.path_id=? AND e.message_role IN ('user','assistant') ORDER BY p.ordinal").all(text(current,"id")) as SQLiteRow[]).map(sessionEntry).filter(entry=>copiedIds.has(entry.id));
+      return projectImportedSessionHistory({dcodeSessionId:sessionId,sourceSessionId:copyDetails.copiedFrom,sourceDigest:text(provenance,"source_digest"),importerVersion:1,sourcePathId:typeof current.source_path_id==="string"?current.source_path_id:text(current,"id"),redactedAtImport:false,entries:entries.map(entry=>({id:entry.id,messageRole:entry.messageRole as "user"|"assistant",content:entry.content}))});
+    }
+    if(text(provenance,"source_kind")!=="pi_import")return undefined;
 
     const importSource = this.database.prepare(`
       SELECT * FROM pi_import_sources
@@ -3065,6 +3373,73 @@ export class ProductStore {
         };
       },
     );
+  }
+
+  async replaySessionCopy(requestId:string,sourceSessionId:string): Promise<TaskBundle|undefined> {
+    return this.replayReceipt<TaskBundle>("dcodeSession.copy",requestId,{sourceSessionId});
+  }
+  async copyTaskSession(input:{requestId:string;expectedStoreRevision:number;sourceSessionId:string;adapter?:{id:string;path:string}}):Promise<TaskBundle> {
+    const sourceSessionId=requiredString(input.sourceSessionId,"sourceSessionId",200);
+    return this.mutate("dcodeSession.copy",input.requestId,input.expectedStoreRevision,{sourceSessionId},(_revision,now)=>{
+      const sourceSession=this.database.prepare("SELECT * FROM sessions WHERE id=?").get(sourceSessionId) as SQLiteRow|undefined;
+      if(!sourceSession)throw new ProductStoreError("NOT_FOUND","Source session does not exist");
+      const sourceTask=this.database.prepare("SELECT * FROM tasks WHERE id=?").get(text(sourceSession,"task_id")) as SQLiteRow;
+      if(this.database.prepare("SELECT id FROM session_runs WHERE session_id=? AND status IN ('prepared','running','waiting') LIMIT 1").get(sourceSessionId))throw new ProductStoreError("REVISION_CONFLICT","请等待当前运行结束后再复制");
+      const taskId=`task-${randomUUID()}`,sessionId=`session-${randomUUID()}`;
+      const title=`${text(sourceSession,"title")} 副本`.slice(0,200);
+      const insert=(table:string,row:SQLiteRow,overrides:Record<string,unknown>)=>{const next={...row,...overrides};const keys=Object.keys(next);this.database.prepare(`INSERT INTO ${table}(${keys.map(k=>`"${k}"`).join(",")}) VALUES (${keys.map(()=>"?").join(",")})`).run(...keys.map(k=>next[k]) as (string|number|bigint|Uint8Array|null)[]);};
+      insert("tasks",sourceTask,{id:taskId,title,state:"draft",revision:1,created_at:now,updated_at:now});
+      const context=this.database.prepare("SELECT * FROM task_context_sets WHERE task_id=?").get(text(sourceTask,"id")) as SQLiteRow;
+      insert("task_context_sets",context,{task_id:taskId,revision:1,created_at:now,updated_at:now});
+      for(const row of this.database.prepare("SELECT * FROM task_context_sources WHERE task_id=?").all(text(sourceTask,"id")) as SQLiteRow[]) insert("task_context_sources",row,{id:`context-${randomUUID()}`,task_id:taskId,created_at:now});
+      insert("sessions",sourceSession,{id:sessionId,task_id:taskId,kind:"coordination",title,state:"idle",revision:1,created_at:now,updated_at:now});
+      const entries=this.database.prepare("SELECT * FROM session_entries WHERE session_id=? ORDER BY source_ordinal,id").all(sourceSessionId) as SQLiteRow[];
+      const entryIds=new Map(entries.map(row=>[text(row,"id"),`entry-${randomUUID()}`]));
+      entries.forEach((row,index)=>insert("session_entries",row,{id:entryIds.get(text(row,"id")),session_id:sessionId,parent_entry_id:typeof row.parent_entry_id==="string"?entryIds.get(row.parent_entry_id)??null:null,source_entry_id:row.source_entry_id??row.id,source_timestamp:row.source_timestamp??row.created_at,source_ordinal:row.source_ordinal??index,created_at:now}));
+      const paths=this.database.prepare("SELECT * FROM session_paths WHERE session_id=?").all(sourceSessionId) as SQLiteRow[];
+      const pathIds=new Map(paths.map(row=>[text(row,"id"),`path-${randomUUID()}`]));
+      for(const row of paths){insert("session_paths",row,{id:pathIds.get(text(row,"id")),session_id:sessionId,parent_path_id:typeof row.parent_path_id==="string"?pathIds.get(row.parent_path_id)??null:null,revision:1,created_at:now,updated_at:now});for(const link of this.database.prepare("SELECT * FROM session_path_entries WHERE path_id=?").all(text(row,"id")) as SQLiteRow[])insert("session_path_entries",link,{path_id:pathIds.get(text(row,"id")),entry_id:entryIds.get(text(link,"entry_id"))});}
+      const sourceAssignment=this.database.prepare("SELECT * FROM coordinator_assignments WHERE task_id=?").get(text(sourceTask,"id")) as SQLiteRow;
+      const assignmentId=`assignment-${randomUUID()}`;insert("coordinator_assignments",sourceAssignment,{id:assignmentId,task_id:taskId,session_id:sessionId,revision:1,created_at:now,updated_at:now});
+      this.database.prepare("INSERT INTO session_provenance(id,task_id,session_id,source_kind,source_session_id,source_path,source_digest,historical_cwd,lineage_status,details_json,created_at) VALUES (?,?,?,'native',?,NULL,?,?,?, ?,?)").run(`provenance-${randomUUID()}`,taskId,sessionId,sourceSessionId,`sha256:${createHash("sha256").update(canonicalJSON(entries)).digest("hex")}`,text(sourceTask,"cwd"),text(sourceSession,"lineage_status"),canonicalJSON({copiedFrom:sourceSessionId,copyVersion:1,adapterContainsHistory:!!input.adapter,copiedEntryIds:[...entryIds.values()]}),now);
+      if(input.adapter)this.database.prepare("INSERT INTO session_runtime_bindings(session_id,task_id,adapter_kind,adapter_session_id,adapter_session_path,cwd,state,revision,created_at,updated_at) VALUES (?,?,'pi',?,?,?,'ready',1,?,?)").run(sessionId,taskId,input.adapter.id,input.adapter.path,text(sourceTask,"cwd"),now,now);
+      const newTask=task(this.database.prepare("SELECT * FROM tasks WHERE id=?").get(taskId) as SQLiteRow);
+      return {value:{task:newTask,coordinationSession:session(this.database.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as SQLiteRow),coordinatorAssignment:coordinatorAssignment(this.database.prepare("SELECT * FROM coordinator_assignments WHERE id=?").get(assignmentId) as SQLiteRow)},event:{kind:"dcodeSession.copied",entityKind:"session",entityId:sessionId,taskId,payload:{sourceSessionId,entryCount:entries.length}}};
+    });
+  }
+
+  async manageTask(input: { requestId: string; expectedStoreRevision: number; taskId: string; action: "rename" | "archive" | "restore" | "trash"; title?: string }): Promise<{ storeRevision: number; task: TaskRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const title = input.action === "rename" ? requiredCredentialFreeString(input.title, "title", 200).trim() : undefined;
+    if (input.action === "rename" && !title) throw new ProductStoreError("INVALID_ARGUMENT", "Task title cannot be empty");
+    if (!["rename", "archive", "restore", "trash"].includes(input.action)) throw new ProductStoreError("INVALID_ARGUMENT", "Unsupported task action");
+    return this.mutate("task.manage", input.requestId, input.expectedStoreRevision, { taskId, action: input.action, title }, (_revision, now) => {
+      const row = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
+      if (!row) throw new ProductStoreError("NOT_FOUND", "Task does not exist");
+      const previous = task(row);
+      if (input.action === "restore" && previous.state !== "archived") throw new ProductStoreError("INVALID_ARGUMENT", "Only archived tasks can be restored");
+      if (input.action !== "rename" && this.database.prepare("SELECT id FROM session_runs WHERE task_id = ? AND status IN ('prepared','running','waiting') UNION SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1").get(taskId,taskId)) throw new ProductStoreError("REVISION_CONFLICT", "请先停止任务，再归档或恢复");
+      if (input.action === "trash" && this.database.prepare("SELECT e.id FROM session_entries e JOIN sessions s ON s.id=e.session_id WHERE s.task_id=? LIMIT 1").get(taskId)) throw new ProductStoreError("INVALID_ARGUMENT", "只能将空任务移入废纸篓；已有消息请使用归档");
+      const previousSessions = (this.database.prepare("SELECT id,state FROM sessions WHERE task_id=?").all(taskId) as SQLiteRow[]).map(s=>({id:text(s,"id"),state:text(s,"state")}));
+      let state = previous.state;
+      if (input.action === "rename") {
+        this.database.prepare("UPDATE tasks SET title=?,revision=revision+1,updated_at=? WHERE id=?").run(title!,now,taskId);
+        this.database.prepare("UPDATE sessions SET title=?,revision=revision+1,updated_at=? WHERE task_id=? AND kind='coordination'").run(title!,now,taskId);
+      } else if (input.action === "restore") {
+        const event = this.database.prepare("SELECT payload_json FROM store_events WHERE entity_id=? AND kind='task.archived' ORDER BY sequence DESC LIMIT 1").get(taskId) as SQLiteRow | undefined;
+        const saved = event ? JSON.parse(text(event,"payload_json")) as {previousState:TaskRecord["state"];sessions:{id:string;state:string}[]} : undefined;
+        state = saved?.previousState && saved.previousState !== "archived" ? saved.previousState : "draft";
+        this.database.prepare("UPDATE tasks SET state=?,revision=revision+1,updated_at=? WHERE id=?").run(state,now,taskId);
+        for (const session of saved?.sessions ?? previousSessions.map(s=>({...s,state:"idle"}))) this.database.prepare("UPDATE sessions SET state=?,revision=revision+1,updated_at=? WHERE id=? AND task_id=?").run(session.state,now,session.id,taskId);
+      } else {
+        if (previous.state === "archived") throw new ProductStoreError("INVALID_ARGUMENT", "Task is already archived");
+        state="archived";
+        this.database.prepare("UPDATE tasks SET state='archived',revision=revision+1,updated_at=? WHERE id=?").run(now,taskId);
+        this.database.prepare("UPDATE sessions SET state='archived',revision=revision+1,updated_at=? WHERE task_id=?").run(now,taskId);
+      }
+      const updated = task(this.database.prepare("SELECT * FROM tasks WHERE id=?").get(taskId) as SQLiteRow);
+      return { value: {task:updated}, event: {kind: input.action === "rename" ? "task.renamed" : input.action === "restore" ? "task.restored" : "task.archived",entityKind:"task",entityId:taskId,taskId,payload:{previousState:previous.state,sessions:previousSessions,trashed:input.action==="trash"}} };
+    });
   }
 
   async createTask(input: {
@@ -4092,6 +4467,7 @@ export class ProductStore {
     workspaceAccess: "sharedReadOnly" | "exclusiveWrite";
     message: string;
     attachmentRefs: unknown[];
+    managedAttachmentIds?: string[];
     modelProvider?: string;
     modelId?: string;
     roleRevision: string;
@@ -4115,7 +4491,10 @@ export class ProductStore {
     if (contextRevision < 1) {
       throw new ProductStoreError("INVALID_ARGUMENT", "contextRevision must be at least 1");
     }
-    const message = requiredCredentialFreeString(input.message, "message", 200_000);
+    const message = input.message.trim().length === 0 && input.managedAttachmentIds?.length ? input.message : requiredCredentialFreeString(input.message, "message", 200_000);
+    const effectiveMessage=attachmentPrompt(message,this.attachmentsForIds(input.managedAttachmentIds??[]),this.layout);
+    if(effectiveMessage.length>200_000)throw new ProductStoreError("INVALID_ARGUMENT","本次提交加附件引用超过长度限制。");
+    let attachmentRefs=[...input.attachmentRefs];
     if (!isAbsolute(input.cwd)) throw new ProductStoreError("INVALID_ARGUMENT", "Runtime cwd must be absolute");
     if (input.workspaceAccess !== "sharedReadOnly" && input.workspaceAccess !== "exclusiveWrite") {
       throw new ProductStoreError("INVALID_ARGUMENT", "Runtime workspaceAccess is invalid");
@@ -4195,6 +4574,8 @@ export class ProductStore {
       ...(agentRunId ? { agentRunId } : {}),
       message,
       attachmentRefs: input.attachmentRefs,
+      managedAttachmentIds:input.managedAttachmentIds??[],
+      effectiveMessage,
       contextRevision,
       systemPromptDigest: input.systemPromptDigest,
       toolNames: input.tools.map((tool) => tool.name),
@@ -4214,6 +4595,14 @@ export class ProductStore {
         }
         if (JSON.stringify(task(taskRow).scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Session Run Task Scope changed before preparation");
+        }
+        for(const id of input.managedAttachmentIds??[]){
+          const item=this.attachmentCatalog().find(item=>item.id===id);
+          if(!item||Date.parse(item.expiresAt)<=Date.parse(now))throw new ProductStoreError("ATTACHMENT_EXPIRED","附件已过期，请重新添加。");
+          const retained={...item,submittedAt:now,expiresAt:new Date(Math.max(Date.parse(item.expiresAt),Date.parse(now)+ATTACHMENT_RETENTION_DAYS*ATTACHMENT_DAY)).toISOString()};
+          this.database.prepare(`INSERT INTO artifacts(id,task_id,session_id,agent_run_id,kind,title,managed_path,external_path,digest,metadata_json,revision,created_at,updated_at) VALUES (?,?,?,NULL,'attachment',?,?,NULL,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET metadata_json=excluded.metadata_json,revision=artifacts.revision+1,updated_at=excluded.updated_at`).run(id,taskId,sessionId,item.name,attachmentPath(this.layout,item),item.digest,canonicalJSON(retained),item.createdAt,now);
+          attachmentRefs=attachmentRefs.filter(value=>!(value&&typeof value==="object"&&(value as {id?:unknown}).id===id));
+          attachmentRefs.push(retained);
         }
         const contextSetRow = this.database.prepare(`
           SELECT revision FROM task_context_sets WHERE task_id = ?
@@ -4282,7 +4671,7 @@ export class ProductStore {
             id, task_id, session_id, ordinal, submitted_text,
             attachment_refs_json, source_kind, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, 'user_submit', ?)
-        `).run(rawInputId, taskId, sessionId, ordinal, message, canonicalJSON(input.attachmentRefs), now);
+        `).run(rawInputId, taskId, sessionId, ordinal, message, canonicalJSON(attachmentRefs), now);
         const currentPath = this.database.prepare(`
           SELECT id FROM session_paths WHERE session_id = ? AND is_current = 1
         `).get(sessionId) as { id?: unknown } | undefined;
@@ -4309,7 +4698,7 @@ export class ProductStore {
           typeof previousEntry?.id === "string" ? previousEntry.id : null,
           ordinal,
           now,
-          canonicalJSON({ type: "text", text: message, attachmentRefs: input.attachmentRefs }),
+          canonicalJSON({ type: "text", text: message, attachmentRefs }),
           now,
         );
         const pathOrdinalRow = this.database.prepare(`
@@ -4333,7 +4722,7 @@ export class ProductStore {
           taskId,
           sessionId,
           rawInputId,
-          canonicalJSON({ message, attachmentRefs: input.attachmentRefs }),
+          canonicalJSON({ message:effectiveMessage, attachmentRefs }),
           canonicalJSON({
             version: 3,
             taskContextRevision: contextRevision,
@@ -6220,6 +6609,8 @@ export class ProductStore {
     attemptId: string;
     outcome: "succeeded" | "failed" | "unknown";
     resultDigest?: string;
+    /** Only the Host may certify this after the matching SDK Runtime has stopped. */
+    confirmedRuntimeAbort?: string;
   }): Promise<{ storeRevision: number; status: string }> {
     return await this.serializeMutation(async () => {
       this.assertOpen();
@@ -6231,12 +6622,16 @@ export class ProductStore {
       this.database.exec("BEGIN IMMEDIATE");
       try {
         const attempt = this.database.prepare(`
-          SELECT status, task_id FROM operation_attempts WHERE id = ?
-        `).get(attemptId) as { status?: unknown; task_id?: unknown } | undefined;
+          SELECT status, task_id, operation_kind, target_identity FROM operation_attempts WHERE id = ?
+        `).get(attemptId) as { status?: unknown; task_id?: unknown; operation_kind?: unknown; target_identity?: unknown } | undefined;
         if (!attempt || typeof attempt.task_id !== "string") {
           throw new ProductStoreError("NOT_FOUND", "Operation Attempt does not exist", { attemptId });
         }
-        if (attempt.status !== "prepared") {
+        const confirmedAbort = input.outcome === "succeeded" && input.confirmedRuntimeAbort !== undefined
+          && attempt.operation_kind === "external_side_effect"
+          && attempt.target_identity === `runtime.abort:${input.confirmedRuntimeAbort}`;
+        if (input.confirmedRuntimeAbort !== undefined && !confirmedAbort) throw new ProductStoreError("INVALID_ARGUMENT", "Runtime stop confirmation does not match its operation");
+        if (attempt.status !== "prepared" && !(attempt.status === "unknown" && confirmedAbort)) {
           const revision = this.metaInteger("store_revision");
           this.database.exec("COMMIT");
           return { storeRevision: revision, status: String(attempt.status) };
@@ -6245,13 +6640,14 @@ export class ProductStore {
         this.database.prepare(`
           UPDATE operation_attempts
           SET status = ?, outcome_json = ?, completed_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'prepared'
+          WHERE id = ? AND status = ?
         `).run(
           input.outcome,
           canonicalJSON({ resultDigest: input.resultDigest ?? null }),
           now,
           now,
           attemptId,
+          attempt.status,
         );
         const storeRevision = this.metaInteger("store_revision") + 1;
         this.database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")

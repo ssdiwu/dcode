@@ -16,10 +16,11 @@ governed by their own licenses.
 - Binary distribution: D Code copies the unmodified complete Node.js 22.22.3
   `LICENSE` into `D Code.app/Contents/Resources/Legal/Node.js-LICENSE.txt`.
 
-### Pi 0.84.1
+### Pi 0.84.4
 
-D Code uses the following packages from the Pi Agent Harness at commit
-`53fa77ccd8a279eb87e92294ef3687b03ff80112`:
+D Code uses the following packages from the Pi Agent Harness. The three direct
+SDK packages are pinned to npm version `0.84.4`; transitive versions are recorded
+in `host/package-lock.json`:
 
 - `@earendil-works/pi-ai`
 - `@earendil-works/pi-agent-core`

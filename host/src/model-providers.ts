@@ -1,3 +1,4 @@
+import { redactCredentialText } from "./credential-material.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
@@ -214,6 +215,28 @@ export class ModelProvidersStore {
 
   async list(): Promise<ProviderListResult> {
     return this.serialized(() => this.listUnchecked());
+  }
+
+  /** Core-only adoption data; provider credentials and request headers stay private. */
+  async modelMetadata(providerId: string): Promise<Record<string, Record<string, unknown>>> {
+    const source = await this.readRawProviders();
+    if (!source.ok) throw new Error(source.error);
+    const provider = source.providers.get(providerId);
+    const keys = ["input", "cost", "thinkingLevelMap", "samplingParams", "compat"];
+    const models = Array.isArray(provider?.models) ? provider.models.filter(isRecord) : [];
+    const metadata = Object.fromEntries(models.filter(model=>typeof model.id === "string").map(model => [model.id,
+      Object.fromEntries(keys.filter(key => model[key] !== undefined).map(key => [key, model[key]])),
+    ]));
+    const assertSafe = (value: unknown): void => {
+      if (typeof value === "string" && redactCredentialText(value).redacted) throw new Error("模型参数包含凭据，不能接管");
+      if (!value || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        if (/^(?:api.?key|authorization|access.?token|refresh.?token|password|secret|headers|credential|credentials|private.?key)$/i.test(key)) throw new Error("模型参数包含凭据字段，不能接管");
+        assertSafe(child);
+      }
+    };
+    assertSafe(metadata);
+    return metadata;
   }
 
   async save(input: ProviderSaveInput): Promise<ProviderSaveResult> {

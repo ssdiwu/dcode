@@ -113,7 +113,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
     };
     assert.equal(hello.protocolVersion, 1);
     assert.equal(hello.hostVersion, "0.0.29");
-    assert.equal(hello.piVersion, "0.84.1");
+    assert.equal(hello.piVersion, "0.84.4");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
     assert.equal(hello.capabilities.extensionWidgets, false);
@@ -205,7 +205,7 @@ test("model catalog is available before a Pi session exists and exposes the conf
     defaultThinkingLevel: "high",
     enabledModels: ["openai/gpt-4o-mini", "openai/gpt-5.6-*"],
   })}\n`);
-  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  const host = new PiHost({ agentDir: f.agentDir, dataRoot:join(f.root,".dcode"), userHome:f.root, emit: () => {} });
   try {
     const result = await host.handle("session.getModels", { cwd: f.root }) as {
       models: Array<{ provider: string; id: string; fastModeSupported: boolean }>;
@@ -258,7 +258,7 @@ test("model settings expose safe Pi state but D Code no longer rewrites Pi model
   await writeFile(join(f.root, ".pi", "settings.json"), `${JSON.stringify({
     enabledModels: ["openai/gpt-5.6-*"],
   })}\n`);
-  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  const host = new PiHost({ agentDir: f.agentDir, dataRoot:join(f.root,".dcode"), userHome:f.root, emit: () => {} });
   try {
     const initial = await host.handle("modelSettings.get", { cwd: f.root }) as {
       cwd: string;
@@ -317,7 +317,7 @@ test("model settings refresh respects offline mode and retains the local catalog
   const f = await fixture();
   const previousOffline = process.env.PI_OFFLINE;
   process.env.PI_OFFLINE = "1";
-  const host = new PiHost({ agentDir: f.agentDir, emit: () => {} });
+  const host = new PiHost({ agentDir: f.agentDir, dataRoot:join(f.root,".dcode"), userHome:f.root, emit: () => {} });
   try {
     const result = await host.handle("modelSettings.refresh", { cwd: f.root }) as {
       providers: Array<{ id: string; models: Array<{ model: { id: string } }> }>;
@@ -365,6 +365,8 @@ test("D Code blocks Pi authentication flows before a secret can be sent through 
   await writeFile(join(f.agentDir, "auth.json"), "{}\n");
   const host = new PiHost({
     agentDir: f.agentDir,
+    dataRoot:join(f.root,".dcode"),
+    userHome:f.root,
     emit: () => {},
   });
   try {

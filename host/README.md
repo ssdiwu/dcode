@@ -81,10 +81,12 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/resource-policy.ts`：在 Extension Factory（扩展工厂）执行前排除外部 `pi-dfast`，其余启用扩展仍交由固定 Pi SDK 加载。
 - `src/resources.ts`：Pi 本机资源加载快照、扩展包启停影子清单与热重载。
 - `src/model-providers.ts`：旧 Pi `models.json` 自定义供应商适配 / 只读发现逻辑；D Code 产品路径不调用其写入入口。
+- `src/model-catalog-configuration.ts`：原生模型供应商目录配置的输入校验、种子与注册；凭据仅接受环境变量引用并沿用脱敏边界。
 - `src/session-lease.ts`：会话租约、静默检查和外部写入检测。
 - `src/extension-ui.ts`：标准结构化扩展 UI，以及 TUI 能力的显式 unsupported 边界。
 - `src/model-auth.ts`：旧 Pi Provider 认证桥；D Code 产品 IPC 显式拒绝认证交互和认证正文。
 - `src/managed-worker-worktree.ts`：Project Worker 受管 detached Git worktree 的创建、验证与 Artifact 记录。
+- `src/maintenance.ts`：本机维护动作（候选检查 / 构建）的子进程执行、持久化状态与中断恢复回执。
 - `src/pi-host.ts`：Pi SDK 会话生命周期与协议动作。
 - `src/index.ts`：stdin/stdout Host 进程入口。
 - `test/`：只使用临时写入范围的公开行为测试。
@@ -97,3 +99,23 @@ npm start -- --agent-dir ~/.pi/agent
 - Session Lease 不能迫使不协作的旧客户端遵守租约；外部写入必须触发停止，不能静默续写。
 - 不自动删除无法证明属于当前 owner 的租约。
 - `host.hello.capabilities.onDemandWrite` 目前只是 Protocol v1 的遗留兼容键，不代表产品仍有“先观察、写时再取租约”的路径；当前行为以打开即接管为准，协议残留需另行清理。
+
+## Web 客户端恢复接口（0.0.30 修复候选）
+
+- `taskDraft.set`：按当前用户或项目作用域保存未创建任务的文字输入，使用已有 `composer_drafts` 表；不会预建 Task / Session。正文沿用长度与凭据拒绝边界。
+- `clientPreferences.get/set`：读取 / 修改通知开关和按会话保存的阅读位置。只有 Host 写 `product_settings`，位置记录验证会话归属并最多保留 200 项。
+- 以上均为 Protocol v1 的加法扩展，写入继续需要 requestId 与 Store revision。现有会话草稿仍使用 `dcodeSession.composerDraft.set`；工作台对象选择仍使用 `taskWorkbenchViewState.patch`。
+- 回归见 `test/client-recovery.test.ts` 与 `../client/test/ui-flow.test.mjs`。
+
+
+Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` 管理工作台偏好及旧界面偏好的单向继承；`dcodeModelProvider.save/remove` 管理原生供应商，显式接管只读旧来源的非敏感配置；`task.manage` 与会话复制入口保留产品历史。`maintenance.status/start` 和 `selfEvolution.*` 记录 Web 本机候选检查、构建和恢复回执，重启前检查所有运行活动。原生 SDK 会话使用内存 SettingsManager，模型与思考切换不回写 Pi 设置。核心凭据引用边界和资源安全策略不变。
+
+
+模型路径（Pi 0.84.4）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
+
+
+受管附件（0.0.30 修复候选）：`attachment.import/get/resolve` 由 Host 管理副本，`attachment-files.ts` 负责受控目录、原子文件、完整性校验与清理。草稿附件元数据使用现有 `composer_drafts.payload_json`；`taskDraft.set` / `dcodeSession.composerDraft.set` 可携带 `attachmentIds`，空文字但有附件时保留草稿。`dcodeSession.prompt` 只接收附件 ID，核心读取图片并生成文件引用，在 `prepareSessionRun` 同事务内写原文、引用、生效输入及附件 Artifact。Schema 仍为 2，附件输入不混入交付物列表。
+
+副本位于 `.dcode/tmp/attachments/<id>/`，未发送时 24 小时过期，持久提交后延至至少 30 天；再次提交可延长。应用启动及每小时检查到期项，关闭期间在下次启动补清理。不可变 manifest 只用于识别失败恢复和解绑孤儿，不保存可变发送状态。过期后保留消息/登记，只清副本；不删除源文件、Pi 私有历史内联图片或已记录的工具内容。单个缓存损坏隔离保留，不阻断其他会话。
+
+附件限制在写入前校验：图片最多 8 张、单图 5 MB、全部附件最多 32 个、单文件 50 MB、暂存总量 500 MB（计入孤儿）。凭据文件和可识别文本中的凭据拒绝保存。预览仅由核心验证登记 ID 后给壳调用 macOS Quick Look（快速查看），不允许渲染层指定任意预览路径。未发送附件存在时，切换到不支持附件草稿的旧候选会被拒绝。

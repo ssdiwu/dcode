@@ -2,17 +2,33 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export const HOST_METHODS = [
   "host.hello",
+  "maintenance.status",
+  "selfEvolution.list",
+  "selfEvolution.prepare",
+  "selfEvolution.transition",
+  "maintenance.start",
   "runtime.list",
   "runtime.start",
   "foundation.snapshot",
+  "clientPreferences.get",
+  "clientPreferences.importLegacy",
+  "clientPreferences.set",
+  "taskDraft.set",
+  "attachment.import",
+  "attachment.get",
+  "attachment.resolve",
   "runtimeModelSelection.set",
+  "dcodeModelProvider.save",
+  "dcodeModelProvider.remove",
   "taskWorkbenchViewState.patch",
   "dcodeSession.presentation",
   "dcodeSession.composerDraft.set",
   "dcodeSession.prompt",
+  "dcodeSession.copy",
   "project.create",
   "project.gitBranch",
   "task.create",
+  "task.manage",
   "task.context.replace",
   "task.plan.create",
   "task.plan.update",
@@ -55,6 +71,10 @@ export const HOST_METHODS = [
   "modelProviders.save",
   "modelProviders.remove",
   "session.getModels",
+  "dcodeModels.get",
+  "dcodeModels.refresh",
+  "dcodeModels.select",
+  "dcodeModels.setThinking",
   "modelSettings.get",
   "modelSettings.refresh",
   "modelSettings.setEnabledModels",
@@ -563,6 +583,76 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "foundation.snapshot":
       optionalInteger(params, "afterEventSequence", 0, Number.MAX_SAFE_INTEGER);
       return;
+    case "selfEvolution.list": return;
+    case "selfEvolution.prepare":
+      requireBoundedString(params,"requestId",128); requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      for(const key of ["fromApp","toApp","fromDigest","toDigest"])requireBoundedString(params,key,4096);
+      if(params.rollbackOf!==undefined)requireBoundedString(params,"rollbackOf",200);
+      return;
+    case "selfEvolution.transition":
+      requireBoundedString(params,"requestId",128); requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);requireBoundedString(params,"id",200);
+      if(!["session_restored","manual_accepted","recovery_required","rolled_back","cancelled"].includes(params.state as string))throw new ProtocolValidationError("INVALID_PARAMS","Invalid evolution state");
+      return;
+    case "maintenance.status": return;
+    case "maintenance.start":
+      requireBoundedString(params,"sourceDirectory",4096);
+      if (params.action !== "verify" && params.action !== "build") throw new ProtocolValidationError("INVALID_PARAMS","Invalid maintenance action");
+      return;
+    case "clientPreferences.importLegacy":
+      requireBoundedString(params,"requestId",128);requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      if(!isRecord(params.values))throw new ProtocolValidationError("INVALID_PARAMS","Legacy preferences required");
+      return;
+    case "clientPreferences.get":
+      return;
+    case "clientPreferences.set": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      if (params.notificationsEnabled !== undefined && typeof params.notificationsEnabled !== "boolean") throw new ProtocolValidationError("INVALID_PARAMS", "notificationsEnabled must be boolean");
+      if (params.readingPosition !== undefined) {
+        if (!isRecord(params.readingPosition)) throw new ProtocolValidationError("INVALID_PARAMS", "readingPosition must be an object");
+        requireBoundedString(params.readingPosition, "sessionId", 200);
+        requireInteger(params.readingPosition, "offset", 0, 100_000_000);
+      }
+      const keys = ["notificationsEnabled", "readingPosition", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"];
+      if (!keys.some(key => params[key] !== undefined)) throw new ProtocolValidationError("INVALID_PARAMS", "Preference change required");
+
+      return;
+    }
+    case "attachment.import": {
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"draftKey",220);
+      const source=params.source;
+      if(!source||typeof source!=="object"||Array.isArray(source))throw new ProtocolValidationError("INVALID_PARAMS","Expected attachment source");
+      const value=source as Record<string,unknown>;
+      if(typeof value.path === "string") {requireBoundedString(value,"path",4096);if(!value.path.startsWith("/"))throw new ProtocolValidationError("INVALID_PARAMS","Expected absolute file path");if(value.data!==undefined)throw new ProtocolValidationError("INVALID_PARAMS","Expected one attachment source");}
+      else {requireBoundedString(value,"name",200);requireBoundedString(value,"mimeType",100);const data=requireBoundedString(value,"data",7_000_000);if(!/^[A-Za-z0-9+/]*={0,2}$/.test(data)||data.length%4!==0)throw new ProtocolValidationError("INVALID_PARAMS","Invalid image data");}
+      return;
+    }
+    case "attachment.get":
+    case "attachment.resolve":
+      requireBoundedString(params,"id",80);
+      if(!/^attachment-[a-f0-9]{32}$/.test(params.id as string))throw new ProtocolValidationError("INVALID_PARAMS","Invalid attachment id");
+      return;
+    case "taskDraft.set": {
+      if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      const text = requireString(params, "text", { allowEmpty: true });
+      if (text.length > 200_000) throw new ProtocolValidationError("INVALID_PARAMS", "Task draft exceeds 200000 characters");
+      return;
+    }
+    case "dcodeModelProvider.save":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      if (!isRecord(params.provider)) throw new ProtocolValidationError("INVALID_PARAMS", "Provider configuration required");
+      return;
+    case "dcodeModelProvider.remove":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "providerId", 200);
+      return;
     case "runtimeModelSelection.set":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
@@ -628,10 +718,16 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       }
       return;
     }
+    case "dcodeSession.copy":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"dcodeSessionId",200);
+      return;
     case "dcodeSession.presentation":
       requireBoundedString(params, "dcodeSessionId", 200);
       return;
     case "dcodeSession.composerDraft.set": {
+      if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
       requireBoundedString(params, "taskId", 200);
@@ -645,8 +741,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "dcodeSession.prompt": {
       requireBoundedString(params, "dcodeSessionId", 200);
       const message = requireString(params, "message", { allowEmpty: true });
-      if (message.trim().length === 0) {
-        throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.message to contain non-whitespace text");
+      if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
+      if (message.trim().length === 0 && !(Array.isArray(params.attachmentIds)&&params.attachmentIds.length)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected text or managed attachments");
       }
       const promptId = requireString(params, "promptId");
       if (promptId.length > 128) {
@@ -663,6 +760,13 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
       requireBoundedString(params, "title", 200);
       requireBoundedString(params, "directory", 4_096);
+      return;
+    case "task.manage":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"taskId",200);
+      if (!["rename","archive","restore","trash"].includes(params.action as string)) throw new ProtocolValidationError("INVALID_PARAMS","Invalid task action");
+      if (params.action === "rename") requireBoundedString(params,"title",200);
       return;
     case "task.create":
       requireBoundedString(params, "requestId", 128);
@@ -920,6 +1024,19 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       }
       return;
     }
+    case "dcodeModels.get":
+    case "dcodeModels.refresh":
+      if (params.dcodeSessionId !== undefined) requireBoundedString(params,"dcodeSessionId",200);
+      if (params.force !== undefined && typeof params.force !== "boolean") throw new ProtocolValidationError("INVALID_PARAMS","force must be boolean");
+      return;
+    case "dcodeModels.select":
+    case "dcodeModels.setThinking":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      if (params.dcodeSessionId !== undefined) requireBoundedString(params,"dcodeSessionId",200);
+      if(method === "dcodeModels.select") { requireModelIdentifier(params,"providerId"); requireModelIdentifier(params,"modelId"); }
+      else requireBoundedString(params,"level",30);
+      return;
     case "modelSettings.get":
     case "modelSettings.refresh":
       requireCwd(params);
@@ -1065,9 +1182,10 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     }
     case "session.prompt": {
       const message = requireString(params, "message", { allowEmpty: true });
-      if (message.trim().length === 0) {
+      if (message.trim().length === 0 && !(Array.isArray(params.attachmentIds)&&params.attachmentIds.length)) {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.message to contain non-whitespace text");
       }
+      if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
       const promptId = requireString(params, "promptId");
       if (promptId.length > 128) {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");

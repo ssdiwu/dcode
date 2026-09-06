@@ -113,3 +113,10 @@ test("tool expansion hints use Pi RPC's neutral native-client behavior", () => {
   bridge.context.setToolsExpanded(false);
   assert.deepEqual(events, []);
 });
+
+
+test("SDK copying the UI context does not invoke unsupported TUI capabilities", () => {
+  const bridge = new ExtensionUIBridge(() => {});
+  const copied = {...bridge.context};
+  assert.throws(() => copied.theme.fg("error", "test"), /theme/);
+});
