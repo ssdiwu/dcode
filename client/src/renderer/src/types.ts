@@ -23,6 +23,7 @@ export type {
   SessionEntryRecord,
 } from "../../../../host/src/product-store.js";
 export type { SessionInspection, HostEvent, PromptImageInput };
+export type { InspirationView, IdeaNode, IdeaDraft, IdeaKind, IdeaPosition, InspirationOperation } from "../../../../host/src/inspiration.js";
 export type { ManagedAttachment, AttachmentSource } from "../../../../host/src/attachment-files.js";
 export type SessionEntry = SessionInspection["entries"][number];
 export type ProviderView =
@@ -44,6 +45,7 @@ export interface DcodeApi {
   subscribe: (handler: (envelope: HostEvent) => void) => () => void;
   notify: (options: { title: string; body?: string }) => Promise<boolean>;
   getPathForFile: (file: File) => string;
+  previewInspiration:(nodeId:string,media:boolean)=>Promise<void>;
   previewAttachment: (id: string) => Promise<void>;
   switchCandidate: (direction: "candidate" | "rollback") => Promise<boolean>;
   signalRestoreFailed: () => Promise<void>;

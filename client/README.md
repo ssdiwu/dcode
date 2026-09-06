@@ -15,6 +15,8 @@ npm run dev         # 编译主进程，再启动 Vite 与 Electron
 npm run build       # 主进程和整个 React 界面类型检查 + 构建
 npm test            # 协议、呈现与真实 Host 的隔离交互回归
 npm run test:layout # 构建后，用隔离 Chromium 检查真实布局几何
+npm run test:inputs # 扫描所有输入控件，检查深浅色焦点、只读、禁用与禁止手动缩放
+npm run test:canvas # 检查不同图片比例下的完整显示与节点自适应尺寸
 npm run smoke:host  # 不开窗口的 Host 启动、握手、查询、停机
 npm run dist        # 本地未签名候选；不是正式发布
 ```
@@ -38,6 +40,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 - 会话及新任务文字草稿按身份保存；工作台选择、梗概分区、阅读位置与通知开关可恢复。图片和文件附件由 Host 复制到 `~/.dcode/tmp/attachments/`，随草稿恢复；未发送保留 24 小时，提交后保留 30 天。
 - 真实 `message_update.assistantMessageEvent` 增量、运行失败、停止和实际模型选择接入；用户提交、执行过程与最终回答按轮次区分；过程默认一行实时预览，展开显示非空思考、中途说明和成对工具记录。复制、引用、图片与文件预览可用。
 - 搜索等待索引就绪后重查，通过 Runtime 绑定返回 D Code Task；Pi 导入只走单向导入合同。
+- 左侧“灵感”进入持久画布：文字、图片、链接、视频节点，搜索、拖动、连线、成组、归档恢复与编辑草稿。选定内容版本可引用到已有任务或新建独立任务；任务标题下方显示所引用的版本。
 - 信息概览按需打开；成员、工作清单、等待事项、产物与报告消费 Store。对象详情展示已有记录，尚未迁移通用文件阅读器或编辑器。
 - 系统菜单、目录选择、外链限制、退出前保存、Host 重启和打包资源路径接入。
 
@@ -47,7 +50,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 - 本机资源保留来源清单，技能和提示词启停实际影响原生资源加载；外部可执行扩展继续服从现有禁用策略。
 - 自进化提供隔离检查与构建、候选身份及数据版本校验、停机后重启恢复、人工确认和回滚回执。候选输出可用 `DCODE_PACKAGE_OUTPUT` 指定，不能覆盖正在运行的构建。
 
-Swift 保留为尚未迁移面的基线，拆除仍须 507 人工验收。
+Swift 按面拆除尚未执行，作为独立迁移收尾保留；当前基础验收不等于这些源文件已经退役。
 
 ## 结构
 
@@ -59,6 +62,7 @@ Swift 保留为尚未迁移面的基线，拆除仍须 507 人工验收。
 - `src/renderer/src/workbench.ts`：可单独测试的消息投影、增量事件和 Store 写入排序。
 - `src/renderer/src/workbench/useModels.ts`：模型目录、连接与选择的呈现逻辑；模型设置及输入区共用，展示组件不直接调用模型协议。
 - `src/renderer/src/workbench/useComposerAttachments.ts`：附件选择、粘贴、拖入、缩略图查询和提交期间的草稿归属；上传期间退出会等待保存完成。
+- `src/renderer/src/workbench/useInspiration.ts`：灵感投影、耐久草稿与画布布局写入、任务引用；`components/InspirationWorkspace.tsx` 只处理展示与指针/键盘交互。
 - `src/renderer/src/components/conversation/`：消息流、执行过程、旧图片放大与对话导航条；`workbench/conversation-navigation.ts` 和 `useConversationNavigation.ts` 管理轮次投影、锚点与阅读跟随。
 - `src/renderer/src/components/`：输入区、Markdown、导入、完整设置及选择菜单。
 - `src/renderer/src/style.css`：Web 共享几何、角色层级、响应式和减少动态效果。
@@ -66,4 +70,4 @@ Swift 保留为尚未迁移面的基线，拆除仍须 507 人工验收。
 
 ## 验收边界
 
-修复候选尚未由 507 人工确认，不是已发布版本。正式验证记录与剩余范围由 PRD 0028 维护。`npm run dist` 不签名、不公证、不推送、不分发。
+507 已于 2026-09-07 确认当前基础工作台与灵感流程验收通过。正式验证记录、候选路径与迁移遗留由 PRD 0028 维护。源码提交、推送与正式发布分别成立；`npm run dist` 生成本机未签名候选。

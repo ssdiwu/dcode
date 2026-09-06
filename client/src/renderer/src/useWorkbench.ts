@@ -48,6 +48,8 @@ export function useWorkbench() {
     {},
   );
   const pendingAttachments = useRef(new Set<Promise<void>>());
+  const quitFlushers = useRef(new Set<()=>Promise<void>>());
+  const registerQuitFlush=useCallback((flush:()=>Promise<void>)=>{quitFlushers.current.add(flush);return ()=>{quitFlushers.current.delete(flush);};},[]);
   const pendingReadings = useRef(new Map<string, number>());
   const latestReadings = useRef(new Map<string, number>());
   const readingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -297,7 +299,7 @@ export function useWorkbench() {
       if (event.event === "shell.quitCancelled") setClosing(false);
       if (event.event === "shell.quitRequested") {
         setClosing(true);
-        void Promise.all([...pendingAttachments.current]).then(()=>flushDrafts())
+        void Promise.all([...pendingAttachments.current]).then(()=>flushDrafts()).then(()=>Promise.all([...quitFlushers.current].map(flush=>flush())))
           .then(() => {
             const hasImages = Object.values(draftRef.current).some(
               (d) => d.images.length > 0,
@@ -535,6 +537,7 @@ export function useWorkbench() {
     updateDraft,
     addAttachment,
     trackAttachmentImport:(operation:Promise<void>)=>{pendingAttachments.current.add(operation);void operation.then(()=>pendingAttachments.current.delete(operation),()=>pendingAttachments.current.delete(operation));},
+    registerQuitFlush,
     previewAttachment:(id:string)=>api().previewAttachment(id).catch(fail),
     presentation,
     presentationError,

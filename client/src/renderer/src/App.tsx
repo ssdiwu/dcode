@@ -1,3 +1,5 @@
+import { InspirationWorkspace } from "./components/InspirationWorkspace";
+import { useInspiration } from "./workbench/useInspiration";
 import { Transcript } from "./components/conversation/Transcript";
 import { profileName } from "./workbench/presentation";
 import { useModels } from "./workbench/useModels";
@@ -23,6 +25,7 @@ import {
   Circle,
   AlertCircle,
   FileText,
+  Sparkles,
 } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { Markdown } from "./components/Markdown";
@@ -42,7 +45,7 @@ import logoUrl from "./assets/logo.png";
 
 // Only transient display controls enter zustand. Product facts stay in Host projections.
 interface DisplayState {
-  page: "task" | "settings";
+  page: "task" | "settings" | "inspiration";
   settingsPage: SettingsPageId;
   search: boolean;
   importing: boolean;
@@ -170,6 +173,8 @@ export function App() {
       overview: work.preferences.overviewVisible ?? true,
     });
   }, [work.preferences?.sidebarVisible, work.preferences?.overviewVisible]);
+  const inspiration=useInspiration(work,display.page==="inspiration");
+  const ideaSources=work.snapshot?.taskContextSets.find(set=>set.taskId===work.task?.id)?.sources.filter(source=>source.kind==="global_knowledge"&&source.rootPath?.endsWith("/knowledge/inspiration"))??[];
   const showingSettings = display.page === "settings";
   if (showingSettings)
     return (
@@ -256,6 +261,7 @@ export function App() {
             <span>搜索</span>
             <kbd>⌘K</kbd>
           </button>
+          <button className={`nav-row ${display.page==="inspiration"?"selected":""}`} aria-current={display.page==="inspiration"?"page":undefined} onClick={()=>{setTarget(undefined);display.set({page:"inspiration",search:false});}}><Sparkles size={16}/><span>灵感</span></button>
           <div className="navigation-scroll">
             {tasks.length > 0 && (
               <>
@@ -264,6 +270,7 @@ export function App() {
                   <TaskRow
                     key={t.id}
                     task={t}
+                    active={display.page==="task"}
                     work={work}
                     select={select}
                     recent
@@ -300,6 +307,7 @@ export function App() {
                       <TaskRow
                         key={t.id}
                         task={t}
+                        active={display.page==="task"}
                         work={work}
                         select={select}
                       />
@@ -313,7 +321,7 @@ export function App() {
                 {tasks
                   .filter((t) => t.scope.kind === "user")
                   .map((t) => (
-                    <TaskRow key={t.id} task={t} work={work} select={select} />
+                    <TaskRow key={t.id} task={t} active={display.page==="task"} work={work} select={select} />
                   ))}
               </>
             )}
@@ -344,9 +352,7 @@ export function App() {
             </button>
           )}
           <span className="workspace-title">
-            {display.page === "settings"
-              ? "设置"
-              : (work.task?.title ?? "新任务")}
+            {display.page === "inspiration" ? "灵感" : (work.task?.title ?? "新任务")}
           </span>
           {actualProject && display.page === "task" && (
             <span className="workspace-context">
@@ -354,13 +360,13 @@ export function App() {
               {git?.branch ? ` · ${git.branch}` : ""}
             </span>
           )}
-          {work.task && (
+          {work.task && display.page==="task" && (
             <span className="workspace-context" title={work.task.cwd}>
               {work.task.scope.kind === "user" ? "个人任务" : "工作目录"} · {work.task.cwd}
             </span>
           )}
           <span className="spacer" />
-          {work.task && (
+          {work.task && display.page==="task" && (
             <Menu.Root>
               <Menu.Trigger asChild>
                 <button className="icon-button" aria-label="任务操作">
@@ -410,15 +416,15 @@ export function App() {
               </Menu.Portal>
             </Menu.Root>
           )}
-          {display.page === "settings" ? (
+          {display.page === "inspiration" ? (
             <button
               className="text-button"
-              onClick={() => display.set({ page: "task" })}
+              onClick={() => {setTarget(undefined);display.set({ page: "task" });}}
             >
               返回任务
             </button>
           ) : (
-            work.task && (
+            work.task && display.page==="task" && (
               <button
                 className="icon-button"
                 aria-label="任务概览"
@@ -433,6 +439,7 @@ export function App() {
             )
           )}
         </header>
+        {display.page==="task"&&ideaSources.length>0&&<div className="idea-task-context" aria-label="任务引用的灵感"><Sparkles size={14}/><span>下次运行的灵感</span>{ideaSources.map(source=><span className="idea-context-tag" key={source.id}>{source.title} · 第 {source.relativePath.match(/\/r(\d+)-/)?.[1]??"已选"} 版</span>)}</div>}
         {work.loadError ? (
           <div className="workspace-error" role="alert">
             <AlertCircle />
@@ -449,10 +456,10 @@ export function App() {
           <div className="loading" role="status">
             正在读取工作台…
           </div>
-        ) : (
+        ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector ? "with-inspector" : ""}`}>
             <section className={`conversation-space ${!work.session ? "new-conversation" : ""}`}>
-              <Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} />
+              <Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />
               <div className="reading-lane">
                 <Composer
                   work={work}
@@ -619,11 +626,13 @@ function TaskRow({
   work,
   select,
   recent = false,
+  active = true,
 }: {
   task: TaskRecord;
   work: Workbench;
   select: (task: TaskRecord, sessionId?: string) => void;
   recent?: boolean;
+  active?: boolean;
 }) {
   const children =
     work.snapshot?.sessions.filter(
@@ -636,7 +645,7 @@ function TaskRow({
     <div>
       <button
         className="nav-row task-row"
-        aria-current={work.task?.id === task.id ? "page" : undefined}
+        aria-current={active && work.task?.id === task.id ? "page" : undefined}
         onClick={() => select(task)}
       >
         <span>{task.title}</span>
@@ -656,7 +665,7 @@ function TaskRow({
             <button
               key={s.id}
               className="nav-row"
-              aria-current={work.session?.id === s.id ? "page" : undefined}
+              aria-current={active && work.session?.id === s.id ? "page" : undefined}
               onClick={() => select(task, s.id)}
             >
               <MessageSquare size={12} />
@@ -1180,7 +1189,7 @@ function SearchPanel({
   }, [query, remote, work.snapshot]);
   return (
     <Overlay label="搜索任务" onClose={onClose}>
-      <div className="panel-heading">
+      <div className="panel-heading input-surface">
         <Search size={17} />
         <input
           aria-label="搜索任务与消息"

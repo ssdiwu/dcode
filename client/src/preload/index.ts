@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("dcode", {
   notify: (options: { title: string; body?: string }) =>
     ipcRenderer.invoke("dcode:notify", options),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  previewInspiration: (nodeId:string,media:boolean) => ipcRenderer.invoke("dcode:previewInspiration",nodeId,media),
   previewAttachment: (id: string) => ipcRenderer.invoke("dcode:previewAttachment", id),
   switchCandidate: (direction: "candidate" | "rollback") =>
     ipcRenderer.invoke("dcode:switchCandidate", direction),

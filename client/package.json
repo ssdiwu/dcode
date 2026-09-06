@@ -21,7 +21,9 @@
     "start": "npm run build && node scripts/dev.mjs --no-vite",
     "capture": "npm run build && node scripts/dev.mjs --capture",
     "dist": "npm run build && node scripts/package.mjs",
-    "test:layout": "npm run build && node test/layout/geometry.mjs"
+    "test:layout": "npm run build && node test/layout/geometry.mjs",
+    "test:inputs": "npm run build && node test/layout/input-focus.mjs",
+    "test:canvas": "npm run build && node test/layout/inspiration.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

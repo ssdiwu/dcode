@@ -21,7 +21,7 @@ try {
     {width:1024,nav:280}, {width:800,nav:240}, {width:1440,nav:0},
     {width:1520,nav:280,inspector:true}, {width:1024,nav:280,inspector:true},
     {width:1200,nav:280,inspector:true,inspectorWidth:600}, {width:1520,nav:280,inspector:true,inspectorWidth:600},
-  ].flatMap(item => [{...item,overview:false},{...item,overview:true}]);
+  ].flatMap(item => [{...item,overview:false},{...item,overview:true}]).flatMap(item=>[{...item,empty:false},{...item,empty:true}]);
   const runner = join(root,"runner.cjs");
   await writeFile(runner, `
 const {app,BrowserWindow}=require('electron');
@@ -33,13 +33,12 @@ app.whenReady().then(async()=>{
  for(const fixture of ${JSON.stringify(cases)}){
   win.setContentSize(fixture.width,900);
   results.push(await win.webContents.executeJavaScript('('+(${function(fixture){
-    document.getElementById("root").innerHTML = `<div class="workbench ${fixture.nav ? "" : "nav-hidden"}" style="--nav-width:${fixture.nav}px;--inspector-width:${fixture.inspectorWidth ?? 340}px">${fixture.nav ? '<nav class="navigation"></nav>' : ''}<main class="workspace"><header class="workspace-bar">标题</header><div class="work-area ${fixture.inspector ? 'with-inspector' : ''}"><section class="conversation-space"><div class="transcript-frame"><nav class="conversation-rail" style="--turn-count:6"><button class="conversation-rail-track">${'<span class="conversation-rail-mark"></span>'.repeat(6)}</button></nav><div class="transcript"><div class="reading-lane" id="message-lane"><article class="message">正文</article></div></div></div><div class="reading-lane" id="composer-lane"><div class="composer"><textarea aria-label="消息"></textarea></div></div></section>${fixture.overview&&!fixture.inspector?'<aside class="overview">概览</aside>':''}${fixture.inspector?'<aside class="inspector">详情</aside>':''}</div></main></div>`;
+    document.getElementById("root").innerHTML = `<div class="workbench ${fixture.nav ? "" : "nav-hidden"}" style="--nav-width:${fixture.nav}px;--inspector-width:${fixture.inspectorWidth ?? 340}px">${fixture.nav ? '<nav class="navigation"></nav>' : ''}<main class="workspace"><header class="workspace-bar">标题</header><div class="work-area ${fixture.inspector ? 'with-inspector' : ''}"><section class="conversation-space"><div class="transcript-frame"><nav class="conversation-rail" style="--turn-count:6"><button class="conversation-rail-track">${'<span class="conversation-rail-mark"></span>'.repeat(6)}</button></nav><div class="transcript"><div class="reading-lane" id="message-lane">${fixture.empty?'<div class="empty-conversation"><h1>开始这项任务</h1><p>任务目标</p></div>':'<article class="message">正文</article>'}</div></div><button class="jump-latest icon-button">↓</button></div><div class="reading-lane" id="composer-lane"><div class="composer"><textarea aria-label="消息"></textarea></div></div></section>${fixture.overview&&!fixture.inspector?'<aside class="overview">概览</aside>':''}${fixture.inspector?'<aside class="inspector">详情</aside>':''}</div></main></div>`;
     return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
       const rect = selector => {const el=document.querySelector(selector); if(!el)return null; const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,top:r.top,bottom:r.bottom};};
       const textarea = document.querySelector('.composer textarea');
-      textarea.focus();
       const inputStyle = getComputedStyle(textarea);
-      resolve({inputStyle:{resize:inputStyle.resize,outlineStyle:inputStyle.outlineStyle},fixture,workspace:rect('.workspace'),conversation:rect('.conversation-space'),message:rect('#message-lane'),composer:rect('#composer-lane'),rail:rect('.conversation-rail-track'),overview:rect('.overview'),inspector:rect('.inspector'),overflow:document.documentElement.scrollWidth>innerWidth});
+      resolve({inputStyle:{resize:inputStyle.resize},fixture,workspace:rect('.workspace'),conversation:rect('.conversation-space'),message:rect('#message-lane'),composer:rect('#composer-lane'),empty:rect('.empty-conversation h1'),jump:rect('.jump-latest'),rail:rect('.conversation-rail-track'),overview:rect('.overview'),inspector:rect('.inspector'),overflow:document.documentElement.scrollWidth>innerWidth});
     })));
   }.toString()})+')('+JSON.stringify(fixture)+')'));
  }
@@ -52,19 +51,25 @@ app.whenReady().then(async()=>{
   for(const result of results){
     const context=JSON.stringify(result);
     const inset=result.message.left-result.workspace.left;
-    assert.ok(inset>=47.5&&inset<=92.5,context);
+    assert.ok(inset>=47.5,context);
+    const center=rect=>(rect.left+rect.right)/2;
+    if(!result.overview)assert.ok(Math.abs(center(result.message)-center(result.conversation))<.5,`No overview: reading content must be centered. ${context}`);
+    else assert.ok(inset<=92.5,context);
+    if(result.empty)assert.ok(Math.abs(center(result.empty)-center(result.composer))<.5,context);
+    assert.ok(Math.abs(center(result.jump)-center(result.composer))<.5,context);
     assert.ok(Math.abs(result.message.left-result.composer.left)<.5,context);
     assert.ok(Math.abs(result.message.width-result.composer.width)<.5,context);
     assert.ok(result.message.right<=result.conversation.right-.5,context);
     assert.ok(result.rail.right<result.message.left,context);
     assert.equal(result.overflow,false,context);
     assert.equal(result.inputStyle.resize,"none",context);
-    assert.equal(result.inputStyle.outlineStyle,"none",context);
     if(result.overview&&result.workspace.width>=950)assert.ok(result.message.right+16<=result.overview.left,context);
   }
-  for(let index=0;index<results.length;index+=2){
-    assert.deepEqual(results[index].message,results[index+1].message,"Overview visibility must not move or resize messages");
-    assert.deepEqual(results[index].composer,results[index+1].composer,"Overview visibility must not move or resize the composer");
+  for(const closed of results.filter(result=>!result.fixture.overview)){
+    const opened=results.find(result=>result.fixture.overview&&result.fixture.width===closed.fixture.width&&result.fixture.nav===closed.fixture.nav&&result.fixture.inspector===closed.fixture.inspector&&result.fixture.inspectorWidth===closed.fixture.inspectorWidth&&result.fixture.empty===closed.fixture.empty);
+    const center=rect=>(rect.left+rect.right)/2;
+    if(opened.overview&&opened.conversation.width>=650)assert.ok(center(opened.message)<center(closed.message)-1,"Opening the overview must move the reading column left when there is room");
+    if(!opened.overview)assert.deepEqual(opened.message,closed.message,"An inspector must not reserve a second hidden overview gutter");
   }
   console.log(JSON.stringify({passed:results.length,layouts:results.map(r=>({width:r.fixture.width,nav:r.fixture.nav,inspector:!!r.fixture.inspector,overview:r.fixture.overview,inset:Math.round(r.message.left-r.workspace.left),content:Math.round(r.message.width)}))}));
 } finally {await rm(root,{recursive:true,force:true});}

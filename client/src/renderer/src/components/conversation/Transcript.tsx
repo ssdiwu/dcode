@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Copy, CornerDownLeft } from "lucide-react";
+import { ArrowDown, Copy, CornerDownLeft, Sparkles } from "lucide-react";
 import { Markdown } from "../Markdown";
 import type { Workbench } from "../../useWorkbench";
 import { messageRows, type MessageRow } from "../../workbench";
@@ -12,7 +12,7 @@ import { projectMessageAttachments } from "../../workbench/message-attachments";
 import { fileType } from "../../workbench/attachments";
 import { ImagePreview } from "./ImagePreview";
 
-export function Transcript({ work, emptyBrand }: { work: Workbench; emptyBrand: ReactNode }) {
+export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Workbench; emptyBrand: ReactNode; onSaveInspiration?:(text:string)=>void }) {
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -79,6 +79,7 @@ export function Transcript({ work, emptyBrand }: { work: Workbench; emptyBrand: 
     <div className="message-actions">
       <button className="icon-button" aria-label="复制消息" onClick={()=>void navigator.clipboard.writeText(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n")).catch(work.fail)}><Copy size={13}/></button>
       <button className="icon-button" aria-label="引用到输入框" onClick={()=>quote(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n"))}><CornerDownLeft size={13}/></button>
+      {onSaveInspiration&&row.parts.some(part=>part.kind==="text"&&part.text.trim())&&<button className="icon-button" aria-label="保存到灵感" onClick={()=>onSaveInspiration(row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("\n"))}><Sparkles size={13}/></button>}
       {row.time && <time dateTime={row.time}>{new Date(row.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</time>}
     </div>
   </article>;

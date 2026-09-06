@@ -2,6 +2,8 @@
 
 ### Added
 
+- 灵感工作台接入真实 Product Store：文字、图片、链接、视频节点，编辑草稿、搜索、连线分组和可逆归档；以不可变 Markdown 版本引用到任务，媒体副本长期保留。
+
 - Web 工作台恢复独立任务、完整设置、真实模型选择与刷新、富消息、对话导航、单行执行进展、附件缩略图与快速查看；输入、阅读位置和附件草稿按任务恢复。
 - Electron 平台壳补齐可信 IPC、Host 优雅停机与重连、系统菜单、通知和本机候选打包、显式切换与回滚。
 
@@ -24,6 +26,9 @@
 - D Code Session Presentation（D Code 会话呈现）：以 D Code Session ID 只读投影 Adapter binding、活动 Runtime 和会话快照，并为 Coordination Session 提供精确 Prompt 路由；首次提交创建持久化 Coordinator Agent Run，随后 Team 复用同一 Coordinator Run / Runtime，查看不抢占 Runtime，Child 仅在其自身 Run 活动时接收消息。
 
 ### Changed
+
+- 所有 Web 输入统一中性焦点反馈并去掉原生缩放手柄；图片节点按原图比例完整显示。画布工具提供名称、操作提示与真实结果，平移、框选、连线和双击编辑各自生效。
+- 任务概览关闭时正文、空态和输入区居中，打开后统一向左让位；同一布局内的状态刷新保持稳定。
 
 - 按 507 确认的 C-A 黑白变色龙方案统一 D Code 系统图标和 Web / Swift 品牌标志；保留唯一 SVG 母版和可复验导出脚本，避免资源分叉。
 

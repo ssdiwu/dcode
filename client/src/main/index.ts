@@ -327,6 +327,11 @@ function setupIPC() {
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  trustedHandle("dcode:previewInspiration", async (nodeId:string,media:boolean) => {
+    if(!bridge||!window||!/^idea-[a-f0-9-]{36}$/.test(nodeId)||typeof media!=="boolean")throw new Error("灵感预览暂不可用。");
+    const file=await bridge.request<{path:string;name?:string}>(media?"inspiration.media":"inspiration.export",{nodeId});
+    window.previewFile(file.path,file.name);
+  });
   trustedHandle("dcode:previewAttachment", async (id: string) => {
     if (!bridge || !window || typeof id !== "string" || !/^attachment-[a-f0-9]{32}$/.test(id)) throw new Error("附件预览暂不可用。");
     const file=await bridge.request<{path:string;name:string}>("attachment.resolve",{id});

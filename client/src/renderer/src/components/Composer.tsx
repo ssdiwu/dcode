@@ -74,7 +74,7 @@ export function Composer({
           </button>
         </div>
       )}
-      <div className={`composer${dragging ? " is-dragging" : ""}`}
+      <div className={`composer input-surface${dragging ? " is-dragging" : ""}`}
         onDragEnter={event=>{if ([...event.dataTransfer.types].includes("Files") && !work.closing) {event.preventDefault();dragDepth.current++;setDragging(true);}}}
         onDragOver={event=>{if ([...event.dataTransfer.types].includes("Files")) {event.preventDefault();event.dataTransfer.dropEffect=work.closing?"none":"copy";}}}
         onDragLeave={event=>{if (dragDepth.current>0) dragDepth.current--; if (!dragDepth.current) setDragging(false);}}
