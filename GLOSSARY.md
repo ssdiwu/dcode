@@ -37,7 +37,7 @@ D Code Product Store 中专门持久化 D Code Session、Raw Input、Effective I
 _Avoid_: Pi Session Cache、JSONL 镜像、会话搜索索引
 
 **D Code Session（D Code 会话）**：
-由 D Code Product Store 持久化、附着于 Task 的对话与上下文对象，拥有稳定身份、提交原文、生效输入、消息、路径、运行记录和压缩投影。它可以由 Pi Session 导入，但导入后独立演化，不以 Pi JSONL 作为继续使用的权威。
+由 D Code Product Store 持久化、附着于 Task 的持续对话与上下文对象，拥有稳定身份、提交原文、生效输入、消息、路径、运行记录和压缩投影。一条用户消息或智能体回复是对话中的消息项，不能直接等同整个会话或任务；一个 Task 可承载多段持续对话。它可以由 Pi Session 导入，但导入后独立演化，不以 Pi JSONL 作为继续使用的权威。
 _Avoid_: Pi Session、一次 Agent Run、任务本身
 
 **D Code Session Presentation（D Code 会话呈现）**：
@@ -49,11 +49,11 @@ _Avoid_: `session.open` 抢占、Pi Session ID 猜测、全局当前会话、第
 _Avoid_: Task、一个任务一条会话、无任务归属的耐久会话
 
 **Coordination Session（协调会话）**：
-一个 Task 当前用于用户与 Coordinator Agent 持续对齐、派发、收集问题和综合结果的默认 Task Session。它在界面中呈现为任务对话本身：点击 Task 主行即进入，导航不为它建立独立的子会话行，协调者就活在这个对话里。它不拥有 Task、Agent Team 或其他 Session；更换协调会话也不会改写任务身份。
+一个 Task 当前用于用户与 Coordinator Agent 持续对齐、派发、收集问题和综合结果的默认 Task Session，也是任务主对话。用户可在同一对话中提及该任务已创建成员，向其定向交办并让协调者获知；相应回复保留真实成员来源，不伪装成协调者发言。点击 Task 主行进入主对话，导航不为它建立独立的子会话行。它不等于或拥有 Task、Agent Team 及其他 Session，更换协调会话不改写任务身份。
 _Avoid_: Task Root、唯一任务会话、独立协调者子会话行、Agent Team 所有者、历史 Main Agent Session
 
 **Child Agent Session（子智能体会话）**：
-某个 Agent Run 为独立 Agent 工作创建的 D Code Session。它附着于所属 Task 和 Agent Run，拥有自己的消息与上下文；默认从对应任务与运行进入，不作为普通会话重复平铺到顶层列表。
+任务协调者创建成员时为其独立工作建立的 D Code Session。它附着于所属 Task 和 Agent Run，拥有自己的消息与上下文；用户可以直接进入交流，也可从主对话提及该成员定向交办。它不在顶层列表重复平铺，创建子对话的界面操作或提及名字不能绕过协调者创建运行成员。
 _Avoid_: Session Path、主会话副本、Agent Run
 
 **Pi Session（Pi 会话）**：
@@ -353,15 +353,15 @@ Task 为达到短期目标而采用、可以随证据修订或推翻的结构化
 _Avoid_: Task、静态路线图、模型思维链
 
 **Work List（工作清单）**：
-一个 Task 当前需要跟踪的 Work Item、状态、依赖、交付物和证据集合，用于回答“这项任务现在还要推进什么”。它属于 Task，不属于某个 D Code Session；普通步骤留在清单中，只有需要独立会话、Agent、验收或产物时才提升为 Subtask。
+一个 Task 当前需要跟踪的 Work Item、状态、依赖、交付物和证据集合，用于回答“这项任务现在还要推进什么”。它属于 Task，不属于某个 D Code Session；工作项可以由任务内的独立成员执行和验收，只有确需独立任务身份、目标与验收生命周期时才提升为 Subtask。
 _Avoid_: Project Task List、Follow-up Queue、会话 Todo
 
 **Work Item（工作项）**：
-Task 的 Work List 中具有稳定身份的可跟踪步骤，包含状态、依赖、交付物和必要证据。Work Item 本身不拥有独立 Session 或 Agent Run；需要独立执行和验收时应提升为 Subtask。
+Task 的 Work List 中具有稳定身份的可跟踪步骤，包含状态、依赖、交付物和必要证据。Work Item 本身不拥有 Session 或 Agent Run，可以通过 Agent Assignment 交给同一 Task 内一个或多个成员独立执行和验收；独立成员、子对话或产物本身不要求提升为 Subtask。
 _Avoid_: Task、普通 Todo 文本、Agent Assignment
 
 **Subtask（子任务）**：
-由一个较大 Task 拆出的独立 Task，拥有自己的短期结果、验收、Session 和 Agent Run，并保留父任务关系。只有独立执行与验收确有价值时才创建，不用无限嵌套替代 Task 内 Work List。
+由一个较大 Task 拆出的独立 Task，拥有自己的短期结果、验收、Session 和 Agent Run，并保留父任务关系。只有独立任务身份、目标及验收生命周期确有价值时才创建；不会仅因调用独立成员、创建子对话或执行独立验收而产生，不用无限嵌套替代 Task 内 Work List。
 _Avoid_: Work Item、计划阶段、Agent Assignment
 
 **Task View（任务视图）**：
@@ -385,7 +385,7 @@ Task 按需组织一个或多个 Agent Run 的内置执行能力，可以串行�
 _Avoid_: dteam、隐藏思维链面板、独立任务数据库、模型列表
 
 **Coordinator Agent（协调智能体）**：
-在一个 Task 中承担面向用户的持续协调角色的 D Code Agent：理解目标、维护任务边界、决定是否派发 Agent Run、合并重复问题、处理成员请求与冲突，并综合报告和证据供用户验收。它就是活在任务对话（Coordination Session）中的智能体角色，直接面对用户，不需要独立的会话入口或子窗口；实际 LLM 只是每次 Agent Run / Session Run 的模型事实。协调智能体不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
+在一个 Task 中从首次对话起承接用户的主智能体角色：简单工作可直接处理，需要后台持续推进、独立分工或独立验收时自主组织成员，持续维护目标、处理变更与冲突，并复核成员报告和证据供用户验收。它始终以该 Task 的 Coordination Session 为默认沟通入口，不跨任务成为全局协调者；转为专注协调不更换任务或主对话。协调智能体不拥有 Task，也不能替用户完成验收或把成员完成自动推导为任务完成。
 _Avoid_: Task Owner、永久 Manager 进程、所有成员的共享上下文、自动验收者
 
 **Coordinator Assignment（协调者指派）**：
@@ -403,6 +403,10 @@ _Avoid_: Task 状态、Agent Team 配置、可跨重启继续的模型进程
 **Agent Run（智能体执行）**：
 一个 D Code Agent 在某个 Task 与相关 Task Session 中承担明确职责的一次稳定、可追溯执行记录，保存 Agent Profile 快照、实际模型、工具集合、Skill 身份与版本、声明范围、上下文来源、唯一执行目录、运行状态、报告和证据引用；一个 Agent Run 可以跨一个或多个 Session Run。它的执行目录是该 Agent Run 的 Pi `cwd`：未显式选择时使用 Project 的 Primary Directory，处理 Linked Directory 工作时使用该目录对应的受管工作树或经验证目录。Agent Run 可以关联 D Code Session 与 Runtime Adapter 私有会话，但不拥有、不等于也不负责命名用户可见会话。LLM 只是该次执行实际使用的模型事实，不是 Agent Run 的稳定身份；进程结束后可以恢复记录，但不能伪装恢复运行中的模型与工具。
 _Avoid_: Task、Agent Profile、D Code Session、Session Run、LLM、模型身份
+
+**Agent Execution Process（智能体执行进程）**：
+由 D Code Runtime Supervisor 管理、专门承载一个已启动 Agent Run 的操作系统进程。它是该智能体的主执行锚点，目标合同要求主执行进程在运行期间一对一：一个活动 Agent Run 恰有一个此类进程，一个此类进程只服务一个 Agent Run；不同成员不能只以同进程中的 Runtime 实例区分。Profile、会话与终态执行记录不要求常驻进程，顺序重启可建立新的进程绑定，但不得让同一 Agent Run 同时拥有两个活动执行进程。Host、界面进程及 shell、浏览器等工具辅助进程不是此处的智能体执行进程；空闲后可以安全回收，后续依据持久上下文重新启动；详见 [ADR 0045](doc/决策档案/0045-任务内自适应协调与智能体进程边界.md)。
+_Avoid_: Agent Profile、D Code Session、Host 进程、工具辅助进程、同进程 Runtime 实例、永久 PID
 
 **Agent 口语映射规则（智能体口语映射规则）**：
 507 在日常讨论中说 Agent / agents 时，默认指 D Code Agent 参与者；说 Agent Run 时，用户界面主文案为“智能体执行”；说 LLM 或“模型”时，指本次执行实际调用的模型。任何会改变配置、启动运行或切换模型的动作都必须显示精确对象名：编辑“智能体档案”、启动“智能体执行”、选择“模型”，不能用一个含糊的“Agent”动作同时覆盖三者。
