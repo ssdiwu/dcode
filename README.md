@@ -10,11 +10,11 @@
 
 D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能力配置，通过 Runtime Adapter 使用 Pi SDK 等 Agent Runtime；Pi JSONL 只作为可选择的单向导入来源。难逆转边界见 [ADR 0037](doc/决策档案/0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md)。
 
-当前 checkout 的 App / Host manifest 为 `0.0.29` Baseline（基线，2026-09-05 以 `main@714a555` 收口）：`0.0.28` 的 Product Store、Task / Session / Run、多 Runtime、D Code Prompt / Tool Manifest、Raw / Effective Input、显式 Pi 导入与模型选择基础设施，已被 Project → Task → 协调者任务对话、Child Session、Task HUD（任务浮层）、中间交付物内容区和按需 Information Inspector（信息检查器）消费。产品数据与 Task Workbench（任务工作台）的恢复状态归当前用户 `~/.dcode/`；Pi JSONL 不双写。`v0.0.27` 仍是已发布源码基线；`0.0.29` 未 tag、未发布，HUD 浮窗形态的完整人工验收已取消、布局合同移交 `0.0.30`，精确状态见[版本实施方案](doc/40-版本实施方案/README.md)。
+当前客户端主路径位于 `client/`：Electron + React 工作台消费 Host 的 Project / Task / Session、模型与能力配置、消息附件和灵感数据。产品事实与恢复状态归当前用户 `~/.dcode/`，Pi JSONL 不双写。`app/` 保留尚未完成退役的 Swift 客户端源码；基本验收、未迁移内容面与后续清理状态由[版本实施方案](doc/40-版本实施方案/README.md)维护。
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 
-验证入口：`cd host && npm test`、`swift test`；Web 客户端的开发、测试与打包入口见 [client/README](client/README.md)。开发运行入口：先构建 Host，再执行 `swift run PiDCode`；本机 App 构建入口：`./app/build.sh`，产物位于 `dist/D Code.app`。项目目录使用 `dcode` 技术名；`PiDCode` 仅保留为内部 Swift 可执行目标名，Host 包名、环境变量与租约目录继续保留既有 `pi-dcode` 兼容标识。
+开发入口：先执行 `npm --prefix host run build`，再执行 `npm --prefix client run dev`。验证入口为 `npm --prefix host test`、`npm --prefix client test`；Web 客户端的布局、输入、打包与隔离运行方式见 [client/README](client/README.md)。旧 Swift 路径保留 `swift test`、`swift run PiDCode` 与 `app/build.sh` 供迁移收尾使用。`PiDCode`、`pi-dcode` 只保留为既有兼容标识。
 
 ## 文档入口
 
@@ -33,7 +33,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 ## 目录
 
 - `host/`：固定 Pi 0.84.4 的 Node 运行宿主、Protocol v1 与测试。
-- `client/`：`0.0.30` Web 客户端修复候选（Electron 平台壳 + React 呈现层），经 Protocol v1 消费既有 `host/`；状态见其 README。
+- `client/`：当前 Web 客户端（Electron 平台壳 + React 呈现层），经 Protocol v1 消费 D Code Host；入口和结构见其 README。
 - `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 基线；`0.0.30` 起按面替换、验证即删）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
 - `Package.swift`：macOS 14+ SwiftPM 可执行包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。

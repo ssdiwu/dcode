@@ -46,4 +46,4 @@
 | [0041](0041-任务上下文选择与-Product-Store-schema-演进边界.md) | 任务上下文选择与 Product Store schema 演进边界 | Task 显式选择具体项目文档或全局知识文件；`AGENTS.md` 强制加载，v1 Product Store 安全单向晋升到 v2。 |
 | [0042](0042-客户端呈现与-D-Code-Host-写入边界.md) | 客户端呈现与 D Code Host 写入边界 | 客户端呈现技术中立；D Code Host 是产品事实与外部副作用的唯一写入边界，Workspace Gateway 与 Runtime Adapter 不得绕过它。 |
 | [0043](0043-Project-多目录与执行目录边界.md) | Project 多目录与执行目录边界 | Proposed（草案待 507 确认）：Project 可选 Primary Directory + Linked Directories，Agent Run 绑定唯一 Execution Directory；确认后取代 0029，拒绝则回退 `0.0.29` 基线中的先行术语。 |
-| [0044](0044-Web客户端与桌面壳技术栈边界.md) | Web 客户端与桌面壳技术栈边界 | Proposed（`0.0.30` 门禁通过后转 Accepted）：客户端主路径转向 Electron + React 桌面壳，层级语义沿用 0042，SwiftUI 客户端按面替换、验证即删，回退依赖 git 基线而非并行代码；具体栈由 [0003](../10-架构与运行/0003-Web客户端技术栈.md) 拥有。 |
+| [0044](0044-Web客户端与桌面壳技术栈边界.md) | Web 客户端与桌面壳技术栈边界 | Accepted（2026-09-07 基础功能验收通过，迁移遗留见 PRD 0028）：客户端主路径转向 Electron + React 桌面壳，层级语义沿用 0042，SwiftUI 客户端按面替换、验证即删，回退依赖 git 基线而非并行代码；具体栈由 [0003](../10-架构与运行/0003-Web客户端技术栈.md) 拥有。 |

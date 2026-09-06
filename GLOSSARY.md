@@ -194,6 +194,14 @@ _Avoid_: 删除会话、移动会话文件、Pi 归档
 与当前 Task Session 和 Session Path 绑定的消息输入区域；没有正式 Task 时，它承接当前 User Scope 或 Project Scope 下的 Task Draft，首次提交后创建对应作用域的 Task 及其首个 Task Session。一级控制只保留当前运行需要的最小选择与发送，文件、Skill、能力和上下文入口按需进入。
 _Avoid_: 模型状态栏、信息检查器模型设置
 
+**Inspiration（灵感）**：
+D Code 原生拥有的可复用知识画布，保存文字、图片、链接与视频节点，支持整理、查找和可逆归档。它独立于 Task；用户显式引用某条内容版本后，才成为该 Task 的知识上下文。
+_Avoid_: 任务列表、运行过程、临时附件缓存
+
+**Inspiration Node（灵感节点）**：
+灵感画布中的稳定内容对象，拥有正文、类型、来源、内容版本和媒体引用。画布位置、连线与分组只表达整理关系，不修改正文版本；归档不撤销已进入任务的版本引用。
+_Avoid_: Task、Session、消息副本
+
 **Composer Draft（输入草稿）**：
 D Code 为特定 Task、D Code Session 与 Session Path 保存、但尚未提交的输入内容。它可以修改或删除，不是提交原文、消息或会话路径节点。
 _Avoid_: 提交原文、待发送消息、会话节点
