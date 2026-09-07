@@ -1,3 +1,4 @@
+import { uiMotion, useMotionReduction } from "./workbench/motion";
 import { LoadingPlaceholder } from "./components/LoadingPlaceholder";
 import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
@@ -15,7 +16,7 @@ import {
   type SettingsPageId,
 } from "./components/SettingsWorkspace";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { create } from "zustand";
 import useSWR from "swr";
 import {
@@ -109,7 +110,7 @@ export function App() {
   const work = useWorkbench();
   const files=useWorkspaceFiles(work);
   const display = useDisplay();
-  const reduced = useReducedMotion();
+  const reduced = useMotionReduction();
   const newTaskDraft = !work.task && !work.session;
   const showNewTask = newTaskDraft && !files.visible;
   const previousTask = useRef<{taskId:string;sessionId?:string}|null>(null);
@@ -507,7 +508,7 @@ export function App() {
                   initial={{ opacity: 0, y: reduced ? 0 : -6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: reduced ? 0 : 0.16 }}
+                  transition={{ duration: reduced ? 0 : uiMotion.standard, ease: uiMotion.glide }}
                 >
                   <Overview
                     work={work}
@@ -798,7 +799,7 @@ function Overview({
         <ChevronRight size={12} />
         {title}
       </button>
-      {expanded.includes(id) && <div>{content}</div>}
+      {expanded.includes(id) && <div className="overview-content">{content}</div>}
     </div>
   );
   const items = snapshot.taskWorkItems.filter((i) => i.taskId === task.id);

@@ -7,15 +7,19 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import electron from "electron";
 
+const withoutWebGL = process.argv.includes("--without-webgl");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const temp = await mkdtemp(join(tmpdir(),"dcode-new-task-ui-"));
 await mkdir(join(temp,"agent"));
 await writeFile(join(temp,"agent/settings.json"),"{}\n");
+await writeFile(join(temp,"a.md"),"# A\n短文件\n");
+await writeFile(join(temp,"long-file-name.md"),"# B\n另一个文件\n");
 const runner = join(temp,"runner.cjs");
 await writeFile(runner, `
 const {app,BrowserWindow,nativeTheme}=require('electron');
 const fs=require('node:fs/promises');
 const assert=require('node:assert/strict');
+
 // This process owns a hidden independent window, never the user's acceptance app.
 BrowserWindow.prototype.show=function(){};
 BrowserWindow.prototype.focus=function(){};
@@ -28,6 +32,19 @@ app.on('browser-window-created',(_event,win)=>{
   const results=[];
   try{
    await until('!!document.querySelector(".new-task-stage")','real new draft');
+   if (${JSON.stringify(withoutWebGL)}) {
+     await until('!!document.querySelector(".new-task-ambient canvas")','initial graphics before simulated refusal');
+     await click('设置');await until('!document.querySelector(".new-task-ambient canvas")','old renderer disposed');
+     // Simulate a browser refusing new WebGL contexts; do not rely on version-specific CLI flags.
+     await run('window.webglRefusals=0;const originalContext=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(type,...args){if(["webgl","webgl2","experimental-webgl"].includes(type)){window.webglRefusals++;return null;}return originalContext.call(this,type,...args);};void 0;');
+     await click('返回工作台');await until('window.webglRefusals>0','renderer attempted a refused context');
+     await until('!document.querySelector(".new-task-ambient canvas")','WebGL refusal static fallback');
+     assert.equal(await run('!!document.querySelector("[data-composer]") && !document.querySelector("[data-composer]").readOnly'),true);
+     await fs.writeFile(${JSON.stringify(join(temp,"static-fallback.png"))},(await win.webContents.capturePage()).toPNG());
+     await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:true,webglContextRefusal:"simulated in Chromium",inputAvailable:true}));
+     app.quit();return;
+   }
+
    await until('!!document.querySelector(".new-task-ambient canvas")','original WebGL scene');
    const geometry=await run('(()=>{const c=document.querySelector(".new-task-ambient canvas");const input=document.querySelector("[data-composer]");return {canvas:c.width>0,inputs:!!input,sceneCount:document.querySelectorAll(".new-task-ambient canvas").length,hidden:document.hidden};})()');
    assert.equal(geometry.sceneCount,1);assert.equal(geometry.inputs,true);nativeTheme.themeSource="light";await sleep(80);
@@ -48,6 +65,16 @@ app.on('browser-window-created',(_event,win)=>{
    await until('!!Array.from(document.querySelectorAll("button")).find(b=>b.getAttribute("aria-label")==="文件与 Git")','project file action before task');
    await click('文件与 Git');await until('!!document.querySelector(".files-workspace")','project files before creation');
    assert.equal(await run('!!document.querySelector(".new-task-ambient")'),false);
+   await until('Array.from(document.querySelectorAll(".file-tree-row")).some(b=>b.textContent.trim()==="a.md")','project file listing loaded');
+   await click('a.md');await until('!!document.querySelector(".file-tab-highlight")','selected file highlight');
+   await click('long-file-name.md');await until('document.querySelector(".file-tab-strip [aria-selected=true]")?.textContent.includes("long-file-name.md")','second file selected');await sleep(300);
+   await run('Array.from(document.querySelectorAll(".file-tab-strip [role=tab]")).find(b=>b.textContent.trim()==="a.md").click()');
+   const movingPill=await run('new Promise(resolve=>requestAnimationFrame(()=>{const p=document.querySelector(".file-tab-highlight").getBoundingClientRect(),b=document.querySelector(".file-tab-strip [aria-selected=true]").getBoundingClientRect();resolve({left:p.left,targetLeft:b.left,width:p.width,targetWidth:b.width});}))');
+   assert.ok(Math.abs(movingPill.left-movingPill.targetLeft)>1||Math.abs(movingPill.width-movingPill.targetWidth)>1,'file highlight moves before settling');
+   await sleep(350);
+   assert.equal(await run('document.querySelector(".file-tab-strip [aria-selected=true]")?.textContent.trim()'),'a.md');
+   const pill=await run('(()=>{const p=document.querySelector(".file-tab-highlight").getBoundingClientRect(),b=document.querySelector(".file-tab-strip [aria-selected=true]").getBoundingClientRect();return {left:p.left,targetLeft:b.left,width:p.width,targetWidth:b.width};})()');
+   assert.ok(Math.abs(pill.left-pill.targetLeft)<1&&Math.abs(pill.width-pill.targetWidth)<1);
    await click('文件与 Git');await until('!!document.querySelector(".new-task-ambient canvas")','return from files to draft');
    await run('(async()=>{for(let attempt=0;;attempt++){const snapshot=await window.dcode.request("foundation.snapshot");try{await window.dcode.request("task.create",{requestId:"ui-empty-task",expectedStoreRevision:snapshot.storeRevision,scope:{kind:"user",userId:snapshot.currentUser.id},title:"已有空任务",goal:"验证既有任务边界",acceptance:[]});break;}catch(error){if(attempt>=5||!String(error).includes("REVISION_CONFLICT"))throw error;await new Promise(resolve=>setTimeout(resolve,50));}}})()');
    await until('Array.from(document.querySelectorAll("button")).some(b=>b.textContent.includes("已有空任务"))','real empty task appears');
@@ -68,6 +95,24 @@ app.on('browser-window-created',(_event,win)=>{
    const frame=await run('window.themeFrames[0].clipPath[0]');
    assert.equal(frame,'circle(0px at '+center[0]+'px '+center[1]+'px)');
    const pref=await run('window.dcode.request("clientPreferences.get")');assert.equal(pref.appearance,'dark');
+   const scaleChecks=[];
+   for (const [label,zoom,theme] of [['紧凑',.92,'浅色'],['标准',1,'深色'],['大',1.12,'浅色']]) {
+     await click(label);for(let i=0;i<100&&Math.abs(win.webContents.getZoomFactor()-zoom)>.001;i++)await sleep(20);
+     assert.ok(Math.abs(win.webContents.getZoomFactor()-zoom)<.001);
+     await until('Array.from(document.querySelectorAll(".segments button")).some(b=>b.textContent.trim()==='+JSON.stringify(theme)+'&&!b.disabled)','appearance available after font scale');
+     await sleep(40);
+     const origin=await run('(()=>{const b=Array.from(document.querySelectorAll(".segments button")).find(b=>b.textContent.trim()==='+JSON.stringify(theme)+');const r=b.getBoundingClientRect();window.themeFrames=[];return [r.left+r.width/2,r.top+r.height/2];})()');
+     await click(theme);await until('window.themeFrames.length>0&&!document.documentElement.classList.contains("theme-changing")','scaled theme transition');
+     const clip=await run('window.themeFrames[0].clipPath[0]');assert.equal(clip,'circle(0px at '+origin[0]+'px '+origin[1]+'px)');
+     scaleChecks.push({label,zoom,origin,clip});
+   }
+   await click('系统');await until('!document.documentElement.classList.contains("theme-changing")&&Array.from(document.querySelectorAll(".segments button")).some(b=>b.textContent.trim()==="系统"&&b.getAttribute("aria-pressed")==="true"&&!b.disabled)','system preference saved');
+   assert.equal(nativeTheme.themeSource,'system');
+   assert.equal(await run('matchMedia("(prefers-color-scheme:dark)").matches'),nativeTheme.shouldUseDarkColors);
+   await click('标准');for(let i=0;i<100&&Math.abs(win.webContents.getZoomFactor()-1)>.001;i++)await sleep(20);
+   await until('Array.from(document.querySelectorAll(".segments button")).some(b=>b.textContent.trim()==="深色"&&!b.disabled)','appearance ready');
+   await click('深色');await until('!document.documentElement.classList.contains("theme-changing")&&Array.from(document.querySelectorAll(".segments button")).some(b=>b.textContent.trim()==="深色"&&b.getAttribute("aria-pressed")==="true"&&!b.disabled)','dark restored');
+
    await click('返回工作台');await until('!!document.querySelector(".new-task-ambient canvas")','new scene after settings');
    await sleep(200);
    await fs.writeFile(${JSON.stringify(join(temp,"new-task-dark.png"))},(await win.webContents.capturePage()).toPNG());
@@ -82,7 +127,7 @@ app.on('browser-window-created',(_event,win)=>{
    await run('document.querySelector(".new-task-ambient canvas").dispatchEvent(new Event("webglcontextlost"))');
    await until('!document.querySelector(".new-task-ambient canvas")','context loss static fallback');
    assert.ok(await run('!!document.querySelector("[data-composer]")'));
-   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',projectDraftFiles:'open and close before task creation',draft:'return preserves input',theme:{center,frame,persisted:pref.appearance},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
+   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',projectDraftFiles:'open and close before task creation',fileTabMotion:{start:movingPill,end:pill},draft:'return preserves input',theme:{center,frame,persisted:pref.appearance,scales:scaleChecks,system:true},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
    await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:true,results},null,2));
    app.quit();
   }catch(error){console.error(error);await fs.writeFile(${JSON.stringify(join(temp,"failure.png"))},(await win.webContents.capturePage()).toPNG());await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:false,error:String(error)}));app.quit();}

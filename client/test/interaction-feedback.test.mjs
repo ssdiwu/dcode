@@ -16,6 +16,8 @@ const {CopyButton}=await server.ssrLoadModule("/src/components/CopyButton.tsx");
 const {LoadingPlaceholder}=await server.ssrLoadModule("/src/components/LoadingPlaceholder.tsx");
 const {useCommands}=await server.ssrLoadModule("/src/workbench/useCommands.ts");
 const {SWRConfig}=await import("swr");
+const {ExecutionStatusIcon}=await server.ssrLoadModule("/src/components/conversation/ExecutionStatusIcon.tsx");
+const {ExecutionProcess}=await server.ssrLoadModule("/src/components/conversation/ExecutionProcess.tsx");
 await server.close();
 test("copy feedback waits for actual clipboard success and preserves submitted text",async()=>{
   let complete,received;
@@ -45,10 +47,10 @@ test("copy failure remains actionable and a later retry can succeed",async()=>{
 test("a short read never flashes loading shapes, while a pending read can show them",async()=>{
   try{
     const view=render(React.createElement(LoadingPlaceholder,{label:"正在读取消息…"}));
-    assert.equal(document.querySelector(".loading-shapes"),null);
+    assert.equal(document.querySelector(".loading-shapes")===null,true);
     view.unmount();
     await act(async()=>new Promise(resolve=>setTimeout(resolve,190)));
-    assert.equal(document.querySelector(".loading-shapes"),null);
+    assert.equal(document.querySelector(".loading-shapes")===null,true);
     render(React.createElement(LoadingPlaceholder,{label:"正在读取消息…"}));
     await waitFor(()=>assert.ok(document.querySelector(".loading-shapes")));
     assert.equal(screen.getByRole("status").getAttribute("aria-busy"),"true");
@@ -66,5 +68,30 @@ test("commands distinguish an in-flight read from an empty completed result",asy
     await act(async()=>complete({commands:[]}));
     await waitFor(()=>assert.equal(document.querySelector("output").dataset.loading,"false"));
     assert.equal(document.querySelector("output").textContent,"0");
+  }finally{cleanup();}
+});
+
+test("execution feedback keeps failure and stop distinct from completion",()=>{
+  const turn={id:"turn",hasResponse:true,running:true,status:"running",steps:[]};
+  try{
+    const view=render(React.createElement(ExecutionProcess,{turn}));
+    assert.ok(document.querySelector('.execution-state-icon[data-state="running"]'));
+    view.rerender(React.createElement(ExecutionProcess,{turn:{...turn,running:false,status:"error"}}));
+    assert.ok(screen.getByText("执行失败"));
+    assert.equal(document.querySelector('.execution-state-icon[data-state="complete"]')===null,true);
+    view.rerender(React.createElement(ExecutionProcess,{turn:{...turn,running:false,status:"aborted"}}));
+    assert.ok(screen.getByText("已停止"));
+    assert.ok(document.querySelector('.execution-state-icon[data-state="aborted"]'));
+    assert.equal(document.querySelector('[data-completing="true"]')===null,true);
+  }finally{cleanup();}
+});
+test("historical completion stays still, while a real running-to-complete change is marked once",async()=>{
+  try{
+    const view=render(React.createElement(ExecutionStatusIcon,{state:"complete"}));
+    assert.equal(document.querySelector('[data-completing="true"]')===null,true);
+    view.rerender(React.createElement(ExecutionStatusIcon,{state:"running"}));
+    view.rerender(React.createElement(ExecutionStatusIcon,{state:"complete"}));
+    await waitFor(()=>assert.ok(document.querySelector('[data-completing="true"]')));
+    await waitFor(()=>assert.equal(document.querySelector('[data-completing="true"]')===null,true));
   }finally{cleanup();}
 });

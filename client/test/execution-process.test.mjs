@@ -49,3 +49,50 @@ test("repeated answers in older turns do not hide the live reply, and durable id
   rows.push(...messageRows([{id:"a2",type:"message",message:{role:"assistant",timestamp:2,content:"相同回复"}}]));
   assert.equal(mergeLiveRows(rows,stream).length,4);
 });
+
+
+test("unfinished output and a lost Host never become a successful execution",()=>{
+  const rows=messageRows([{id:"u1",type:"message",message:{role:"user",content:"历史问题"}},{id:"a1",type:"message",message:{role:"assistant",content:"完成的历史"}},{id:"u2",type:"message",message:{role:"user",content:"当前问题"}}]);
+  const stream={...emptyStream("s"),messages:[{id:"partial",text:"尚未结束",thinking:"",ended:false}]};
+  const live=mergeLiveRows(rows,stream);
+  assert.equal(executionTurns(live,stream,true).at(-1).status,"running");
+  assert.equal(executionTurns(live,stream,false).at(-1).status,"interrupted");
+  const disconnected=executionTurns(live,emptyStream("s"),false,"interrupted");
+  assert.equal(disconnected[0].status,"complete");
+  assert.equal(disconnected.at(-1).status,"interrupted");
+  assert.equal(executionTurns(live,stream,false,"failed").at(-1).status,"error");
+  assert.equal(executionTurns(live,stream,false,"aborted").at(-1).status,"aborted");
+  assert.equal(executionTurns(live,stream,false,"completed").at(-1).status,"complete");
+  assert.equal(executionTurns(live,emptyStream("s"),false,"unknown").at(-1).status,"unknown");
+});
+
+
+test("interrupted execution stops stale tool spinners without rewriting completed results",()=>{
+  const rows=messageRows([{id:"u",type:"message",message:{role:"user",content:"读两份文件"}},{id:"a",type:"message",message:{role:"assistant",content:[{type:"toolCall",id:"t1",name:"read",arguments:{path:"a.md"}},{type:"toolCall",id:"t2",name:"read",arguments:{path:"b.md"}}]}},{id:"r",type:"message",message:{role:"toolResult",toolCallId:"t1",toolName:"read",content:[{type:"text",text:"已返回的内容"}]}}]);
+  const stream={...emptyStream("s"),tools:[{id:"t2",name:"read",input:"b.md",output:"",state:"running"}]};
+  const turn=executionTurns(rows,stream,false,"interrupted").at(-1);
+  assert.equal(turn.status,"interrupted");
+  assert.equal(turn.steps.find(step=>step.id==="t1").state,"complete");
+  assert.equal(turn.steps.find(step=>step.id==="t2").state,"unknown");
+  assert.equal(turn.steps.some(step=>step.state==="running"),false);
+});
+
+
+test("a continuing input does not complete an earlier input whose tool is still running",()=>{
+  const rows=[{id:"u1",messageId:"input-a",role:"user",parts:[{kind:"text",text:"先读文件"}]},{id:"a1",role:"assistant",parts:[{kind:"tool",text:'read\n{"path":"a.md"}',toolCallId:"pending",toolName:"read"}]},{id:"u2",messageId:"input-b",role:"user",parts:[{kind:"text",text:"继续补充"}]}];
+  const stream={...emptyStream("s"),tools:[{id:"pending",inputMessageId:"input-a",name:"read",input:"a.md",output:"",state:"running"}]};
+  const live=executionTurns(rows,stream,true);
+  assert.equal(live[0].status,"running");
+  const ended=executionTurns(rows,stream,false,"interrupted");
+  assert.equal(ended[0].status,"unknown");
+  assert.equal(ended[0].steps[0].state,"unknown");
+});
+
+
+test("an image-only tool result proves its paired tool completed",()=>{
+  const rows=messageRows([{id:"u",type:"message",message:{role:"user",content:"查看图片"}},{id:"a",type:"message",message:{role:"assistant",content:[{type:"toolCall",id:"image-tool",name:"read",arguments:{path:"image.png"}}]}},{id:"image",type:"message",message:{role:"toolResult",toolCallId:"image-tool",toolName:"read",content:[{type:"image",mimeType:"image/png",data:"AQID"}]}}]);
+  const turn=executionTurns(rows,emptyStream(),false,"completed").at(-1);
+  assert.equal(turn.steps.find(step=>step.id==="image-tool").state,"complete");
+  assert.equal(turn.steps.filter(step=>step.kind==="image").length,1);
+  assert.equal(turn.status,"complete");
+});

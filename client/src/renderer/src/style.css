@@ -1585,7 +1585,8 @@ details[open] > summary > svg:first-child {
 .files-workspace {flex:1;min-height:0;display:flex;flex-direction:column;border-bottom:1px solid var(--c-line);}
 .file-tab-strip {display:flex;align-items:center;gap:4px;min-height:38px;padding:0 12px;overflow-x:auto;border-bottom:1px solid var(--c-line);}
 .file-tab-strip [role="tab"] {white-space:nowrap;padding:7px 10px;border-radius:6px;font-size:12px;}
-.file-tab-strip [aria-selected="true"] {background:color-mix(in srgb, var(--c-ink) 6%, transparent);}
+.file-tab-strip [role="tab"] {position:relative;isolation:isolate;}
+.file-tab-highlight {position:absolute;inset:0;z-index:-1;border-radius:inherit;background:color-mix(in srgb,var(--c-ink) 6%,transparent);pointer-events:none;}
 .file-tab {display:flex;align-items:center;}
 .file-workspace-body {display:flex;flex:1;min-height:0;}
 .file-navigation {width:190px;flex:none;overflow:auto;border-right:1px solid var(--c-line);padding:8px;}
@@ -1684,3 +1685,28 @@ html.theme-changing, html.theme-changing * { transition:none !important; }
 .loading-shapes i { display:block; width:100%; height:10px; border-radius:5px; background:color-mix(in srgb,var(--c-ink) 7%,transparent); }
 .loading-shapes i:nth-child(2) { width:88%; }
 .loading-shapes i:nth-child(3) { width:62%; }
+
+/* Motion values are installed from workbench/motion.ts, shared with React motion. */
+:where(.icon-button,.text-button,.primary-button,.send-button,.task-scope-chip,.segments button) {
+  transition:transform var(--motion-settle) var(--ease-spring),background-color var(--motion-standard) var(--ease-glide),color var(--motion-standard) var(--ease-glide);
+}
+:where(.icon-button,.text-button,.primary-button,.send-button,.task-scope-chip,.segments button):not(:disabled):active {
+  transform:scale(.97); transition-duration:var(--motion-press);
+}
+.execution-chevron,.section-toggle svg { transition:transform var(--motion-standard) var(--ease-glide); }
+.overview-content,.execution-process[open] .execution-steps { animation:content-reveal var(--motion-standard) var(--ease-glide); }
+@keyframes content-reveal { from{opacity:0;transform:translateY(-3px)} to{opacity:1;transform:none} }
+.execution-state-icon { display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex-shrink:0; }
+.execution-step-label > .execution-state-icon,.execution-step-label > .execution-step-title { margin-left:0; }
+.execution-state-icon[data-state="complete"] {color:#248a3d;}
+.execution-state-icon[data-state="error"] {color:#c93434;}
+.execution-state-icon[data-state="aborted"] {color:var(--c-muted);}
+.execution-state-icon[data-completing="true"] {animation:completion-arrive var(--motion-settle) var(--ease-glide);}
+@keyframes completion-arrive {from{opacity:0;transform:scale(.75)}to{opacity:1;transform:scale(1)}}
+.execution-process[data-state="running"] .execution-label {animation:status-breathe 1.8s ease-in-out infinite;}
+.reply-writing {display:flex;align-items:center;gap:7px;margin-top:8px;color:var(--c-hint);font-size:11px;}
+.reply-writing i {width:4px;height:4px;border-radius:50%;background:currentColor;animation:status-breathe 1.2s ease-in-out infinite;}
+@keyframes status-breathe {0%,100%{opacity:.62}50%{opacity:1}}
+.loading-shapes {animation:status-breathe 1.5s ease-in-out infinite;}
+.run-statistics,.work-items small,.members small,.diff-number,time,.composer-status {font-variant-numeric:tabular-nums;}
+@media(prefers-color-scheme:dark){.execution-state-icon[data-state="complete"]{color:#63d47c;}.execution-state-icon[data-state="error"]{color:#ff6961;}}

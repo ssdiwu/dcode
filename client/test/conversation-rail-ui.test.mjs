@@ -120,3 +120,39 @@ test("explicit turn navigation stays paused during streaming even when its targe
     for(const [key,descriptor] of properties){if(descriptor)Object.defineProperty(proto,key,descriptor);else delete proto[key];}
   }
 });
+
+test("stream feedback belongs only to the unfinished live reply and never remounts history",()=>{
+  const entries=[{id:"u1",type:"message",message:{role:"user",content:"历史问题"}},{id:"a1",type:"message",message:{role:"assistant",content:"历史回答"}},{id:"u2",type:"message",message:{role:"user",content:"当前问题"}}];
+  const base={imported:[],session:{id:"stream-test"},preferences:{},presentation:{adapterState:"ready",inspection:{entries}},readingPosition:()=>0,saveReading:()=>{},draft:{text:"",images:[]},draftKey:"stream-test",updateDraft:()=>{},fail:()=>{}};
+  const work=(text,running=true)=>({...base,running,stream:{messages:[{id:"live-reply",text,thinking:"",ended:!running}]}});
+  try{
+    const view=render(React.createElement(Transcript,{work:work("第一段"),emptyBrand:null}));
+    const history=document.querySelector('.message.assistant');
+    const live=document.querySelector('.message[data-live="true"]');
+    assert.notEqual(history,live);assert.equal(history.dataset.live,undefined);
+    assert.equal(document.querySelectorAll('.reply-writing').length,1);
+    view.rerender(React.createElement(Transcript,{work:work("第一段，继续追加"),emptyBrand:null}));
+    assert.equal(document.querySelector('.message.assistant'),history);
+    assert.equal(document.querySelector('.message[data-live="true"]'),live);
+    view.rerender(React.createElement(Transcript,{work:work("第一段，继续追加",false),emptyBrand:null}));
+    assert.equal(document.querySelector('.reply-writing')===null,true);
+    assert.equal(document.querySelector('.message[data-live="true"]')===null,true);
+    assert.equal(document.querySelector('.message.assistant'),history);
+  }finally{cleanup();}
+});
+
+
+test("a Host exit after partial output renders interruption instead of a completion check",()=>{
+  const entries=[{id:"u",type:"message",message:{role:"user",content:"执行当前任务"}},{id:"a",type:"message",message:{role:"assistant",timestamp:12,content:"部分内容"}}];
+  const base={imported:[],session:{id:"host-exit"},preferences:{},presentation:{adapterState:"ready",inspection:{entries}},readingPosition:()=>0,saveReading:()=>{},draft:{text:"",images:[]},draftKey:"host-exit",updateDraft:()=>{},fail:()=>{},run:{status:"running"}};
+  try{
+    const view=render(React.createElement(Transcript,{work:{...base,running:true,hostDead:false,stream:{messages:[{id:"12",text:"部分内容",thinking:"",ended:false}]}},emptyBrand:null}));
+    view.rerender(React.createElement(Transcript,{work:{...base,running:false,hostDead:true,stream:{messages:[]}},emptyBrand:null}));
+    assert.ok(screen.getByText("执行已中断"));
+    assert.equal(document.querySelector('.execution-state-icon[data-state="complete"]')===null,true);
+    assert.equal(document.querySelector('[data-completing="true"]')===null,true);
+    view.rerender(React.createElement(Transcript,{work:{...base,viewingHistory:true,running:true,hostDead:false,stream:{messages:[]}},emptyBrand:null}));
+    assert.equal(document.querySelector('.execution-state-icon[data-state="running"]')===null,true);
+    assert.equal(document.querySelector('.reply-writing')===null,true);
+  }finally{cleanup();}
+});

@@ -57,7 +57,9 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
     restored.current = true;
   }, [work.preferences, work.presentation, work.session?.id]);
   const rows = useMemo(() => mergeLiveRows(projectMessageAttachments(storedRows,work.presentation?.submissions), work.stream), [storedRows, work.stream,work.presentation?.submissions]);
-  const executions = useMemo(() => executionTurns(rows, work.stream, work.running), [rows, work.stream, work.running]);
+  const runStatus = work.viewingHistory ? undefined : work.hostDead && ["prepared","running"].includes(work.run?.status ?? "") ? "interrupted" : work.run?.status;
+  const runningHere = work.running && !work.viewingHistory;
+  const executions = useMemo(() => executionTurns(rows, work.stream, runningHere, runStatus), [rows, work.stream, runningHere, runStatus]);
   const turns = useMemo(() => conversationTurns(rows, ""), [rows]);
   const navigation = useConversationNavigation(turns, scroll, content);
   const rowSignature = `${work.snapshot?.collaborationMessages?.map(message=>message.revision).join(":")}:${rows.map(row=>row.parts.map(part=>part.text.length).join(",")).join(":")}:${work.stream.tools?.map(tool=>tool.output.length).join(",")}`;
@@ -75,7 +77,8 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
     });
     document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus();
   };
-  const renderMessage = (row: MessageRow) => <article className={`message ${row.role}`} key={row.id} data-conversation-turn={row.role === "user"||row.role==="coordination" ? row.id : undefined} aria-label={row.role === "user" ? "你的消息" : row.role==="coordination"?"收到的工作安排":"D Code 回答"}>
+  const liveIds = new Set(runningHere ? work.stream.messages.filter(message => !message.ended).map(message => message.id) : []);
+  const renderMessage = (row: MessageRow) => <article className={`message ${row.role}`} data-live={row.role === "assistant" && !!row.messageId && liveIds.has(row.messageId) || undefined} key={row.id} data-conversation-turn={row.role === "user"||row.role==="coordination" ? row.id : undefined} aria-label={row.role === "user" ? "你的消息" : row.role==="coordination"?"收到的工作安排":"D Code 回答"}>
     {row.role==="coordination"&&<strong className="message-attribution">来自主对话的安排</strong>}
     {row.parts.filter(part=>part.kind === "text" || part.kind === "image" || part.kind === "file").map((part,index)=>{
       if(part.kind === "file" && part.attachment)return <button key={index} className="message-file" aria-label={`预览 ${part.attachment.name}`} onClick={()=>void work.previewAttachment(part.attachment!.id)}><span className="file-type">{fileType(part.attachment.name)}</span><span>{part.attachment.name}</span>{Date.parse(part.attachment.expiresAt)<=Date.now()&&<small>已过期</small>}</button>;
@@ -83,6 +86,7 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
       return row.role === "assistant" ? <Markdown key={index} text={part.text}/> : <div className="user-text" key={index}>{part.text}</div>;
     })}
 
+    {row.role === "assistant" && !!row.messageId && liveIds.has(row.messageId) && <span className="reply-writing" role="status"><i aria-hidden="true"/>正在回复</span>}
     <div className="message-actions">
       <CopyButton text={row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n")} onError={work.fail}/>
       <button className="icon-button" aria-label="引用到输入框" onClick={()=>quote(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n"))}><CornerDownLeft size={13}/></button>

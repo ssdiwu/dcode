@@ -1,5 +1,7 @@
+import {motion, LayoutGroup} from "motion/react";
+import {uiMotion, useMotionReduction} from "../workbench/motion";
 import {diffLines} from "../workbench/git-diff";
-import {useEffect,useRef,useState} from "react";
+import {useEffect,useRef,useState,useId} from "react";
 import {ChevronRight,FileText,Folder,GitBranch,RefreshCw,Save,X,Quote,Code,Eye} from "lucide-react";
 import type {WorkspaceSource,GitFile} from "../../../../../host/src/workspace-access.js";
 import type {WorkspaceTree} from "../../../../../host/src/workspace-files.js";
@@ -58,6 +60,7 @@ function FileBody({tab,model,overlay}:{tab:FileTab;model:WorkspaceFileModel;over
   </div>;
 }
 export function WorkspaceFiles({model,work,overlay=false}:{model:WorkspaceFileModel;work:Workbench;overlay?:boolean}){
+  const stripId=useId();const reduced=useMotionReduction();
   const [view,setView]=useState<"files"|"git">("files"),[revision,setRevision]=useState(0),[git,setGit]=useState<{repository:boolean;branch:string|null;files:GitFile[];hiddenCount?:number;truncated?:boolean}|null>(null),[diff,setDiff]=useState<{path:string;staged:boolean;diff:string;digest:string;absolutePath:string}|null>(null),[error,setError]=useState("");
   useEffect(()=>{let alive=true;if(view==="git"&&model.source){setError("");void api().request<NonNullable<typeof git>>("workspace.git",{source:model.source}).then(value=>{if(alive)setGit(value);}).catch(error=>{if(alive)setError(errorText(error));});}return()=>{alive=false;};},[view,model.scope,revision]);
   const diffRequest=useRef(0);const scope=useRef(model.scope);scope.current=model.scope;
@@ -68,7 +71,7 @@ export function WorkspaceFiles({model,work,overlay=false}:{model:WorkspaceFileMo
     catch(error){if(request===diffRequest.current&&scope.current===currentScope)setError(errorText(error));}
   };
   return <section className="files-workspace" aria-label="文件与 Git">
-    <div className="file-tab-strip" role="tablist" aria-label="工作区标签"><button role="tab" aria-selected={false} onClick={model.conversation}>对话</button>{model.tabs.map(tab=><div className="file-tab" key={tab.id}><button role="tab" aria-selected={model.active?.id===tab.id} onClick={()=>{model.select(tab.id);setDiff(null);}}>{tab.path.split("/").at(-1)}{fileDirty(tab)?" ·":""}</button><button className="icon-button" aria-label={`关闭文件 ${tab.path}`} onClick={()=>model.close(tab.id)}><X size={12}/></button></div>)}</div>
+    <LayoutGroup id={stripId}><div className="file-tab-strip" role="tablist" aria-label="工作区标签"><button role="tab" aria-selected={false} onClick={model.conversation}>对话</button>{model.tabs.map(tab=><div className="file-tab" key={tab.id}><button role="tab" aria-selected={model.active?.id===tab.id} onClick={()=>{model.select(tab.id);setDiff(null);}}>{model.active?.id===tab.id&&<motion.span className="file-tab-highlight" layoutId="selected-file" initial={false} transition={{duration:reduced?0:uiMotion.settle,ease:uiMotion.inertia}} aria-hidden="true"/>}{tab.path.split("/").at(-1)}{fileDirty(tab)?" ·":""}</button><button className="icon-button" aria-label={`关闭文件 ${tab.path}`} onClick={()=>model.close(tab.id)}><X size={12}/></button></div>)}</div></LayoutGroup>
     <div className="file-workspace-body"><aside className="file-navigation">{model.artifacts.length>0&&<label className="file-source-picker">查看目录或产物<select aria-label="文件来源" value={model.source?.artifactId??""} onChange={event=>model.browse(event.target.value||undefined)}><option value="">任务目录</option>{model.artifacts.map(artifact=><option key={artifact.id} value={artifact.id}>{artifact.title}</option>)}</select></label>}<div className="file-navigation-toolbar"><button className="icon-button" aria-label="项目文件" aria-pressed={view==="files"} onClick={()=>setView("files")}><Folder size={15}/></button><button className="icon-button" aria-label="Git 改动" aria-pressed={view==="git"} onClick={()=>setView("git")}><GitBranch size={15}/></button><span className="spacer"/><button className="icon-button" aria-label="刷新文件与改动" onClick={()=>setRevision(value=>value+1)}><RefreshCw size={13}/></button></div>
       {model.source&&view==="files"&&<Tree key={`${model.scope}:${revision}`} source={model.source} onOpen={path=>{setDiff(null);model.open(path);}}/>}
       {view==="git"&&<div className="git-files">{git?.repository?<><p className="secondary">{git.branch??"当前分支"}</p>{git.files.map(file=><button className="file-tree-row" key={file.path} onClick={()=>void showDiff(file.path,file.status[1]===" "&&file.status[0]!==" ")}><span className="git-state">{file.status}</span><span>{file.path}</span></button>)}{!!git.hiddenCount&&<p className="secondary">有 {git.hiddenCount} 个受限路径未显示。</p>}{git.truncated&&<p className="secondary">仅显示前 1000 项改动。</p>}{git.files.length===0&&<p className="secondary">没有可显示的改动。</p>}</>:<p className="secondary">当前目录没有可用的 Git 仓库。</p>}</div>}
