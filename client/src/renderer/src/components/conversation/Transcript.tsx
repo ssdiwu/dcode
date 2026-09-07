@@ -134,8 +134,8 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
           ) : !rows.length ? (
             <div className="empty-conversation">
               {emptyBrand}
-              <h1>{work.task ? "开始这项任务" : "想完成什么？"}</h1>
-              {work.task && <p>{work.task.goal}</p>}
+              <h1>{work.task ? "开始这项任务" : "开始新任务"}</h1>
+              {work.task ? <p>{work.task.goal}</p> : <p>描述目标，D Code 会接手推进。</p>}
             </div>
           ) : (
             <div className="message-list">

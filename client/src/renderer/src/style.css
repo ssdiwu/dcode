@@ -1649,3 +1649,23 @@ details[open] > summary > svg:first-child {
 .workspace-session{display:flex;align-items:center;gap:3px;min-width:0;max-width:260px;flex-shrink:0;font-size:12px}.workspace-session .text-button{font-size:11px;padding:2px 5px}.workspace-session strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}.workspace-session>svg{flex-shrink:0;color:var(--c-muted)}
 
 .collaboration-inbox{border:1px solid var(--c-line);border-radius:10px;padding:10px 12px;margin:12px 0}.collaboration-inbox>summary{cursor:pointer;font-size:12px;font-weight:500}.collaboration-inbox-item{padding:10px 0;border-top:1px solid var(--c-line)}.collaboration-inbox-item>details{font-size:11px;color:var(--c-muted)}.collaboration-inbox-item .user-text{font-size:12px;max-height:220px;overflow:auto;margin-top:8px}.collaboration-inbox .collaboration-heading strong{font-size:12px;font-weight:500}
+
+/* UI candidate: optional original ThreeUI scene only on a new task draft. */
+.new-task-stage { position:relative; isolation:isolate; }
+.new-task-ambient { position:absolute; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+.new-task-ambient .shader-frame { width:100%; height:100%; filter:invert(1); }
+.new-task-stage > .conversation-space { z-index:1; }
+.new-task-stage .new-conversation { padding-block:32px min(12vh,100px); overflow:auto; }
+.new-task-stage .new-conversation .logo { width:44px; height:44px; margin-bottom:16px; }
+.new-task-stage .empty-conversation h1 { font-size:24px; font-weight:600; }
+.new-task-stage .empty-conversation p { margin-top:10px; font-size:13px; }
+.new-task-stage .composer { border-radius:18px; box-shadow:0 4px 20px #00000006; }
+.new-task-stage .scope-tray { display:flex; justify-content:center; align-items:center; margin-top:14px; }
+.new-task-stage .composer-status { text-align:center; }
+@media (prefers-color-scheme:dark) { .new-task-ambient .shader-frame { filter:none; } }
+::view-transition-old(root), ::view-transition-new(root) { animation:none; mix-blend-mode:normal; }
+::view-transition-old(root) { z-index:1; }
+::view-transition-new(root) { z-index:2; }
+html.theme-changing, html.theme-changing * { transition:none !important; }
+
+.new-task-stage .composer:has(textarea:focus) { box-shadow:inset 0 0 0 1px var(--c-focus),0 4px 20px #00000006; }

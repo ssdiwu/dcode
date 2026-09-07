@@ -1,3 +1,4 @@
+import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
 import {TaskContext} from "./components/TaskContext";
 import {ExtensionRequests} from "./components/ExtensionRequests";
@@ -108,6 +109,12 @@ export function App() {
   const files=useWorkspaceFiles(work);
   const display = useDisplay();
   const reduced = useReducedMotion();
+  const newTaskDraft = !work.task && !work.session;
+  const showNewTask = newTaskDraft && !files.visible;
+  const previousTask = useRef<{taskId:string;sessionId?:string}|null>(null);
+  useEffect(() => {
+    if (work.task) previousTask.current = {taskId:work.task.id,sessionId:work.session?.id};
+  }, [work.task?.id, work.session?.id]);
   const models = useModels({sessionId:work.session?.id,mutateStore:work.mutateStore,onChanged:async()=>{await Promise.all([work.reload(),work.refreshPresentation()]);},onError:work.fail});
   const providers = models.data?.legacyProviders ?? [];
   const projectId =
@@ -150,6 +157,11 @@ export function App() {
     requestAnimationFrame(() =>
       document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus(),
     );
+  };
+  const returnFromDraft = () => {
+    const previous = previousTask.current;
+    const task = work.snapshot?.tasks.find(task => task.id === previous?.taskId && task.state !== "archived");
+    if (task) select(task, previous?.sessionId);
   };
   const openDetail = (value: TaskWorkbenchInspectorTarget | null) => {
     setTarget(value);
@@ -377,6 +389,7 @@ export function App() {
             </span>
           )}
           <span className="spacer" />
+          {display.page === "task" && newTaskDraft && work.snapshot?.tasks.some(task => task.id === previousTask.current?.taskId && task.state !== "archived") && <button className="text-button" onClick={returnFromDraft}>返回任务</button>}
           {work.presentation?.nativePaths&&work.presentation.nativePaths.length>1&&display.page==="task"&&<Menu.Root><Menu.Trigger asChild><button className="text-button" aria-label="对话路径">{work.viewingHistory?"历史路径":"当前路径"}</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" sideOffset={5}>{work.presentation.nativePaths.map(path=><Menu.Item className="menu-item" key={path.id} onSelect={()=>{work.selectPath(path.isCurrent?undefined:path.id);files.conversation();}}>{path.title}{path.isCurrent?" · 当前":""}<small>{new Date(path.createdAt).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</small></Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
           {work.task&&display.page==="task"&&<button className="icon-button" aria-label="上下文与运行依据" onClick={()=>setContextOpen(true)}><FileText size={16}/></button>}
           {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.visible} onClick={()=>files.visible?files.conversation():files.show()}><Folder size={16}/></button>}
@@ -471,8 +484,11 @@ export function App() {
             正在读取工作台…
           </div>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
-          <div className={`work-area ${inspector ? "with-inspector" : ""}`}>
-            <section className={`conversation-space ${!work.session ? "new-conversation" : ""}`}>
+          <div className={`work-area ${inspector ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""}`}>
+            {showNewTask && <NewTaskScene />}
+            <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} onKeyDown={event => {
+              if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
+            }}>
               {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>

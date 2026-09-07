@@ -1,4 +1,5 @@
 import { ModelRouteEditor, type ModelRouteDraft } from "./ModelRouteEditor";
+import { changeThemeFromButton } from "../workbench/theme-transition";
 import { ModelPicker } from "./ModelPicker";
 import type { ModelControls } from "../workbench/useModels";
 import { thinkingLabels, profilePresentation } from "../workbench/presentation";
@@ -69,12 +70,16 @@ export function SettingsWorkspace({
   const [page, setPage] = useState<Page>(initialPage ?? "models");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const update = async (patch: Partial<ClientPreferences>) => {
+  const update = async (patch: Partial<ClientPreferences>, origin?: HTMLElement) => {
     setBusy(true);
     setError(null);
     try {
-      await work.mutateStore("clientPreferences.set", patch);
-      await work.reload();
+      const save = async () => {
+        await work.mutateStore("clientPreferences.set", patch);
+        await work.reload();
+      };
+      if (origin) await changeThemeFromButton(origin, save);
+      else await save();
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -183,11 +188,12 @@ export function SettingsWorkspace({
                       ["light", "浅色"],
                       ["dark", "深色"],
                     ]}
-                    onChange={(appearance) =>
+                    disabled={busy}
+                    onChange={(appearance, button) =>
                       void update({
                         appearance:
                           appearance as ClientPreferences["appearance"],
-                      })
+                      }, button)
                     }
                   />
                 </Row>
@@ -398,10 +404,12 @@ function Segments({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   value: string;
   options: readonly (readonly [string, string])[];
-  onChange: (v: string) => void;
+  onChange: (v: string, button: HTMLButtonElement) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="segments">
@@ -409,7 +417,8 @@ function Segments({
         <button
           key={id}
           aria-pressed={value === id}
-          onClick={() => onChange(id)}
+          disabled={disabled}
+          onClick={event => onChange(id, event.currentTarget)}
         >
           {label}
         </button>

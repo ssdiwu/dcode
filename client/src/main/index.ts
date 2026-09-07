@@ -161,6 +161,10 @@ function setupIPC() {
       if (!bridge) throw new Error("运行服务尚未连接，请重新连接。");
       return bridge
         .request(method, params)
+        .then(async result => {
+          if (method === "clientPreferences.set" && "appearance" in params) await refreshNotifications();
+          return result;
+        })
         .catch((error: Error & { code?: string }) => {
           diagnostic(`${method} · ${error.code ?? "HOST_ERROR"}`);
           throw new Error(`${error.code ?? "HOST_ERROR"}: ${error.message}`);

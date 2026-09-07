@@ -15,6 +15,7 @@
     ],
     "strict": true,
     "skipLibCheck": true,
+    "rootDirs": ["src/renderer/src/vendor/threeui/src", "node_modules/@designcodeio/threeui/lib-dist"],
     "noEmit": true,
     "allowImportingTsExtensions": true
   },

@@ -65,3 +65,15 @@ Swift dependencies remain traceable in Git before the retirement commit.
 
 This file is an attribution and distribution notice. It does not replace or
 modify any third-party license.
+
+## ThreeUI Structure Flow (UI/UX candidate)
+
+The new-task scene uses the five exact registered source files from
+https://threeui.com/source-code/structure-flow.json, preserved with SHA-256
+identities and the upstream MIT license in
+`client/src/renderer/src/vendor/threeui/`. Copyright (c) 2026 Meng To.
+The selected renderer uses `three128` (Three.js 0.128.0). Other declared lazy
+variants resolve to the locked `@designcodeio/threeui` package. The candidate
+license inventory includes the npm package notices and Three.js MIT notices.
+Theme inversion, visibility and static accessibility fallback are D Code host
+adaptations; the five registered source files are unchanged.
