@@ -32,7 +32,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 ## 目录
 
-- `host/`：固定 Pi 0.84.4 的 Node 运行宿主、Protocol v1 与测试。
+- `host/`：固定 Pi 0.85.1 的 Node 运行宿主、Protocol v1 与测试。
 - `client/`：当前 Web 客户端（Electron 平台壳 + React 呈现层），经 Protocol v1 消费 D Code Host；入口和结构见其 README。
 - `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 基线；`0.0.30` 起按面替换、验证即删）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
 - `Package.swift`：macOS 14+ SwiftPM 可执行包入口。

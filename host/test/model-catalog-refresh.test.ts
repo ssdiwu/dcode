@@ -5,6 +5,7 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {PiHost} from "../src/pi-host.js";
 import type {DCodeModelsView} from "../src/model-catalog-view.js";
+import {getBuiltinModelDataGeneratedAt} from "@earendil-works/pi-ai/providers/all";
 import type {FoundationSnapshot} from "../src/product-store.js";
 
 test("online model refresh reaches native selection and survives restart without replacing custom providers or Pi settings",async()=>{
@@ -20,7 +21,7 @@ test("online model refresh reaches native selection and survives restart without
   globalThis.fetch=async input=>{
     assert.match(String(input),/^https:\/\/pi.dev\/api\/models\/providers\//);
     const models=String(input).endsWith("/openai")?[{id:"catalog-update-fixture",name:"Updated catalog model",provider:"openai",api:"openai-responses",baseUrl:"https://api.openai.com/v1",contextWindow:372000,maxTokens:128000,reasoning:true,input:["text","image"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]:[];
-    return new Response(JSON.stringify(models),{headers:{"content-type":"application/json","last-modified":"Fri, 04 Sep 2026 20:10:40 GMT"}});
+    return new Response(JSON.stringify(models),{headers:{"content-type":"application/json","last-modified":new Date((getBuiltinModelDataGeneratedAt()??Date.now())+1000).toUTCString()}});
   };
   try {
     await host.start();

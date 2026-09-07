@@ -1,12 +1,12 @@
 import type { AgentEvent, AgentState, AgentTool } from "@earendil-works/pi-agent-core";
 
-export type ProcessTool = Pick<AgentTool, "name" | "label" | "description" | "parameters">;
+export type ProcessTool = Pick<AgentTool, "name" | "label" | "description" | "parameters" | "executionMode">;
 export type ProcessState = Pick<AgentState, "systemPrompt" | "messages" | "model" | "thinkingLevel"> & {
   tools: ProcessTool[];
 };
 
 export function processTools(tools: AgentTool[]): ProcessTool[] {
-  return tools.map(({ name, label, description, parameters }) => ({ name, label, description, parameters }));
+  return tools.map(({ name, label, description, parameters, executionMode }) => ({ name, label, description, parameters, ...(executionMode?{executionMode}:{}) }));
 }
 
 export type ProcessHook = "event" | "convert" | "transform" | "beforeTool" | "afterTool" | "shouldStop" | "prepare" | "tool" | "stream";

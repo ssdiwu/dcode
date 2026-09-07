@@ -16,24 +16,23 @@ governed by their own licenses.
 - Binary distribution: D Code copies the unmodified complete Node.js 22.22.3
   `LICENSE` into `D Code.app/Contents/Resources/Legal/Node.js-LICENSE.txt`.
 
-### Pi 0.84.4
+### Pi 0.85.1
 
 D Code uses the following packages from the Pi Agent Harness. The three direct
-SDK packages are pinned to npm version `0.84.4`; transitive versions are recorded
+SDK packages are pinned to npm version `0.85.1`; transitive versions are recorded
 in `host/package-lock.json`:
 
 - `@earendil-works/pi-ai`
 - `@earendil-works/pi-agent-core`
 - `@earendil-works/pi-coding-agent`
-- `@earendil-works/pi-client`
-- `@earendil-works/pi-protocol`
+- `@earendil-works/chord` (transitive SDK dependency)
 - `@earendil-works/pi-telemetry`
 - `@earendil-works/pi-tui` (transitive package; D Code does not use it as its
   product UI)
 
 License: MIT. Copyright (c) 2025 Mario Zechner. The complete notice is in
-`legal/Pi-v0.84.1-MIT.txt` in the source repository and is copied into every D
-Code application bundle.
+`legal/Pi-v0.84.1-MIT.txt` in the source repository. Its wording matches the
+upstream v0.85.1 license; the filename retains the original audit version.
 
 ### grok-mermaid 0.2.2
 

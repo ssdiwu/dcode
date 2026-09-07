@@ -12,7 +12,7 @@ export function inputSourceReceipts(value:unknown):InputSourceReceipt[]{
 }
 const body=(text:string)=>text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u,'').trim();
 const escape=(text:string)=>text.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
-/** Pi 0.84.4 argument syntax, kept in D Code so raw input and expansion receipts
+/** Pi SDK argument syntax, kept in D Code so raw input and expansion receipts
  * are committed together. No shell evaluation and no recursive substitution. */
 export function templateArguments(content:string,input:string):string {
   const args:string[]=[];let current='',quote:string|undefined;

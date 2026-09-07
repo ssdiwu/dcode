@@ -4,7 +4,7 @@
 
 ## 职责
 
-`host/` 是 Swift App 唯一允许写入 D Code Product Store、启动 Runtime Adapter 和执行外部副作用的运行边界。它使用项目内精确固定的 Pi 0.84.4 提供 Agent Loop，但 Project / Task / D Code Session / Run / Prompt Receipt / Attempt 等产品事实进入 `~/.dcode/`，不以 Pi JSONL 作为产品数据库，也不调用全局 `pi` 命令。
+`host/` 是 Swift App 唯一允许写入 D Code Product Store、启动 Runtime Adapter 和执行外部副作用的运行边界。它使用项目内精确固定的 Pi 0.85.1 提供 Agent Loop，但 Project / Task / D Code Session / Run / Prompt Receipt / Attempt 等产品事实进入 `~/.dcode/`，不以 Pi JSONL 作为产品数据库，也不调用全局 `pi` 命令。
 
 Swift 负责原生呈现与用户输入；Host 负责：
 

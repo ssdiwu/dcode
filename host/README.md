@@ -131,7 +131,7 @@ npm start -- --agent-dir ~/.pi/agent
 Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` 管理工作台偏好及旧界面偏好的单向继承；`dcodeModelProvider.save/remove` 管理原生供应商，显式接管只读旧来源的非敏感配置；`task.manage` 与会话复制入口保留产品历史。`maintenance.status/start` 和 `selfEvolution.*` 记录 Web 本机候选检查、构建和恢复回执，重启前检查所有运行活动。原生 SDK 会话使用内存 SettingsManager，模型与思考切换不回写 Pi 设置。核心凭据引用边界和资源安全策略不变。
 
 
-模型路径（Pi 0.84.4）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
+模型路径（Pi 0.85.1）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
 
 
 受管附件（0.0.30 修复候选）：`attachment.import/get/resolve` 由 Host 管理副本，`attachment-files.ts` 负责受控目录、原子文件、完整性校验与清理。草稿附件元数据使用现有 `composer_drafts.payload_json`；`taskDraft.set` / `dcodeSession.composerDraft.set` 可携带 `attachmentIds`，空文字但有附件时保留草稿。`dcodeSession.prompt` 只接收附件 ID，核心读取图片并生成文件引用，在 `prepareSessionRun` 同事务内写原文、引用、生效输入及附件 Artifact。Schema 仍为 2，附件输入不混入交付物列表。
