@@ -10,6 +10,7 @@ export interface CatalogProviderInput {
   baseUrl: string;
   apiKind: string;
   credentialEnv: string;
+  managedAuth?: boolean;
   keepExistingAuth?: boolean;
   adoptExisting?: boolean;
   compatJson?: string;
@@ -42,9 +43,9 @@ export function catalogProviderInput(value: unknown): CatalogProviderInput {
     name = string("name"),
     baseUrl = string("baseUrl", 4096),
     apiKind = string("apiKind"),
-    credentialEnv = p.keepExistingAuth === true ? "" : string("credentialEnv");
+    credentialEnv = p.keepExistingAuth === true || p.managedAuth === true ? "" : string("credentialEnv");
   if (
-    p.keepExistingAuth !== true &&
+    p.keepExistingAuth !== true && p.managedAuth !== true &&
     !/^[A-Za-z_][A-Za-z0-9_]{0,199}$/.test(credentialEnv)
   )
     throw new Error("请填写环境变量名称，不要填写密钥正文");
@@ -155,6 +156,7 @@ export function catalogProviderInput(value: unknown): CatalogProviderInput {
     baseUrl,
     apiKind,
     credentialEnv,
+    managedAuth: p.managedAuth === true,
     models,
     keepExistingAuth: p.keepExistingAuth === true,
     adoptExisting: p.adoptExisting === true,
@@ -170,18 +172,19 @@ export function providerCatalogSeed(
     name: input.name,
     baseUrl: input.baseUrl,
     apiKind: input.apiKind,
-    authMode: input.keepExistingAuth ? "external_reference" : "environment",
+    authMode: input.managedAuth ? "api_key" : input.keepExistingAuth ? "external_reference" : "environment",
     nonsecret: {
       source: "dcode_custom",
       credentialEnv: input.credentialEnv,
+      managedAuth: input.managedAuth === true,
       keepExistingAuth: input.keepExistingAuth === true,
       ...(input.compatJson ? { compat: JSON.parse(input.compatJson) } : {}),
     },
     credential: {
-      locator: input.keepExistingAuth
+      locator: input.managedAuth ? `keychain:dcode:${input.id}` : input.keepExistingAuth
         ? `pi-runtime-auth-bridge:${input.id}`
         : `environment:${input.credentialEnv}`,
-      configured: input.keepExistingAuth
+      configured: input.managedAuth || input.keepExistingAuth
         ? existingAuthConfigured
         : !!process.env[input.credentialEnv],
     },
@@ -211,13 +214,14 @@ export async function registerCatalogProviders(
       source?: string;
       credentialEnv?: string;
       keepExistingAuth?: boolean;
+      managedAuth?: boolean;
       compat?: Record<string, unknown>;
     };
     if (config?.source !== "dcode_custom") continue;
     const apiKey = config.credentialEnv
       ? process.env[config.credentialEnv]
       : undefined;
-    if (!apiKey && !config.keepExistingAuth) continue;
+    // Register the catalog even before connection, so its supported setup is discoverable.
     runtime.registerProvider(provider.id, {
       name: provider.name,
       baseUrl: provider.baseUrl,

@@ -129,6 +129,7 @@ open "client/release/mac-arm64/D Code.app"
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
 | `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` | 仅保留旧 Pi 目录的安全只读诊断 / 迁入来源，不定义 D Code Model Catalog、未来 Runtime 选择或用户可写产品设置 |
 | `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel`、`modelProviders.save`、`modelProviders.remove` | 明确拒绝；D Code 不再经 Pi `SettingsManager` / `models.json` 写产品模型配置 |
+| `dcodeAuth.get/start/cancel/disconnect/refresh` | D Code 安全连接控制；仅 Provider、认证类型、流程 ID 与状态，不能传入密钥或 OAuth 回调。Host 私有窗口/管道与钥匙串承载机密，完整合同归 PRD 0030 |
 | `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 明确拒绝；D Code 不通过 IPC 启动 Pi 认证流程或发送 API Key / OAuth 值，凭据只以安全引用进入 Product Store |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前已绑定 Runtime 的临时会话设置；未来 Runtime 的默认模型仍由 `runtimeModelSelection.set` 归 D Code Product Store 管理 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
@@ -187,7 +188,7 @@ open "client/release/mac-arm64/D Code.app"
 `host.hello.capabilities.dcodeModelCatalog=true` 表示 Host 将非敏感 Provider / Model 目录、Credential Reference（凭据安全引用）与 future Runtime Model Selection（未来运行模型选择）投影到 D Code Product Store。每次 D Code Runtime 启动前必须以 Store 选择、目录和已配置安全引用验证模型，并显式设置模型；Pi `settings.json`、`models.json` 与 `auth.json` 只服务受控发现或外部认证桥状态，不是产品权威。
 
 - `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` 只保留旧 Pi 目录的安全只读诊断 / 迁入来源；其中不得返回 API Key、OAuth token 或认证文件正文。
-- `modelProviders.save / remove`、`modelSettings.setEnabledModels / setDefaultModel` 与 `modelAuth.start / respond / cancel` 均被 Host 明确拒绝。D Code 不通过 IPC 新建 Pi 认证流程，也不把凭据正文交给 Pi。
+- `modelProviders.save / remove`、`modelSettings.setEnabledModels / setDefaultModel` 与 `modelAuth.start / respond / cancel` 均被 Host 明确拒绝。旧 Pi 交互桥继续拒绝。D Code 自有 `dcodeAuth.*` 控制 Host 管理的安全连接，SDK 登录与刷新只消费 Host 内部凭据，不经过公共协议。
 - `runtimeModelSelection.set` 只写入 Product Store 的安全、版本化选择；Pi Runtime Adapter 在实际 Run 边界读取该选择，不回写 Pi 默认配置或历史 Run。
 
 Swift 将尚未呈现的最新稳定完成身份原子保存到 `~/Library/Application Support/D Code/activity-attention-v1.json`；资料版本化、有界且只含 Session / Run / Completion / Entry 身份、完成时间与可选查看时间，不保存正文、Thinking、工具结果或凭据。Activity View 仍从可见 Pi Session 与 Host Run State 重建；关注资料不是第二套会话数据库，旧结果也不能清除同一 Session 的更新完成身份。

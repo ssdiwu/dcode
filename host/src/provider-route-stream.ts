@@ -1,3 +1,4 @@
+import {rememberRequestCredentials} from "./credential-material.js";
 import {randomUUID,createHash} from 'node:crypto';
 import {createAssistantMessageEventStream,type AssistantMessage,type AssistantMessageEvent} from '@earendil-works/pi-ai';
 import type {AgentOptions} from '@earendil-works/pi-agent-core';
@@ -27,6 +28,7 @@ export function routedProviderStream(base:Stream,control:ProviderRouteControl):S
           await control.record({id,providerId:model.provider,modelId:model.id,state:'started',systemPromptDigest,toolNames,toolManifestDigest,...(reasoning?{reasoning}:{})});
           let httpStatus:number|undefined,notifiedStatus:number|undefined,visible=false;const buffered:AssistantMessageEvent[]=[];
           const observedFetch:NonNullable<NonNullable<Parameters<Stream>[2]>["fetch"]>=async(input,init)=>{
+            rememberRequestCredentials(input,init);
             const response=await (options?.fetch??globalThis.fetch)(input,init);httpStatus=response.status;control.response?.(model,response.status,Object.fromEntries(response.headers.entries()));
             // Pi's OpenAI adapters invoke onResponse only after .withResponse()
             // succeeds. Observe non-2xx responses through its supported fetch hook.

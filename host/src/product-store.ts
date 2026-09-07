@@ -2758,6 +2758,17 @@ export class ProductStore {
     });
   }
 
+  async syncModelCredentialReferences(providers: {providerId:string;locator:string;configured:boolean}[]): Promise<void> {
+    const safe=providers.map(p=>({providerId:requiredCredentialFreeString(p.providerId,"providerId",200),locator:requiredCredentialFreeString(p.locator,"locator",4096),configured:p.configured===true}));
+    await this.mutate("modelCredentialReferences.sync",`credential-sync:${randomUUID()}`,undefined,{providers:safe},(_revision,now)=>{
+      for(const provider of safe){
+        const kind=provider.locator.startsWith("keychain:dcode:")?"keychain":provider.locator.startsWith("environment:")?"environment":"external_auth_bridge";
+        this.database.prepare("UPDATE credential_references SET reference_kind=?,locator=?,configured=?,revision=revision+1,updated_at=? WHERE provider_id=? AND (reference_kind<>? OR locator<>? OR configured<>?)").run(kind,provider.locator,provider.configured?1:0,now,provider.providerId,kind,provider.locator,provider.configured?1:0);
+      }
+      return {value:{},event:{kind:"modelCredentials.changed",entityKind:"modelCredential",entityId:"connections",payload:{providers:safe.map(p=>p.providerId)}}};
+    });
+  }
+
   async seedRuntimeModelCatalog(input: {
     requestId: string;
     expectedStoreRevision?: number;
@@ -2942,7 +2953,7 @@ export class ProductStore {
           const credential = existingCredential.get(provider.id) as SQLiteRow | undefined;
           if (credential) {
             updateCredential.run(
-              provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
+              provider.credential.locator.startsWith("keychain:dcode:") ? "keychain" : provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
               provider.credential.locator,
               provider.credential.configured ? 1 : 0,
               provider.credential.sourceDigest ?? null,
@@ -2954,7 +2965,7 @@ export class ProductStore {
             insertCredential.run(
               `credential-${createHash("sha256").update(provider.id).digest("hex").slice(0, 32)}`,
               provider.id,
-              provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
+              provider.credential.locator.startsWith("keychain:dcode:") ? "keychain" : provider.credential.locator.startsWith("environment:") ? "environment" : "external_auth_bridge",
               provider.credential.locator,
               provider.credential.configured ? 1 : 0,
               provider.credential.sourceDigest ?? null,

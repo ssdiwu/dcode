@@ -1728,3 +1728,15 @@ html.theme-changing, html.theme-changing * { transition:none !important; }
 .command-menu-footer .icon-button { width:24px; height:24px; }
 .command-key-hints { margin-left:auto; }
 @media(max-width:520px){.command-key-hints{display:none}.command-option{gap:7px;}}
+
+/* Provider-local connection progress. Secret inputs are Host-owned native windows. */
+.provider-connection{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid var(--c-line);flex-wrap:wrap}
+.provider-connection-status{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:13px}
+.provider-connection-status [role=status]{display:flex;align-items:center;gap:5px}
+.provider-connection-status .secondary{font-size:12px;line-height:1.5}
+.provider-connection-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+.provider-connection .connection-spinner{animation:spin 1s linear infinite}
+@media(prefers-reduced-motion:reduce){.provider-connection .connection-spinner{animation:none}}
+
+.model-provider-models{padding:0 16px 12px}.model-provider-models>summary{padding:8px 0;color:var(--c-muted);font-size:12px;cursor:pointer}

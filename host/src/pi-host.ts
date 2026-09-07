@@ -75,7 +75,8 @@ import {
   type SessionSummary,
 } from "./session-reader.js";
 import { DCodeResourceLoader } from "./resource-policy.js";
-import { ModelAuthBridge } from "./model-auth.js";
+import { ModelConnections } from "./model-connections.js";
+import { DCodeCredentialStore, MacCredentialAdapter, type CredentialVault, type ConfidentialInteraction } from "./secure-model-credentials.js";
 import { publishNewFileAtomically } from "./atomic-file.js";
 import { extractSearchableMessage, searchEntryDigest } from "./search-entry-digest.js";
 import { SessionCopier } from "./session-copy.js";
@@ -245,6 +246,8 @@ export interface PiHostOptions {
   agentDir?: string;
   sessionsDirectory?: string;
   dataRoot?: string;
+  /** Host-owned adapter injection for isolated tests; never accepted through IPC. */
+  modelCredentialAdapter?: CredentialVault & ConfidentialInteraction;
   userHome?: string;
   legacyUserDefaults?: Record<string, unknown>;
   legacySourcePaths?: Partial<Record<LegacyStoreKind, string>>;
@@ -559,7 +562,8 @@ export class PiHost {
   private readonly leaseQuietWindowMs: number;
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
-  private readonly modelAuth: ModelAuthBridge;
+  private connectionsPromise: Promise<ModelConnections> | undefined;
+  private credentialStorePromise: Promise<DCodeCredentialStore> | undefined;
   private productStore?: ProductStore;
   private productStoreOpening?: Promise<ProductStore>;
   private attachmentSweep?: ReturnType<typeof setInterval>;
@@ -698,7 +702,6 @@ export class PiHost {
       ...(options.searchCacheDirectory ? { cacheDirectory: options.searchCacheDirectory } : {}),
       emit: options.emit,
     });
-    this.modelAuth = new ModelAuthBridge(options.emit);
   }
 
   get wantsShutdown(): boolean { return this.shutdownRequested; }
@@ -1367,6 +1370,11 @@ export class PiHost {
       }
       return await this.handleExtensionResponse(params);
     }
+    if(method === "dcodeAuth.refresh") return (await this.modelConnections()).refresh();
+    if(method === "dcodeAuth.get") return (await this.modelConnections()).get();
+    if(method === "dcodeAuth.start") return (await this.modelConnections()).start(params.providerId as string,params.authType as AuthType,params.flowId as string);
+    if(method === "dcodeAuth.cancel") return (await this.modelConnections()).cancel(params.flowId as string);
+    if(method === "dcodeAuth.disconnect") return (await this.modelConnections()).disconnect(params.providerId as string);
     if (method === "modelAuth.respond" || method === "modelAuth.cancel") {
       throw new PiHostError(
         "D_CODE_CREDENTIAL_IPC_DISABLED",
@@ -1426,7 +1434,7 @@ export class PiHost {
     this.collaborationClosing = true;
     clearInterval(this.attachmentSweep);
     await this.maintenance?.close();
-    this.modelAuth.close();
+    if(this.connectionsPromise)await (await this.connectionsPromise).close();
     const searchClose = this.searchShutdown ?? this.searchIndex.close();
     this.searchShutdown = searchClose;
     try {
@@ -2328,6 +2336,11 @@ export class PiHost {
         this.searchShutdown ??= this.searchIndex.close();
         void this.searchShutdown.catch(() => undefined);
         return { shuttingDown: true };
+      case "dcodeAuth.refresh":
+      case "dcodeAuth.get":
+      case "dcodeAuth.start":
+      case "dcodeAuth.cancel":
+      case "dcodeAuth.disconnect":
       case "extension.respond":
       case "modelAuth.respond":
       case "modelAuth.cancel":
@@ -4073,7 +4086,7 @@ export class PiHost {
       const created = runtimeIdentity
         ? await createProcessAgentSession({
           ...sessionOptions,
-          modelRuntime: await ModelRuntime.create({ authPath: join(this.agentDir, "auth.json"), modelsPath: join(this.agentDir, "models.json"), modelsStorePath: join((await this.getProductStore()).layout.root, "models-cache.json"), allowModelNetwork: false }),
+          modelRuntime: await ModelRuntime.create({ credentials: await this.credentialStore(), modelsPath: join(this.agentDir, "models.json"), modelsStorePath: join((await this.getProductStore()).layout.root, "models-cache.json"), allowModelNetwork: false }),
           providerControl:this.providerRouteControl(runtimeIdentity,()=>activeForFacts),
           ...(auxiliary?{baseToolsOverride:{bash:auxiliary.tool(manager.getCwd())}}:{}),
           processOptions: {
@@ -5397,9 +5410,24 @@ export class PiHost {
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
   /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
+  private credentialStore(): Promise<DCodeCredentialStore> {
+    return this.credentialStorePromise ??= this.getProductStore().then(store=>new DCodeCredentialStore(this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),join(this.agentDir,"auth.json")));
+  }
+  private modelConnections(): Promise<ModelConnections> {
+    return this.connectionsPromise ??= Promise.all([this.getProductStore(),this.credentialStore()]).then(([store,credentials])=>new ModelConnections(credentials,this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),async()=>{const runtime=await this.sharedModelRuntime();await registerCatalogProviders(runtime,await store.snapshot());return runtime;},async()=>{
+      const runtimes=new Set([await this.sharedModelRuntime(),...[...this.runtimes.values()].map(active=>active.session.modelRuntime)]);
+      for(const runtime of runtimes)await runtime.refresh({allowNetwork:false});
+      await this.ensureDCodeRuntimeModelCatalog(true);
+      const snapshot=await store.snapshot();const runtime=await this.sharedModelRuntime();
+      const managed=new Set((await credentials.managed()).map(item=>item.providerId));
+      const unavailable=await credentials.unavailableProviders(runtime.getProviders().map(provider=>provider.id));
+      await store.syncModelCredentialReferences(snapshot.modelProviders.map(provider=>({providerId:provider.id,configured:runtime.hasConfiguredAuth(provider.id)&&!unavailable.has(provider.id),locator:managed.has(provider.id)?`keychain:dcode:${provider.id}`:(provider.nonsecret as {credentialEnv?:string}).credentialEnv?`environment:${(provider.nonsecret as {credentialEnv:string}).credentialEnv}`:`pi-runtime-auth-bridge:${provider.id}`})));
+      this.options.emit("foundation.changed",{kind:"modelAuth.changed"});
+    },this.options.emit));
+  }
   private sharedModelRuntime(): Promise<ModelRuntime> {
-    this.modelRuntimePromise ??= this.getProductStore().then(store => ModelRuntime.create({
-      authPath: join(this.agentDir, "auth.json"),
+    this.modelRuntimePromise ??= this.getProductStore().then(async store => ModelRuntime.create({
+      credentials: await this.credentialStore(),
       modelsPath: join(this.agentDir, "models.json"),
       modelsStorePath: join(store.layout.root, "models-cache.json"),
       allowModelNetwork: false,
@@ -5417,6 +5445,8 @@ export class PiHost {
     if (!force && current.modelCatalogEntries.length > 0 && current.runtimeModelSelection) return;
 
     const runtime = await this.createModelSettingsRuntime();
+    const managedCredentials=new Set((await (await this.credentialStore()).managed()).map(item=>item.providerId));
+    const unavailableCredentials=await (await this.credentialStore()).unavailableProviders(runtime.getProviders().map(provider=>provider.id));
     const removedProviderIds=store.removedModelProviderIds();
     const providers: RuntimeModelCatalogProviderInput[] = runtime.getProviders().flatMap((provider) => {
       if(removedProviderIds.has(provider.id)||current.modelProviders.some(p=>p.id===provider.id&&(p.nonsecret as {source?:string}).source==="dcode_custom"))return [];
@@ -5464,8 +5494,8 @@ export class PiHost {
         authMode: apiKey ? "api_key" : oauth ? "oauth" : "none",
         nonsecret: { source: "pi_runtime_discovery" },
         credential: {
-          locator: `pi-runtime-auth-bridge:${providerId.text}`,
-          configured: auth.configured,
+          locator: managedCredentials.has(provider.id)?`keychain:dcode:${providerId.text}`:`pi-runtime-auth-bridge:${providerId.text}`,
+          configured: auth.configured&&!unavailableCredentials.has(provider.id),
         },
         models,
       } satisfies RuntimeModelCatalogProviderInput];
@@ -5492,6 +5522,7 @@ export class PiHost {
   }
 
   private providerRouteControl(identity:RuntimeIdentity,active:()=>WritableSession|undefined):ProviderRouteControl {
+    const callAuthGenerations=new Map<string,number>();
     const callInputs=new Map<string,Pick<Parameters<ProductStore["recordProviderCall"]>[0],"sessionId"|"sessionRunId"|"taskId"|"agentRunId"|"rawInputIds"|"effectiveInputIds"|"purpose"|"sourceLeafEntryId">>();
     return {
       response:(model,status,headers)=>{if(status===429)this.quotaService().blockProvider(model.provider,headers["retry-after"]);},
@@ -5537,6 +5568,7 @@ export class PiHost {
       record:async(call)=>{
         const runtime=active(),run=runtime?.currentRun;const store=await this.getProductStore();
         if(call.state==="started"){
+          callAuthGenerations.set(call.id,(await this.credentialStore()).generation(call.providerId));
           const auxiliary=runtime?.session.isCompacting===true;
           if(!runtime||!auxiliary&&!run?.sessionRunId)throw new PiHostError("RUN_REQUIRED","模型调用缺少所属运行");
           const rawInputIds=auxiliary?[]:[...new Set([run?.rawInputId,...(run?.knownUserUpdates?.values()??[]),...[...run?.steering?.values()??[]].filter(item=>item.effectiveInputId).map(item=>item.message.originRawInputId)].filter((id):id is string=>!!id))];
@@ -5545,7 +5577,10 @@ export class PiHost {
         }
         const inputs=callInputs.get(call.id);if(!inputs)throw new PiHostError("PROVIDER_CALL_NOT_STARTED","模型结果缺少对应的调用记录");
         await store.recordProviderCall({...sanitizeRuntimeValue(call),...inputs});
-        if(call.state!=="started")callInputs.delete(call.id);
+        if(call.state!=="started"){
+          callInputs.delete(call.id);const generation=callAuthGenerations.get(call.id);callAuthGenerations.delete(call.id);
+          if(generation!==undefined&&call.httpStatus!==undefined&&await (await this.credentialStore()).recordResponse(call.providerId,generation,call.httpStatus))this.options.emit("dcodeAuth.changed",{providerId:call.providerId});
+        }
         this.options.emit("foundation.changed",{kind:"providerCall.changed",taskId:identity.taskId});
       },
     };
@@ -5588,7 +5623,8 @@ export class PiHost {
     const snapshot=await store.snapshot();
     const runtime=await this.sharedModelRuntime();
     await registerCatalogProviders(runtime,snapshot);
-    const available=new Set((await runtime.getAvailable()).map(m=>`${m.provider}::${m.id}`));
+    const unavailable=await (await this.credentialStore()).unavailableProviders(runtime.getProviders().map(p=>p.id));
+    const available=new Set((await runtime.getAvailable()).filter(m=>!unavailable.has(m.provider)).map(m=>`${m.provider}::${m.id}`));
     const preferences=await this.handleSerial("clientPreferences.get",{}) as ClientPreferences;
     const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
     const active=runtimeId?this.runtimes.get(runtimeId):undefined;
@@ -5886,53 +5922,6 @@ export class PiHost {
     await settings.flush();
     this.throwForGlobalSettingsErrors(settings);
     return await this.getModelSettings(canonicalCwd, false);
-  }
-
-  private async startModelAuth(
-    cwd: string,
-    flowId: string,
-    providerId: string,
-    authType: AuthType,
-  ): Promise<unknown> {
-    const canonicalCwd = await this.canonicalModelSettingsCwd(cwd);
-    const runtime = await this.createModelSettingsRuntime();
-    const provider = runtime.getProvider(providerId);
-    if (!provider) {
-      throw new PiHostError("MODEL_AUTH_NOT_AVAILABLE", "The requested Provider is not available");
-    }
-    const method = authType === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
-    const interactive = authType === "oauth" || typeof provider.auth.apiKey?.login === "function";
-    if (!method || !interactive) {
-      throw new PiHostError(
-        "MODEL_AUTH_NOT_INTERACTIVE",
-        "This Provider must be configured through its ambient Pi or system environment",
-      );
-    }
-    try {
-      await this.modelAuth.login(flowId, runtime, providerId, authType);
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new PiHostError("MODEL_AUTH_CANCELLED", "Provider authentication was cancelled");
-      }
-      throw new PiHostError("MODEL_AUTH_FAILED", "Provider authentication failed");
-    }
-    return await this.getModelSettings(canonicalCwd, false);
-  }
-
-  private handleModelAuthResponse(params: Record<string, unknown>): unknown {
-    const accepted = this.modelAuth.respond(
-      params.flowId as string,
-      params.requestId as string,
-      typeof params.value === "string" ? params.value : undefined,
-      params.cancelled === true,
-    );
-    if (!accepted) throw new PiHostError("MODEL_AUTH_REQUEST_NOT_FOUND", "Authentication prompt is no longer active");
-    return { accepted: true };
-  }
-
-  private handleModelAuthCancel(params: Record<string, unknown>): unknown {
-    const cancelled = this.modelAuth.cancel(params.flowId as string);
-    return { cancelled };
   }
 
   private getThinkingLevels(): unknown {
