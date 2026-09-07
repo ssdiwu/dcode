@@ -1,6 +1,16 @@
 ## [Unreleased]
 
-### Added
+### 0.0.32 · 工作台 UI/UX（未发布候选）
+
+507 于 2026-09-08 确认本次 UI/UX 升级归属 `0.0.32`。三批实现已本地提交，自动验证与独立审查通过，尚未整体人工验收、合并或发布；完整范围与证据见 [PRD 0030](doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。原多目录项目改为后续待排期。
+
+- 新任务创造页使用正式 C-A 品牌与真实草稿流程，仅新任务加载原版 ThreeUI Structure Flow；深浅主题、按钮中心扩散、隐藏释放与减少动态效果/WebGL 失败降级保留输入可用性。对应 `18bf206`。
+- 整理真实技能/命令入口、项目归属与成员标记，补齐加载状态及系统剪贴板成功/失败反馈，保留既有模型、队列和成员提及语义。对应 `32d35b7`。
+- 统一共享动效、文件页签高亮与等宽数字；流式反馈只作用于本轮新内容，完成、停止、中断、未知和工具结果分别呈现，历史不重播。对应 `3704fe3`。
+
+### 0.0.28–0.0.31 · 既有待定版记录
+
+#### Added
 
 - 项目可重命名、更换关联目录或移动文件；任务与对话保持原身份，目录交换有恢复记录，未确认状态跨任务和重启持续保护文件，原目录内容与编辑缓冲不会被静默覆盖。
 
@@ -32,11 +42,11 @@
 - D Code Model Catalog / Credential Reference / Runtime Model Selection（模型目录 / 凭据安全引用 / 未来运行模型选择）：Product Store 投影非敏感 Provider / Model、认证引用和下一次 Runtime 选择；Coordinator 运行前依此验证并显式应用模型，不再写入 Pi `settings.json` / `models.json`。
 - D Code Session Presentation（D Code 会话呈现）：以 D Code Session ID 只读投影 Adapter binding、活动 Runtime 和会话快照，并为 Coordination Session 提供精确 Prompt 路由；首次提交创建持久化 Coordinator Agent Run，随后 Team 复用同一 Coordinator Run / Runtime，查看不抢占 Runtime，Child 仅在其自身 Run 活动时接收消息。
 
-### Fixed
+#### Fixed
 
 - 协调者处理后台结果或等待验收时，通知原文不再暂时显示成用户消息；运行中与落盘后的来源保持一致，同文真人输入不被隐藏。
 
-### Changed
+#### Changed
 
 - 已迁移的 Swift 客户端、桥接、SwiftPM 与旧打包入口退役；保留品牌和原生文件辅助程序，Electron 候选携带运行时及 Host/客户端生产依赖的许可证清单与正文。
 
@@ -51,7 +61,7 @@
 - Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
 - Pi `models.json` / `settings.json` 的 D Code 写入口、Pi 认证启动与认证响应全部改为明确拒绝；Swift 不再将 Provider API Key 或认证值通过 Host IPC 发送，旧 Pi 模型接口只保留安全只读诊断 / 迁入来源。
 
-### Security
+#### Security
 
 - Product Store、Pi 导入、Prompt 文档与 legacy migration 共用凭据检测 / 脱敏边界；Tool Result 只保存有界引用和 digest。Worker 需要独立可写 worktree，当前 Foundation Team 在打开任何 Runtime 前诚实拒绝，不留下孤儿运行。
 - Imported History Projection 对历史文本再次执行凭据脱敏和字节 / 条目上限，Prompt 内容使用转义的证据区块；来源路径标题与预览摘要同样脱敏。D Code 不再支持 API Key、OAuth 值或 Pi 认证响应经 IPC 进入 Runtime。

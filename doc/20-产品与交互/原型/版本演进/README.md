@@ -49,7 +49,8 @@
 | `0.0.29` | 任务工作台与协调者协作体验：复用 Foundation Console 的生产合同，完成 User Home / Project → Task → Child Sessions 导航（Task 主行即任务对话，协调会话无独立导航行）、显式“导入为任务”、协调者在其中工作的任务对话、宽屏常驻独立浮窗 Task HUD（Main Workspace 预留左右安全区）、窄屏覆盖、具体对象 Inspector 与并行运行控制。 | 修改 `0.0.28` 数据 / 并发 / mutation 合同、空 Task 状态、聊天文案推断进度或新增第二运行时。 | 正式工作台与 Foundation Console 操作同源；候选已于 2026-09-05 收口为基线：自动门禁与隔离冒烟通过后落库，HUD 浮窗形态的完整人工验收与 tag 取消，界面布局合同移交 `0.0.30` 重审。 |
 | `0.0.30` | Web 基础工作台与灵感：Electron + React 消费真实 Host，完整设置、消息附件、灵感保存与任务引用、画布工具、居中/概览让位布局。 | 0.0.31 协作运行改造、多目录项目与正式签名分发；Swift 和未迁移内容面收尾由 PRD 单独记录。 | 507 于 2026-09-07 确认基础功能验收通过，ADR 0044 Accepted；自动验证、候选路径与剩余边界见 PRD 0028。 |
 | `0.0.31` | 任务内自适应协作（能力版）：前置 0.0.30 客户端与灵感收口，按 [PRD 0029](../../../40-版本实施方案/0029-任务内自适应协作产品需求.md) 完成独立执行与模型配额基础、持续沟通与自主派发、独立验收与返工三阶段；用户可在主对话提及已创建成员。 | 混入 0.0.30、整套工作台换版、用户直接创建运行成员、第二任务/Queue系统、从聊天文案造运行、提前引入多目录或云端常驻。 | 真实成员后台执行期间主对话可继续，定向交办与子对话变更回流、局部验收返工、进程回收续接以及直接任务/灵感引用组合路径均通过；不以一次派发成功代替版本完成。 |
-| `0.0.32` | 多目录项目（基础设施版）：以新 ADR 取代 ADR 0029，落地 Primary / Linked / Execution Directory 的 Product Store schema 与 Host / Swift 支持。 | 在 ADR 成立前实现多目录、把 Linked Directory 自动加入上下文或默认写入。 | 多目录 Project 可建立，Task 显式选择执行目录，回归与重启恢复绿。 |
+| `0.0.32` | 工作台 UI/UX 升级：整页新任务入口、仅新任务的原版 ThreeUI 背景、主题按钮中心扩散、真实输入/复制/加载反馈，以及共享动效、运行状态与已有页签细节。507 于 2026-09-08 确认编号，范围见 [PRD 0030](../../../40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。 | 多目录项目、新 Harness、第二套设置/导航权威，以及将未验收候选当作正式发布。 | 三批实现与自动验证、独立审查通过；完整人工验收与发布仍分别成立，固定 0.0.31 验收基线保持不变。 |
+| 后续待排期 | 多目录项目（基础设施版）：以新 ADR 取代 ADR 0029，落地 Primary / Linked / Execution Directory 的 Product Store schema 与 Host / 客户端支持。 | 在 ADR 成立前实现多目录、把 Linked Directory 自动加入上下文或默认写入。 | 多目录 Project 可建立，Task 显式选择执行目录，回归与重启恢复绿。 |
 | `0.0.33+` | 继续按依赖与真实 dogfood 缺口切片；Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 分别进入独立 PRD。 | 为赶 `0.1.0` 预装空入口，或把多个未验证大系统重新混成一版。 | 每版只有一个可运行用户结果、明确失败边界与独立验收，不用目标文档冒充实现。 |
 | `0.1.0` | Promotion（晋升）版本：冻结并证明已经成立的自迭代闭环，不突然加入新主功能。 | 把尚未实现的目标架构能力一起打包成晋升理由。 | 见下方晋升门禁；全部成立后才可命名、提交、打标签和发布。 |
 
@@ -105,7 +106,7 @@ ZCode 的价值是把“批准、注入、观察、接手”这四类用户动�
 
 1. `0.0.28` 一次建立 D Code Product Store、现有本机状态迁移、D Code Session、Raw Input / Effective Input、Pi 单向导入、Task / Agent Run、多 Runtime、Coordinator + 两个 Child Agent、Prompt / Tools / Receipt、结构化操作合同与可 dogfood 的 Foundation Console；
 2. `0.0.29` 只消费并重新呈现上述事实和操作，建立任务对话（Coordination Session，协调者活在其中、无独立导航行）、Child Session 树、Task HUD、窄屏覆盖与具体对象 Inspector 的工作台候选；2026-09-05 起收口为基线，HUD 浮窗形态不再单独走完整人工验收；
-3. `0.0.30` Web 客户端初版（三区布局合同与技术栈验证）、`0.0.31` 任务内自适应协作、`0.0.32` 多目录项目依次切片；其后 Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 按真实依赖进入独立 PRD。
+3. `0.0.30` Web 客户端初版（三区布局合同与技术栈验证）、`0.0.31` 任务内自适应协作、`0.0.32` 工作台 UI/UX 升级依次切片；多目录项目改为后续待排期，其后 Capability、Artifact 编辑体验、Knowledge、Vision、Agent Profile 高级策略 / 分享与 Creation Mode 按真实依赖进入独立 PRD。
 
 Project → Task 的产品根、D Code 数据权威、能力吸收、全局创造模式、一等项目文档与系统提示词分别由 ADR 0035–0040 固定。ADR 0013 只保留旧主 Pi Session 编排方案及仍成立的子会话隔离、单写入、报告与诚实恢复经验，不再拥有当前产品路线。
 

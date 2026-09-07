@@ -18,8 +18,8 @@ ADR 0029 确认"一个 D Code Project 对应一个目录"，该结论在 `0.0.25
 
 ## 影响
 
-- Product Store schema 需要表达 Project 与目录的一对多关系及 Run 级执行目录记录；演进路径（就地扩展或版本化晋升）与降级边界在 `0.0.32` PRD 中收口，延续 `0.0.28`"不支持降级"的既有结论方向。
-- Task 创建、Composer 与派发流程的目录选择 UI 不在本 ADR 冻结，由 `0.0.32` PRD 与相应原型确认。
+- Product Store schema 需要表达 Project 与目录的一对多关系及 Run 级执行目录记录；演进路径（就地扩展或版本化晋升）与降级边界在多目录项目专项 PRD（版本待排期）中收口，延续 `0.0.28`"不支持降级"的既有结论方向。
+- Task 创建、Composer 与派发流程的目录选择 UI 不在本 ADR 冻结，由多目录项目专项 PRD（版本待排期）与相应原型确认。
 - 若本 ADR 被拒绝：回退 `GLOSSARY.md` 中的三个术语条目及 Project / Project Scope 定义改动，ADR 0029 继续成立。
 
 ## 待决问题（507 拍板后收口）

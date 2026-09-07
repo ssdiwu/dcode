@@ -84,10 +84,10 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 507 已于 2026-09-07 确认当前基础工作台与灵感流程验收通过。正式验证记录、候选路径与迁移遗留由 PRD 0028 维护。源码提交、推送与正式发布分别成立；`npm run dist` 生成本机未签名候选。
 
-## UI/UX 并行候选
+## 0.0.32 UI/UX 候选
 
-[0030](../doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md) 在独立工作树推进，与固定 0.0.31 人工验收基线分开。第一批包含真实新任务草稿的创造页、原版 ThreeUI 场景、静态降级及从主题按钮展开的配色切换。`NewTaskScene` 拥有场景作用域和生命周期，`vendor/threeui` 保存原始源码与身份，`workbench/theme-transition.ts` 协调渲染快照；外观仍由 Product Store/Electron 拥有。
+[0030](../doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md) 按 507 于 2026-09-08 确认的 `0.0.32` 在独立工作树推进，与固定 0.0.31 人工验收基线分开。第一批包含真实新任务草稿的创造页、原版 ThreeUI 场景、静态降级及从主题按钮展开的配色切换。`NewTaskScene` 拥有场景作用域和生命周期，`vendor/threeui` 保存原始源码与身份，`workbench/theme-transition.ts` 协调渲染快照；外观仍由 Product Store/Electron 拥有。
 
 `npm run verify:threeui` 核对五个原文哈希；`npm run test:new-task` 在独立数据根与隐藏 Electron 窗口验证真实新草稿、已有任务/灵感排除、项目草稿文件、草稿返回、外观持久化、减少动态效果和 WebGL 降级，不操作正在运行的验收应用。
 
-候选后续两批补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签仍使用原有文件工作区合同。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
+候选的第二、三批已补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签仍使用原有文件工作区合同。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
