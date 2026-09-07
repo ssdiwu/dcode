@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const nodeModulesRoot = process.argv[2] ? resolve(process.argv[2]) : undefined;
@@ -6,11 +6,13 @@ const outputPath = process.argv[3] ? resolve(process.argv[3]) : undefined;
 
 if (!nodeModulesRoot || !outputPath) {
   throw new Error(
-    "usage: node generate-license-manifest.mjs <node_modules> <output>",
+    "usage: node generate-license-manifest.mjs <node_modules> <output> [license-archive-directory]",
   );
 }
 
+const archiveDirectory = process.argv[4] ? resolve(process.argv[4]) : undefined;
 const reviewedLicenses = new Set([
+  "Unlicense",
   "0BSD",
   "Apache-2.0",
   "BlueOak-1.0.0",
@@ -18,26 +20,29 @@ const reviewedLicenses = new Set([
   "ISC",
   "MIT",
 ]);
+// Exact versions and attribution are retained in legal/Missing-NPM-License-Notices.txt.
 const reviewedPackagesWithoutLicenseFiles = new Set([
   "@aws-sdk/credential-provider-http@3.972.39",
-  "@aws-sdk/credential-provider-http@3.972.69",
+  "@aws-sdk/credential-provider-http@3.972.72",
   "@aws-sdk/credential-provider-login@3.972.41",
-  "@aws-sdk/credential-provider-login@3.972.74",
+  "@aws-sdk/credential-provider-login@3.972.77",
   "@aws-sdk/nested-clients@3.997.9",
-  "@aws-sdk/nested-clients@3.997.41",
-  "@earendil-works/pi-agent-core@0.84.1",
-  "@earendil-works/pi-ai@0.84.1",
-  "@earendil-works/pi-client@0.84.1",
-  "@earendil-works/pi-coding-agent@0.84.1",
-  "@earendil-works/pi-protocol@0.84.1",
-  "@earendil-works/pi-telemetry@0.84.1",
-  "@earendil-works/pi-tui@0.84.1",
+  "@aws-sdk/nested-clients@3.997.44",
+  "@earendil-works/pi-agent-core@0.85.1",
+  "@earendil-works/pi-ai@0.85.1",
+  "@earendil-works/pi-coding-agent@0.85.1",
+  "@earendil-works/pi-telemetry@0.85.1",
+  "@earendil-works/pi-tui@0.85.1",
+  "@earendil-works/chord@0.85.1",
   "@mariozechner/clipboard@0.3.9",
   "@mariozechner/clipboard-darwin-arm64@0.3.9",
   "@mariozechner/clipboard-darwin-universal@0.3.9",
   "@nodable/entities@2.1.0",
   "data-uri-to-buffer@4.0.1",
   "xml-naming@0.1.0",
+  "standardwebhooks@1.1.1",
+  "@esbuild/darwin-arm64@0.28.1",
+  "react-remove-scroll-bar@2.3.8",
 ]);
 
 const records = new Map();
@@ -86,6 +91,11 @@ async function inspectPackage(packageDirectory) {
     .sort((left, right) => left.localeCompare(right));
 
   const key = `${name}@${version}`;
+  if (archiveDirectory && licenseFiles.length) {
+    const target = join(archiveDirectory, encodeURIComponent(key));
+    await mkdir(target, { recursive: true });
+    for (const file of licenseFiles) await copyFile(join(packageDirectory, file), join(target, file));
+  }
   if (
     licenseFiles.length === 0 &&
     !reviewedPackagesWithoutLicenseFiles.has(key)

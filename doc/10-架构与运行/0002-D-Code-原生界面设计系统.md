@@ -1,14 +1,14 @@
 # D Code 原生界面设计系统
 
-> Status: Current Implementation Authority（当前实现权威）
-> Scope: macOS 14+ SwiftUI / AppKit 的视觉层级、组件几何、交互状态、无障碍与人工验收。未来产品能力仍由 `20-产品与交互/` 和对应版本 PRD 定义。
+> Status: Design semantics and legacy geometry reference（设计语义与旧版几何参考）
+> Scope: 保留既有视觉层级、状态优先级和无障碍语义；Swift 专属组件名与数值用于历史追溯。当前可执行样式由 `client/src/renderer/src/style.css` 与组件拥有，Web 技术边界见 0003。未来产品能力仍由 `20-产品与交互/` 和对应版本 PRD 定义。
 
 ## 1. 权威边界
 
 本文件规定“当前 D Code 原生界面应该呈现成什么样、共享组件必须满足什么结果”。
 
 - 本文件拥有语义规则、状态优先级和可观察结果。
-- [`DesignSystem.swift`](../../app/Sources/PiDCode/Views/DesignSystem.swift) 拥有当前可执行 token（令牌）和共享 primitive（基础组件）。
+- `DesignSystem.swift`（历史源码 `app/Sources/PiDCode/Views/DesignSystem.swift`，退役前 Git 基线 `18e12df`） 记录当时的 token（令牌）与基础组件；当前实现见[共享样式](../../client/src/renderer/src/style.css)。
 - Feature View（功能视图）只能组合这些规则；局部源码不是第二套设计规范。
 - `20-产品与交互/` 规定跨版本目标，`40-版本实施方案/` 规定版本切片；尚未实现的目标不得写成当前组件事实。
 - HTML 原型和竞品截图只能验证信息层级或交互方向，不能覆盖原生组件与产品语义。

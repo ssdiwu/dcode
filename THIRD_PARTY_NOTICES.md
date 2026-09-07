@@ -7,14 +7,13 @@ governed by their own licenses.
 
 ## Embedded runtime
 
-### Node.js 22.22.3
+### Electron and its embedded Node.js / Chromium
 
-- Project: <https://nodejs.org/>
-- Source: <https://github.com/nodejs/node/tree/v22.22.3>
-- License: MIT plus the licenses for externally maintained libraries listed in
-  the Node.js distribution license.
-- Binary distribution: D Code copies the unmodified complete Node.js 22.22.3
-  `LICENSE` into `D Code.app/Contents/Resources/Legal/Node.js-LICENSE.txt`.
+The current macOS client uses the Electron version fixed in
+`client/package-lock.json`; the Host runs using that executable's Node mode.
+There is no separately embedded Node.js 22.22.3 binary. Candidate assembly
+copies Electron's complete `LICENSE` and `LICENSES.chromium.html` into
+`Contents/Resources/Legal/`, preserving the runtime's bundled notices.
 
 ### Pi 0.85.1
 
@@ -42,34 +41,27 @@ upstream v0.85.1 license; the filename retains the original audit version.
 - Copyright 2026 Alexey Zaytsev
 
 The package's complete `LICENSE` is retained inside its embedded package and
-is also copied to `D Code.app/Contents/Resources/Legal/`.
+is also archived under `D Code.app/Contents/Resources/Legal/host-licenses/`.
 
 ## Other npm production dependencies
 
-The exact production dependency graph is fixed by `host/package-lock.json`.
-During application assembly, D Code preserves license files already shipped by
-each package and generates
-`Contents/Resources/Legal/npm-packages.txt`, containing every embedded package,
-version, declared SPDX license, and retained license filenames. The build fails
-if a package omits a license declaration or introduces a license outside the
-reviewed allowlist.
+The production graphs are fixed by `host/package-lock.json` and
+`client/package-lock.json`. Candidate assembly records their package versions,
+SPDX declarations and retained license filenames separately in
+`Contents/Resources/Legal/host-npm-packages.txt` and `client-npm-packages.txt`.
+Complete license and notice files are archived in `host-licenses/` and
+`client-licenses/`, including dependencies bundled into renderer JavaScript.
+Unknown license declarations and unreviewed missing license texts fail the build.
 
-Some upstream npm archives declare a license in `package.json` but omit a
-license text. Their exact versions are listed in
-`legal/Missing-NPM-License-Notices.txt`, which is copied into the application
-bundle together with the applicable MIT and Apache 2.0 terms.
+Some archives declare a license but omit its text. Their exact reviewed versions
+and copyright attribution are retained in `legal/Missing-NPM-License-Notices.txt`.
+This file, the Pi MIT notice and complete Apache 2.0 terms accompany the package
+inventories in `Legal/`. Upstream Node and Electron notices are not replaced by
+these npm inventories.
 
-## Development-only Swift dependencies
-
-### ViewInspector 0.10.3
-
-- Project: <https://github.com/nalexn/ViewInspector>
-- License: MIT. Copyright (c) 2020 Alexey Nekrasov.
-
-`ViewInspector` is pinned by the root `Package.swift` and used exclusively by
-the `PiDCodeTests` target for view-hierarchy assertions in `swift test`. It is
-not linked into the `PiDCode` executable and is not distributed inside the
-`D Code.app` bundle.
+ViewInspector was used only by the retired Swift client tests. It is no longer
+a current dependency and is not shipped in the Electron candidate; historical
+Swift dependencies remain traceable in Git before the retirement commit.
 
 This file is an attribution and distribution notice. It does not replace or
 modify any third-party license.

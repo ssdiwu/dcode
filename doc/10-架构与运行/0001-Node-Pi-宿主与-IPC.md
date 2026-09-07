@@ -4,15 +4,15 @@
 
 ## 职责
 
-`host/` 是 Swift App 唯一允许写入 D Code Product Store、启动 Runtime Adapter 和执行外部副作用的运行边界。它使用项目内精确固定的 Pi 0.85.1 提供 Agent Loop，但 Project / Task / D Code Session / Run / Prompt Receipt / Attempt 等产品事实进入 `~/.dcode/`，不以 Pi JSONL 作为产品数据库，也不调用全局 `pi` 命令。
+`host/` 是客户端唯一允许写入 D Code Product Store、启动 Runtime Adapter 和执行外部副作用的运行边界。它使用项目内精确固定的 Pi 0.85.1 提供 Agent Loop，但 Project / Task / D Code Session / Run / Prompt Receipt / Attempt 等产品事实进入 `~/.dcode/`，不以 Pi JSONL 作为产品数据库，也不调用全局 `pi` 命令。
 
-Swift 负责原生呈现与用户输入；Host 负责：
+客户端负责呈现与用户输入；Host 负责：
 
 - 初始化、迁移、校验和单写入持有 `~/.dcode/product-store.sqlite3`；schema v1 晋升 v2 时先在 `~/.dcode/migrations/` 写入私有 SQLite 前备份，再原子补齐 Task Context Selection，不支持降级或双写；
 - 以 User Scope / Project Scope → Task → Coordination / Child Session → Team / Agent / Session Run 的稳定身份执行 query 与 mutation；
 - 原生持久化 Task Plan 与 Work List：Plan 激活保留 superseded 历史，Work Item 的状态、归属、详情与顺序通过 revision / request ID mutation 维护，重排在单一 SQLite 事务中避免 ordinal 唯一约束冲突；
-- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；非 Worker Runtime 的 cwd 必须精确等于 Task Scope，Project Scope 中的 Worker 只在 Host 预写 Attempt 后使用独立、验证过且保留的 detached Git worktree，且所有选中的 Scope Document 都必须能从冻结 Git revision 物化；
-- 为 Coordinator 执行“规划 → Child 并行 → Report 落库 → 综合”的两阶段生命周期；
+- 管理最多 12 个显式 Runtime，拒绝同一 D Code Session 的第二写入者与不安全 workspace 共享；非 Worker Runtime 的 cwd 必须精确等于 Task Scope，可独立执行的干净 Git 项目在 Host 预写 Attempt 后使用验证过的工作树；User Scope、普通目录或脏仓库保留原目录并串行写入，不复制用户目录或自动提交；
+- 支持 Coordinator 自主派发成员、持续主子沟通、独立验收与局部返工，结果回流同一任务；
 - 在 Provider / Tool / Stop 副作用之前写 Operation Attempt，在崩溃后保留 unknown 且不自动重放；
 - 组装并安装 D Code System Prompt、Agent Role 与真实 Active Tool Manifest；强制加载运行目录 `AGENTS.md`，其余项目文档和 Global Knowledge 只能来自 Task 的显式、带 revision Context Selection；导入 Pi 会话只从 Product Store 当前路径生成有界、二次脱敏的 Imported History Projection（导入历史投影），不倒填 Raw / Effective Input、重读或写回源 JSONL；失效选择或损坏的导入投影在 Pi Session / Provider 副作用前拒绝；
 - 预览并显式单向导入外部 Pi Session，首次晋升时只自动接管带有效 D Code origin 的旧会话；
@@ -46,25 +46,25 @@ npm run build
 node dist/src/index.js --agent-dir ~/.pi/agent
 ```
 
-本机 Finder App 入口：
+本机未签名候选入口：
 
 ```bash
-./app/build.sh
-open "dist/D Code.app"
+npm --prefix client run dist
+open "client/release/mac-arm64/D Code.app"
 ```
 
-`build.sh` 将 release Swift executable、arm64 Node `22.22.3`、Host `dist/src` 与 npm production dependency closure 装入 App resources，并应用本地 ad-hoc signature。Finder 启动时 `HostLocator` 优先使用 `Contents/Resources/runtime/node` 与 `Contents/Resources/host/dist/src/index.js`；开发覆盖仍可通过 `--node-bin`、`--host-entry`、`PI_DCODE_NODE_BIN` 与 `PI_DCODE_HOST_ENTRY` 指定。App 不启用 Sandbox 或 Hardened Runtime，也不构成 Developer ID/notarized 分发产物。
+`client/scripts/package.mjs` 装配 Electron 客户端、Host 生产依赖、原生文件辅助程序、品牌和许可证资料。Host 使用 Electron 可执行文件的 Node 模式，不再打包另一份 Node 或 Swift 可执行文件。开发和包内资源分别由 `client/src/main/paths.ts` 解析，`DCODE_HOST_ENTRY` 可在显式隔离诊断时覆盖；当前命令与隔离参数见 [client/README](../../client/README.md)。候选不代表签名、公证、人工验收或正式发布。
 
-- Host 开发运行要求 Node `>=22.19.0`；当前 App Bundle 构建脚本精确要求 arm64 Node `22.22.3`，确保内嵌运行时、SQLite FTS5 能力与随包许可证一致。
+- Host 开发运行要求 Node `>=22.19.0`；包内 Node 随锁定的 Electron 版本提供。
 - stdin 接收 UTF-8 JSONL；stdout 只输出 Protocol v1 JSONL；普通诊断写 stderr。
-- `--data-root` 只在隔离测试或显式诊断时使用；默认 D Code 产品数据根为当前用户 `~/.dcode/`。
-- `--sessions-dir` 只在测试或显式覆盖时使用；默认目录 `<agent-dir>/sessions` 只保存 Pi 来源与 Runtime Adapter 私有会话，不是 D Code 产品权威。
-- `--lease-agent-dir` 可把测试租约与真实 `~/.pi/agent` 隔离。
-- `--search-cache-dir` 可把测试搜索缓存与默认 `~/Library/Caches/D Code/Search` 隔离。
-- App 退出先发送 `host.shutdown`；Swift Host client 对该请求与子进程等待设有界超时，超时只 force terminate 当前 App 已登记的 Host PID，再完成退出 reply；Host 也处理 EOF、`SIGTERM` 与 `SIGHUP`。
-- Self-build 交换后的新 App 启动由独立 `DCodeRelaunchHelper` 负责：旧 App PID 消失前不调用启动，新 App 只按规范化 `dist/D Code.app` 路径启动一次；marker 在 Session / receipt 恢复成立前保留。
-- App 在执行任何会话查询前要求 `hostVersion` 与 `HostCompatibility.appVersion` 精确相同，并校验 `HostCompatibility.requiredCapabilities` 中的能力；可执行权威位于 `HostModels.swift` 与 `pi-host.ts`，本文不复制动态版本和完整能力数组。旧 Host 或缺失能力会明确停止连接，不能静默退化成错误的导航、运行状态、模型、资源、队列所有权或写入路径。
-- Finder 环境保留继承的 `PATH` 顺序，并补入 `~/.local/bin`、Hermes、Homebrew 与标准系统目录；`HOME` 与 `PI_CODING_AGENT_DIR` 显式传给 Host。
+- `--data-root` 供隔离测试或显式诊断；默认 D Code 产品数据根为当前用户 `~/.dcode/`。
+- `--sessions-dir`、`--lease-agent-dir`、`--search-cache-dir` 保留既有测试/兼容诊断用途；Pi 私有会话不成为产品权威。
+- App 退出先发送 `host.shutdown`，等待实际 Host 退出；超时只终止当前桥持有的进程，再确认退出。不以请求停止代替已停止。
+- 自进化构建由 `host/src/maintenance.ts` 调用当前客户端候选链；`client/src/main/candidate-switch.ts` 校验身份、数据版本和完整资源摘要，停机后等待新 App 恢复确认，失败回原版本。旧 `DCodeRelaunchHelper` 不再使用。
+- 平台桥等待 `host.ready` 并调用 `host.hello`；具体请求、版本化 envelope 和目标身份仍由生产协议实现验证。原 Swift `HostCompatibility` 不再是当前权威。
+- Electron Node 模式保持当前平台环境，设置 `PI_CODING_AGENT_DIR`、`NO_COLOR` 和有界诊断参数；不复制凭据到客户端。
+
+下文保留 Protocol v1 及历史 `session.*` 兼容诊断合同；当前产品任务使用 `dcodeSession.*` 与 Product Store，不能从旧协议示例推导双写或绕过产品权威。
 
 ## Protocol v1
 

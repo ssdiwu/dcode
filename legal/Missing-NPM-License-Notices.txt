@@ -9,23 +9,22 @@ Apache-2.0
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 @aws-sdk/credential-provider-http 3.972.39
-@aws-sdk/credential-provider-http 3.972.69
+@aws-sdk/credential-provider-http 3.972.72
 @aws-sdk/credential-provider-login 3.972.41
-@aws-sdk/credential-provider-login 3.972.74
+@aws-sdk/credential-provider-login 3.972.77
 @aws-sdk/nested-clients 3.997.9
-@aws-sdk/nested-clients 3.997.41
+@aws-sdk/nested-clients 3.997.44
 
 MIT
 ---
 Copyright (c) 2025 Mario Zechner
 
-@earendil-works/pi-agent-core 0.84.1
-@earendil-works/pi-ai 0.84.1
-@earendil-works/pi-client 0.84.1
-@earendil-works/pi-coding-agent 0.84.1
-@earendil-works/pi-protocol 0.84.1
-@earendil-works/pi-telemetry 0.84.1
-@earendil-works/pi-tui 0.84.1
+@earendil-works/pi-agent-core 0.85.1
+@earendil-works/pi-ai 0.85.1
+@earendil-works/pi-coding-agent 0.85.1
+@earendil-works/pi-telemetry 0.85.1
+@earendil-works/pi-tui 0.85.1
+@earendil-works/chord 0.85.1
 
 Copyright Mario Zechner and contributors.
 
@@ -44,6 +43,21 @@ data-uri-to-buffer 4.0.1
 Copyright (c) 2026 Natural Intelligence.
 
 xml-naming 0.1.0
+
+Copyright (c) 2023 Svix (https://www.svix.com)
+
+standardwebhooks 1.1.1
+Source: https://github.com/standard-webhooks/standard-webhooks/blob/b4d2c14fc5b4ccff3ff271e3b087dff812254c59/libraries/LICENSE
+
+Copyright (c) 2020 Evan Wallace
+
+@esbuild/darwin-arm64 0.28.1
+Source: https://github.com/evanw/esbuild/blob/v0.28.1/LICENSE.md
+
+Copyright (c) 2025 Anton Korzunov <thekashey@gmail.com>
+
+react-remove-scroll-bar 2.3.8
+Source: https://github.com/theKashey/react-remove-scroll-bar/blob/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE
 
 MIT License Terms
 -----------------

@@ -43,13 +43,13 @@ Each structural rail owns one Shared Rail Geometry（共享栏位几何）across
 | 跨版本最终产品行为 | [产品与交互](doc/20-产品与交互/README.md) |
 | 当前版本承诺与验收 | [版本实施方案](doc/40-版本实施方案/README.md) |
 | 外部产品只提供什么参考 | [外部产品与仓库参考](doc/参考文件/README.md) |
-| 可执行 token（令牌）与共享 primitive（基础组件） | [`DesignSystem.swift`](app/Sources/PiDCode/Views/DesignSystem.swift) |
+| 可执行 token（令牌）与共享 primitive（基础组件） | [`style.css`](client/src/renderer/src/style.css) 与 [`components/`](client/src/renderer/src/components/) |
 
 The design document defines semantic rules and observable results. Shared code owns concrete reusable values. Feature views consume those primitives; they do not become independent design authorities.
 
 ## Reference boundary
 
-Codex informs workbench structure and self-hosting workflow, MiniMax Code informs visible local Goal / Agent Team and activity hierarchy, Curio informs design-document governance and container-driven geometry, ZCode informs information density, and Orca informs tabs and previews. D Code translates useful patterns into its own SwiftUI / AppKit components and D Code-owned product model; Pi SDK remains a runtime reference, not a visual or data authority.
+Codex informs workbench structure and self-hosting workflow, MiniMax Code informs visible local Goal / Agent Team and activity hierarchy, Curio informs design-document governance and container-driven geometry, ZCode informs information density, and Orca informs tabs and previews. D Code translates useful patterns into its own client components and D Code-owned product model; Pi SDK remains a runtime reference, not a visual or data authority.
 
 References never authorize copying another product's brand, visual skin, assets, runtime, cloud authority, account system, remote control, or hidden implementation. Confirmed future behavior remains in `doc/20-产品与交互/`; it does not enter the current design-system document until the native component is implemented and verified.
 

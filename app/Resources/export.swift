@@ -127,10 +127,7 @@ let resources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let root = resources.deletingLastPathComponent().deletingLastPathComponent()
 let master = try loadMaster(resources.appendingPathComponent("DCodeMark.svg"))
 let markPNG = try render(master, size: 1024, icon: false)
-for destination in [root.appendingPathComponent("app/Sources/PiDCode/Resources/DCodeLogo.png"),
-                    root.appendingPathComponent("client/src/renderer/src/assets/logo.png")] {
-    try markPNG.write(to: destination, options: .atomic)
-}
+try markPNG.write(to: root.appendingPathComponent("client/src/renderer/src/assets/logo.png"), options: .atomic)
 let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("DCode-\(UUID().uuidString).iconset")
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 defer { try? FileManager.default.removeItem(at: iconset) }
@@ -151,4 +148,4 @@ process.arguments = ["-c", "icns", iconset.path, "-o", resources.appendingPathCo
 try process.run()
 process.waitUntilExit()
 guard process.terminationStatus == 0 else { throw BrandExportError.iconutilFailed(process.terminationStatus) }
-print("Exported C-A: AppIcon.png, AppIcon.icns, Swift DCodeLogo.png, Web logo.png")
+print("Exported C-A: AppIcon.png, AppIcon.icns, Web logo.png")

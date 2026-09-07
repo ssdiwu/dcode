@@ -7,8 +7,7 @@
 | 资源 | 使用位置 |
 | --- | --- |
 | `AppIcon.png` | Electron 窗口与 Dock；本地候选安装包资源 |
-| `AppIcon.icns` | Swift/Electron 安装包、Finder；Swift 的“关于”读取系统应用图标 |
-| `../Sources/PiDCode/Resources/DCodeLogo.png` | Swift 首页品牌区，template 图像随主题变色 |
+| `AppIcon.icns` | Electron 候选安装包、Finder |
 | `../../client/src/renderer/src/assets/logo.png` | Web 导航品牌区、新任务/空对话、“关于”，通过 CSS mask 随主题变色 |
 
 从项目根目录重新导出：
@@ -17,6 +16,6 @@
 swift app/Resources/export.swift
 ```
 
-母版与透明标志为 1024 × 1024；带底板 PNG 的画布也是 1024 × 1024，底板范围为 102–922，周围保持透明，避免在 Dock 中比相邻应用大一圈。ICNS 含 16、32、64、128、256、512、1024 像素档位。修改母版后须一次运行导出，避免 Web、Swift 和系统图标分叉。
+母版与透明标志为 1024 × 1024；带底板 PNG 的画布也是 1024 × 1024，底板范围为 102–922，周围保持透明，避免在 Dock 中比相邻应用大一圈。ICNS 含 16、32、64、128、256、512、1024 像素档位。修改母版后须一次运行导出，避免界面标志和系统图标分叉。
 
 导出只修改静态资源。构建、候选安装、运行中应用重启和正式发布仍分别执行。

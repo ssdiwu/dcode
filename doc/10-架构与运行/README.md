@@ -2,46 +2,45 @@
 
 本目录记录已经由源码和运行验证成立的当前架构，不承载未来设想或版本需求。
 
-> Candidate boundary（候选边界）：当前 checkout 已实现 `0.0.28` Product Store 与多 Runtime 纵切、`0.0.29` 任务工作台，并通过 Host / Swift 自动测试；`0.0.29` 候选已于 2026-09-05 收口为基线（`main@714a555`），HUD 浮窗形态的完整人工验收与 tag 取消，尚未形成发布产物。以下只描述源码和自动验证已经成立的结构，不把基线等同于发布。
+> 当前界面入口是 Electron + React `client/`。旧 Swift 客户端已按迁移边界退役，品牌和 Host 原生文件辅助程序保留。当前源码、独立批次、窗口走查与人工验收状态见[版本实施方案](../40-版本实施方案/README.md)，不以源码存在或测试通过代替发布。
 
 ## D Code Harness 当前边界
 
-D Code 当前实现不是 Pi CLI 的界面封装。D Code Product Store 拥有 Project、Task、D Code Session、Raw / Effective Input、Team / Agent / Session Run、Prompt Receipt、Attempt、Request、Report、Artifact 与 Evidence 等产品事实；Runtime Supervisor 按稳定身份管理多个 Pi AgentSession。Pi SDK 只提供模型循环、工具执行和私有适配会话。
+D Code 当前实现不是 Pi CLI 的界面封装。D Code Product Store 拥有 Project、Task、D Code Session、Raw / Effective Input、Team / Agent / Session Run、Prompt Receipt、Attempt、Request、Report、Artifact 与 Evidence 等产品事实；Runtime Supervisor 按稳定身份管理多个独立智能体执行进程和各自的 Pi AgentSession。Pi SDK 只提供模型循环、工具执行和私有适配会话。
 
 每个 D Code Runtime 在 Provider 请求前冻结 D Code Identity、Agent Role、项目一等文档来源和真实 Active Tool Manifest；Product Store 原子写入 Effective Input、Session Run、Prompt Receipt 与 Provider Attempt 后才允许请求。Pi 默认 System Prompt、自动 Skill / project context 和外部扩展不会进入该 Runtime。
 
 ```mermaid
 flowchart LR
-    User["用户"] --> UI["SwiftUI / AppKit 原生界面"]
-    UI --> Model["AppModel 协调 + 领域状态模型"]
-    Model --> Client["PiHostClient\nProtocol v1"]
-    Client --> Store["D Code Product Store\n~/.dcode/product-store.sqlite3"]
-    Client --> Host["Runtime Supervisor\nCoordinator / Child Runtime"]
-    Host --> SDK["Pi Runtime Adapter\nPi SDK AgentSession"]
-    SDK --> Private["私有 Pi Adapter Session\n非产品权威"]
+    User["用户"] --> UI["React 工作台"]
+    UI --> Shell["Electron 平台壳"]
+    Shell -->|Protocol v1| Host["本机 Host"]
+    Host --> Store["D Code Product Store"]
+    Host --> Agents["智能体独立执行进程"]
+    Agents -->|工具请求| Host
+    Host --> Files["项目文件与受管辅助进程"]
+    Host --> Private["Pi Adapter 私有会话"]
     PiSource["外部 Pi JSONL"] -->|显式单向导入| Store
-    Host --> Events["带 Task / Session / Run / Runtime 身份的事件"]
-    Events --> Model
+    Host -->|结构化运行事件| UI
 ```
 
-| 层 | 当前职责 | 主要入口 |
+| 边界 | 当前职责 | 主要入口 |
 |---|---|---|
-| Native App（原生应用） | App 启动、响应式工作台、输入与状态呈现 | [`PiDCodeApp.swift`](../../app/Sources/PiDCode/PiDCodeApp.swift)、[`Views/`](../../app/Sources/PiDCode/Views/) |
-| Product Store（产品数据库） | 版本化 SQLite schema、单写入租约、原子迁移、幂等 mutation、Task / Session / Run / Attempt / Request / Report / Evidence 权威与恢复 | [`product-store.ts`](../../host/src/product-store.ts)、[`product-store-schema.ts`](../../host/src/product-store-schema.ts) |
-| Foundation Console（基础控制台） | 使用正式 query / mutation contract 创建 Project / Task / Profile、预览导入、启动团队、切换观察、回答请求、停止成员和验收；不是 `0.0.29` 最终界面 | [`FoundationConsoleView.swift`](../../app/Sources/PiDCode/Views/FoundationConsoleView.swift) |
-| Host Bridge（宿主桥） | 定位并启动配置指定的 Node/Host 进程，通过 Protocol v1 关联请求、响应和事件；App Bundle 默认使用包内运行时 | [`HostLocator.swift`](../../app/Sources/PiDCode/Host/HostLocator.swift)、[`PiHostClient.swift`](../../app/Sources/PiDCode/Host/PiHostClient.swift)、[`HostProtocol.swift`](../../app/Sources/PiDCode/Host/HostProtocol.swift) |
-| Runtime Supervisor（运行时监督器） | 多 Runtime 路由、并发上限、单 Session / workspace 写入隔离、Project Git Worker 的受管 detached worktree、Coordinator 两阶段调度、Agent Request 等待与单成员停止 | [`pi-host.ts`](../../host/src/pi-host.ts)、[`managed-worker-worktree.ts`](../../host/src/managed-worker-worktree.ts)、[`runtime-supervisor.test.ts`](../../host/test/runtime-supervisor.test.ts) |
-| Pi Adapter（Pi 适配层） | 通过固定 Pi SDK 运行独立 AgentSession，提供模型、工具与流式事件；外部 Pi Session 只作为显式导入来源 | [`host/src/`](../../host/src/)、[Node/Pi 宿主与 IPC](0001-Node-Pi-宿主与-IPC.md) |
-| Native Presentation（原生呈现） | 把消息、Plan、Mermaid、工具结果和受支持扩展交互投影成 D Code 自有组件 | [`Views/`](../../app/Sources/PiDCode/Views/)、[原生界面设计系统](0002-D-Code-原生界面设计系统.md) |
+| 客户端与平台壳 | 自有工作台、窗口、系统目录选择、通知、候选切换与安全退出 | [client](../../client/README.md)、[主进程](../../client/src/main/index.ts)、[候选切换](../../client/src/main/candidate-switch.ts) |
+| Host Bridge（宿主桥） | 使用 Electron Node 模式启动 Host，通过 JSONL 关联请求、响应和退出状态 | [bridge.ts](../../client/src/host/bridge.ts)、[launch.ts](../../client/src/host/launch.ts) |
+| Product Store（产品数据库） | 单写入、产品事实、原子结果/通知、幂等操作及中断恢复 | [product-store.ts](../../host/src/product-store.ts)、[schema](../../host/src/product-store-schema.ts) |
+| Runtime Supervisor（运行时监督器） | 按需派发、单成员控制、目录保护、配额回退、独立验收与复核 | [pi-host.ts](../../host/src/pi-host.ts)、[工作树](../../host/src/managed-worker-worktree.ts) |
+| Pi Adapter 与执行进程 | SDK 模型循环在独立进程执行；工具、存储和凭据仍由 Host 管理 | [process-agent.ts](../../host/src/process-agent.ts)、[进程协议](../../host/src/agent-process-protocol.ts) |
+| 文件与进程辅助 | 原生安全文件操作、目录句柄校验及归属明确的辅助进程 | [WorkspaceFiles.swift](../../host/native/WorkspaceFiles.swift)、[Host 源码](../../host/src/) |
 
-同一 Host 现在可以保持多个显式 Runtime 活动；同一 Team 由 Coordinator 先规划、两个以上成员并行执行、成员 Report 落库后再由 Coordination Session 综合。切换 Foundation Console 的观察 Session / Run 只改变呈现选择，不关闭 Runtime。Project → Task 导航、协调者主对话、常驻 Task HUD 与对象 Inspector 已随 `0.0.29` 任务工作台交付并收口为基线（`main@714a555`），基础控制台不再是当前界面。
+同一任务由协调者承接，成员按需要创建。主对话、定向消息和子对话使用耐久身份；切换观察对象不停止其他成员。成员完成、报告与通知交付、独立验收、协调复核和用户接受分别成立；保存失败不提前释放运行与写入保护。本机架构不引入跨机器 worker 或远程控制面。
 
 ## 权威与数据所有权
 
 以下是当前实现权威：
 
 - `~/.dcode/product-store.sqlite3` 是 D Code 产品事实的唯一数据库；Project 文件正文仍留在真实项目目录。
-- Swift 不直接写 Product Store 或 Pi JSONL；所有 mutation 经 Host 的 revision、request ID 与目标身份合同执行。
+- 客户端不直接写 Product Store 或 Pi JSONL；所有 mutation 经 Host 的 revision、request ID 与目标身份合同执行。
 - 外部 Pi JSONL 保持源字节不变，只在用户预览并点击“导入为任务”后转换；导入后的 D Code Session 不双写回 Pi。
 - Pi Adapter 的私有 JSONL 只服务固定 SDK 运行与恢复，不定义 D Code Task / Session 历史。
 - 用户可见界面由 D Code 原生组件拥有；Host 只发送结构化事件，不传递或重绘终端画面。
@@ -50,5 +49,5 @@ flowchart LR
 ## 当前文档
 
 - [Node/Pi 宿主与 IPC](0001-Node-Pi-宿主与-IPC.md)：Host 进程职责、Protocol v1、会话生命周期、可见会话搜索、路径协议、完整会话复制、归档可见性排除、本机草稿/归档边界与验证入口。
-- [D Code 原生界面设计系统](0002-D-Code-原生界面设计系统.md)：当前 SwiftUI/AppKit 界面的设计性格、共享 token、组件几何、状态矩阵、无障碍边界与视觉验收方法。
+- [D Code 原生界面设计系统](0002-D-Code-原生界面设计系统.md)：设计语义和旧 Swift 几何参考；当前可执行样式见客户端共享样式与组件。
 - [D Code Web 客户端技术栈](0003-Web客户端技术栈.md)：Electron + React 客户端主路径、参照实证与 Host 边界；[ADR 0044](../决策档案/0044-Web客户端与桌面壳技术栈边界.md) 已接受，`client/` 基础功能经 507 确认，具体验证与迁移收尾由 PRD 0028 维护。

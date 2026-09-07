@@ -57,7 +57,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 - 本机资源保留来源清单，技能和提示词启停实际影响原生资源加载；外部可执行扩展继续服从现有禁用策略。
 - 自进化提供隔离检查与构建、候选身份及数据版本校验、停机后重启恢复、人工确认和回滚回执。候选输出可用 `DCODE_PACKAGE_OUTPUT` 指定，不能覆盖正在运行的构建。
 
-Swift 按面拆除尚未执行，作为独立迁移收尾保留；当前基础验收不等于这些源文件已经退役。
+旧 Swift 界面、状态、桥接、SwiftPM 与打包入口已退役；保留 `app/Resources/` 品牌母版、旧偏好单向导入及 Host 原生文件辅助程序。历史源码可在退役前 Git 基线 `18e12df` 查阅。
 
 ## 结构
 
@@ -78,7 +78,7 @@ Swift 按面拆除尚未执行，作为独立迁移收尾保留；当前基础�
 - `src/renderer/src/components/conversation/`：消息流、执行过程、旧图片放大与对话导航条；`workbench/conversation-navigation.ts` 和 `useConversationNavigation.ts` 管理轮次投影、锚点与阅读跟随。
 - `src/renderer/src/components/`：输入区、Markdown、导入、完整设置及选择菜单。
 - `src/renderer/src/style.css`：Web 共享几何、角色层级、响应式和减少动态效果。
-- `scripts/package.mjs`：临时目录中安装 Host 生产依赖，打包原图标与完整 Host；产物在 `release/mac-arm64/D Code.app`，临时目录自动清理。
+- `scripts/package.mjs`：临时目录中安装 Host 生产依赖，打包原图标、完整 Host 和 Legal 许可证资料；Host 与客户端生产依赖分别登记版本并归档许可证正文，未知声明或缺少未审计正文会阻止打包。产物在 `release/mac-arm64/D Code.app`，临时目录自动清理。
 
 ## 验收边界
 

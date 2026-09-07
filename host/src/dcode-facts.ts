@@ -146,7 +146,7 @@ async function changeFactsSummary(sessionId: string, factsDir: string): Promise<
     const additions = typeof record.additions === "number" ? record.additions : 0;
     const deletions = typeof record.deletions === "number" ? record.deletions : 0;
     const line = typeof record.firstChangedLine === "number" ? `，首次变更行 ${record.firstChangedLine}` : "";
-    // Swift 账本合同：source 恒为 "structured-tool-v1"（SessionChangeModels.swift 校验）。
+    // 旧账本导入合同：source 恒为 "structured-tool-v1"；保留已持久化的来源标记。
     const source = record.source === "structured-tool-v1" ? "" : "，来源非 D Code";
     return `- ${file}（+${additions} −${deletions}${line}${source}）`;
   });

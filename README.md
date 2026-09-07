@@ -10,11 +10,11 @@
 
 D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能力配置，通过 Runtime Adapter 使用 Pi SDK 等 Agent Runtime；Pi JSONL 只作为可选择的单向导入来源。难逆转边界见 [ADR 0037](doc/决策档案/0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md)。
 
-当前客户端主路径位于 `client/`：Electron + React 工作台消费 Host 的 Project / Task / Session、模型与能力配置、消息附件和灵感数据，并提供文件树、Markdown/HTML 编辑、隔离预览、Git 差异和项目目录维护。任务内协作由主智能体按需组织，支持成员定向交流、独立验收与原生历史续接。产品事实与恢复状态归当前用户 `~/.dcode/`，Pi JSONL 不双写。`app/` 保留尚未完成退役的 Swift 客户端源码；基本验收、未迁移内容面与后续清理状态由[版本实施方案](doc/40-版本实施方案/README.md)维护。
+当前客户端主路径位于 `client/`：Electron + React 工作台消费 Host 的 Project / Task / Session、模型与能力配置、消息附件和灵感数据，并提供文件树、Markdown/HTML 编辑、隔离预览、Git 差异和项目目录维护。任务内协作由主智能体按需组织，支持成员定向交流、独立验收与原生历史续接。产品事实与恢复状态归当前用户 `~/.dcode/`，Pi JSONL 不双写。`app/Resources/` 保留统一品牌母版；旧 Swift 客户端和打包入口已退役。基本验收与各批交付状态由[版本实施方案](doc/40-版本实施方案/README.md)维护。
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 
-开发入口：先执行 `npm --prefix host run build`，再执行 `npm --prefix client run dev`。验证入口为 `npm --prefix host test`、`npm --prefix client test`；Web 客户端的布局、输入、打包与隔离运行方式见 [client/README](client/README.md)。旧 Swift 路径保留 `swift test`、`swift run PiDCode` 与 `app/build.sh` 供迁移收尾使用。`PiDCode`、`pi-dcode` 只保留为既有兼容标识。
+开发入口：先执行 `npm --prefix host run build`，再执行 `npm --prefix client run dev`。验证入口为 `npm --prefix host test`、`npm --prefix client test`；Web 客户端的布局、输入、打包与隔离运行方式见 [client/README](client/README.md)。本机未签名候选使用 `npm --prefix client run dist`；原生文件辅助程序仍随 Host 构建。`PiDCode`、`pi-dcode` 只保留为既有兼容标识。
 
 ## 文档入口
 
@@ -34,8 +34,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 - `host/`：固定 Pi 0.85.1 的 Node 运行宿主、Protocol v1 与测试。
 - `client/`：当前 Web 客户端（Electron 平台壳 + React 呈现层），经 Protocol v1 消费 D Code Host；入口和结构见其 README。
-- `app/`：现有 macOS SwiftUI/AppKit 客户端与 Host 桥（`0.0.29` 基线；`0.0.30` 起按面替换、验证即删）；Web 客户端选型见[架构与运行](doc/10-架构与运行/README.md)。
-- `Package.swift`：macOS 14+ SwiftPM 可执行包入口。
+- `app/Resources/`：品牌 SVG 母版、系统图标及统一导出脚本；不含另一套客户端或打包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。
 - `GLOSSARY.md`：项目专有术语的根目录唯一权威；机器索引只能从它派生。
 - `doc/`：当前架构、产品目标、PRD、架构决策、参考与验收权威。
