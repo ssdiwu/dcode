@@ -1,8 +1,10 @@
+import { CopyButton } from "../CopyButton";
+import { LoadingPlaceholder } from "../LoadingPlaceholder";
 import {projectConversationOrigins} from "../../workbench/conversation-origins";
 import {AuxiliaryActivities} from "../AuxiliaryActivities";
 import { CollaborationFeed } from "./CollaborationFeed";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Copy, CornerDownLeft, GitBranch, Pencil, Sparkles } from "lucide-react";
+import { ArrowDown, CornerDownLeft, GitBranch, Pencil, Sparkles } from "lucide-react";
 import { Markdown } from "../Markdown";
 import type { Workbench } from "../../useWorkbench";
 import { messageRows, type MessageRow } from "../../workbench";
@@ -82,7 +84,7 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
     })}
 
     <div className="message-actions">
-      <button className="icon-button" aria-label="复制消息" onClick={()=>void navigator.clipboard.writeText(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n")).catch(work.fail)}><Copy size={13}/></button>
+      <CopyButton text={row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n")} onError={work.fail}/>
       <button className="icon-button" aria-label="引用到输入框" onClick={()=>quote(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n"))}><CornerDownLeft size={13}/></button>
       {onSaveInspiration&&row.parts.some(part=>part.kind==="text"&&part.text.trim())&&<button className="icon-button" aria-label="保存到灵感" onClick={()=>onSaveInspiration(row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("\n"))}><Sparkles size={13}/></button>}
       {(row.role==="user"||row.role==="assistant")&&work.presentation?.nativeEntries?.some(entry=>entry.sourceEntryId===row.id)&&<button className="icon-button" disabled={work.running||work.sending} aria-label={row.role==="user"?"编辑并从这里继续":"从这里继续"} onClick={()=>work.startPath(row.role==="user"?"editUser":"continueAssistant",row.id,row.role==="user"?row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("\n"):"")}>{row.role==="user"?<Pencil size={13}/>:<GitBranch size={13}/>}</button>}
@@ -130,7 +132,7 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
               </button>
             </div>
           ) : work.session && !work.presentation ? (
-            <p className="loading">正在读取消息…</p>
+            <LoadingPlaceholder label="正在读取消息…"/>
           ) : !rows.length ? (
             <div className="empty-conversation">
               {emptyBrand}

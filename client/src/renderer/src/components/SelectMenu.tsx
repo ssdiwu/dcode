@@ -13,6 +13,7 @@ export function SelectMenu<T extends string>({
   ariaLabel,
   accent,
   onChange,
+  className = "",
 }: {
   value: T | null;
   options: { value: T; label: string }[];
@@ -20,6 +21,7 @@ export function SelectMenu<T extends string>({
   ariaLabel: string;
   accent?: boolean;
   onChange: (value: T) => void;
+  className?: string;
 }) {
   const current = options.find(option => option.value === value);
   return (
@@ -29,7 +31,7 @@ export function SelectMenu<T extends string>({
           aria-label={ariaLabel}
           className={`flex h-6 max-w-[260px] items-center gap-1 rounded-md px-1.5 text-[11px] leading-none hover:bg-ink/5 ${
             accent ? "text-accent" : "text-muted"
-          }`}
+          } ${className}`}
         >
           <span className="min-w-0 truncate">
             {current ? current.label : placeholder}

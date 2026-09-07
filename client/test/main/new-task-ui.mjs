@@ -32,6 +32,12 @@ app.on('browser-window-created',(_event,win)=>{
    const geometry=await run('(()=>{const c=document.querySelector(".new-task-ambient canvas");const input=document.querySelector("[data-composer]");return {canvas:c.width>0,inputs:!!input,sceneCount:document.querySelectorAll(".new-task-ambient canvas").length,hidden:document.hidden};})()');
    assert.equal(geometry.sceneCount,1);assert.equal(geometry.inputs,true);nativeTheme.themeSource="light";await sleep(80);
    await fs.writeFile(${JSON.stringify(join(temp,"new-task-light.png"))},(await win.webContents.capturePage()).toPNG());
+   await click('选择技能或命令');
+   await until('!!document.getElementById("composer-commands")','real commands menu');
+   assert.equal(await run('document.activeElement===document.querySelector("[data-composer]")'),true);
+   assert.equal(await run('document.querySelector("[data-composer]").getAttribute("aria-controls")'),'composer-commands');
+   await run('document.querySelector("[data-composer]").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+   await until('!document.getElementById("composer-commands")','Escape closes commands without leaving draft');
    await click('灵感');await until('!document.querySelector(".new-task-ambient")','inspiration excludes scene');
    await click('新建任务');await until('!!document.querySelector(".new-task-ambient canvas")','scene returns');
    await run('(async()=>{for(let attempt=0;;attempt++){const snapshot=await window.dcode.request("foundation.snapshot");try{await window.dcode.request("project.create",{requestId:"ui-project",expectedStoreRevision:snapshot.storeRevision,title:"UI 测试项目",directory:'+JSON.stringify(${JSON.stringify(temp)})+'});break;}catch(error){if(attempt>=5||!String(error).includes("REVISION_CONFLICT"))throw error;await new Promise(resolve=>setTimeout(resolve,50));}}})()');

@@ -1,3 +1,4 @@
+import { LoadingPlaceholder } from "./components/LoadingPlaceholder";
 import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
 import {TaskContext} from "./components/TaskContext";
@@ -480,9 +481,7 @@ export function App() {
             </button>
           </div>
         ) : !work.snapshot ? (
-          <div className="loading" role="status">
-            正在读取工作台…
-          </div>
+          <LoadingPlaceholder label="正在读取工作台…"/>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""}`}>
             {showNewTask && <NewTaskScene />}

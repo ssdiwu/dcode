@@ -33,7 +33,7 @@ export function Composer({
   const [mentionIndex,setMentionIndex]=useState(0);
   const [mentionOpen,setMentionOpen]=useState(false);
   const [commandOpen,setCommandOpen]=useState(false),[commandIndex,setCommandIndex]=useState(0);
-  const {commands,error:commandError}=useCommands(work,commandOpen);
+  const {commands,error:commandError,loading:commandsLoading}=useCommands(work,commandOpen);
   const query=draft.text.match(/^\/(\S*)$/u)?.[1]?.toLowerCase()??"";
   const commandMatches=commands.filter(command=>command.name.toLowerCase().includes(query)||command.description?.toLowerCase().includes(query)).slice(0,50);
   const chooseCommand=(name:string)=>{setCommandOpen(false);updateDraft(draftKey,{...draft,text:/^\/[^/\s]*$/u.test(draft.text)?`/${name} `:`/${name} ${draft.text}`});textarea.current?.focus();};
@@ -141,11 +141,11 @@ export function Composer({
         )}
         {targetMember&&<div className="composer-recipient">发送给 {members.find(member=>member.id===targetMember)?.title??"成员"}<button className="icon-button" aria-label="取消定向发送" onClick={()=>setTargetMember(undefined)}><X size={12}/></button></div>}
         {mentionOpen&&<div className="mention-options" id="member-mentions" role="listbox" aria-label="选择已有成员">{members.length?matchingMembers.map((member,index)=><button role="option" aria-selected={index===mentionIndex} id={`mention-${member.id}`} type="button" className="menu-item" key={member.id} onClick={()=>chooseMember(member.id)}>{member.title}<small>{member.role==="worker"?"执行":member.role==="verifier"?"验收":"调研"}</small></button>):<p className="secondary">暂无成员，可以让主智能体安排工作。</p>}<button className="text-button" onClick={()=>setMentionOpen(false)}>关闭</button></div>}
-        {commandOpen&&<div className="mention-options command-options" role="listbox" aria-label="技能与命令">{commandMatches.map((command,index)=><button key={`${command.source}:${command.name}`} type="button" role="option" aria-selected={index===commandIndex} className="menu-item" onClick={()=>chooseCommand(command.name)}><span>/{command.name}<small>{command.description}</small></span><small>{command.source==="skill"?"技能":command.source==="prompt"?"模板":"命令"}</small></button>)}{!commandMatches.length&&<p className="secondary">{commandError||"没有匹配的已启用技能或命令。"}</p>}<button className="text-button" onClick={()=>setCommandOpen(false)}>关闭</button></div>}
+        {commandOpen&&<div className="mention-options command-options" id="composer-commands" role="listbox" aria-label="技能与命令">{commandMatches.map((command,index)=><button key={`${command.source}:${command.name}`} id={`composer-command-${index}`} type="button" role="option" aria-selected={index===commandIndex} className="menu-item" onClick={()=>chooseCommand(command.name)}><span>/{command.name}<small>{command.description}</small></span><small>{command.source==="skill"?"技能":command.source==="prompt"?"模板":"命令"}</small></button>)}{commandsLoading&&<p className="secondary" role="status">正在读取技能与命令…</p>}{!commandsLoading&&!commandMatches.length&&<p className="secondary" role={commandError?"alert":undefined}>{commandError||"没有匹配的已启用技能或命令。"}</p>}<button className="text-button" onClick={()=>setCommandOpen(false)}>关闭</button></div>}
         <textarea
           ref={textarea}
-          aria-controls={mentionOpen?"member-mentions":undefined}
-          aria-activedescendant={mentionOpen&&matchingMembers[mentionIndex]?`mention-${matchingMembers[mentionIndex].id}`:undefined}
+          aria-controls={mentionOpen?"member-mentions":commandOpen?"composer-commands":undefined}
+          aria-activedescendant={mentionOpen&&matchingMembers[mentionIndex]?`mention-${matchingMembers[mentionIndex].id}`:commandOpen&&commandMatches[commandIndex]?`composer-command-${commandIndex}`:undefined}
           aria-label="任务消息"
           readOnly={work.closing}
           data-composer
@@ -159,7 +159,7 @@ export function Composer({
               add(files);
             }
           }}
-          placeholder={work.session ? "继续这项任务…" : "描述你想完成的任务…"}
+          placeholder={work.session ? "继续这项任务…" : "描述你想完成的任务，输入 / 选择技能…"}
           rows={3}
           maxLength={200000}
         />
@@ -220,7 +220,7 @@ export function Composer({
             }}
           />
           {targetWorking&&!draft.pathAction&&<select className="delivery-select" aria-label="发送时机" value={delivery} onChange={event=>setDelivery(event.target.value as "queue"|"steer")}><option value="queue">排到后面</option><option value="steer">补充当前工作</option></select>}
-          <button type="button" className="icon-button" aria-label="选择技能或命令" onClick={()=>{setCommandOpen(value=>!value);setMentionOpen(false);}}><Slash size={15}/></button>
+          <button type="button" className="text-button composer-command-trigger" aria-label="选择技能或命令" aria-expanded={commandOpen} title="技能与命令（/）" onClick={()=>{setCommandOpen(value=>!value);setMentionOpen(false);textarea.current?.focus();}}><Slash size={14}/><span>技能</span></button>
           {!draft.pathAction&&members.length>0&&<Menu.Root><Menu.Trigger asChild><button type="button" className="text-button" aria-label="提及成员">@ 成员</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" side="top" onCloseAutoFocus={event=>{event.preventDefault();textarea.current?.focus();}}>{members.map(member=><Menu.Item className="menu-item" key={member.id} onSelect={()=>chooseMember(member.id)}>{member.title}</Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
           <span className="spacer" />
           <ModelPicker models={models.data?.models??[]} value={models.data?.selectedKey??null} onChange={models.choose} onManage={onSettings} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy || work.running}/>
@@ -248,6 +248,7 @@ export function Composer({
         <div className="scope-tray">
           <SelectMenu
             ariaLabel="任务归属"
+            className="task-scope-chip"
             value={work.newProjectId ?? "user"}
             placeholder="独立任务"
             options={[
