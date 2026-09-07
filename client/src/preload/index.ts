@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 contextBridge.exposeInMainWorld("dcode", {
+  htmlPreview: (input: Record<string,unknown>) => ipcRenderer.invoke("dcode:htmlPreview",input),
   request: (method: string, params?: Record<string, unknown>) =>
     ipcRenderer.invoke("dcode:request", method, params ?? {}),
   subscribe: (handler: (envelope: unknown) => void) => {

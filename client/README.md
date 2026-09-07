@@ -17,6 +17,7 @@ npm test            # 协议、呈现与真实 Host 的隔离交互回归
 npm run test:layout # 构建后，用隔离 Chromium 检查真实布局几何
 npm run test:inputs # 扫描所有输入控件，检查深浅色焦点、只读、禁用与禁止手动缩放
 npm run test:canvas # 检查不同图片比例下的完整显示与节点自适应尺寸
+npm run test:preview # 隔离 Electron 中验证 HTML 脚本、资源和网络边界
 npm run smoke:host  # 不开窗口的 Host 启动、握手、查询、停机
 npm run dist        # 本地未签名候选；不是正式发布
 ```
@@ -41,7 +42,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 - 真实 `message_update.assistantMessageEvent` 增量、运行失败、停止和实际模型选择接入；用户提交、执行过程与最终回答按轮次区分；过程默认一行实时预览，展开显示非空思考、中途说明和成对工具记录。复制、引用、图片与文件预览可用。
 - 搜索等待索引就绪后重查，通过 Runtime 绑定返回 D Code Task；Pi 导入只走单向导入合同。
 - 左侧“灵感”进入持久画布：文字、图片、链接、视频节点，搜索、拖动、连线、成组、归档恢复与编辑草稿。选定内容版本可引用到已有任务或新建独立任务；任务标题下方显示所引用的版本。
-- 信息概览按需打开；成员、工作清单、等待事项、产物与报告消费 Store。对象详情展示已有记录，尚未迁移通用文件阅读器或编辑器。
+- 信息概览按需打开；成员、工作清单、等待事项、产物与报告消费 Store。对象详情展示已有记录，文件与 Git 工作台可查看任务目录及已登记产物，支持多标签、行定位、Markdown/HTML 编辑、冲突保存、图片查看和差异引用。HTML 预览独立隔离，默认不联网，本次放行在切换文件时重置。
 - 系统菜单、目录选择、外链限制、退出前保存、Host 重启和打包资源路径接入。
 
 - 恢复任务重命名、复制会话为新任务、归档及空任务移入废纸篓；均由 D Code 原生产品接口写入，可在已归档任务中恢复，不改 Pi 私有会话作为产品权威。
@@ -56,10 +57,12 @@ Swift 按面拆除尚未执行，作为独立迁移收尾保留；当前基础�
 
 - `src/protocol/`：传输无关 Protocol v1 编解码和请求关联。
 - `src/host/`：Electron Node 模式启动、握手、停机、退出事件。
+- `src/main/html-preview.ts` / `preview-network.ts`：HTML 缓冲区预览、独立浏览器会话与临时网络策略；不开放 App API。
 - `src/main/`：平台窗口、可信 IPC、菜单、通知、目录选择与生命周期。
 - `src/preload/`：渲染层允许使用的系统和 Host 通道。
 - `src/renderer/src/useWorkbench.ts`：投影查询、目标身份、草稿保存、提交和运行事件协调。
 - `src/renderer/src/workbench.ts`：可单独测试的消息投影、增量事件和 Store 写入排序。
+- `src/renderer/src/workbench/useWorkspaceFiles.ts` / `components/WorkspaceFiles.tsx`：文件标签、编辑缓冲、保存冲突、退出保护、文件/产物来源与差异引用。
 - `src/renderer/src/workbench/useModels.ts`：模型目录、连接与选择的呈现逻辑；模型设置及输入区共用，展示组件不直接调用模型协议。
 - `src/renderer/src/workbench/useComposerAttachments.ts`：附件选择、粘贴、拖入、缩略图查询和提交期间的草稿归属；上传期间退出会等待保存完成。
 - `src/renderer/src/workbench/useInspiration.ts`：灵感投影、耐久草稿与画布布局写入、任务引用；`components/InspirationWorkspace.tsx` 只处理展示与指针/键盘交互。

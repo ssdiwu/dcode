@@ -1,4 +1,5 @@
-import { memo, useEffect, useState } from "react";
+import {FileReferenceContext} from "../workbench/useWorkspaceFiles";
+import { memo, useContext, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
@@ -91,15 +92,17 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
 }
 
 function MarkdownInner({ text }: { text: string }) {
+  const openFile=useContext(FileReferenceContext);
   return (
     <div className="space-y-2 break-words text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-ink/8 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_h1]:text-[16px] [&_h1]:font-semibold [&_h2]:text-[15px] [&_h2]:font-semibold [&_h3]:text-[14px] [&_h3]:font-semibold [&_hr]:border-line [&_li]:marker:text-hint [&_ol]:list-decimal [&_ol]:pl-5 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-line [&_pre]:p-3 [&_pre]:text-[12px] [&_table]:w-full [&_table]:text-[12px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={url=>/^(https?:|file:)/iu.test(url)||!/^\w[\w+.-]*:/u.test(url)||/^[^/]+\.[a-z0-9]+:\d+$/iu.test(url)?url:""}
         components={{
           pre: (props) => <>{props.children}</>,
           a: (props) =>
             !/^https?:\/\//i.test(props.href ?? "") ? (
-              <span>{props.children}</span>
+              openFile&&props.href?<button className="file-reference" onClick={()=>openFile(props.href!)}>{props.children}</button>:<span>{props.children}</span>
             ) : (
               <a
                 href={props.href}

@@ -3,7 +3,7 @@
   "version": "0.0.30",
   "private": true,
   "type": "module",
-  "description": "D Code Web 客户端：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 host/。",
+  "description": "D Code Web \u5ba2\u6237\u7aef\uff1aElectron \u5e73\u53f0\u58f3 + React \u5448\u73b0\u5c42\uff0c\u7ecf Protocol v1 \u6d88\u8d39\u65e2\u6709 host/\u3002",
   "main": "dist/src/main/index.js",
   "engines": {
     "node": ">=22.19.0"
@@ -23,7 +23,8 @@
     "dist": "npm run build && node scripts/package.mjs",
     "test:layout": "npm run build && node test/layout/geometry.mjs",
     "test:inputs": "npm run build && node test/layout/input-focus.mjs",
-    "test:canvas": "npm run build && node test/layout/inspiration.mjs"
+    "test:canvas": "npm run build && node test/layout/inspiration.mjs",
+    "test:preview": "npm run build:main && node node_modules/electron/cli.js test/main/html-preview.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

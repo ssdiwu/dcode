@@ -11,7 +11,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/build-native.mjs",
     "start": "node --disable-warning=ExperimentalWarning dist/src/index.js",
     "test": "npm run build && node --disable-warning=ExperimentalWarning --test dist/test/*.test.js"
   },

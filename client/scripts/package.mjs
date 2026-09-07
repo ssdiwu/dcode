@@ -26,6 +26,7 @@ try {
   await cp(join(root, "host/dist/src"), join(stage, "dist/src"), {
     recursive: true,
   });
+  await cp(join(root,"host/dist/bin"),join(stage,"dist/bin"),{recursive:true});
   await build({
     projectDir: client,
     config: {

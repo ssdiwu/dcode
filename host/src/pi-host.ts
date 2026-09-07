@@ -1,3 +1,5 @@
+import {WorkspaceWriteGuard} from "./workspace-write-guard.js";
+import {WorkspaceAccess} from "./workspace-access.js";
 import { type ManagedAttachment, attachmentPrompt } from "./attachment-files.js";
 import type { ClientPreferences } from "./product-store.js";
 import type { DCodeModelsView, ModelChoice } from "./model-catalog-view.js";
@@ -614,6 +616,7 @@ export class PiHost {
   }
 
   private workspaceConflict(cwd: string, runtimeId: string, access: WorkspaceClaim["access"]): string | undefined {
+    const fileWriter=this.workspaceFileWrites.conflict(cwd);if(fileWriter)return fileWriter;
     for (const claims of [this.runtimeWorkspaceClaims, this.openingWorkspaceClaims]) {
       const current = claims.get(cwd);
       if (!current) continue;
@@ -1202,7 +1205,21 @@ export class PiHost {
     }
   }
 
+  private readonly openingLegacyWorkspaces=new Set<string>();
+  private readonly closingWorkspaces=new Map<ActiveSession,string>();
+  private workspaceFileWrites=new WorkspaceWriteGuard(()=>[
+    ...this.openingLegacyWorkspaces, ...this.closingWorkspaces.values(),
+    ...[...this.runtimeWorkspaceClaims].filter(([,claim])=>claim.access==="exclusiveWrite").map(([root])=>root),
+    ...this.openingWorkspaceClaims.keys(),
+    ...(this.legacyActive?[this.legacyActive.inspection.summary.cwd]:[]),
+  ]);
+  private workspaceAccess=new WorkspaceAccess(()=>this.getProductStore(),async(root,save)=>{
+    const key=await this.resolveWorkspaceIsolationKey(await realpath(root));
+    return this.workspaceFileWrites.run(key,save);
+  });
+
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
+    if(method.startsWith("workspace."))return this.workspaceAccess.handle(method,params);
     if (method === "extension.respond") {
       if (typeof params.runtimeId === "string") {
         return await this.handleRuntimeRequest(method, params);
@@ -3624,6 +3641,21 @@ export class PiHost {
   ): Promise<unknown> {
     this.assertWriteHealthy();
     const inspection = await this.reader.inspect(sessionId, selectedLeafId);
+    if(this.workspaceFileWrites.conflict(inspection.summary.cwd))throw new PiHostError("WORKSPACE_IN_USE","目录正在保存文件，请稍后打开运行");
+    const legacyRoot=runtimeIdentity?undefined:inspection.summary.cwd;
+    if(legacyRoot)this.openingLegacyWorkspaces.add(legacyRoot);
+    try{return await this.openInspectedSession(sessionId,inspection,expectedEntryId,expectedEntryDigest,selectedLeafId,runtimeIdentity);}
+    finally{if(legacyRoot)this.openingLegacyWorkspaces.delete(legacyRoot);}
+  }
+
+  private async openInspectedSession(
+    sessionId:string,
+    inspection:SessionInspection,
+    expectedEntryId?:string,
+    expectedEntryDigest?:string,
+    selectedLeafId?:string|null,
+    runtimeIdentity?:RuntimeIdentity,
+  ):Promise<unknown>{
     if ((inspection.header.version ?? 1) !== CURRENT_SESSION_VERSION) {
       throw new PiHostError(
         "SESSION_MIGRATION_REQUIRED",
@@ -4158,6 +4190,7 @@ export class PiHost {
   private async closeActive(): Promise<void> {
     const active = this.active;
     if (!active) return;
+    this.closingWorkspaces.set(active,active.inspection.summary.cwd);
     this.active = undefined;
     clearInterval(active.conflictTimer);
     active.closing = true;
@@ -4199,6 +4232,7 @@ export class PiHost {
       if (!safeToRelease) this.poisonWrites(active, "The previous runtime did not stop cleanly");
       this.emitRuntimeEvent(active, "session.closed", { mode: "writable", sessionId: active.inspection.summary.id });
     }
+    if(safeToRelease)this.closingWorkspaces.delete(active);
   }
 
   private async cleanupStep(

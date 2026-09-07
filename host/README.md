@@ -2,11 +2,13 @@
 
 ## 一句话定位
 
-`host/` 是 `D Code` 的 Product Store、Runtime Supervisor 与 Node/Pi 适配边界：它通过版本化 JSONL 协议向 Swift App 暴露 D Code 原生产品对象和多个 Pi Runtime，不把 Pi JSONL 当作产品权威。`@pi-dcode/host` 与 `pi-dcode-host` 继续作为内部兼容标识。
+`host/` 是 `D Code` 的 Product Store、Runtime Supervisor 与 Node/Pi 适配边界：它通过版本化 JSONL 协议向客户端暴露 D Code 原生产品对象和多个 Pi Runtime，不把 Pi JSONL 当作产品权威。`@pi-dcode/host` 与 `pi-dcode-host` 继续作为内部兼容标识。
 
 完整进程、协议与生命周期说明见 [Node/Pi 宿主与 IPC](../doc/10-架构与运行/0001-Node-Pi-宿主与-IPC.md)。
 
 ## 当前能力
+
+- `workspace.*` 仅访问已登记的项目、任务目录和产物；文件/资源读取与 Git 命令从拒绝符号链接的原生目录句柄开始。Markdown/HTML 保存校验原内容摘要，并与 Runtime 写入互斥；敏感路径不进入文件或 Git 展示，单文件产物不扩大父目录范围。
 
 - 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
 - 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；沿用 Schema 2。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
@@ -57,6 +59,9 @@ npm start -- --agent-dir ~/.pi/agent
 ```
 
 ## 目录
+
+- `src/workspace-files.ts` / `workspace-access.ts` / `workspace-write-guard.ts`：文件/Git 协议、来源边界与编辑保存的写入保留。
+- `native/WorkspaceFiles.swift` / `FileHelper.swift`：安全目录遍历、稳定读取、原子保存和有界 Git 读取；`scripts/build-native.mjs` 随 Host 构建生成 `dist/bin/dcode-files`，客户端打包一并携带。
 
 - `src/protocol.ts`：Protocol v1 类型、解析、参数校验和信封构造。
 - `src/product-store.ts` / `src/product-store-schema.ts`：D Code 原生产品数据库、事务、迁移、投影与恢复合同。

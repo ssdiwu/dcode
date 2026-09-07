@@ -1,0 +1,10 @@
+import {spawnSync} from "node:child_process";
+import {mkdir} from "node:fs/promises";
+import {fileURLToPath} from "node:url";
+import {join} from "node:path";
+const root=fileURLToPath(new URL("..",import.meta.url));
+if(process.platform!=="darwin")throw new Error("D Code native file boundary requires macOS");
+await mkdir(join(root,"dist/bin"),{recursive:true});
+const result=spawnSync("xcrun",["swiftc","-O","-swift-version","6","-parse-as-library",join(root,"native/WorkspaceFiles.swift"),join(root,"native/FileHelper.swift"),"-o",join(root,"dist/bin/dcode-files")],{stdio:"inherit"});
+if(result.error)throw result.error;
+if(result.status!==0)throw new Error(`Native file boundary build failed (${result.status})`);

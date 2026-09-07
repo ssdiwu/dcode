@@ -405,6 +405,7 @@ test(
         () => assert.ok(screen.getByRole("button", { name: "发送" })),
         { timeout: 10000 },
       );
+      fireEvent.click(screen.getByRole("button",{name:"文件与 Git"}));await waitFor(()=>assert.ok(screen.getByRole("tab",{name:"对话"})));fireEvent.click(screen.getByRole("tab",{name:"对话"}));
       fireEvent.pointerDown(screen.getByRole("button", { name: "选择模型" }), {
         button: 0,
         ctrlKey: false,

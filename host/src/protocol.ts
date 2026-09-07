@@ -32,6 +32,15 @@ export const HOST_METHODS = [
   "dcodeSession.copy",
   "project.create",
   "project.gitBranch",
+  "workspace.tree",
+  "workspace.read",
+  "workspace.asset",
+  "workspace.preview",
+  "workspace.save",
+  "workspace.git",
+  "workspace.diff",
+  "workspace.reference",
+  "workspace.describe",
   "task.create",
   "task.manage",
   "task.context.replace",
@@ -772,6 +781,21 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.promptId to be at most 128 characters");
       }
       validatePromptImages(params, "images");
+      return;
+    }
+    case "workspace.reference":
+      requireBoundedString(params,"taskId",200);requireBoundedString(params,"reference",4096);return;
+    case "workspace.describe": case "workspace.tree": case "workspace.read": case "workspace.asset": case "workspace.preview": case "workspace.save": case "workspace.git": case "workspace.diff": {
+      const source=params.source;
+      if(!source||typeof source!=="object"||Array.isArray(source))throw new ProtocolValidationError("INVALID_PARAMS","Workspace source required");
+      const record=source as Record<string,unknown>;
+      if(Object.keys(record).some(key=>!["taskId","projectId","artifactId"].includes(key))||!Object.keys(record).length)throw new ProtocolValidationError("INVALID_PARAMS","Invalid workspace source");
+      for(const key of Object.keys(record))requireBoundedString(record,key,200);
+      if(params.path!==undefined){const path=requireString(params,"path",{allowEmpty:true});if(path.length>4096)throw new ProtocolValidationError("INVALID_PARAMS","File path too long");}
+      if(method==="workspace.asset"||method==="workspace.preview")requireBoundedString(params,"expectedRoot",4096);
+      if(method==="workspace.preview"){const text=requireString(params,"text",{allowEmpty:true});if(Buffer.byteLength(text)>2*1024*1024)throw new ProtocolValidationError("INVALID_PARAMS","HTML too long");}
+      if(method==="workspace.save"){requireBoundedString(params,"expectedRoot",4096);const text=requireString(params,"text",{allowEmpty:true});if(Buffer.byteLength(text)>2*1024*1024)throw new ProtocolValidationError("INVALID_PARAMS","File content too long");requireBoundedString(params,"expectedDigest",100);if(params.overwrite!==undefined&&typeof params.overwrite!=="boolean")throw new ProtocolValidationError("INVALID_PARAMS","Invalid overwrite choice");}
+      if(params.staged!==undefined&&typeof params.staged!=="boolean")throw new ProtocolValidationError("INVALID_PARAMS","Invalid staged choice");
       return;
     }
     case "project.gitBranch":

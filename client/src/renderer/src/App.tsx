@@ -1,3 +1,5 @@
+import {WorkspaceFiles,FileCloseDialog} from "./components/WorkspaceFiles";
+import {useWorkspaceFiles,FileReferenceContext} from "./workbench/useWorkspaceFiles";
 import { InspirationWorkspace } from "./components/InspirationWorkspace";
 import { useInspiration } from "./workbench/useInspiration";
 import { Transcript } from "./components/conversation/Transcript";
@@ -97,6 +99,7 @@ const stateLabel = (state: string) =>
 
 export function App() {
   const work = useWorkbench();
+  const files=useWorkspaceFiles(work);
   const display = useDisplay();
   const reduced = useReducedMotion();
   const models = useModels({sessionId:work.session?.id,mutateStore:work.mutateStore,onChanged:async()=>{await Promise.all([work.reload(),work.refreshPresentation()]);},onError:work.fail});
@@ -177,7 +180,7 @@ export function App() {
   const ideaSources=work.snapshot?.taskContextSets.find(set=>set.taskId===work.task?.id)?.sources.filter(source=>source.kind==="global_knowledge"&&source.rootPath?.endsWith("/knowledge/inspiration"))??[];
   const showingSettings = display.page === "settings";
   if (showingSettings)
-    return (
+    return (<><FileCloseDialog model={files}/>
       <SettingsWorkspace
         initialPage={display.settingsPage}
         work={work}
@@ -189,7 +192,7 @@ export function App() {
           select(task);
           display.set({ page: "task" });
         }}
-      />
+      /></>
     );
   const manageTask = async () => {
     if (!taskAction || taskActionBusy) return;
@@ -216,7 +219,7 @@ export function App() {
   const tasks = [...(work.snapshot?.tasks ?? [])]
     .filter((t) => t.state !== "archived")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  return (
+  return (<FileReferenceContext.Provider value={display.page==="task"?reference=>void files.openReference(reference):undefined}>
     <div
       className={`workbench ${display.nav ? "" : "nav-hidden"}`}
       style={
@@ -366,6 +369,7 @@ export function App() {
             </span>
           )}
           <span className="spacer" />
+          {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.visible} onClick={()=>files.visible?files.conversation():files.show()}><Folder size={16}/></button>}
           {work.task && display.page==="task" && (
             <Menu.Root>
               <Menu.Trigger asChild>
@@ -459,7 +463,7 @@ export function App() {
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector ? "with-inspector" : ""}`}>
             <section className={`conversation-space ${!work.session ? "new-conversation" : ""}`}>
-              <Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />
+              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}`} model={files} work={work} overlay={display.search||display.importing||display.projectForm||!!taskAction}/>: <Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <Composer
                   work={work}
@@ -493,6 +497,7 @@ export function App() {
                 target={inspector}
                 snapshot={work.snapshot}
                 taskId={work.task?.id ?? null}
+                onOpenArtifact={id=>{void files.openArtifact(id);openDetail(null);}}
                 onClose={() => openDetail(null)}
               />
             )}
@@ -606,7 +611,8 @@ export function App() {
           />
         </Overlay>
       )}
-    </div>
+      <FileCloseDialog model={files}/>
+    </div></FileReferenceContext.Provider>
   );
 }
 function Logo() {
@@ -971,11 +977,13 @@ function Inspector({
   target,
   snapshot,
   taskId,
+  onOpenArtifact,
   onClose,
 }: {
   target: TaskWorkbenchInspectorTarget;
   snapshot: FoundationSnapshot;
   taskId: string | null;
+  onOpenArtifact:(id:string)=>void;
   onClose: () => void;
 }) {
   const item =
@@ -1026,6 +1034,7 @@ function Inspector({
                 }
               />
             )}{" "}
+            {target.kind==="artifact"&&("managedPath" in item&&item.managedPath||"externalPath" in item&&item.externalPath)&&<button className="primary-button" onClick={()=>onOpenArtifact(item.id)}>打开产物</button>}
             {"managedPath" in item && item.managedPath && (
               <p className="source-path">{item.managedPath}</p>
             )}

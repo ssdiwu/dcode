@@ -1,3 +1,5 @@
+import {closePreviewProxy} from "./preview-network.js";
+import { HTMLPreview } from "./html-preview.js";
 import { readLegacyPreferences } from "./legacy-preferences.js";
 import { switchApplication } from "./candidate-switch.js";
 import {
@@ -38,6 +40,7 @@ function diagnostic(message: string) {
 }
 let quitAck: ((error?: string) => void) | null = null;
 app.setName("D Code");
+if(process.env.DCODE_USER_DATA) app.setPath("userData",process.env.DCODE_USER_DATA);
 const sendEvent = (event: string, data?: unknown) => {
   if (window && !window.isDestroyed())
     window.webContents.send("dcode:event", {
@@ -130,7 +133,15 @@ const trustedHandle = <Args extends unknown[]>(
     assertSender(event);
     return fn(...(args as Args));
   });
+const htmlPreview=new HTMLPreview(()=>window,()=>bridge,sendEvent);
 function setupIPC() {
+  trustedHandle("dcode:htmlPreview",(input:Record<string,unknown>)=>{
+    if(input.action==="update")return htmlPreview.update(input as unknown as Parameters<HTMLPreview["update"]>[0]);
+    if(input.action==="bounds")return htmlPreview.bounds(input.bounds as Parameters<HTMLPreview["bounds"]>[0],input.clientId as string|undefined);
+    if(input.action==="network"&&typeof input.id==="string"&&typeof input.allow==="boolean")return htmlPreview.allowNetwork(input.id,input.allow);
+    if(input.action==="close")return htmlPreview.close(typeof input.clientId==="string"?input.clientId:undefined);
+    throw new Error("预览操作无效");
+  });
   trustedHandle("dcode:restoreFailed", async () => {
     if (process.env.DCODE_SWITCH_ID && process.env.DCODE_SWITCH_READY) {
       await writeFile(
@@ -517,6 +528,7 @@ async function createWindow() {
     }
   });
   window.on("closed", () => {
+    void htmlPreview.close().catch(()=>{});
     window = null;
   });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -561,6 +573,8 @@ app.on("before-quit", (event) => {
         return;
       }
     }
+    await htmlPreview.close().catch(()=>{});
+    closePreviewProxy();
     await bridge?.shutdown();
     shutdownComplete = true;
     app.quit();
