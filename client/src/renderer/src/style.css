@@ -1634,6 +1634,7 @@ details[open] > summary > svg:first-child {
 
 .runtime-notice{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px;border:1px solid var(--c-line);border-radius:8px;font-size:12px;}.runtime-notice span{white-space:pre-wrap;}
 
+.project-edit{margin-left:auto;opacity:0;}.project-group summary:hover .project-edit,.project-edit:focus-visible{opacity:1;}.checkbox-label{display:flex!important;align-items:center;gap:8px;}
 
 .task-context-content{max-height:70vh;overflow:auto;padding:16px;display:grid;gap:12px;}.task-context-content h3,.task-context-content h4{margin:4px 0;}.task-context-content select{width:100%;padding:7px;border:1px solid var(--c-line);border-radius:6px;background:var(--c-raised);color:var(--c-ink);}.context-selection,.receipt-sources{padding:0;margin:0;list-style:none;}.context-selection li{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--c-line);}.context-selection li>span{display:grid;flex:1;min-width:0;gap:4px;}.receipt-facts{display:grid;grid-template-columns:110px 1fr;gap:8px;margin:0;}.receipt-facts dd{margin:0;overflow-wrap:anywhere;}.receipt-input{font:12px/1.6 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;background:var(--c-raised);padding:12px;border-radius:8px;}.receipt-sources li{display:grid;gap:4px;padding:8px 0;}.receipt-sources code{font-size:10px;overflow-wrap:anywhere;color:var(--c-muted);}
 

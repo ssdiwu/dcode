@@ -1,4 +1,5 @@
 import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-process.js";
+import type {ProjectDirectoryChange} from "./project-directory-change.js";
 import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
 import type { VerificationRecord, CoordinatorReviewRecord } from "./collaboration-verification.js";
 import type { CollaborationMessage, CollaborationMessageState } from "./collaboration-message.js";
@@ -727,6 +728,7 @@ export interface FoundationSnapshot {
   collaborationMessages?: CollaborationMessage[];
   collaborationQueues?:Array<{sessionId:string;revision:number;messageIds:string[]}>;
   providerCalls?:Array<import("./provider-route-stream.js").ProviderCallRecord&{taskId:string;sessionId?:string;sessionRunId?:string;agentRunId?:string}>;
+  projectDirectoryChanges?:ProjectDirectoryChange[];
   runtimeDialogs?:Array<import("./extension-ui.js").RuntimeDialog&{runtimeId:string;taskId:string;sessionId:string}>;
   events: StoreEventRecord[];
 }
@@ -3165,6 +3167,7 @@ export class ProductStore {
       agentProcesses: this.agentProcessExecutions(),
       collaborationMessages: this.collaborationMessages(),
       collaborationQueues:[...new Set(this.collaborationMessages().map(message=>message.targetSessionId))].map(id=>this.collaborationQueueState(id)),
+      projectDirectoryChanges:this.projectDirectoryChanges(),
       providerCalls:this.providerCalls(),
       auxiliaryProcesses:this.auxiliaryProcessExecutions(),
       events: (
@@ -3458,6 +3461,60 @@ export class ProductStore {
     }
   }
 
+  projectDirectoryChanges():ProjectDirectoryChange[]{
+    this.assertOpen();return (this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='project.directoryChange' GROUP BY entity_id) ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
+  }
+
+  async renameProject(input:{requestId:string;projectId:string;expectedProjectRevision:number;title:string}):Promise<{storeRevision:number;project:ProjectRecord}> {
+    const title=requiredCredentialFreeString(input.title,"title",200).trim();if(!title)throw new ProductStoreError("INVALID_ARGUMENT","项目名称不能为空");
+    return this.mutate("project.rename",input.requestId,undefined,{...input,title},(_revision,now)=>{
+      const previous=this.database.prepare("SELECT * FROM projects WHERE id=?").get(input.projectId) as SQLiteRow|undefined;
+      if(!previous||integer(previous,"revision")!==input.expectedProjectRevision)throw new ProductStoreError("REVISION_CONFLICT","项目刚刚更新，请刷新后重试");
+      this.database.prepare("UPDATE projects SET title=?,revision=revision+1,updated_at=? WHERE id=?").run(title,now,input.projectId);
+      const updated={...project(previous),title,revision:integer(previous,"revision")+1,updatedAt:now};return {value:{project:updated},event:{kind:"project.renamed",entityKind:"project",entityId:input.projectId,payload:updated}};
+    });
+  }
+
+  async prepareProjectDirectoryChange(change:ProjectDirectoryChange):Promise<{storeRevision:number}> {
+    return this.mutate("project.directoryPrepare",`prepare:${change.id}`,undefined,change,()=>{
+      const current=this.database.prepare("SELECT * FROM projects WHERE id=?").get(change.projectId) as SQLiteRow|undefined;
+      if(!current||integer(current,"revision")!==change.expectedProjectRevision||current.directory!==change.sourceDirectory)throw new ProductStoreError("REVISION_CONFLICT","项目目录已改变，尚未移动文件");
+      if(this.projectDirectoryChanges().some(item=>item.projectId===change.projectId&&["prepared","unknown"].includes(item.status)))throw new ProductStoreError("REVISION_CONFLICT","项目还有未确认的目录更换");
+      if(change.status!=="prepared"||change.bindings.length>200)throw new ProductStoreError("INVALID_ARGUMENT","目录更换计划无效");
+      const overlaps=(a:string,b:string)=>a===b||strictlyInside(a,b)||strictlyInside(b,a);
+      if((this.database.prepare("SELECT id,directory FROM projects WHERE id<>?").all(change.projectId) as SQLiteRow[]).some(project=>project.directory===change.targetDirectory||change.moveFiles&&[change.sourceDirectory,change.targetDirectory].some(root=>overlaps(root,text(project,"directory")))))throw new ProductStoreError("REVISION_CONFLICT","准备期间另一个项目登记了相关目录，尚未移动文件");
+      const bindings=this.database.prepare("SELECT b.* FROM session_runtime_bindings b JOIN tasks t ON t.id=b.task_id WHERE t.project_id=? AND b.cwd=?").all(change.projectId,change.sourceDirectory) as SQLiteRow[];
+      if(bindings.length!==change.bindings.length||new Set(change.bindings.map(candidate=>candidate.sessionId)).size!==bindings.length||change.bindings.some(candidate=>!bindings.some(binding=>binding.session_id===candidate.sessionId&&binding.adapter_session_id===candidate.previousAdapterId&&integer(binding,"revision")===candidate.previousBindingRevision)))throw new ProductStoreError("REVISION_CONFLICT","项目会话在准备期间发生变化");
+      requiredCredentialFreeString(change.title,"title",200);
+      return {value:{},event:{kind:"project.directoryChange",entityKind:"projectDirectoryChange",entityId:change.id,payload:change}};
+    });
+  }
+
+  async finishProjectDirectoryChange(id:string,status:"committed"|"cancelled"|"unknown",reason?:string):Promise<{storeRevision:number;change:ProjectDirectoryChange}> {
+    return this.mutate("project.directoryFinish",`finish:${id}:${status}:${payloadHash(reason??null).slice(0,12)}`,undefined,{id,status,reason:reason??null},(_revision,now)=>{
+      const change=this.projectDirectoryChanges().find(change=>change.id===id);
+      if(!change||!["prepared","unknown"].includes(change.status))throw new ProductStoreError("REVISION_CONFLICT","目录更换已结束，请刷新项目状态");
+      if(status==="committed"){
+        const current=this.database.prepare("SELECT * FROM projects WHERE id=?").get(change.projectId) as SQLiteRow|undefined;
+        if(!current||integer(current,"revision")!==change.expectedProjectRevision||current.directory!==change.sourceDirectory)throw new ProductStoreError("REVISION_CONFLICT","项目已被其他修改更新，不能覆盖");
+        const bound=this.database.prepare("SELECT b.session_id FROM session_runtime_bindings b JOIN tasks t ON t.id=b.task_id WHERE t.project_id=? AND b.cwd=?").all(change.projectId,change.sourceDirectory) as SQLiteRow[];
+        if(bound.length!==change.bindings.length||bound.some(row=>!change.bindings.some(candidate=>candidate.sessionId===row.session_id)))throw new ProductStoreError("REVISION_CONFLICT","项目会话在提交前发生变化");
+        for(const candidate of change.bindings){
+          const row=this.database.prepare("SELECT b.* FROM session_runtime_bindings b JOIN tasks t ON t.id=b.task_id WHERE b.session_id=? AND t.project_id=?").get(candidate.sessionId,change.projectId) as SQLiteRow|undefined;
+          if(!row||row.adapter_session_id!==candidate.previousAdapterId||integer(row,"revision")!==candidate.previousBindingRevision)throw new ProductStoreError("REVISION_CONFLICT","会话绑定已改变，不能替换");
+          this.database.prepare("UPDATE session_runtime_bindings SET adapter_session_id=?,adapter_session_path=?,cwd=?,state='ready',revision=revision+1,updated_at=? WHERE session_id=?").run(candidate.adapterSessionId,candidate.adapterSessionPath,change.targetDirectory,now,candidate.sessionId);
+        }
+        this.database.prepare("UPDATE projects SET title=?,directory=?,revision=revision+1,updated_at=? WHERE id=?").run(change.title,change.targetDirectory,now,change.projectId);
+        this.database.prepare("UPDATE tasks SET cwd=?,revision=revision+1,updated_at=? WHERE project_id=?").run(change.targetDirectory,now,change.projectId);
+        const digest=createHash("sha256").update(change.targetDirectory).digest("hex");
+        this.database.prepare("UPDATE agent_assignments SET task_packet_json=json_set(task_packet_json,'$.workspaceRootDigest',?),revision=revision+1 WHERE task_id IN (SELECT id FROM tasks WHERE project_id=?) AND json_extract(task_packet_json,'$.workspacePolicy')='task_directory'").run(digest,change.projectId);
+        this.database.prepare("UPDATE artifacts SET metadata_json=json_set(metadata_json,'$.state','unknown','$.failureCode','PROJECT_DIRECTORY_CHANGED'),revision=revision+1,updated_at=? WHERE task_id IN (SELECT id FROM tasks WHERE project_id=?) AND kind=? AND json_extract(metadata_json,'$.state')='ready'").run(now,change.projectId,MANAGED_WORKER_WORKTREE_ARTIFACT_KIND);
+      }
+      const next={...change,status,...(reason?{error:requiredCredentialFreeString(reason,"reason",2000)}:{})};
+      return {value:{change:next},event:{kind:"project.directoryChange",entityKind:"projectDirectoryChange",entityId:change.id,payload:next}};
+    });
+  }
+
   async createProject(input: {
     requestId: string;
     expectedStoreRevision: number;
@@ -3497,6 +3554,7 @@ export class ProductStore {
       input.expectedStoreRevision,
       params,
       (_storeRevision, now) => {
+        if(this.projectDirectoryChanges().some(change=>["prepared","unknown"].includes(change.status)&&[change.sourceDirectory,change.targetDirectory].some(root=>root===directory||strictlyInside(root,directory)||strictlyInside(directory,root))))throw new ProductStoreError("REVISION_CONFLICT","相关目录更换结果尚未确认，不能重新登记为其他项目");
         const currentUser = this.currentUser();
         const record: ProjectRecord = {
           id: `project-${randomUUID()}`,

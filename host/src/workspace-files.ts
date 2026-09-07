@@ -22,7 +22,7 @@ export class WorkspaceFiles {
   private waiting:Array<()=>void>=[];
   constructor(private readonly helper=fileURLToPath(new URL("../bin/dcode-files",import.meta.url))){}
   private async call(root:string,relativePath:string,action:string,extra:Record<string,unknown>={}):Promise<Record<string,unknown>> {
-    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="tree"||action==="git");
+    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="tree"||action==="git"||action==="swap-directories");
     const path=join(canonical,relativePath);
     if(relative(canonical,path).startsWith("..")||isAbsolute(relative(canonical,path)))throw new WorkspaceFileError("FILE_SCOPE","文件不在项目目录内");
     if(this.active>=4)await new Promise<void>(resolve=>this.waiting.push(resolve));
@@ -42,7 +42,10 @@ export class WorkspaceFiles {
       child.stdin.end(JSON.stringify({action,root:canonical,path,...extra}));
     }).finally(()=>{const next=this.waiting.shift();if(next)next();else this.active--;});
   }
-
+  async git(root:string,args:string[]):Promise<string>{const result=await this.call(root,"","git",{arguments:args});return String(result.stdout??"");}
+  async swapDirectories(sourceRoot:string,targetRoot:string,source:{device:string;inode:string},target:{device:string;inode:string},requireEmptyTarget=true):Promise<void>{
+    await this.call(sourceRoot,"","swap-directories",{targetRoot:workspaceRootPath(targetRoot),sourceDevice:source.device,sourceInode:source.inode,targetDevice:target.device,targetInode:target.inode,requireEmptyTarget});
+  }
   private snapshot(path:string,result:Record<string,unknown>):WorkspaceFile {
     if(typeof result.text!=="string"||typeof result.digest!=="string")throw new WorkspaceFileError("FILE_UNAVAILABLE","文件正文不可用");
     if(redactCredentialText(result.text).redacted)throw new WorkspaceFileError("FILE_CREDENTIAL_MATERIAL","文件包含凭据内容，预览已隐藏");
@@ -53,7 +56,6 @@ export class WorkspaceFiles {
     safeWorkspaceRelativePath(path);
     if(![".html",".htm"].includes(extname(path).toLowerCase())||typeof text!=="string"||Buffer.byteLength(text)>2*1024*1024||redactCredentialText(text).redacted)throw new WorkspaceFileError("HTML_CONTENT_REJECTED","HTML 预览内容不可用或包含凭据");
   }
-  async git(root:string,args:string[]):Promise<string>{const result=await this.call(root,"","git",{arguments:args});return String(result.stdout??"");}
   async tree(root:string,path=""):Promise<WorkspaceTree>{
     const result=await this.call(root,path,"tree");const entries=(result.entries as Array<{name:string;kind:WorkspaceTree["entries"][number]["kind"]}>).filter(entry=>{try{safeWorkspaceRelativePath(join(path,entry.name));return true;}catch{return false;}}).map(entry=>({...entry,relativePath:join(path,entry.name)})).sort((a,b)=>(a.kind==="directory"?0:1)-(b.kind==="directory"?0:1)||a.name.localeCompare(b.name));
     return {relativePath:path,entries,truncated:result.truncated===true};

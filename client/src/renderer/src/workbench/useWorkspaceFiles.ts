@@ -62,7 +62,24 @@ export function useWorkspaceFiles(work:Workbench){
     if(!tab.document)return;const line=lineOverride??tab.line??1;const content=(tab.draft??tab.document.text).split("\n")[line-1];
     work.updateDraft(work.draftKey,previous=>({...previous,text:`${previous.text}${previous.text?"\n\n":""}[${tab.path}:${line}](<${encodeURI(tab.document!.absolutePath)}#L${line}>)${fileDirty(tab)?"（未保存编辑）":""}\n> ${content??""}\n`}));
   };
-  return {source,baseSource,scope,browse,openArtifact,openRelative,artifacts:work.snapshot?.artifacts.filter(artifact=>artifact.taskId===work.task?.id&&artifact.kind!=="attachment"&&(artifact.managedPath||artifact.externalPath))??[],tabs:tabs.filter(tab=>tab.scope===scope),allTabs:tabs,active:tabs.find(tab=>tab.id===selected[scope])??null,visible:browser[scope]??false,closing:tabs.find(tab=>tab.id===closing)??null,
+  const projectFileScope=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
+    const taskIds=new Set(work.snapshot?.tasks.filter(task=>task.scope.kind==="project"&&task.scope.projectId===projectId).map(task=>task.id));
+    const normalize=(path:string)=>path.replace(/^\/(var|tmp|etc)(?=\/|$)/u,"/private/$1").normalize("NFD").toLowerCase().replace(/\/+$/u,"");
+    const roots=[work.snapshot?.projects.find(project=>project.id===projectId)?.directory,targetDirectory].filter((path):path is string=>!!path).map(normalize);
+    const sourceOwned=(source:WorkspaceSource)=>source.projectId===projectId||!!source.taskId&&taskIds.has(source.taskId);
+    const contains=(tab:FileTab)=>sourceOwned(tab.source)||moveFiles&&!!tab.document&&roots.some(root=>{const path=normalize(tab.document!.absolutePath);return path===root||path.startsWith(root+"/");});
+    return {sourceOwned,contains};
+  };
+  const beforeProjectDirectoryChange=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
+    const {contains}=projectFileScope(projectId,targetDirectory,moveFiles);
+    if(latest.current.some(tab=>contains(tab)&&(fileDirty(tab)||tab.saving)))throw new Error("请先保存或关闭相关目录中尚未保存的文件，再更换目录");
+  };
+  const invalidateProject=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
+    const {sourceOwned,contains}=projectFileScope(projectId,targetDirectory,moveFiles);
+    for(const tab of latest.current)if(!fileDirty(tab)&&!tab.saving&&contains(tab))discard(tab.id);
+    setBrowserSources(previous=>Object.fromEntries(Object.entries(previous).filter(([,source])=>!sourceOwned(source))));
+  };
+  return {source,baseSource,scope,beforeProjectDirectoryChange,invalidateProject,browse,openArtifact,openRelative,artifacts:work.snapshot?.artifacts.filter(artifact=>artifact.taskId===work.task?.id&&artifact.kind!=="attachment"&&(artifact.managedPath||artifact.externalPath))??[],tabs:tabs.filter(tab=>tab.scope===scope),allTabs:tabs,active:tabs.find(tab=>tab.id===selected[scope])??null,visible:browser[scope]??false,closing:tabs.find(tab=>tab.id===closing)??null,
     show:()=>setBrowser(values=>({...values,[scope]:true})),conversation:()=>setBrowser(values=>({...values,[scope]:false})),select:(id:string)=>{setBrowser(values=>({...values,[scope]:true}));setSelected(values=>({...values,[scope]:id}));},
     open,openReference,save,close,discard,keep:()=>setClosing(null),saveAndClose:async(id:string)=>{if(await save(id))discard(id);},reload:(tab:FileTab)=>load(tab.id,tab.source,tab.path),patch,quote};
 }

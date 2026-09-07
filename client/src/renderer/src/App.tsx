@@ -129,6 +129,7 @@ export function App() {
   const [taskActionBusy, setTaskActionBusy] = useState(false);
   const [taskActionError, setTaskActionError] = useState<string | null>(null);
   const [contextOpen,setContextOpen]=useState(false);
+  const [projectEditingId,setProjectEditingId]=useState<string|null>(null);
   const [target, setTarget] = useState<
     TaskWorkbenchInspectorTarget | null | undefined
   >();
@@ -162,7 +163,7 @@ export function App() {
           display.set({ page: "settings", settingsPage: "models" });
         if (event.event === "shell.candidateRestored")
           display.set({ page: "settings", settingsPage: "evolution" });
-        if (event.event === "shell.newProject") display.set({ projectForm: true });
+        if (event.event === "shell.newProject") {setProjectEditingId(null);display.set({ projectForm: true });}
         if (event.event === "shell.newTask") {
           display.set({ page: "task", overview: false });
           setTarget(null);
@@ -293,7 +294,7 @@ export function App() {
                 className="icon-button"
                 aria-label="新建项目"
                 title="新建项目 ⇧⌘N"
-                onClick={() => display.set({ projectForm: true })}
+                onClick={() => {setProjectEditingId(null);display.set({ projectForm: true });}}
               >
                 <Plus size={14} />
               </button>
@@ -303,7 +304,7 @@ export function App() {
                 <summary>
                   <ChevronRight size={13} />
                   <Folder size={14} />
-                  <span>{p.title}</span>
+                  <span>{p.title}</span><button type="button" className="icon-button project-edit" aria-label={`编辑项目 ${p.title}`} onClick={event=>{event.preventDefault();event.stopPropagation();setProjectEditingId(p.id);display.set({projectForm:true});}}><Settings size={13}/></button>
                 </summary>
                 <div className="project-tasks">
                   {tasks
@@ -472,7 +473,7 @@ export function App() {
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector ? "with-inspector" : ""}`}>
             <section className={`conversation-space ${!work.session ? "new-conversation" : ""}`}>
-              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}`} model={files} work={work} overlay={contextOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
                 <Composer
@@ -612,11 +613,15 @@ export function App() {
       )}
       {display.projectForm && (
         <Overlay
-          label="新建项目"
+          label={projectEditingId?"编辑项目":"新建项目"}
           onClose={() => display.set({ projectForm: false })}
         >
           <ProjectForm
+            key={projectEditingId??"new"}
             work={work}
+            project={work.snapshot?.projects.find(project=>project.id===projectEditingId)}
+            beforeDirectoryChange={files.beforeProjectDirectoryChange}
+            afterDirectoryChange={files.invalidateProject}
             onClose={() => display.set({ projectForm: false })}
           />
         </Overlay>
@@ -1258,27 +1263,32 @@ function SearchPanel({
   );
 }
 function ProjectForm({
-  work,
+  work,project,beforeDirectoryChange,afterDirectoryChange,
   onClose,
 }: {
   work: Workbench;
+  project?:FoundationSnapshot["projects"][number];
+  beforeDirectoryChange:(projectId:string,targetDirectory:string,moveFiles:boolean)=>void;
+  afterDirectoryChange:(projectId:string,targetDirectory:string,moveFiles:boolean)=>void;
   onClose: () => void;
 }) {
-  const [title, setTitle] = useState("");
-  const [directory, setDirectory] = useState("");
+  const initial=useRef(project);
+  const [title, setTitle] = useState(project?.title??"");
+  const [directory, setDirectory] = useState(project?.directory??"");
+  const [moveFiles,setMoveFiles]=useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const create = async () => {
     if (!title.trim() || !directory || busy) return;
     setBusy(true);
     try {
-      const result = await work.mutateStore<{ project: { id: string } }>(
-        "project.create",
-        { title: title.trim(), directory },
-      );
+      const changed=!!initial.current&&directory!==initial.current.directory;
+      if(changed)beforeDirectoryChange(initial.current!.id,directory,moveFiles);
+      const result = initial.current?await api().request<{project:{id:string}}>("project.update",{requestId:crypto.randomUUID(),projectId:initial.current.id,expectedProjectRevision:initial.current.revision,title:title.trim(),directory,moveFiles:changed&&moveFiles}):await work.mutateStore<{ project: { id: string } }>("project.create",{ title: title.trim(), directory });
+      if(changed)afterDirectoryChange(initial.current!.id,directory,moveFiles);
       await work.reload();
-      work.setNewProjectId(result.project.id);
-      work.newTask();
+      await work.refreshPresentation();
+      if(!initial.current){work.setNewProjectId(result.project.id);work.newTask();}
       useDisplay.getState().set({ page: "task" });
       onClose();
     } catch (e) {
@@ -1295,7 +1305,7 @@ function ProjectForm({
       }}
     >
       <div className="panel-heading">
-        <strong>新建项目</strong>
+        <strong>{project?"编辑项目":"新建项目"}</strong>
         <button
           type="button"
           className="icon-button"
@@ -1333,6 +1343,8 @@ function ProjectForm({
             {directory || "选择文件夹…"}
           </button>
         </label>
+        {project&&directory!==initial.current?.directory&&<><p className="secondary">任务与对话会保留，后续工作使用新目录。</p><label className="checkbox-label"><input type="checkbox" checked={moveFiles} onChange={event=>setMoveFiles(event.target.checked)}/>同时移动项目文件</label>{moveFiles&&<p className="secondary">目标需为同一磁盘上的空文件夹，已有文件不会被合并或覆盖。</p>}</>}
+        {project&&work.snapshot?.projectDirectoryChanges?.filter(change=>change.projectId===project.id&&["prepared","unknown"].includes(change.status)).map(change=><div role="alert" key={change.id}><p>{change.error??"目录更换尚未完成"}</p><p className="source-path">{change.sourceDirectory} → {change.targetDirectory}</p><button type="button" className="text-button" onClick={()=>void api().request("project.recover",{projectId:project.id}).then(()=>work.reload()).catch(error=>setError(errorText(error)))}>重新核对目录状态</button></div>)}
         {error && <p role="alert">{error}</p>}
       </div>
       <div className="dialog-actions">
@@ -1343,7 +1355,7 @@ function ProjectForm({
           className="primary-button"
           disabled={!title.trim() || !directory || busy}
         >
-          {busy ? "正在创建…" : "创建项目"}
+          {busy ? "正在保存…" : project?"保存项目":"创建项目"}
         </button>
       </div>
     </form>

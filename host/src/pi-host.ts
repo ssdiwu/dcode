@@ -1,8 +1,9 @@
-import {WorkspaceWriteGuard} from "./workspace-write-guard.js";
+import {WorkspaceWriteGuard,workspacePathsOverlap} from "./workspace-write-guard.js";
 import {verificationContext} from "./verification-context.js";
 import {AuxiliaryProcesses} from "./auxiliary-process.js";
 import type {ProviderRouteControl,ProviderModel} from "./provider-route-stream.js";
 import {sanitizeRuntimeValue} from "./runtime-privacy.js";
+import {directoryChangeTargets,directoryPosition,swapProjectDirectories,privateSessionDigest,type ProjectDirectoryChange} from "./project-directory-change.js";
 import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
@@ -619,10 +620,7 @@ export class PiHost {
     if(access==="exclusiveWrite"){current.writerRuntimeId=runtimeId;current.access=access;}
   }
 
-  private workspacesOverlap(a:string,b:string):boolean {
-    const normalized=(path:string)=>path.normalize("NFD").toLowerCase().replace(/\/+$/u,"")+"/";
-    a=normalized(a);b=normalized(b);return a.startsWith(b)||b.startsWith(a);
-  }
+  private workspacesOverlap(a:string,b:string):boolean {return workspacePathsOverlap(a,b);}
 
   private claimConflict(claim:WorkspaceClaim,runtimeId:string,access:WorkspaceClaim["access"]):string|undefined {
     const other=[...claim.runtimeIds].find(id=>id!==runtimeId);if(!other)return;
@@ -646,6 +644,7 @@ export class PiHost {
   }
 
   private workspaceConflict(cwd: string, runtimeId: string, access: WorkspaceClaim["access"]): string | undefined {
+    if(access==="exclusiveWrite"&&this.pendingProjectDirectories().some(path=>this.workspacesOverlap(path,cwd)))return "project-directory-change";
     const fileWriter=this.workspaceFileWrites.conflict(cwd);if(fileWriter)return fileWriter;
     if(access==="exclusiveWrite")for(const record of this.productStore?.auxiliaryProcessExecutions()??[]){if(record.process.status==="unknown"&&!this.runtimes.has(record.runtimeId)&&this.workspacesOverlap(record.process.cwd,cwd))return record.runtimeId;}
     for(const claims of [this.runtimeWorkspaceClaims,this.openingWorkspaceClaims])for(const [path,claim] of claims){
@@ -706,6 +705,7 @@ export class PiHost {
 
   async start(): Promise<void> {
     await this.getProductStore();
+    await this.recoverProjectDirectoryChanges();
     if(this.productStore)for(const assignment of (await this.productStore.snapshot()).agentAssignments)if(assignment.assignmentKind!=="coordinator"&&assignment.agentRunId)await this.ensureAdaptiveInitialInput(this.productStore,assignment.agentRunId,true);
     await this.ensureDCodeRuntimeModelCatalog();
     await this.productStore?.sweepAttachments().catch(error=>this.options.emit("attachment.cleanupFailed",{message:error instanceof Error?error.message:String(error)}));
@@ -1242,10 +1242,108 @@ export class PiHost {
     }
   }
 
+  private readonly changingProjects=new Set<string>();
+  private readonly projectChangeFlights=new Map<string,{projectId:string;fingerprint:string;promise:Promise<unknown>}>();
+  private pendingProjectDirectories():string[]{return this.productStore?.projectDirectoryChanges().filter(change=>["prepared","unknown"].includes(change.status)).flatMap(change=>[change.sourceDirectory,change.targetDirectory])??[];}
+  private assertProjectAvailable(scope:TaskScope):void {
+    if(scope.kind==="project"&&(this.changingProjects.has(scope.projectId)||this.productStore?.projectDirectoryChanges().some(change=>change.projectId===scope.projectId&&["prepared","unknown"].includes(change.status))))throw new PiHostError("PROJECT_DIRECTORY_BUSY","项目目录正在更换或等待恢复，请稍后再继续这个项目");
+  }
+
+  private async recoverProjectDirectoryChanges(projectId?:string):Promise<void> {
+    const store=await this.getProductStore();
+    for(const change of store.projectDirectoryChanges().filter(change=>(!projectId||change.projectId===projectId)&&["prepared","unknown"].includes(change.status))){
+      this.changingProjects.add(change.projectId);
+      try {
+        const position=await directoryPosition(change);
+        if(!change.moveFiles||position==="original"){
+          await store.finishProjectDirectoryChange(change.id,"cancelled","上次目录更换尚未提交，原项目及文件保持原位");this.changingProjects.delete(change.projectId);continue;
+        }
+        if(position!=="swapped")throw new Error("目录状态不能确认");
+        for(const candidate of change.bindings){const privateRoot=join(store.layout.runtimeDirectory,"pi-sessions");const path=relative(privateRoot,candidate.adapterSessionPath);if(!path||path.startsWith("..")||isAbsolute(path)||await privateSessionDigest(candidate.adapterSessionPath)!==candidate.digest)throw new Error("会话副本不能确认");}
+        await store.finishProjectDirectoryChange(change.id,"committed");this.changingProjects.delete(change.projectId);this.searchIndex.invalidate();
+      }catch{
+        await store.finishProjectDirectoryChange(change.id,"unknown","目录或会话副本发生变化，未覆盖任何现有内容，请核对原目录和目标目录");
+      }
+    }
+    this.options.emit("foundation.changed",{kind:"project.directoryRecovered"});
+  }
+
+  private async updateNativeProject(params:Record<string,unknown>):Promise<unknown> {
+    const requestId=params.requestId as string;
+    const fingerprint=createHash("sha256").update(JSON.stringify({projectId:params.projectId,expectedProjectRevision:params.expectedProjectRevision,title:params.title,directory:params.directory,moveFiles:params.moveFiles})).digest("hex");
+    const existing=this.projectChangeFlights.get(requestId);if(existing){if(existing.fingerprint!==fingerprint)throw new PiHostError("IDEMPOTENCY_KEY_REUSED","同一请求不能用于不同的项目修改");return existing.promise;}
+    const operation=this.performNativeProjectUpdate(params);this.projectChangeFlights.set(requestId,{projectId:params.projectId as string,fingerprint,promise:operation});
+    try{return await operation;}finally{this.projectChangeFlights.delete(requestId);}
+  }
+
+  private async performNativeProjectUpdate(params:Record<string,unknown>):Promise<unknown> {
+    const store=await this.getProductStore();let snapshot=await store.snapshot();
+    if(typeof params.directory!=="string"||!isAbsolute(params.directory))throw new PiHostError("INVALID_ARGUMENT","请选择已有项目文件夹");
+    const id=params.projectId as string,title=String(params.title??"").trim(),requestedDirectory=resolve(params.directory);
+    if(!title||title.length>200||redactCredentialText(title).redacted)throw new PiHostError("INVALID_ARGUMENT","项目名称无效");
+    const previous=store.projectDirectoryChanges().find(change=>change.id===params.requestId);
+    if(previous){
+      if(previous.projectId!==id||previous.title!==title||previous.requestedDirectory!==requestedDirectory||previous.moveFiles!==(params.moveFiles===true)||previous.expectedProjectRevision!==params.expectedProjectRevision)throw new PiHostError("IDEMPOTENCY_KEY_REUSED","同一请求不能用于不同的目录修改");
+      if(previous.status==="prepared"||previous.status==="unknown")await this.recoverProjectDirectoryChanges(id);
+      const status=store.projectDirectoryChanges().find(change=>change.id===previous.id)!;
+      if(status.status!=="committed")throw new PiHostError("PROJECT_DIRECTORY_NOT_COMMITTED",status.error??"上次目录修改未完成，请重新核对后操作");
+      return {project:(await store.snapshot()).projects.find(project=>project.id===id),change:status,replayed:true};
+    }
+    const project=snapshot.projects.find(project=>project.id===id);if(!project)throw new PiHostError("PROJECT_NOT_FOUND","项目不存在");
+    this.assertProjectAvailable({kind:"project",projectId:id});
+    if(requestedDirectory===project.directory||await realpath(requestedDirectory)===project.directory){const result=await store.renameProject({requestId:params.requestId as string,projectId:id,expectedProjectRevision:params.expectedProjectRevision as number,title});this.options.emit("foundation.changed",{kind:"project.renamed",storeRevision:result.storeRevision});return result;}
+    if(project.revision!==params.expectedProjectRevision)throw new PiHostError("REVISION_CONFLICT","项目刚刚更新，请刷新后重试");
+    this.assertProjectAvailable({kind:"project",projectId:id});
+    this.changingProjects.add(id);
+    const claimId=`project-change:${params.requestId}`;const claimed:string[]=[];
+    let change:ProjectDirectoryChange|undefined;
+    try {
+      const target=await directoryChangeTargets(project.directory,requestedDirectory,params.moveFiles===true);
+      if(snapshot.projects.some(other=>other.id!==id&&(other.directory===target.targetDirectory||params.moveFiles===true&&[target.sourceDirectory,target.targetDirectory].some(root=>this.workspacesOverlap(root,other.directory)))))throw new PiHostError("PROJECT_DIRECTORY_OVERLAP","这次更换会影响另一个已登记项目，请使用不重叠的目录");
+      const modulePath=fileURLToPath(import.meta.url),applicationRoot=modulePath.match(/^(.+?\.app)(?:\/|$)/u)?.[1]??fileURLToPath(new URL("../../../",import.meta.url));
+      const ownedPaths=[store.layout.root,this.agentDir,applicationRoot];
+      if(params.moveFiles===true&&(target.sourceDirectory===snapshot.currentUser.homeDirectory||ownedPaths.some(path=>[target.sourceDirectory,target.targetDirectory].some(directory=>this.workspacesOverlap(directory,path)))))throw new PiHostError("PROJECT_DIRECTORY_PROTECTED","源、目标目录不能与运行数据或当前应用重叠，也不能移动用户主目录");
+      if(params.moveFiles===true){
+        const marker=await lstat(join(target.sourceDirectory,".git")).catch(()=>undefined);
+        if(marker?.isFile())throw new PiHostError("PROJECT_WORKTREE_MOVE_UNSUPPORTED","该目录是 Git 工作树，请先通过 Git 完成移动，再更换项目目录");
+        if(marker?.isDirectory()){const {stdout}=await promisify(execFileCallback)("git",["--no-optional-locks","-c","core.fsmonitor=false","-c","core.hooksPath=/dev/null","-C",target.sourceDirectory,"worktree","list","--porcelain"],{encoding:"utf8",timeout:10000,maxBuffer:1024*1024});if(stdout.split("\n").filter(line=>line.startsWith("worktree ")).length>1)throw new PiHostError("PROJECT_WORKTREE_MOVE_UNSUPPORTED","这个仓库还有关联工作树，请先处理关联后再移动项目文件");}
+      }
+      const taskIds=new Set(snapshot.tasks.filter(task=>task.scope.kind==="project"&&task.scope.projectId===id).map(task=>task.id));
+      if([...this.openingDCodeSessionIds.keys()].some(sessionId=>snapshot.sessions.some(session=>session.id===sessionId&&taskIds.has(session.taskId))))throw new PiHostError("PROJECT_IS_RUNNING","项目会话仍在启动，请等待收尾后再更换目录");
+      if(snapshot.collaborationMessages?.some(message=>taskIds.has(message.taskId)&&["queued","paused","delivering","interrupted","failed"].includes(message.state)))throw new PiHostError("PROJECT_HAS_PENDING_WORK","请先处理这个项目的待发送或中断工作，再更换目录");
+      for(const [runtimeId,runtime] of this.runtimes){const identity=runtime.runtimeIdentity;if(!identity)continue;if(taskIds.has(identity.taskId)||[target.sourceDirectory,target.targetDirectory].some(root=>this.workspacesOverlap(root,this.workspaceClaimKey(identity.workspace)))){
+        if(runtime.currentRun||runtime.session.isStreaming||runtime.auxiliary?.hasLive||runtime.ui.hasPendingDialogs||this.collaborationDrains.has(identity.dcodeSessionId))throw new PiHostError("PROJECT_IS_RUNNING","相关目录仍有工作运行，请先停止并等待收尾");
+        await this.closeRuntime(runtimeId);
+      }}
+      for(const root of [target.sourceDirectory,target.targetDirectory]){const key=await this.resolveWorkspaceIsolationKey(root);if(this.workspaceConflict(key,claimId,"exclusiveWrite"))throw new PiHostError("WORKSPACE_IN_USE","相关目录正在使用");this.addWorkspaceClaim(this.openingWorkspaceClaims,key,claimId,"exclusiveWrite");claimed.push(key);}
+      snapshot=await store.snapshot();const bindings=snapshot.sessionRuntimeBindings.filter(binding=>taskIds.has(binding.taskId)&&binding.cwd===target.sourceDirectory);if(bindings.length>200)throw new PiHostError("PROJECT_MIGRATION_LIMIT","这个项目超过单次会话迁移上限，需要分步处理");
+      const candidates:ProjectDirectoryChange["bindings"]=[];
+      for(const binding of bindings){const copied=await this.copySession(binding.adapterSessionId,target.targetDirectory,true) as import("./session-copy.js").SessionCopyResult;candidates.push({sessionId:binding.sessionId,previousAdapterId:binding.adapterSessionId,previousBindingRevision:binding.revision,adapterSessionId:copied.target.id,adapterSessionPath:copied.target.path,digest:await privateSessionDigest(copied.target.path)});}
+      change={id:params.requestId as string,projectId:id,expectedProjectRevision:project.revision,requestedDirectory,title,...target,moveFiles:params.moveFiles===true,bindings:candidates,status:"prepared"};
+      await store.prepareProjectDirectoryChange(change);
+      if(change.moveFiles)await swapProjectDirectories(change);
+      for(const candidate of candidates)if(await privateSessionDigest(candidate.adapterSessionPath)!==candidate.digest)throw new PiHostError("PROJECT_SESSION_CHANGED","会话副本在提交前发生变化");
+      const result=await store.finishProjectDirectoryChange(change.id,"committed");change=result.change;this.searchIndex.invalidate();
+      this.options.emit("foundation.changed",{kind:"project.directoryChanged",storeRevision:result.storeRevision});
+      return {project:(await store.snapshot()).projects.find(project=>project.id===id),change:result.change};
+    }catch(error){
+      if(change&&change.status!=="committed"){
+        try{
+          if(change.moveFiles){const position=await directoryPosition(change);if(position==="unknown")throw new Error("目录位置未知");if(position==="swapped")await swapProjectDirectories(change,true);if(await directoryPosition(change)!=="original")throw new Error("不能确认文件已恢复");}
+          await store.finishProjectDirectoryChange(change.id,"cancelled",change.moveFiles?"目录更换未提交，文件已恢复到原位置":"目录更换未提交，未移动项目文件");
+        }catch{await store.finishProjectDirectoryChange(change.id,"unknown","目录更换需要核对，未覆盖其他内容").catch(()=>undefined);}
+      }
+      throw error;
+    }finally{
+      for(const key of claimed)this.releaseWorkspaceClaim(this.openingWorkspaceClaims,key,claimId);
+      if(!store.projectDirectoryChanges().some(change=>change.projectId===id&&["prepared","unknown"].includes(change.status)))this.changingProjects.delete(id);
+    }
+  }
+
   private readonly openingLegacyWorkspaces=new Set<string>();
   private readonly closingWorkspaces=new Map<ActiveSession,string>();
   private workspaceFileWrites=new WorkspaceWriteGuard(()=>[
-    ...this.openingLegacyWorkspaces, ...this.closingWorkspaces.values(),
+    ...this.openingLegacyWorkspaces, ...this.closingWorkspaces.values(), ...this.pendingProjectDirectories(),
     ...[...this.runtimeWorkspaceClaims].filter(([,claim])=>claim.access==="exclusiveWrite").map(([root])=>root),
     ...this.openingWorkspaceClaims.keys(),
     ...(this.productStore?.auxiliaryProcessExecutions().filter(record=>record.process.status==="unknown").map(record=>record.process.cwd)??[]),
@@ -1257,6 +1355,8 @@ export class PiHost {
   });
 
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
+    if(method==="project.update")return this.updateNativeProject(params);
+    if(method==="project.recover"){if([...this.projectChangeFlights.values()].some(flight=>flight.projectId===params.projectId))throw new PiHostError("PROJECT_DIRECTORY_BUSY","项目目录更换仍在进行，请等待收尾");await this.recoverProjectDirectoryChanges(params.projectId as string);return this.foundationSnapshot(0);}
     if(method.startsWith("workspace."))return this.workspaceAccess.handle(method,params);
     if (method === "dcodeModels.quotas") return this.modelQuotaSnapshot(params);
 
@@ -1321,6 +1421,7 @@ export class PiHost {
   }
 
   async close(): Promise<void> {
+    await Promise.allSettled([...this.projectChangeFlights.values()].map(flight=>flight.promise));
     this.collaborationClosing = true;
     clearInterval(this.attachmentSweep);
     await this.maintenance?.close();
@@ -1636,6 +1737,7 @@ export class PiHost {
         return result;
       }
       case "task.create": {
+        this.assertProjectAvailable(params.scope as TaskScope);
         const result = await (await this.getProductStore()).createTask({
           requestId: params.requestId as string,
           expectedStoreRevision: params.expectedStoreRevision as number,
@@ -2839,6 +2941,7 @@ export class PiHost {
         dcodeSessionId: input.dcodeSessionId,
       });
     }
+    this.assertProjectAvailable(task.scope);
     if(task.state==="archived")throw new PiHostError("TASK_ARCHIVED","请先恢复归档任务，再发送消息");
     if(input.pathAction){
       if(input.targetAgentRunId)throw new PiHostError("INVALID_PATH_ACTION","历史路径操作只能在消息所属会话中进行");
@@ -2964,6 +3067,7 @@ export class PiHost {
     const dcodeSessionId = params.dcodeSessionId as string;
     const agentRunId = typeof params.agentRunId === "string" ? params.agentRunId : undefined;
     const scope = params.scope as TaskScope;
+    this.assertProjectAvailable(scope);
     const workspace = params.workspace as {
       workspaceId: string;
       cwd: string;
@@ -3770,6 +3874,7 @@ export class PiHost {
     this.assertWriteHealthy();
     const inspection = await this.reader.inspect(sessionId, selectedLeafId);
     if(this.workspaceFileWrites.conflict(inspection.summary.cwd))throw new PiHostError("WORKSPACE_IN_USE","目录正在保存文件，请稍后打开运行");
+    if(!runtimeIdentity&&this.pendingProjectDirectories().some(path=>this.workspacesOverlap(path,inspection.summary.cwd)))throw new PiHostError("WORKSPACE_IN_USE","目录更换结果尚未确认，请先完成恢复");
     const legacyRoot=runtimeIdentity?undefined:inspection.summary.cwd;
     if(legacyRoot)this.openingLegacyWorkspaces.add(legacyRoot);
     try{return await this.openInspectedSession(sessionId,inspection,expectedEntryId,expectedEntryDigest,selectedLeafId,runtimeIdentity);}

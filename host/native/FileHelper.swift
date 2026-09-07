@@ -11,7 +11,14 @@ struct FileHelper {
         let expectedDigest: String?
         let overwrite: Bool?
         let arguments: [String]?
+        let targetRoot: String?
+        let sourceDevice: String?
+        let sourceInode: String?
+        let targetDevice: String?
+        let targetInode: String?
+        let requireEmptyTarget: Bool?
     }
+    struct DirectorySwapError: LocalizedError { var errorDescription: String? { "原目录或空目标目录发生变化，项目文件没有被覆盖。" } }
     struct InvalidRequest: LocalizedError { var errorDescription: String? { "文件请求格式无效。" } }
     static func emit(_ value: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
@@ -24,6 +31,35 @@ struct FileHelper {
             guard bytes.count <= 12 * 1024 * 1024 else { throw InvalidRequest() }
             let request = try JSONDecoder().decode(Request.self, from: bytes)
             guard request.root.hasPrefix("/"), request.path.hasPrefix("/") else { throw InvalidRequest() }
+            if request.action == "swap-directories", let targetRoot = request.targetRoot {
+                let sourceParts = request.root.split(separator: "/").map(String.init)
+                let targetParts = targetRoot.split(separator: "/").map(String.init)
+                guard let sourceName = sourceParts.last, let targetName = targetParts.last, !sourceParts.contains(".."), !targetParts.contains(".."), request.root != targetRoot else { throw DirectorySwapError() }
+                let sourceParent = try WorkspaceFileSecurePath.openParentDirectory(rootPath: "/", relativeComponents: Array(sourceParts.dropLast()))
+                defer { Darwin.close(sourceParent) }
+                let targetParent = try WorkspaceFileSecurePath.openParentDirectory(rootPath: "/", relativeComponents: Array(targetParts.dropLast()))
+                defer { Darwin.close(targetParent) }
+                var sourceStat = stat(), targetStat = stat()
+                guard Darwin.fstatat(sourceParent, sourceName, &sourceStat, AT_SYMLINK_NOFOLLOW) == 0,
+                      Darwin.fstatat(targetParent, targetName, &targetStat, AT_SYMLINK_NOFOLLOW) == 0,
+                      sourceStat.st_mode & S_IFMT == S_IFDIR, targetStat.st_mode & S_IFMT == S_IFDIR,
+                      String(sourceStat.st_dev) == request.sourceDevice, String(sourceStat.st_ino) == request.sourceInode,
+                      String(targetStat.st_dev) == request.targetDevice, String(targetStat.st_ino) == request.targetInode,
+                      sourceStat.st_dev == targetStat.st_dev else { throw DirectorySwapError() }
+                if request.requireEmptyTarget != false {
+                    let fd = Darwin.openat(targetParent, targetName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard fd >= 0 else { throw DirectorySwapError() }
+                    guard let directory = Darwin.fdopendir(fd) else { Darwin.close(fd); throw DirectorySwapError() }
+                    defer { Darwin.closedir(directory) }
+                    while let entry = Darwin.readdir(directory) {
+                        let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in pointer.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) } }
+                        if name != "." && name != ".." { throw DirectorySwapError() }
+                    }
+                }
+                guard renameatx_np(sourceParent, sourceName, targetParent, targetName, UInt32(RENAME_SWAP)) == 0 else { throw DirectorySwapError() }
+                _ = Darwin.fsync(sourceParent); _ = Darwin.fsync(targetParent)
+                emit(["ok": true]); return
+            }
             if request.action == "git", let arguments = request.arguments {
                 let top = ["rev-parse", "--show-toplevel"]
                 let diffPrefix = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=3"]

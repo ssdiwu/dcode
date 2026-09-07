@@ -36,6 +36,8 @@ export const HOST_METHODS = [
   "collaboration.queueReorder",
   "dcodeSession.copy",
   "project.create",
+  "project.update",
+  "project.recover",
   "project.gitBranch",
   "workspace.tree",
   "workspace.read",
@@ -831,6 +833,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "project.gitBranch":
       requireBoundedString(params, "projectId", 200);
       return;
+    case "project.recover":requireBoundedString(params,"projectId",200);return;
+    case "project.update":
+      requireBoundedString(params,"requestId",128);requireBoundedString(params,"projectId",200);requireInteger(params,"expectedProjectRevision",1,Number.MAX_SAFE_INTEGER);requireBoundedString(params,"title",200);requireBoundedString(params,"directory",4096);if(typeof params.moveFiles!=="boolean")throw new ProtocolValidationError("INVALID_PARAMS","请选择是否移动文件");return;
     case "project.create":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);

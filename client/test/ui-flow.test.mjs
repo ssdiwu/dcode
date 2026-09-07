@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -487,6 +487,12 @@ test(
       fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
       assert.ok(screen.getByRole("dialog", { name: "新建项目" }));
       fireEvent.click(screen.getByRole("button", { name: "取消" }));
+      const projectSource=join(home,"managed-project"),projectTarget=join(home,"moved-project");await mkdir(projectSource);await mkdir(projectTarget);await writeFile(join(projectSource,"keep.md"),"实际项目文件");
+      const managed=await work.mutateStore("project.create",{title:"界面目录维护",directory:projectSource});await waitFor(()=>assert.ok(screen.getByRole("button",{name:"编辑项目 界面目录维护"})));
+      fireEvent.click(screen.getByRole("button",{name:"编辑项目 界面目录维护"}));fireEvent.change(screen.getByRole("textbox",{name:"项目名称"}),{target:{value:"已修改的项目名称"}});fireEvent.click(screen.getByRole("button",{name:"保存项目"}));await waitFor(()=>assert.ok(!screen.queryByRole("dialog",{name:"编辑项目"})));
+      assert.equal((await host.handle("foundation.snapshot",{})).projects.find(project=>project.id===managed.project.id).title,"已修改的项目名称");
+      fireEvent.click(screen.getByRole("button",{name:"编辑项目 已修改的项目名称"}));window.dcode.chooseDirectory=async()=>projectTarget;fireEvent.click(screen.getByRole("button",{name:"项目文件夹"}));await waitFor(()=>assert.ok(screen.getByRole("checkbox",{name:"同时移动项目文件"})));fireEvent.click(screen.getByRole("checkbox",{name:"同时移动项目文件"}));fireEvent.click(screen.getByRole("button",{name:"保存项目"}));await waitFor(()=>assert.ok(!screen.queryByRole("dialog",{name:"编辑项目"})),{timeout:10000});
+      assert.equal((await host.handle("foundation.snapshot",{})).projects.find(project=>project.id===managed.project.id).directory,await realpath(projectTarget));assert.equal(await readFile(join(projectTarget,"keep.md"),"utf8"),"实际项目文件");assert.deepEqual(await readdir(projectSource),[]);window.dcode.chooseDirectory=async()=>null;
       fireEvent.click(screen.getByRole("button", { name: "设置" }));
       await waitFor(() =>
         assert.ok(screen.getByRole("navigation", { name: "设置分类" })),
