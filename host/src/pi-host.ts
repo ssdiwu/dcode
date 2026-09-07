@@ -223,6 +223,7 @@ interface ActiveRun {
   effectiveInputId?: string;
   promptReceiptId?: string;
   pathEntryId?: string;
+  nativeUserEntryId?: string;
   persistenceFailed?:boolean;
   pathAction?:import("./product-store.js").NativeSessionPathAction;
   toolCalls: Map<string, { toolName: string; args: unknown }>;
@@ -2867,14 +2868,18 @@ export class PiHost {
     if(!selectedNativePath)throw new PiHostError("SESSION_PATH_NOT_FOUND","对话路径不存在");
     const nativeEntries=await store.sessionPathEntries(dcodeSessionId,selectedNativePath.id);
     const pathPresentation={nativePaths,selectedNativePathId:selectedNativePath.id,nativeEntries};
-    const collaborationInputs=nativeEntries.flatMap(entry=>{
-      const content=entry.content as {collaborationMessageId?:string;author?:string};
-      return content.collaborationMessageId&&entry.sourceEntryId?[{sourceEntryId:entry.sourceEntryId,author:content.author,messageId:content.collaborationMessageId}]:[];
-    });
-    const submissions=store.sessionSubmittedInputs(dcodeSessionId,selectedNativePath.id);
     const active = [...this.runtimes.values()].find((candidate) => (
       candidate.runtimeIdentity?.dcodeSessionId === dcodeSession.id
     ));
+    const collaborationInputs=nativeEntries.flatMap(entry=>{
+      const content=entry.content as {collaborationMessageId?:string;author?:string};
+      // The durable source link is finalized with the result. While inference or
+      // a user decision is pending, use the exact input pair already owned by
+      // this execution; never infer authorship from generated text or an old reply.
+      const sourceEntryId=entry.sourceEntryId??(entry.id===active?.currentRun?.nativeUserEntryId?active.currentRun.pathEntryId:undefined);
+      return content.collaborationMessageId&&sourceEntryId?[{sourceEntryId,author:content.author,messageId:content.collaborationMessageId}]:[];
+    });
+    const submissions=store.sessionSubmittedInputs(dcodeSessionId,selectedNativePath.id);
     if (!binding) {
       return {
         dcodeSession,
@@ -4794,6 +4799,7 @@ export class PiHost {
       ...(pathAction&&runtimeIdentity?{pathAction:pathAction as import("./product-store.js").NativeSessionPathAction}:{}),
       ...(preparedRun ? {
         sessionRunId: preparedRun.sessionRunId,
+        nativeUserEntryId: preparedRun.userEntryId,
         providerAttemptId: preparedRun.providerAttemptId,
         rawInputId: preparedRun.rawInputId,
         effectiveInputId: preparedRun.effectiveInputId,

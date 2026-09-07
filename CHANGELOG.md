@@ -32,7 +32,13 @@
 - D Code Model Catalog / Credential Reference / Runtime Model Selection（模型目录 / 凭据安全引用 / 未来运行模型选择）：Product Store 投影非敏感 Provider / Model、认证引用和下一次 Runtime 选择；Coordinator 运行前依此验证并显式应用模型，不再写入 Pi `settings.json` / `models.json`。
 - D Code Session Presentation（D Code 会话呈现）：以 D Code Session ID 只读投影 Adapter binding、活动 Runtime 和会话快照，并为 Coordination Session 提供精确 Prompt 路由；首次提交创建持久化 Coordinator Agent Run，随后 Team 复用同一 Coordinator Run / Runtime，查看不抢占 Runtime，Child 仅在其自身 Run 活动时接收消息。
 
+### Fixed
+
+- 协调者处理后台结果或等待验收时，通知原文不再暂时显示成用户消息；运行中与落盘后的来源保持一致，同文真人输入不被隐藏。
+
 ### Changed
+
+- 已迁移的 Swift 客户端、桥接、SwiftPM 与旧打包入口退役；保留品牌和原生文件辅助程序，Electron 候选携带运行时及 Host/客户端生产依赖的许可证清单与正文。
 
 - 三个 Pi 核心 SDK 包精确升级为 0.85.1；保留本机 Host、独立智能体进程与 Product Store 权威，补齐工具顺序标记在进程间的传递。外部条目恢复和流式片段编码暂未替换现有会话或历史格式。
 
