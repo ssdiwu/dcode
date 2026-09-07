@@ -1,3 +1,8 @@
+import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-process.js";
+import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
+import type { VerificationRecord, CoordinatorReviewRecord } from "./collaboration-verification.js";
+import type { CollaborationMessage, CollaborationMessageState } from "./collaboration-message.js";
+import { agentModelCandidates, type AgentModelCandidate } from "./model-route.js";
 import { INSPIRATION_KEY, emptyInspiration, changeInspiration, exportIdeaMarkdown, publishIdeaMedia, removeUnreferencedIdeaMedia, resolveIdeaMedia, inspirationRoot, assertIdeaSnapshotDigest, InspirationError, type InspirationDocument, type InspirationOperation, type InspirationView } from "./inspiration.js";
 import { stageAttachment, readAttachment, sweepAttachmentFiles, stagedAttachmentBytes, discardStagedAttachment, attachmentPath, attachmentPrompt, ATTACHMENT_DAY, ATTACHMENT_RETENTION_DAYS, type ManagedAttachment, type AttachmentSource } from "./attachment-files.js";
 import type { MaintenanceState } from "./maintenance.js";
@@ -167,6 +172,9 @@ export interface ClientPreferences {
 }
 
 export interface ComposerDraftRecord {
+  pathAction?:NativeSessionPathAction;
+  pathDraftBackup?:{text:string;attachmentIds:string[];attachments?:ManagedAttachment[];targetAgentRunId?:string};
+  targetAgentRunId?: string;
   attachments?: ManagedAttachment[];
   scope?: TaskScope;
   id: string;
@@ -203,6 +211,7 @@ export interface RuntimeModelCatalogProviderInput {
 
 export interface AgentProfileRecord {
   id: string;
+  modelCandidates?: AgentModelCandidate[];
   role: "coordinator" | "explore" | "worker" | "verifier" | "custom";
   name: string;
   roleContract: string;
@@ -403,6 +412,14 @@ export interface PiImportTaskResult extends TaskBundle {
   importedEntryCount: number;
 }
 
+export interface NativeSessionPathAction {
+  kind:"editUser"|"continueAssistant"|"continuePath";
+  entryId:string;
+  fromPathId:string;
+  expectedCurrentPathId:string;
+  expectedCurrentPathRevision:number;
+}
+
 export interface PreparedSessionRun {
   storeRevision: number;
   rawInputId: string;
@@ -506,6 +523,7 @@ export interface ActiveToolSetRecord {
 }
 
 export interface PromptReceiptRecord {
+  inputSources?:InputSourceReceipt[];
   id: string;
   taskId: string;
   sessionId: string;
@@ -702,6 +720,14 @@ export interface FoundationSnapshot {
   artifacts: ArtifactRecord[];
   managedWorkerWorktrees: ManagedWorkerWorktreeRecord[];
   evidence: EvidenceRecord[];
+  verifications?: VerificationRecord[];
+  coordinatorReviews?: CoordinatorReviewRecord[];
+  agentProcesses?: ReturnType<ProductStore["agentProcessExecutions"]>;
+  auxiliaryProcesses?:ReturnType<ProductStore["auxiliaryProcessExecutions"]>;
+  collaborationMessages?: CollaborationMessage[];
+  collaborationQueues?:Array<{sessionId:string;revision:number;messageIds:string[]}>;
+  providerCalls?:Array<import("./provider-route-stream.js").ProviderCallRecord&{taskId:string;sessionId?:string;sessionRunId?:string;agentRunId?:string}>;
+  runtimeDialogs?:Array<import("./extension-ui.js").RuntimeDialog&{runtimeId:string;taskId:string;sessionId:string}>;
   events: StoreEventRecord[];
 }
 
@@ -1350,10 +1376,13 @@ function taskWorkItem(row: SQLiteRow): TaskWorkItemRecord {
 }
 
 function composerDraft(row: SQLiteRow): ComposerDraftRecord {
-  const payload = JSON.parse(text(row, "payload_json")) as { scope?: unknown; attachments?: ManagedAttachment[] };
+  const payload = JSON.parse(text(row, "payload_json")) as { scope?: unknown; attachments?: ManagedAttachment[]; targetAgentRunId?: string;pathAction?:NativeSessionPathAction;pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"] };
   return {
     ...(payload?.scope ? { scope: normalizedTaskScope(payload.scope) } : {}),
     ...(payload.attachments?.length ? {attachments:payload.attachments} : {}),
+    ...(payload.targetAgentRunId?{targetAgentRunId:payload.targetAgentRunId}:{}),
+    ...(payload.pathAction?{pathAction:payload.pathAction}:{}),
+    ...(payload.pathDraftBackup?{pathDraftBackup:payload.pathDraftBackup}:{}),
     id: text(row, "id"),
     ...(typeof row.task_id === "string" ? { taskId: row.task_id } : {}),
     ...(typeof row.session_id === "string" ? { sessionId: row.session_id } : {}),
@@ -1610,6 +1639,7 @@ function activeToolSet(row: SQLiteRow): ActiveToolSetRecord {
 function promptReceiptSources(value: unknown): {
   sourceReceipts: DCodePromptSourceReceipt[];
   importedHistoryReceipt?: ImportedSessionHistoryReceipt;
+  inputSources?:InputSourceReceipt[];
 } {
   if (Array.isArray(value)) {
     return { sourceReceipts: normalizeDCodePromptSourceReceipts(value) };
@@ -1621,12 +1651,14 @@ function promptReceiptSources(value: unknown): {
     version?: unknown;
     documentSources?: unknown;
     importedHistory?: unknown;
+    inputSources?:unknown;
   };
   if (payload.version !== 2) {
     throw new DCodePromptSourceReceiptError("Prompt Receipt sources have an unsupported version");
   }
   return {
     sourceReceipts: normalizeDCodePromptSourceReceipts(payload.documentSources),
+    ...(payload.inputSources!==undefined?{inputSources:inputSourceReceipts(payload.inputSources)}:{}),
     ...(payload.importedHistory === undefined
       ? {}
       : { importedHistoryReceipt: normalizeImportedSessionHistoryReceipt(payload.importedHistory) }),
@@ -1637,6 +1669,7 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
   let sources: {
     sourceReceipts: DCodePromptSourceReceipt[];
     importedHistoryReceipt?: ImportedSessionHistoryReceipt;
+    inputSources?:InputSourceReceipt[];
   };
   try {
     sources = promptReceiptSources(JSON.parse(text(row, "source_receipts_json")));
@@ -1658,6 +1691,7 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
     identityRevision: text(row, "identity_revision"),
     roleRevision: text(row, "role_revision"),
     sourceReceipts: sources.sourceReceipts,
+    ...(sources.inputSources?{inputSources:sources.inputSources}:{}),
     ...(sources.importedHistoryReceipt ? { importedHistoryReceipt: sources.importedHistoryReceipt } : {}),
     createdAt: text(row, "created_at"),
   };
@@ -1960,7 +1994,15 @@ export class ProductStore {
         now,
         options.faultInjector,
       );
+      await store.recoverCollaborationResults();
       await store.recoverInterruptedRuns();
+      for(const execution of store.agentProcessExecutions()) {
+        if(execution.process.status!=="exited") await store.recordAgentProcess({requestId:`recover-process:${randomUUID()}`,taskId:execution.taskId,agentRunId:execution.agentRunId,runtimeId:execution.runtimeId,process:{...execution.process,status:"exited",exitReason:"supervisor_restarted"}});
+      }
+      for(const execution of store.auxiliaryProcessExecutions())if(execution.process.status!=="exited")await store.recordAuxiliaryProcess({...execution,requestId:`recover-auxiliary:${randomUUID()}`,process:await recoverAuxiliaryProcess(execution.process)});
+      for(const message of store.collaborationMessages()) {
+        if(message.state==="delivering"||message.state==="queued") await store.transitionCollaborationMessage({requestId:`recover-message:${randomUUID()}`,id:message.id,expectedRevision:message.revision,state:message.state==="delivering"?"interrupted":"paused",error:message.state==="delivering"?"上次运行已中断，请先核对结果再交办新工作":"已恢复未发送消息，继续后才会发送"});
+      }
       return store;
     } catch (error) {
       try {
@@ -2031,6 +2073,7 @@ export class ProductStore {
         SET status = 'interrupted', revision = revision + 1, updated_at = ?
         WHERE status IN ('prepared', 'running', 'waiting')
       `).run(now);
+      this.database.prepare("UPDATE task_work_items SET state='blocked',revision=revision+1,updated_at=? WHERE state='in_progress' AND owner_assignment_id IN (SELECT a.id FROM agent_assignments a JOIN agent_runs g ON a.agent_run_id=g.id WHERE g.status='interrupted')").run(now);
       this.database.prepare(`
         UPDATE team_runs
         SET status = 'interrupted', revision = revision + 1, updated_at = ?
@@ -2088,6 +2131,24 @@ export class ProductStore {
     `).get() as SQLiteRow | undefined;
     if (!row) throw new Error("D Code Product Store has no current user");
     return localUser(row);
+  }
+
+  sessionModelSelection(sessionId:string):RuntimeModelSelectionRecord|undefined {
+    this.assertOpen();const row=this.database.prepare("SELECT * FROM product_settings WHERE key=?").get(`session.modelSelection:${sessionId}`) as SQLiteRow|undefined;if(!row)return undefined;
+    const value=JSON.parse(text(row,"value_json"));return {providerId:value.providerId,modelId:value.modelId,sourceKind:"user",revision:integer(row,"revision")};
+  }
+
+  async replaySessionModelSelection(input:{requestId:string;sessionId:string;providerId:string;modelId:string}):Promise<unknown>{return this.replayReceipt("sessionModel.select",`session-model:${payloadHash(input.requestId).slice(0,48)}`,{sessionId:input.sessionId,providerId:input.providerId,modelId:input.modelId});}
+
+  async setSessionModelSelection(input:{requestId:string;sessionId:string;providerId:string;modelId:string}):Promise<{storeRevision:number}> {
+    return this.mutate("sessionModel.select",`session-model:${payloadHash(input.requestId).slice(0,48)}`,undefined,{sessionId:input.sessionId,providerId:input.providerId,modelId:input.modelId},(_revision,now)=>{
+      const session=this.database.prepare("SELECT task_id FROM sessions WHERE id=?").get(input.sessionId) as SQLiteRow|undefined;
+      if(!session||!this.database.prepare("SELECT id FROM model_catalog_entries WHERE provider_id=? AND model_id=?").get(input.providerId,input.modelId))throw new ProductStoreError("NOT_FOUND","会话或模型不存在");
+      if(this.database.prepare("SELECT id FROM session_runs WHERE session_id=? AND status IN ('prepared','running','waiting')").get(input.sessionId))throw new ProductStoreError("REVISION_CONFLICT","当前运行尚未结束，不能更换模型");
+      this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES (?,?,'user',1,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,revision=product_settings.revision+1,updated_at=excluded.updated_at").run(`session.modelSelection:${input.sessionId}`,canonicalJSON({providerId:input.providerId,modelId:input.modelId}),now,now);
+      this.database.prepare("UPDATE agent_runs SET model_provider=?,model_id=?,revision=revision+1,updated_at=? WHERE session_id=?").run(input.providerId,input.modelId,now,input.sessionId);
+      return {value:{},event:{kind:"sessionModel.selected",entityKind:"session",entityId:input.sessionId,taskId:text(session,"task_id"),payload:input}};
+    });
   }
 
   runtimeModelSelection(): RuntimeModelSelectionRecord | undefined {
@@ -2547,6 +2608,9 @@ export class ProductStore {
     sessionId: string;
     text: string;
     attachmentIds?: string[];
+    targetAgentRunId?: string | null;
+    pathAction?:NativeSessionPathAction|null;
+    pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"]|null;
   }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
     const taskId = requiredString(input.taskId, "taskId", 200);
     const sessionId = requiredString(input.sessionId, "sessionId", 200);
@@ -2561,7 +2625,7 @@ export class ProductStore {
       "dcodeSession.composerDraft.set",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, sessionId, text: textValue, attachmentIds:input.attachmentIds??null },
+      { taskId, sessionId, text: textValue, attachmentIds:input.attachmentIds??null, targetAgentRunId:input.targetAgentRunId??null,pathAction:input.pathAction??null,pathDraftBackup:input.pathDraftBackup??null },
       (_storeRevision, now) => {
         const sessionRow = this.database.prepare(`
           SELECT id FROM sessions WHERE id = ? AND task_id = ?
@@ -2576,7 +2640,18 @@ export class ProductStore {
         `).get(sessionId) as SQLiteRow | undefined;
         const payload=existing?JSON.parse(text(existing,"payload_json")):{};
         const attachments=this.attachmentsForIds(input.attachmentIds,payload.attachments??[]);
-        if (textValue.length === 0 && !attachments.length) {
+        const targetAgentRunId=input.targetAgentRunId===undefined?payload.targetAgentRunId:input.targetAgentRunId;
+        if(targetAgentRunId && !this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role<>'coordinator'").get(targetAgentRunId,taskId)) throw new ProductStoreError("INVALID_ARGUMENT","定向草稿只能选择本任务已创建的成员");
+        payload.targetAgentRunId=targetAgentRunId??null;
+        if(input.pathAction!==undefined)payload.pathAction=input.pathAction;
+        if(input.pathDraftBackup!==undefined)payload.pathDraftBackup=input.pathDraftBackup;
+        if(payload.pathAction){const action=payload.pathAction as NativeSessionPathAction;
+          if(!["editUser","continueAssistant","continuePath"].includes(action.kind)||!this.database.prepare("SELECT id FROM session_paths WHERE id=? AND session_id=?").get(action.fromPathId,sessionId))throw new ProductStoreError("INVALID_ARGUMENT","草稿路径不属于当前会话");
+          assertCredentialFreeValue(action,"pathAction");
+        }
+        if(payload.pathDraftBackup){const backup=payload.pathDraftBackup as NonNullable<ComposerDraftRecord["pathDraftBackup"]>;if(typeof backup.text!=="string"||backup.text.length>200000||!Array.isArray(backup.attachmentIds)||backup.attachmentIds.length>32)throw new ProductStoreError("INVALID_ARGUMENT","原草稿备份无效");assertCredentialFreeValue(backup,"pathDraftBackup");backup.attachments=this.attachmentsForIds(backup.attachmentIds);}
+
+        if (textValue.length === 0 && !attachments.length && !targetAgentRunId && !payload.pathAction && !payload.pathDraftBackup) {
           if (existing) {
             this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(text(existing, "id"));
           }
@@ -2613,6 +2688,9 @@ export class ProductStore {
           sessionId,
           draftKind: "session_path",
           attachments,
+          ...(targetAgentRunId?{targetAgentRunId}:{}),
+          ...(payload.pathAction?{pathAction:payload.pathAction}:{}),
+          ...(payload.pathDraftBackup?{pathDraftBackup:payload.pathDraftBackup}:{}),
           text: textValue,
           revision,
           createdAt: existing ? text(existing, "created_at") : now,
@@ -2965,6 +3043,10 @@ export class ProductStore {
   }
 
   async snapshot(afterEventSequence = 0): Promise<FoundationSnapshot> {
+    return this.serializeMutation(()=>this.snapshotNow(afterEventSequence));
+  }
+
+  private async snapshotNow(afterEventSequence:number): Promise<FoundationSnapshot> {
     this.assertOpen();
     requiredRevision(afterEventSequence, "afterEventSequence");
     const artifacts = (
@@ -3011,7 +3093,7 @@ export class ProductStore {
       ).map(credentialReference).map(reference => reference.locator.startsWith("environment:") ? {...reference,configured:!!process.env[reference.locator.slice("environment:".length)]} : reference),
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
       taskWorkbenchViewState,
-      agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map(agentProfile),
+      agentProfiles: (this.database.prepare("SELECT * FROM agent_profiles ORDER BY builtin DESC, role, id").all() as SQLiteRow[]).map((row) => this.profileRecord(row)),
       tasks: (this.database.prepare("SELECT * FROM tasks ORDER BY created_at, id").all() as SQLiteRow[]).map(task),
       taskContextSets,
       taskPlans: (
@@ -3078,6 +3160,13 @@ export class ProductStore {
       evidence: (
         this.database.prepare("SELECT * FROM evidence_records ORDER BY created_at, id").all() as SQLiteRow[]
       ).map(evidenceRecord),
+      verifications: this.verifications(),
+      coordinatorReviews: this.coordinatorReviews(),
+      agentProcesses: this.agentProcessExecutions(),
+      collaborationMessages: this.collaborationMessages(),
+      collaborationQueues:[...new Set(this.collaborationMessages().map(message=>message.targetSessionId))].map(id=>this.collaborationQueueState(id)),
+      providerCalls:this.providerCalls(),
+      auxiliaryProcesses:this.auxiliaryProcessExecutions(),
       events: (
         this.database.prepare("SELECT * FROM store_events WHERE sequence > ? ORDER BY sequence").all(afterEventSequence) as SQLiteRow[]
       ).map(event),
@@ -3146,13 +3235,8 @@ export class ProductStore {
         { sessionId },
       );
     }
-    if (typeof currentPath.source_path_id !== "string" || currentPath.source_path_id.length === 0) {
-      throw new ProductStoreError(
-        "PRODUCT_STORE_CORRUPT",
-        "Pi-imported Session current path has no Pi source path identity",
-        { sessionId },
-      );
-    }
+
+    if(typeof currentPath.source_path_id!=="string"||!currentPath.source_path_id)throw new ProductStoreError("PRODUCT_STORE_CORRUPT","Pi-imported Session current path has no Pi source path identity",{sessionId});
 
     let provenanceDetails: unknown;
     try {
@@ -3180,7 +3264,7 @@ export class ProductStore {
       sourceSessionId: text(importSource, "source_session_id"),
       sourceDigest: text(importSource, "source_digest"),
       importerVersion: integer(importSource, "importer_version"),
-      sourcePathId: text(currentPath, "source_path_id"),
+      sourcePathId: typeof currentPath.source_path_id==="string"?currentPath.source_path_id:`native:${text(currentPath,"id")}`,
       redactedAtImport: importedHistoryWasRedactedAtImport(provenanceDetails),
       entries: entries.map((entry) => ({
         id: entry.id,
@@ -4521,8 +4605,79 @@ export class ProductStore {
     );
   }
 
+  async beginNativeSessionPath(input:{requestId:string;sessionId:string;action:NativeSessionPathAction}):Promise<{storeRevision:number;pathId:string}> {
+    return this.mutate("session.pathBegin",input.requestId,undefined,input,(_revision,now)=>{
+      if(this.database.prepare("SELECT id FROM session_runs WHERE session_id=? AND status IN ('prepared','running','waiting')").get(input.sessionId))throw new ProductStoreError("REVISION_CONFLICT","会话仍在运行，不能改变路径");
+      const pathId=this.branchNativePath(input.sessionId,input.action,now);
+      return {value:{pathId},event:{kind:"session.pathStarted",entityKind:"sessionPath",entityId:pathId,payload:input}};
+    });
+  }
+
+  async restoreNativeSessionPath(sessionId:string,fromPathId:string,pathId:string):Promise<{storeRevision:number}> {
+    return this.mutate("session.pathRestore",`restore-path:${payloadHash({sessionId,fromPathId,pathId})}`,undefined,{sessionId,fromPathId,pathId},(_revision,now)=>{
+      const current=this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND is_current=1").get(sessionId) as SQLiteRow|undefined;
+      if(current?.id!==pathId){
+        if(current?.id!==fromPathId||!this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND id=?").get(sessionId,pathId))throw new ProductStoreError("REVISION_CONFLICT","原路径已改变，不能自动回退");
+        this.database.prepare("UPDATE session_paths SET is_current=0,revision=revision+1,updated_at=? WHERE id=?").run(now,fromPathId);
+        this.database.prepare("UPDATE session_paths SET is_current=1,revision=revision+1,updated_at=? WHERE id=?").run(now,pathId);
+      }
+      return {value:{},event:{kind:"session.pathRestored",entityKind:"sessionPath",entityId:pathId,payload:{sessionId,fromPathId,pathId}}};
+    });
+  }
+
+  private branchNativePath(sessionId:string,action:NativeSessionPathAction,now:string):string {
+    const current=this.database.prepare("SELECT * FROM session_paths WHERE session_id=? AND is_current=1").get(sessionId) as SQLiteRow|undefined;
+    const source=this.database.prepare("SELECT * FROM session_paths WHERE id=? AND session_id=?").get(action.fromPathId,sessionId) as SQLiteRow|undefined;
+    const target=this.database.prepare("SELECT e.*,p.ordinal AS path_ordinal FROM session_entries e JOIN session_path_entries p ON p.entry_id=e.id WHERE p.path_id=? AND e.session_id=? AND e.source_entry_id=?").get(action.fromPathId,sessionId,action.entryId) as SQLiteRow|undefined;
+    if(!current||current.id!==action.expectedCurrentPathId||integer(current,"revision")!==action.expectedCurrentPathRevision)throw new ProductStoreError("REVISION_CONFLICT","当前对话路径已经改变，编辑内容已保留");
+    if(!source||!target)throw new ProductStoreError("NOT_FOUND","消息不属于选定的对话路径");
+    if(action.kind==="editUser"&&target.message_role!=="user" || action.kind==="continueAssistant"&&target.message_role!=="assistant")throw new ProductStoreError("INVALID_ARGUMENT","路径操作与消息类型不一致");
+    const include=integer(target,"path_ordinal")-(action.kind==="editUser"?1:0);
+    const pathId=`session-path-${randomUUID()}`;
+    this.database.prepare("UPDATE session_paths SET is_current=0,revision=revision+1,updated_at=? WHERE session_id=? AND is_current=1").run(now,sessionId);
+    this.database.prepare("INSERT INTO session_paths(id,session_id,source_path_id,source_leaf_entry_id,title,is_current,revision,created_at,updated_at) VALUES (?,?,?,NULL,?,1,1,?,?)").run(pathId,sessionId,`native:${pathId}`,action.kind==="editUser"?"编辑后继续":"从历史继续",now,now);
+    this.database.prepare("INSERT INTO session_path_entries(path_id,entry_id,ordinal) SELECT ?,entry_id,ordinal FROM session_path_entries WHERE path_id=? AND ordinal<=? ORDER BY ordinal").run(pathId,action.fromPathId,include);
+    return pathId;
+  }
+
+  async sessionPathEntries(sessionId:string,pathId?:string):Promise<SessionEntryRecord[]> {
+    this.assertOpen();const path=this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND "+(pathId?"id=?":"is_current=1")).get(...(pathId?[sessionId,pathId]:[sessionId])) as SQLiteRow|undefined;
+    if(!path)throw new ProductStoreError("NOT_FOUND","会话路径不存在");
+    return (this.database.prepare("SELECT e.* FROM session_entries e JOIN session_path_entries p ON p.entry_id=e.id WHERE p.path_id=? ORDER BY p.ordinal").all(text(path,"id")) as SQLiteRow[]).map(sessionEntry);
+  }
+
+  sessionRunInputs(taskId:string,sessionRunId:string):{rawText:string;effectiveText:string;additionalInputs:Array<{author:string;text:string;effectiveText:string}>} {
+    this.assertOpen();const row=this.database.prepare("SELECT raw.submitted_text,e.effective_content_json FROM session_runs r JOIN effective_inputs e ON e.id=r.effective_input_id JOIN raw_inputs raw ON raw.id=e.raw_input_id WHERE r.id=? AND r.task_id=?").get(sessionRunId,taskId) as SQLiteRow|undefined;
+    if(!row)throw new ProductStoreError("NOT_FOUND","这项任务中没有对应运行记录");
+    const additional=(this.database.prepare("SELECT effective_content_json,context_projection_json FROM effective_inputs WHERE task_id=? AND json_extract(context_projection_json,'$.steeringSource.sessionRunId')=? ORDER BY created_at,id").all(taskId,sessionRunId) as SQLiteRow[]).flatMap(input=>{const messageId=JSON.parse(text(input,"context_projection_json")).steeringSource.messageId;const message=this.collaborationMessages(taskId).find(message=>message.id===messageId);return message?[{author:message.author,text:message.text,effectiveText:String(JSON.parse(text(input,"effective_content_json")).message)}]:[];});
+    return {rawText:text(row,"submitted_text"),effectiveText:String(JSON.parse(text(row,"effective_content_json")).message),additionalInputs:additional};
+  }
+
+  sessionSubmittedInputs(sessionId:string,pathId:string):Array<{sourceEntryId?:string;text:string;effectiveText:string;attachments:ManagedAttachment[]}> {
+    const rows=this.database.prepare("SELECT e.source_entry_id,raw.submitted_text,raw.attachment_refs_json,i.effective_content_json FROM session_path_entries p JOIN session_entries e ON e.id=p.entry_id LEFT JOIN session_runs r ON r.user_entry_id=e.id JOIN effective_inputs i ON i.id=r.effective_input_id OR (json_extract(e.content_json,'$.steering')=1 AND json_extract(i.context_projection_json,'$.steeringSource.messageId')=json_extract(e.content_json,'$.collaborationMessageId')) JOIN raw_inputs raw ON raw.id=i.raw_input_id WHERE p.path_id=? AND e.session_id=? AND e.message_role='user' ORDER BY p.ordinal").all(pathId,sessionId) as SQLiteRow[];
+    const catalog=this.attachmentCatalog();
+    return rows.map(row=>({...(typeof row.source_entry_id==="string"?{sourceEntryId:row.source_entry_id}:{}),text:text(row,"submitted_text"),effectiveText:String(JSON.parse(text(row,"effective_content_json")).message),attachments:(JSON.parse(text(row,"attachment_refs_json")) as ManagedAttachment[]).filter(item=>typeof item?.id==="string"&&item.id.startsWith("attachment-")).map(item=>catalog.find(current=>current.id===item.id)??item)}));
+  }
+
+  sessionAdapterAnchors(sessionId:string):Array<{userEntryId:string;effectiveText:string;assistantSourceEntryId:string}> {
+    this.assertOpen();const rows=this.database.prepare("SELECT r.user_entry_id,i.effective_content_json,a.source_entry_id FROM session_runs r JOIN session_entries u ON u.id=r.user_entry_id JOIN session_entries a ON a.id=r.assistant_entry_id JOIN effective_inputs i ON i.id=r.effective_input_id WHERE r.session_id=? AND u.source_entry_id IS NULL AND a.source_entry_id IS NOT NULL").all(sessionId) as SQLiteRow[];
+    return rows.map(row=>({userEntryId:text(row,"user_entry_id"),effectiveText:String((JSON.parse(text(row,"effective_content_json")) as {message:string}).message),assistantSourceEntryId:text(row,"source_entry_id")}));
+  }
+
+  async linkSessionAdapterEntries(sessionId:string,links:Array<{userEntryId:string;sourceEntryId:string}>):Promise<{storeRevision:number}> {
+    return this.mutate("session.sourcesLink",`source-links:${payloadHash({sessionId,links})}`,undefined,{sessionId,links},()=>{
+      for(const link of links){const entry=this.database.prepare("SELECT source_entry_id FROM session_entries WHERE id=? AND session_id=? AND source_kind='native' AND message_role IN ('user','other')").get(link.userEntryId,sessionId) as SQLiteRow|undefined;if(!entry||entry.source_entry_id&&entry.source_entry_id!==link.sourceEntryId)throw new ProductStoreError("REVISION_CONFLICT","输入来源已改变");this.database.prepare("UPDATE session_entries SET source_entry_id=? WHERE id=?").run(link.sourceEntryId,link.userEntryId);}
+      return {value:{},event:{kind:"session.sourcesLinked",entityKind:"session",entityId:sessionId,payload:{sessionId,links}}};
+    });
+  }
+
   async prepareSessionRun(input: {
     requestId: string;
+    collaborationMessageId?: string;
+    pathAction?:NativeSessionPathAction;
+    preparedPathId?:string;
+    effectiveMessage?:string;
+    inputSources?:InputSourceReceipt[];
     taskId: string;
     scope: TaskScope;
     sessionId: string;
@@ -4558,7 +4713,9 @@ export class ProductStore {
       throw new ProductStoreError("INVALID_ARGUMENT", "contextRevision must be at least 1");
     }
     const message = input.message.trim().length === 0 && input.managedAttachmentIds?.length ? input.message : requiredCredentialFreeString(input.message, "message", 200_000);
-    const effectiveMessage=attachmentPrompt(message,this.attachmentsForIds(input.managedAttachmentIds??[]),this.layout);
+    const effectiveMessage=input.effectiveMessage??attachmentPrompt(message,this.attachmentsForIds(input.managedAttachmentIds??[]),this.layout);
+    const inputSources=inputSourceReceipts(input.inputSources);
+    if(typeof effectiveMessage!=="string")throw new ProductStoreError("INVALID_ARGUMENT","生效输入无效");
     if(effectiveMessage.length>200_000)throw new ProductStoreError("INVALID_ARGUMENT","本次提交加附件引用超过长度限制。");
     let attachmentRefs=[...input.attachmentRefs];
     if (!isAbsolute(input.cwd)) throw new ProductStoreError("INVALID_ARGUMENT", "Runtime cwd must be absolute");
@@ -4636,13 +4793,15 @@ export class ProductStore {
     const params = {
       taskId,
       scope,
+      collaborationMessageId: input.collaborationMessageId ?? null,
+      pathAction:input.pathAction??null,preparedPathId:input.preparedPathId??null,
       sessionId,
       runtimeId,
       ...(agentRunId ? { agentRunId } : {}),
       message,
       attachmentRefs: input.attachmentRefs,
       managedAttachmentIds:input.managedAttachmentIds??[],
-      effectiveMessage,
+      effectiveMessage,inputSources,
       contextRevision,
       systemPromptDigest: input.systemPromptDigest,
       toolNames: input.tools.map((tool) => tool.name),
@@ -4699,10 +4858,10 @@ export class ProductStore {
           `).get(agentRunId, taskId, sessionId) as SQLiteRow | undefined;
           if (!agentRun) throw new ProductStoreError("NOT_FOUND", "Agent Run does not match the Session Run target");
           const agentStatus = text(agentRun, "status");
-          const coordinatorContinuation = text(agentRun, "role") === "coordinator"
-            && agentStatus === "completed"
-            && (agentRun.team_status === "active" || agentRun.team_run_id === null);
-          if (agentStatus !== "prepared" && !coordinatorContinuation) {
+          // A member persists beyond one turn and may be explicitly resumed after
+          // completion/recovery. Only the new input runs; prior effects are not replayed.
+          const continuation = ["completed", "failed", "aborted", "interrupted", "unknown"].includes(agentStatus);
+          if (agentStatus !== "prepared" && !continuation) {
             throw new ProductStoreError("REVISION_CONFLICT", "Agent Run cannot start another Session Run", {
               agentStatus,
             });
@@ -4724,7 +4883,12 @@ export class ProductStore {
           FROM active_tool_sets WHERE session_id = ?
         `).get(sessionId) as { revision?: unknown } | undefined;
         const toolRevision = typeof toolRevisionRow?.revision === "number" ? toolRevisionRow.revision : 1;
-        const rawInputId = `raw-${randomUUID()}`;
+        const collaboration = input.collaborationMessageId ? this.collaborationMessages(taskId).find(item=>item.id===input.collaborationMessageId&&item.targetSessionId===sessionId&&item.targetAgentRunId===agentRunId&&item.state==="delivering"&&item.text===message) : undefined;
+        if(input.collaborationMessageId&&!collaboration) throw new ProductStoreError("INVALID_ARGUMENT","协作来源与本次输入不一致");
+        const generatedInput=collaboration&&collaboration.author!=="user";
+        const sourceRaw = collaboration ? this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(collaboration.originRawInputId,taskId) as SQLiteRow|undefined : undefined;
+        if(collaboration&&!sourceRaw) throw new ProductStoreError("INVALID_ARGUMENT","协作输入缺少发起任务的用户原文");
+        const rawInputId = sourceRaw ? text(sourceRaw,"id") : `raw-${randomUUID()}`;
         const userEntryId = `entry-${randomUUID()}`;
         const effectiveInputId = `effective-${randomUUID()}`;
         const runtimeEnvironmentId = `environment-${randomUUID()}`;
@@ -4733,12 +4897,16 @@ export class ProductStore {
         const promptReceiptId = `prompt-receipt-${randomUUID()}`;
         const providerAttemptId = `attempt-${randomUUID()}`;
 
-        this.database.prepare(`
+        if(!collaboration) this.database.prepare(`
           INSERT INTO raw_inputs(
             id, task_id, session_id, ordinal, submitted_text,
             attachment_refs_json, source_kind, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'user_submit', ?)
-        `).run(rawInputId, taskId, sessionId, ordinal, message, canonicalJSON(attachmentRefs), now);
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(rawInputId, taskId, sessionId, ordinal, message, canonicalJSON(attachmentRefs), input.pathAction?.kind==="editUser"?"edit_and_rerun":input.pathAction?"continue_path":"user_submit", now);
+        if(input.pathAction){
+          if(input.preparedPathId){if(!this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND id=? AND is_current=1").get(sessionId,input.preparedPathId))throw new ProductStoreError("REVISION_CONFLICT","新路径已改变，输入没有被发送");}
+          else this.branchNativePath(sessionId,input.pathAction,now);
+        }
         const currentPath = this.database.prepare(`
           SELECT id FROM session_paths WHERE session_id = ? AND is_current = 1
         `).get(sessionId) as { id?: unknown } | undefined;
@@ -4758,14 +4926,15 @@ export class ProductStore {
             id, session_id, parent_entry_id, source_kind, lineage_status,
             source_entry_id, source_parent_entry_id, source_ordinal,
             source_timestamp, message_role, content_json, created_at
-          ) VALUES (?, ?, ?, 'native', 'native', NULL, NULL, ?, ?, 'user', ?, ?)
+          ) VALUES (?, ?, ?, 'native', 'native', NULL, NULL, ?, ?, ?, ?, ?)
         `).run(
           userEntryId,
           sessionId,
           typeof previousEntry?.id === "string" ? previousEntry.id : null,
           ordinal,
           now,
-          canonicalJSON({ type: "text", text: message, attachmentRefs }),
+          generatedInput ? "other" : "user",
+          canonicalJSON({ type: "text", text: message, attachmentRefs, ...(collaboration?{collaborationMessageId:collaboration.id,author:collaboration.author}:{}) }),
           now,
         );
         const pathOrdinalRow = this.database.prepare(`
@@ -4792,6 +4961,9 @@ export class ProductStore {
           canonicalJSON({ message:effectiveMessage, attachmentRefs }),
           canonicalJSON({
             version: 3,
+            ...(inputSources.length?{inputSources}:{}),
+            ...(input.pathAction?{pathAction:input.pathAction}:{}),
+            ...(collaboration?{collaborationSource:{messageId:collaboration.id,author:collaboration.author,sourceSessionId:collaboration.sourceSessionId}}:{}),
             taskContextRevision: contextRevision,
             promptSources,
             ...(importedHistoryReceipt ? { importedHistoryReceipt } : {}),
@@ -4883,6 +5055,7 @@ export class ProductStore {
           canonicalJSON({
             version: 2,
             documentSources: promptSources,
+            ...(inputSources.length?{inputSources}:{}),
             ...(importedHistoryReceipt ? { importedHistory: importedHistoryReceipt } : {}),
           }),
           now,
@@ -4961,7 +5134,6 @@ export class ProductStore {
         const existing = this.database.prepare(`
           SELECT * FROM agent_runs
           WHERE task_id = ? AND session_id = ? AND role = 'coordinator' AND team_run_id IS NULL
-            AND status IN ('prepared', 'running', 'waiting', 'completed')
           ORDER BY created_at DESC, id DESC LIMIT 1
         `).get(taskId, text(coordination, "id")) as SQLiteRow | undefined;
         if (existing) {
@@ -4987,7 +5159,7 @@ export class ProductStore {
             },
           };
         }
-        const profile = agentProfile(profileRow);
+        const profile = this.profileRecord(profileRow);
         const agentRunRecord: AgentRunRecord = {
           id: `agent-run-${randomUUID()}`,
           taskId,
@@ -5054,9 +5226,15 @@ export class ProductStore {
     );
   }
 
+  async replayAdaptiveTeam(requestId:string,taskId:string,scope:TaskScope,coordinatorAgentRunId:string,members:Array<{profileId:string;title:string;taskPacket:Record<string,unknown>}>):Promise<CreatedTeamRun|undefined> {
+    return this.replayReceipt("teamRun.create",requestId,{taskId,scope,members,coordinatorAgentRunId});
+  }
+
   async createTeamRun(input: {
     requestId: string;
-    expectedStoreRevision: number;
+    expectedStoreRevision?: number;
+    /** Internal authority from the bound Coordinator Runtime; not a client parameter. */
+    coordinatorAgentRunId?: string;
     taskId: string;
     scope: TaskScope;
     members: Array<{
@@ -5081,7 +5259,7 @@ export class ProductStore {
       "teamRun.create",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, scope, members },
+      { taskId, scope, members: input.coordinatorAgentRunId ? members.map(member=>{const {modelDecision,resolvedModelCandidates,workspacePolicy,workspaceRootDigest,sourceSessionId,originRawInputId,...packet}=member.taskPacket;return {...member,taskPacket:packet};}) : members, ...(input.coordinatorAgentRunId ? { coordinatorAgentRunId: input.coordinatorAgentRunId } : {}) },
       (_storeRevision, now) => {
         const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
         if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Team Run Task does not exist", { taskId });
@@ -5104,7 +5282,7 @@ export class ProductStore {
         if (!coordinatorProfileRow) {
           throw new ProductStoreError("NOT_FOUND", "Coordinator Agent Profile is disabled or missing");
         }
-        const coordinatorProfile = agentProfile(coordinatorProfileRow);
+        const coordinatorProfile = this.profileRecord(coordinatorProfileRow);
         const memberProfiles = members.map((member) => {
           const row = this.database.prepare(`
             SELECT * FROM agent_profiles WHERE id = ? AND enabled = 1
@@ -5112,22 +5290,29 @@ export class ProductStore {
           if (!row) throw new ProductStoreError("NOT_FOUND", "Member Agent Profile is disabled or missing", {
             profileId: member.profileId,
           });
-          return agentProfile(row);
+          return this.profileRecord(row);
         });
-        const activeTeam = this.database.prepare(`
-          SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
-        `).get(taskId);
-        if (activeTeam) {
+        if (input.coordinatorAgentRunId) {
+          const owner = this.database.prepare("SELECT id FROM agent_runs WHERE id = ? AND task_id = ? AND session_id = ? AND role = 'coordinator'").get(input.coordinatorAgentRunId,taskId,text(coordination,"id"));
+          if (!owner) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以创建成员");
+          if (memberProfiles.some(profile=>profile.role === "coordinator")) throw new ProductStoreError("INVALID_ARGUMENT", "成员不能创建另一个任务协调者");
+        }
+        let activeTeam = this.database.prepare(`
+          SELECT * FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
+        `).get(taskId) as SQLiteRow|undefined;
+        if(!activeTeam&&input.coordinatorAgentRunId) activeTeam=this.database.prepare("SELECT t.* FROM team_runs t WHERE t.task_id=? AND t.coordinator_agent_run_id=? AND EXISTS (SELECT 1 FROM agent_assignments a WHERE a.team_run_id=t.id AND a.assignment_kind='coordinator' AND json_extract(a.task_packet_json,'$.adaptive')=1) ORDER BY t.created_at DESC,t.id DESC LIMIT 1").get(taskId,input.coordinatorAgentRunId) as SQLiteRow|undefined;
+        if (activeTeam && !input.coordinatorAgentRunId) {
           throw new ProductStoreError("REVISION_CONFLICT", "Task already has an active Team Run", { taskId });
         }
 
-        const teamRunId = `team-run-${randomUUID()}`;
+        if(activeTeam&&text(activeTeam,"coordinator_agent_run_id")!==input.coordinatorAgentRunId) throw new ProductStoreError("REVISION_CONFLICT","现有团队由其他协调运行持有");
+        const teamRunId = activeTeam?text(activeTeam,"id"):`team-run-${randomUUID()}`;
         const reusableCoordinatorRow = this.database.prepare(`
           SELECT * FROM agent_runs
           WHERE task_id = ? AND session_id = ? AND role = 'coordinator' AND team_run_id IS NULL
           ORDER BY created_at DESC, id DESC LIMIT 1
         `).get(taskId, text(coordination, "id")) as SQLiteRow | undefined;
-        if (reusableCoordinatorRow && ["running", "waiting"].includes(text(reusableCoordinatorRow, "status"))) {
+        if (!input.coordinatorAgentRunId && reusableCoordinatorRow && ["running", "waiting"].includes(text(reusableCoordinatorRow, "status"))) {
           throw new ProductStoreError(
             "REVISION_CONFLICT",
             "Coordinator Agent Run is still active; D Code did not start a Team beside the same Coordination Runtime",
@@ -5135,7 +5320,7 @@ export class ProductStore {
           );
         }
         const reusableCoordinator = reusableCoordinatorRow
-          && ["prepared", "completed"].includes(text(reusableCoordinatorRow, "status"))
+          && (input.coordinatorAgentRunId === text(reusableCoordinatorRow,"id") || ["prepared", "completed"].includes(text(reusableCoordinatorRow, "status")))
           ? agentRun(reusableCoordinatorRow)
           : undefined;
         const coordinatorAgentRunId = reusableCoordinator?.id ?? `agent-run-${randomUUID()}`;
@@ -5144,9 +5329,10 @@ export class ProductStore {
           taskId,
           coordinatorAgentRunId,
           status: "active",
-          revision: 1,
+          revision: activeTeam?integer(activeTeam,"revision")+1:1,
         };
-        this.database.prepare(`
+        if(activeTeam)this.database.prepare("UPDATE team_runs SET status='active',revision=revision+1,completed_at=NULL,updated_at=? WHERE id=?").run(now,teamRunId);
+        else this.database.prepare(`
           INSERT INTO team_runs(
             id, task_id, coordinator_agent_run_id, status, revision,
             created_at, updated_at, completed_at
@@ -5196,7 +5382,7 @@ export class ProductStore {
           agentRunId: coordinatorAgentRun.id,
           profileId: coordinatorProfile.id,
           assignmentKind: "coordinator",
-          taskPacket: { title: taskRecord.title, goal: taskRecord.goal },
+          taskPacket: { title: taskRecord.title, goal: taskRecord.goal, ...(input.coordinatorAgentRunId?{adaptive:true}:{}) },
           revision: 1,
         };
         insertAssignment.run(
@@ -5298,6 +5484,10 @@ export class ProductStore {
             now,
             now,
           );
+          if(input.coordinatorAgentRunId) {
+            const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
+            this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)").run(`work-item-${randomUUID()}`,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON(member.taskPacket),now,now);
+          }
           childSessions.push(childSession);
           childAgentRuns.push(childAgentRun);
           assignments.push(assignment);
@@ -5379,7 +5569,7 @@ export class ProductStore {
 
   async prepareManagedWorkerWorktrees(input: {
     requestId: string;
-    expectedStoreRevision: number;
+    expectedStoreRevision?: number;
     scope: TaskScope;
     taskId: string;
     teamRunId: string;
@@ -5564,6 +5754,22 @@ export class ProductStore {
         };
       },
     );
+  }
+
+  async retryManagedWorkerWorktree(input:{artifactId:string;expectedRevision:number}):Promise<ManagedWorkerWorktreeRecord>{
+    const result=await this.mutate("managedWorkerWorktree.retry",`worktree-retry:${input.artifactId}:${input.expectedRevision}`,undefined,input,(_revision,now)=>{
+      const row=this.database.prepare("SELECT * FROM artifacts WHERE id=?").get(input.artifactId) as SQLiteRow|undefined;if(!row)throw new ProductStoreError("NOT_FOUND","原工作树记录不存在");
+      const current=managedWorkerWorktree(artifact(row));
+      const member=this.database.prepare("SELECT session_id,status FROM agent_runs WHERE id=?").get(current.agentRunId) as SQLiteRow|undefined;
+      if(current.revision!==input.expectedRevision||current.state==="ready"||!member||member.status!=="prepared")throw new ProductStoreError("REVISION_CONFLICT","成员或目录状态已改变，不能重试目录准备");
+      const attemptId=`attempt-${randomUUID()}`;
+      this.database.prepare("UPDATE operation_attempts SET status='unknown',outcome_json=?,completed_at=?,updated_at=? WHERE id=? AND status='prepared'").run(canonicalJSON({reason:"recovery_prepared",nextAttemptId:attemptId}),now,now,current.provisionAttemptId);
+      const metadata={...JSON.parse(text(row,"metadata_json")),state:"preparing",provisionAttemptId:attemptId};delete metadata.failureCode;
+      this.database.prepare("INSERT INTO operation_attempts(id,task_id,session_id,agent_run_id,operation_kind,target_identity,parameter_digest,replay_policy,status,prepared_at,updated_at) VALUES (?,?,?,?,'external_side_effect',?,?,'never','prepared',?,?)").run(attemptId,current.taskId,text(member,"session_id"),current.agentRunId,`${MANAGED_WORKER_WORKTREE_TARGET_PREFIX}${current.artifactId}`,`sha256:${payloadHash({artifactId:current.artifactId,previousAttempt:current.provisionAttemptId})}`,now,now);
+      this.database.prepare("UPDATE artifacts SET metadata_json=?,revision=revision+1,updated_at=? WHERE id=?").run(canonicalJSON(metadata),now,current.artifactId);
+      const worktree={...current,state:"preparing" as const,provisionAttemptId:attemptId,revision:current.revision+1};delete worktree.failureCode;
+      return {value:{worktree},event:{kind:"managedWorkerWorktree.retryPrepared",entityKind:"artifact",entityId:current.artifactId,taskId:current.taskId,payload:{worktree,previousAttemptId:current.provisionAttemptId}}};
+    });return result.worktree;
   }
 
   async finishManagedWorkerWorktree(input: {
@@ -5940,6 +6146,8 @@ export class ProductStore {
           if (text(run, "task_state") !== "active") {
             throw new ProductStoreError("REVISION_CONFLICT", "Only an active Task may request acceptance");
           }
+          const unreviewed=this.database.prepare(`SELECT w.id FROM task_work_items w JOIN agent_assignments a ON a.id=w.owner_assignment_id WHERE w.task_id=? AND w.state NOT IN ('completed','cancelled') AND a.team_run_id IN (SELECT team_run_id FROM agent_assignments WHERE assignment_kind='coordinator' AND json_extract(task_packet_json,'$.adaptive')=1) LIMIT 1`).get(taskId);
+          if(unreviewed) throw new ProductStoreError("REVISION_CONFLICT","任务还有待处理或待复核的工作项");
           const activeTeam = this.database.prepare(`
             SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
           `).get(taskId);
@@ -6474,6 +6682,10 @@ export class ProductStore {
     resultReference?: Record<string, unknown>;
     assistantText?: string;
     assistantSourceEntryId?: string;
+    userSourceEntryId?:string;
+    sourceLeafEntryId?:string;
+    rollbackPathId?:string;
+    handledInput?:boolean;
   }): Promise<{ storeRevision: number; status: string }> {
     return await this.serializeMutation(async () => await this.finishSessionRunNow(input));
   }
@@ -6493,6 +6705,11 @@ export class ProductStore {
         const priorStatus = text(row, "status");
         if (priorStatus !== "prepared") {
           throw new ProductStoreError("REVISION_CONFLICT", "Session Run is not prepared", { priorStatus });
+        }
+        const member=this.database.prepare("SELECT g.id,g.role,g.team_run_id FROM agent_runs g JOIN session_runs r ON r.agent_run_id=g.id WHERE r.id=?").get(sessionRunId) as SQLiteRow|undefined;
+        if(member&&text(member,"role")!=="coordinator") {
+          this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,text(member,"id"));
+          if(typeof member.team_run_id==="string"&&this.database.prepare("SELECT id FROM agent_assignments WHERE team_run_id=? AND assignment_kind='coordinator' AND json_extract(task_packet_json,'$.adaptive')=1 LIMIT 1").get(member.team_run_id))this.reopenAdaptiveTeam(member.team_run_id,now);
         }
         this.database.prepare(`
           UPDATE session_runs SET status = 'running', revision = revision + 1, updated_at = ?
@@ -6820,6 +7037,10 @@ export class ProductStore {
     resultReference?: Record<string, unknown>;
     assistantText?: string;
     assistantSourceEntryId?: string;
+    userSourceEntryId?:string;
+    sourceLeafEntryId?:string;
+    rollbackPathId?:string;
+    handledInput?:boolean;
   }): Promise<{ storeRevision: number; status: string }> {
     this.assertOpen();
     await this.lease.assertOwned();
@@ -6863,6 +7084,14 @@ export class ProductStore {
         return { storeRevision: revision, status: String(attempt.status) };
       }
       const now = this.now();
+      if(input.handledInput&&typeof attempt.user_entry_id==="string")this.database.prepare("UPDATE session_entries SET content_json=json_set(content_json,'$.handled',json('true')) WHERE id=?").run(attempt.user_entry_id);
+      if(input.userSourceEntryId&&typeof attempt.user_entry_id==="string")this.database.prepare("UPDATE session_entries SET source_entry_id=COALESCE(source_entry_id,?) WHERE id=?").run(input.userSourceEntryId,attempt.user_entry_id);
+      if(input.sourceLeafEntryId&&typeof attempt.session_id==="string")this.database.prepare("UPDATE session_paths SET source_leaf_entry_id=?,revision=revision+1,updated_at=? WHERE session_id=? AND is_current=1").run(input.sourceLeafEntryId,now,attempt.session_id);
+      if(input.rollbackPathId&&typeof attempt.session_id==="string"){
+        if(!this.database.prepare("SELECT id FROM session_paths WHERE id=? AND session_id=?").get(input.rollbackPathId,attempt.session_id))throw new ProductStoreError("NOT_FOUND","原路径已不可用");
+        this.database.prepare("UPDATE session_paths SET is_current=0,revision=revision+1,updated_at=? WHERE session_id=? AND is_current=1").run(now,attempt.session_id);
+        this.database.prepare("UPDATE session_paths SET is_current=1,revision=revision+1,updated_at=? WHERE id=?").run(now,input.rollbackPathId);
+      }
       const runStatus = input.outcome === "succeeded" ? "completed" : input.outcome;
       const attemptOutcome = input.outcome === "aborted" ? "failed" : input.outcome;
       let assistantEntryId: string | undefined;
@@ -6892,7 +7121,7 @@ export class ProductStore {
         `).run(
           assistantEntryId,
           attempt.session_id,
-          typeof attempt.user_entry_id === "string" ? attempt.user_entry_id : null,
+          (this.database.prepare("SELECT entry_id FROM session_path_entries WHERE path_id=? ORDER BY ordinal DESC LIMIT 1").get(currentPath.id) as {entry_id?:string}|undefined)?.entry_id??(typeof attempt.user_entry_id === "string" ? attempt.user_entry_id : null),
           input.assistantSourceEntryId ?? null,
           typeof pathOrdinal?.ordinal === "number" ? pathOrdinal.ordinal : 0,
           now,
@@ -6936,6 +7165,7 @@ export class ProductStore {
           SET status = ?, revision = revision + 1, completed_at = ?, updated_at = ?
           WHERE id = ?
         `).run(runStatus, now, now, attempt.agent_run_id);
+        this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(runStatus==="completed"?(attempt.agent_role==="worker"||attempt.agent_role==="verifier"&&!this.verifications().some(record=>record.verifierSessionRunId===sessionRunId)?"in_progress":"completed"):"blocked",now,attempt.task_id,attempt.agent_run_id);
         if (assistantEntryId && input.assistantText) {
           this.database.prepare(`
             INSERT INTO agent_reports(
@@ -6967,7 +7197,10 @@ export class ProductStore {
               JOIN team_runs t ON t.coordinator_agent_run_id = p.agent_run_id
               WHERE t.id = ? AND p.report_kind = 'coordinator'
             `).get(attempt.team_run_id) as { count?: unknown } | undefined;
-            if (typeof coordinatorReports?.count !== "number" || coordinatorReports.count < 2) {
+            const adaptive=this.database.prepare("SELECT id FROM agent_assignments WHERE team_run_id=? AND assignment_kind='coordinator' AND json_extract(task_packet_json,'$.adaptive')=1 LIMIT 1").get(attempt.team_run_id);
+            if(adaptive) {
+              this.reconcileAdaptiveTeam(text(attempt,"team_run_id"),now);
+            } else if (typeof coordinatorReports?.count !== "number" || coordinatorReports.count < 2) {
               // Coordinator has planned once but has not yet synthesized member reports.
               // Keep the Team active so the same Coordination Session can run its second phase.
             } else {
@@ -6992,6 +7225,7 @@ export class ProductStore {
           }
         }
       }
+      this.finishCollaborationFacts(sessionRunId,now);
       const storeRevision = this.metaInteger("store_revision") + 1;
       this.database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")
         .run(String(storeRevision));
@@ -7016,6 +7250,359 @@ export class ProductStore {
     }
   }
 
+
+  /** Commit the input terminal states and its result notice beside the report.
+   * All identifiers come from this run's persisted input and report receipts. */
+  private finishCollaborationFacts(sessionRunId:string,now:string):boolean {
+    const run=this.database.prepare(`SELECT r.*,g.role,g.team_run_id,e.raw_input_id,e.context_projection_json FROM session_runs r JOIN agent_runs g ON g.id=r.agent_run_id JOIN effective_inputs e ON e.id=r.effective_input_id WHERE r.id=?`).get(sessionRunId) as SQLiteRow|undefined;
+    if(!run||!["completed","failed","aborted","unknown"].includes(text(run,"status")))return false;
+    const projection=JSON.parse(text(run,"context_projection_json")) as {collaborationSource?:{messageId?:string}};
+    const all=this.collaborationMessages(text(run,"task_id"));
+    const sources=all.filter(message=>message.targetSessionId===run.session_id&&message.targetAgentRunId===run.agent_run_id&&(message.id===projection.collaborationSource?.messageId||message.deliveryMode==="steer"&&message.targetSessionRunId===sessionRunId));
+    if(!sources.length)return false;
+    const report=this.database.prepare("SELECT id,body_json FROM agent_reports WHERE agent_run_id=? AND json_extract(body_json,'$.sessionRunId')=? ORDER BY created_at DESC,id DESC LIMIT 1").get(text(run,"agent_run_id"),sessionRunId) as SQLiteRow|undefined;
+    const body=report?JSON.parse(text(report,"body_json")) as {text?:string}:undefined;
+    const reply=run.status==="completed"&&typeof body?.text==="string"?body.text:undefined;
+    const outcome=run.status==="completed"?"succeeded":text(run,"status");
+    const resultReference={sessionRunId,agentRunId:text(run,"agent_run_id"),...(report?{reportId:text(report,"id")}:{}),outcome,sourceMessageIds:sources.map(message=>message.id)};
+    const write=(message:CollaborationMessage)=>{
+      const revision=this.metaInteger("store_revision")+1;
+      this.database.prepare("INSERT INTO store_events(event_id,store_revision,kind,entity_kind,entity_id,task_id,payload_json,created_at) VALUES (?,?,'collaboration.messageChanged','collaborationMessage',?,?,?,?)").run(randomUUID(),revision,message.id,message.taskId,canonicalJSON(message),now);
+      this.database.prepare("UPDATE dcode_meta SET value=? WHERE key='store_revision'").run(String(revision));
+    };
+    let changed=false;
+    for(const previous of sources){
+      if(previous.completionReference?.sessionRunId===sessionRunId||!["delivering","completed","failed","interrupted"].includes(previous.state))continue;
+      if(previous.completionReference)throw new ProductStoreError("INVALID_ARGUMENT","消息结果已经属于另一轮运行");
+      const consumed=previous.deliveryMode!=="steer"||!!this.database.prepare("SELECT id FROM effective_inputs WHERE json_extract(context_projection_json,'$.steeringSource.messageId')=? AND json_extract(context_projection_json,'$.steeringSource.sessionRunId')=?").get(previous.id,sessionRunId);
+      const message:CollaborationMessage={...previous,state:consumed?(outcome==="succeeded"?"completed":"failed"):"interrupted",revision:previous.revision+1,updatedAt:now,completionReference:resultReference};
+      delete message.waitingFor;delete message.reply;
+      if(consumed&&reply)message.reply=reply.slice(0,190000);
+      if(!consumed)message.error="补充尚未确认被接收，未自动重发";
+      write(message);changed=true;
+    }
+    if(run.role==="coordinator")return changed;
+    const prior=all.find(message=>message.author==="member"&&message.resultReference?.sessionRunId===sessionRunId);
+    if(prior)return changed;
+    const coordinator=this.database.prepare("SELECT g.id,g.session_id FROM agent_runs g WHERE g.task_id=? AND g.role='coordinator' AND (g.id=(SELECT coordinator_agent_run_id FROM team_runs WHERE id=?) OR ? IS NULL) ORDER BY g.created_at,g.id LIMIT 1").get(text(run,"task_id"),typeof run.team_run_id==="string"?run.team_run_id:null,typeof run.team_run_id==="string"?run.team_run_id:null) as SQLiteRow|undefined;
+    if(!coordinator)throw new ProductStoreError("NOT_FOUND","本轮结果的协调者不存在，未提交交付状态");
+    const primary=sources.find(message=>message.id===projection.collaborationSource?.messageId)??sources[0]!;
+    const legacyReceipt=this.database.prepare("SELECT result_json FROM mutation_receipts WHERE request_id=? AND method='collaboration.queue'").get(`member-result:${primary.id}`) as SQLiteRow|undefined;
+    const legacyId=legacyReceipt?(JSON.parse(text(legacyReceipt,"result_json")) as {message?:{id:string}}).message?.id:undefined;
+    const legacy=legacyId?all.find(message=>message.id===legacyId&&message.targetAgentRunId===coordinator.id&&message.sourceSessionId===run.session_id):undefined;
+    const title=this.database.prepare("SELECT title FROM sessions WHERE id=?").get(text(run,"session_id")) as SQLiteRow|undefined;
+    const notice:CollaborationMessage=legacy?{...legacy,resultReference,revision:legacy.revision+1,updatedAt:now}:{
+      id:`collaboration-result-${sessionRunId}`,taskId:text(run,"task_id"),originRawInputId:text(run,"raw_input_id"),sourceSessionId:text(run,"session_id"),targetSessionId:text(coordinator,"session_id"),targetAgentRunId:text(coordinator,"id"),author:"member",state:"queued",revision:1,createdAt:now,updatedAt:now,resultReference,
+      text:`成员 ${title?text(title,"title"):"成员"}（${run.agent_run_id}）本轮返回 ${outcome}。\n执行：${sessionRunId}\n${report?`报告：${report.id}`:"本轮没有可交付报告"}\n这是成员结果，请独立复核，必要时安排验收或返工；执行结束不等于验收通过或用户接受。\n${reply?`${reply.slice(0,12000)}${reply.length>12000?"\n（完整内容见本轮报告）":""}`:"没有可交付回复，请检查本轮运行状态。"}`,
+    };
+    write(notice);return true;
+  }
+
+  private async recoverCollaborationResults():Promise<void>{
+    const runs=this.database.prepare("SELECT r.id FROM session_runs r WHERE r.status IN ('completed','failed','aborted','unknown') AND EXISTS(SELECT 1 FROM operation_attempts a WHERE a.session_run_id=r.id AND json_extract(a.outcome_json,'$.piRunId') IS NOT NULL)").all() as SQLiteRow[];
+    if(!runs.length)return;
+    await this.lease.assertOwned();this.database.exec("BEGIN IMMEDIATE");
+    try{
+      const now=this.now();
+      for(const run of runs)this.finishCollaborationFacts(text(run,"id"),now);
+      await this.lease.assertOwned();this.database.exec("COMMIT");
+    }catch(error){rollback(this.database);throw error;}
+  }
+
+  private reopenAdaptiveTeam(teamRunId:string,now:string):void {
+    const team=this.database.prepare("SELECT task_id FROM team_runs WHERE id=?").get(teamRunId) as SQLiteRow|undefined;
+    if(!team)return;
+    const other=this.database.prepare("SELECT id FROM team_runs WHERE task_id=? AND id<>? AND status IN ('prepared','active','waiting')").get(text(team,"task_id"),teamRunId);
+    if(other)throw new ProductStoreError("REVISION_CONFLICT","当前团队仍在执行，请先完成当前安排再恢复历史团队");
+    this.database.prepare("UPDATE team_runs SET status='active',completed_at=NULL,revision=revision+1,updated_at=? WHERE id=?").run(now,teamRunId);
+  }
+
+  private reconcileAdaptiveTeam(teamRunId:string,now:string):void {
+    const pending=this.database.prepare("SELECT COUNT(*) AS count FROM task_work_items WHERE owner_assignment_id IN (SELECT id FROM agent_assignments WHERE team_run_id=?) AND state NOT IN ('completed','cancelled')").get(teamRunId) as SQLiteRow;
+    if(integer(pending,"count")===0)this.database.prepare("UPDATE team_runs SET status='completed',revision=revision+1,completed_at=?,updated_at=? WHERE id=? AND status IN ('prepared','active','waiting')").run(now,now,teamRunId);
+  }
+
+  verifications():VerificationRecord[] {
+    return (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='verification.submitted' ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
+  }
+  coordinatorReviews():CoordinatorReviewRecord[] {
+    return (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='verification.reviewed' ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
+  }
+  async submitVerification(input:{requestId:string;taskId:string;verifierAgentRunId:string;subjectReportId:string;verdict:"pass"|"fail";evidenceIds:string[];findings:VerificationRecord["findings"];summary:string}):Promise<{storeRevision:number;verification:VerificationRecord}> {
+    assertCredentialFreeValue(input,"verification");
+    if(!["pass","fail"].includes(input.verdict)||!input.summary?.trim()||input.evidenceIds.length>64||input.findings.length>32) throw new ProductStoreError("INVALID_ARGUMENT","验收报告格式无效");
+    if(input.verdict==="pass"&&(!input.evidenceIds.length||input.findings.length)) throw new ProductStoreError("INVALID_ARGUMENT","通过验收需要独立证据且没有未解决问题");
+    if(input.verdict==="fail"&&!input.findings.length) throw new ProductStoreError("INVALID_ARGUMENT","未通过时需要说明问题");
+    return this.mutate("verification.submit",input.requestId,undefined,input,(_revision,now)=>{
+      const verifier=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='verifier'").get(input.verifierAgentRunId,input.taskId);
+      const subject=this.database.prepare("SELECT * FROM agent_reports WHERE id=? AND task_id=?").get(input.subjectReportId,input.taskId) as SQLiteRow|undefined;
+      if(!verifier||!subject||text(subject,"agent_run_id")===input.verifierAgentRunId) throw new ProductStoreError("INVALID_ARGUMENT","独立验收必须由同任务不同于执行者的验收成员承担");
+      const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(text(subject,"agent_run_id")) as SQLiteRow|undefined;
+      if(!latest||text(latest,"id")!==input.subjectReportId)throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，请重新读取当前报告");
+      const reportRunId=JSON.parse(text(subject,"body_json")).sessionRunId;
+      const boundary=typeof reportRunId==="string"?this.database.prepare("SELECT sequence FROM store_events WHERE kind='sessionRun.finished' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(reportRunId) as SQLiteRow|undefined:undefined;
+      if(input.verdict==="pass"&&!boundary)throw new ProductStoreError("INVALID_ARGUMENT","报告没有可验证的提交边界");
+      const evidence=input.evidenceIds.map(id=>this.database.prepare("SELECT * FROM evidence_records WHERE id=? AND task_id=? AND agent_run_id=?").get(id,input.taskId,input.verifierAgentRunId) as SQLiteRow|undefined);
+      if(evidence.some(item=>!item||text(item,"command_redacted").startsWith("dcode_"))) throw new ProductStoreError("INVALID_ARGUMENT","验收证据必须来自本人实际检查成果的工具执行，不能用协调记录代替");
+      if(boundary&&input.evidenceIds.some(id=>{
+        const event=this.database.prepare("SELECT sequence FROM store_events WHERE kind='evidence.recorded' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(id) as SQLiteRow|undefined;
+        return !event||integer(event,"sequence")<=integer(boundary,"sequence");
+      }))throw new ProductStoreError("INVALID_ARGUMENT","验收证据早于当前报告，必须重新检查新版成果");
+      if(input.verdict==="pass"&&evidence.some(item=>text(item!,"exit_kind")!=="ok")) throw new ProductStoreError("INVALID_ARGUMENT","失败的检查不能作为通过证据");
+      const verifierRun=this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status='running' ORDER BY created_at DESC,id DESC LIMIT 1").get(input.verifierAgentRunId) as SQLiteRow|undefined;
+      if(!verifierRun)throw new ProductStoreError("INVALID_ARGUMENT","验收报告必须来自正在执行的验收运行");
+      const fingerprint=payloadHash({subjectAgentRunId:text(subject,"agent_run_id"),verdict:input.verdict,findings:input.findings,evidence:evidence.map(item=>({tool:text(item!,"command_redacted"),resultDigest:JSON.parse(text(item!,"payload_json")).resultDigest})).sort((a,b)=>canonicalJSON(a).localeCompare(canonicalJSON(b)))});
+      const verification:VerificationRecord={id:`verification-${randomUUID()}`,taskId:input.taskId,verifierAgentRunId:input.verifierAgentRunId,verifierSessionRunId:text(verifierRun,"id"),subjectAgentRunId:text(subject,"agent_run_id"),subjectReportId:input.subjectReportId,verdict:input.verdict,evidenceIds:[...new Set(input.evidenceIds)],findings:input.findings,summary:input.summary,fingerprint,createdAt:now};
+      this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,verification.subjectAgentRunId);
+      const subjectTeam=this.database.prepare("SELECT team_run_id FROM agent_runs WHERE id=?").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
+      if(typeof subjectTeam?.team_run_id==="string")this.reopenAdaptiveTeam(subjectTeam.team_run_id,now);
+      this.database.prepare("INSERT INTO agent_reports(id,task_id,agent_run_id,report_kind,body_json,created_at) VALUES (?,?,?,'verification',?,?)").run(verification.id,input.taskId,input.verifierAgentRunId,canonicalJSON(verification),now);
+      return {value:{verification},event:{kind:"verification.submitted",entityKind:"verification",entityId:verification.id,taskId:input.taskId,payload:verification}};
+    });
+  }
+  async reviewVerification(input:{requestId:string;taskId:string;coordinatorAgentRunId:string;verificationId:string;outcome:CoordinatorReviewRecord["outcome"];reason:string;strategyChange?:string}):Promise<{storeRevision:number;review:CoordinatorReviewRecord;verification:VerificationRecord;workItemCompleted:boolean}> {
+    assertCredentialFreeValue(input,"review");
+    if(!["accepted","rework","recheck"].includes(input.outcome)||!input.reason?.trim()) throw new ProductStoreError("INVALID_ARGUMENT","需要明确复核结论与依据");
+    return this.mutate("verification.review",input.requestId,undefined,input,(_revision,now)=>{
+      const owner=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='coordinator'").get(input.coordinatorAgentRunId,input.taskId);
+      const verification=this.verifications().find(item=>item.id===input.verificationId&&item.taskId===input.taskId);
+      if(!owner||!verification) throw new ProductStoreError("INVALID_ARGUMENT","只有本任务协调者可以复核已有验收");
+      if(this.coordinatorReviews().some(review=>review.verificationId===verification.id)) throw new ProductStoreError("REVISION_CONFLICT","该验收已经复核，应复验后提交新记录");
+      const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
+      if(!latest||text(latest,"id")!==verification.subjectReportId) throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，需要对新报告验收");
+      if(input.outcome==="accepted"&&verification.verdict!=="pass") throw new ProductStoreError("INVALID_ARGUMENT","不能把未通过验收的成果标为复核通过");
+      const recent=this.verifications().filter(item=>item.taskId===input.taskId&&item.subjectAgentRunId===verification.subjectAgentRunId).slice(-2);
+      if(input.outcome!=="accepted"&&recent.length===2&&recent[0]!.fingerprint===recent[1]!.fingerprint&&!input.strategyChange?.trim()) throw new ProductStoreError("INVALID_ARGUMENT","连续两次没有新证据，需要调整方法或重新分工后再返工");
+      const review:CoordinatorReviewRecord={id:`review-${randomUUID()}`,taskId:input.taskId,coordinatorAgentRunId:input.coordinatorAgentRunId,verificationId:verification.id,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{}),createdAt:now};
+      const subjectRun=this.database.prepare("SELECT status,team_run_id FROM agent_runs WHERE id=?").get(verification.subjectAgentRunId) as SQLiteRow;
+      if(input.outcome==="accepted"&&(text(subjectRun,"status")!=="completed"||this.collaborationMessages(input.taskId).some(message=>message.targetAgentRunId===verification.subjectAgentRunId&&["queued","delivering","paused","interrupted","failed"].includes(message.state)))) throw new ProductStoreError("REVISION_CONFLICT","执行者还有新工作待处理，需要核对新版结果");
+      const latestByVerifier=new Map<string,VerificationRecord>();
+      for(const item of this.verifications().filter(item=>item.subjectReportId===verification.subjectReportId))latestByVerifier.set(item.verifierAgentRunId,item);
+      const reviews=[...this.coordinatorReviews(),review];
+      const workItemCompleted=input.outcome==="accepted"&&[...latestByVerifier.values()].every(item=>item.verdict==="pass"&&reviews.some(candidate=>candidate.verificationId===item.id&&candidate.outcome==="accepted"));
+      this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(workItemCompleted?"completed":"in_progress",now,input.taskId,verification.subjectAgentRunId);
+      if(input.outcome==="recheck")this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,verification.verifierAgentRunId);
+      if(typeof subjectRun.team_run_id==="string") {
+        if(workItemCompleted)this.reconcileAdaptiveTeam(subjectRun.team_run_id,now);
+        else this.reopenAdaptiveTeam(subjectRun.team_run_id,now);
+      }
+      return {value:{review,verification,workItemCompleted},event:{kind:"verification.reviewed",entityKind:"coordinatorReview",entityId:review.id,taskId:input.taskId,payload:review}};
+    });
+  }
+
+  collaborationMessages(taskId?:string):CollaborationMessage[] {
+    this.assertOpen();
+    const rows = this.database.prepare(`SELECT payload_json FROM store_events WHERE sequence IN (
+      SELECT MAX(sequence) FROM store_events WHERE kind='collaboration.messageChanged' GROUP BY entity_id
+    ) ORDER BY sequence`).all() as SQLiteRow[];
+    const messages=rows.map(row=>JSON.parse(text(row,"payload_json")) as CollaborationMessage).filter(message=>!taskId || message.taskId===taskId);
+    const orders=this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='collaboration.queueOrdered' GROUP BY entity_id)").all() as SQLiteRow[];
+    const ranks=new Map<string,Map<string,number>>();
+    for(const row of orders){const order=JSON.parse(text(row,"payload_json")) as {sessionId:string;messageIds:string[]};ranks.set(order.sessionId,new Map(order.messageIds.map((id,index)=>[id,index])));}
+    const bySession=new Map<string,CollaborationMessage[]>();
+    for(const message of messages){const group=bySession.get(message.targetSessionId)??[];group.push(message);bySession.set(message.targetSessionId,group);}
+    return [...bySession.values()].flatMap(group=>group.sort((a,b)=>{
+      const pending=(message:CollaborationMessage)=>["queued","paused"].includes(message.state);
+      if(pending(a)!==pending(b))return pending(a)?1:-1;
+      if(pending(a)&&pending(b)){const order=ranks.get(a.targetSessionId);const difference=(order?.get(a.id)??Number.MAX_SAFE_INTEGER)-(order?.get(b.id)??Number.MAX_SAFE_INTEGER);if(difference)return difference;}
+      return a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id);
+    }));
+  }
+
+  initialCollaborationMessage(agentRunId:string):CollaborationMessage|undefined{
+    const receipt=this.database.prepare("SELECT result_json FROM mutation_receipts WHERE request_id=? AND method='collaboration.queue'").get(`delegate-initial:${agentRunId}`) as SQLiteRow|undefined;
+    if(!receipt)return;const id=(JSON.parse(text(receipt,"result_json")) as {message?:{id?:string}}).message?.id;
+    return this.collaborationMessages().find(message=>message.id===id&&message.targetAgentRunId===agentRunId);
+  }
+
+  async queueCollaborationMessage(input:{requestId:string;taskId:string;sourceSessionId:string;targetAgentRunId:string;author:CollaborationMessage["author"];text:string;attachmentIds?:string[];originRawInputId?:string;pathAction?:NativeSessionPathAction;deliveryMode?:"steer";targetSessionRunId?:string;acknowledgedUserMessageId?:string}):Promise<{storeRevision:number;message:CollaborationMessage}> {
+    if(typeof input.text!=="string"||input.text.length>200000||!input.text.trim()&&!input.attachmentIds?.length)throw new ProductStoreError("INVALID_ARGUMENT","需要消息或附件，正文不能超过 200000 字符");
+    if(redactCredentialText(input.text).redacted)throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED","消息包含凭据内容");
+    const body=input.text;
+    return this.mutate("collaboration.queue",input.requestId,undefined,{...input,text:body},(_revision,now)=>{
+      const target=this.database.prepare("SELECT * FROM agent_runs WHERE id=? AND task_id=?").get(input.targetAgentRunId,input.taskId) as SQLiteRow|undefined;
+      const source=this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(input.sourceSessionId,input.taskId);
+      if(!target||!source) throw new ProductStoreError("NOT_FOUND","只能向本任务已创建的成员发送消息");
+      if(input.attachmentIds?.some(id=>!this.attachmentCatalog().some(attachment=>attachment.id===id))) throw new ProductStoreError("NOT_FOUND","附件不存在");
+      if(text(target,"role")!=="coordinator") {
+        this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,input.targetAgentRunId);
+        if(typeof target.team_run_id==="string")this.reopenAdaptiveTeam(target.team_run_id,now);
+      }
+      if(input.author==="user")this.database.prepare("UPDATE tasks SET state='active',revision=revision+1,updated_at=? WHERE id=? AND state IN ('completed','rejected')").run(now,input.taskId);
+      let originRawInputId=input.originRawInputId;
+      if(input.author==="user") {
+        originRawInputId=`raw-${randomUUID()}`;
+        const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM raw_inputs WHERE session_id=?").get(input.sourceSessionId) as SQLiteRow;
+        const attachments=(input.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
+        this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(originRawInputId,input.taskId,input.sourceSessionId,integer(ordinal,"ordinal"),body,canonicalJSON(attachments),now);
+      } else if(!originRawInputId||!this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(originRawInputId,input.taskId)) throw new ProductStoreError("INVALID_ARGUMENT","协作消息必须保留发起原文的固定引用");
+      const message:CollaborationMessage={id:`collaboration-${randomUUID()}`,taskId:input.taskId,originRawInputId:originRawInputId!,sourceSessionId:input.sourceSessionId,targetSessionId:text(target,"session_id"),targetAgentRunId:input.targetAgentRunId,author:input.author,text:body,...(input.acknowledgedUserMessageId?{acknowledgedUserMessageId:input.acknowledgedUserMessageId}:{}),...(input.deliveryMode?{deliveryMode:input.deliveryMode,targetSessionRunId:input.targetSessionRunId}:{}),...(input.pathAction?{pathAction:input.pathAction}:{}),...(input.attachmentIds?.length?{attachmentIds:input.attachmentIds}:{}),state:"queued",revision:1,createdAt:now,updatedAt:now};
+      return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
+    });
+  }
+
+  async consumeSteeringMessage(input:{messageId:string;sessionRunId:string;sourceEntryId:string;effectiveText:string;inputSources?:InputSourceReceipt[]}):Promise<{storeRevision:number;effectiveInputId:string}> {
+    return this.mutate("collaboration.steeringConsumed",`steering-consumed:${input.messageId}`,undefined,input,(_revision,now)=>{
+      const message=this.collaborationMessages().find(message=>message.id===input.messageId);
+      const run=this.database.prepare("SELECT * FROM session_runs WHERE id=?").get(input.sessionRunId) as SQLiteRow|undefined;
+      if(!message||message.state!=="delivering"||message.deliveryMode!=="steer"||message.targetSessionRunId!==input.sessionRunId||!run||run.session_id!==message.targetSessionId||run.agent_run_id!==message.targetAgentRunId||!["running","waiting"].includes(String(run.status)))throw new ProductStoreError("REVISION_CONFLICT","即时补充不再属于当前运行");
+      const current=this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND is_current=1").get(message.targetSessionId) as SQLiteRow;
+      const previous=this.database.prepare("SELECT entry_id,ordinal FROM session_path_entries WHERE path_id=? ORDER BY ordinal DESC LIMIT 1").get(text(current,"id")) as SQLiteRow|undefined;
+      const entryId=`entry-${randomUUID()}`,ordinal=previous?integer(previous,"ordinal")+1:0;
+      const attachments=(message.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
+      this.database.prepare("INSERT INTO session_entries(id,session_id,parent_entry_id,source_kind,lineage_status,source_entry_id,source_ordinal,source_timestamp,message_role,content_json,created_at) VALUES (?,?,?,'native','native',?,?,?,?,?,?)").run(entryId,message.targetSessionId,previous?text(previous,"entry_id"):null,input.sourceEntryId,ordinal,now,message.author==="user"?"user":"other",canonicalJSON({type:"text",text:message.text,attachmentRefs:attachments,collaborationMessageId:message.id,author:message.author,steering:true}),now);
+      this.database.prepare("INSERT INTO session_path_entries(path_id,entry_id,ordinal) VALUES (?,?,?)").run(text(current,"id"),entryId,ordinal);
+      const effectiveInputId=`effective-${randomUUID()}`;
+      this.database.prepare("INSERT INTO effective_inputs(id,task_id,session_id,raw_input_id,conversion_revision,effective_content_json,context_projection_json,created_at) VALUES (?,?,?,?,1,?,?,?)").run(effectiveInputId,message.taskId,message.targetSessionId,message.originRawInputId,canonicalJSON({message:input.effectiveText,attachmentRefs:attachments}),canonicalJSON({version:3,steeringSource:{messageId:message.id,sessionRunId:input.sessionRunId,sourceSessionId:message.sourceSessionId},inputSources:inputSourceReceipts(input.inputSources)}),now);
+      return {value:{effectiveInputId},event:{kind:"collaboration.steeringConsumed",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:{messageId:message.id,sessionRunId:input.sessionRunId,entryId,effectiveInputId,rawInputId:message.originRawInputId}}};
+    });
+  }
+
+  rawInputSequence(rawInputId:string):number {
+    const row=this.database.prepare("SELECT MIN(sequence) AS sequence FROM store_events WHERE (kind='sessionRun.prepared' AND json_extract(payload_json,'$.rawInputId')=?) OR (kind='collaboration.messageChanged' AND json_extract(payload_json,'$.author')='user' AND json_extract(payload_json,'$.originRawInputId')=?)").get(rawInputId,rawInputId) as SQLiteRow;
+    return typeof row.sequence==="number"?row.sequence:0;
+  }
+
+  latestAppliedUserMessage(agentRunId:string):CollaborationMessage|undefined {
+    return this.collaborationMessages().filter(message=>message.targetAgentRunId===agentRunId&&message.author==="user"&&message.state!=="cancelled"&&this.isCollaborationMessageApplied(message.id)).sort((a,b)=>this.rawInputSequence(b.originRawInputId)-this.rawInputSequence(a.originRawInputId))[0];
+  }
+
+  isCollaborationMessageApplied(messageId:string):boolean {
+    return !!this.database.prepare("SELECT id FROM effective_inputs WHERE json_extract(context_projection_json,'$.collaborationSource.messageId')=? OR json_extract(context_projection_json,'$.steeringSource.messageId')=? LIMIT 1").get(messageId,messageId);
+  }
+
+  async editCollaborationMessage(input:{requestId:string;id:string;expectedRevision:number;text:string}):Promise<{storeRevision:number;message:CollaborationMessage}> {
+    const body=requiredCredentialFreeString(input.text,"message text",200000);
+    return this.mutate("collaboration.edit",input.requestId,undefined,input,(_revision,now)=>{
+      const previous=this.collaborationMessages().find(message=>message.id===input.id);
+      if(!previous||previous.revision!==input.expectedRevision||previous.state!=="paused")throw new ProductStoreError("REVISION_CONFLICT","只能修改已暂停且尚未发送的消息，请刷新状态");
+      const rawId=`raw-${randomUUID()}`;
+      const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM raw_inputs WHERE session_id=?").get(previous.sourceSessionId) as SQLiteRow;
+      const attachments=(previous.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
+      this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(rawId,previous.taskId,previous.sourceSessionId,integer(ordinal,"ordinal"),body,canonicalJSON(attachments),now);
+      const message:CollaborationMessage={...previous,previousRawInputId:previous.originRawInputId,originRawInputId:rawId,author:"user",text:body,revision:previous.revision+1,updatedAt:now};delete message.error;
+      return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
+    });
+  }
+
+  collaborationQueueState(sessionId:string):{sessionId:string;revision:number;messageIds:string[]} {
+    const row=this.database.prepare("SELECT payload_json FROM store_events WHERE kind='collaboration.queueOrdered' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(sessionId) as SQLiteRow|undefined;
+    if(!row)return {sessionId,revision:0,messageIds:[]};
+    const payload=JSON.parse(text(row,"payload_json"));return {...payload,revision:payload.revision??1};
+  }
+
+  async reorderCollaborationMessages(input:{requestId:string;sessionId:string;expectedQueueRevision:number;messages:Array<{id:string;revision:number}>}):Promise<{storeRevision:number}> {
+    return this.mutate("collaboration.reorder",input.requestId,undefined,input,()=>{
+      const queue=this.collaborationQueueState(input.sessionId);
+      if(queue.revision!==input.expectedQueueRevision)throw new ProductStoreError("REVISION_CONFLICT","队列顺序已改变，请刷新后重新排序");
+      const pending=this.collaborationMessages().filter(message=>message.targetSessionId===input.sessionId&&["queued","paused"].includes(message.state));
+      if(!pending.length||input.messages.length!==pending.length||new Set(input.messages.map(item=>item.id)).size!==pending.length||input.messages.some(item=>!pending.some(message=>message.id===item.id&&message.revision===item.revision)))throw new ProductStoreError("REVISION_CONFLICT","待发送队列已改变，请刷新后重新排序");
+      return {value:{},event:{kind:"collaboration.queueOrdered",entityKind:"collaborationQueue",entityId:input.sessionId,taskId:pending[0]!.taskId,payload:{sessionId:input.sessionId,revision:queue.revision+1,messageIds:input.messages.map(item=>item.id)}}};
+    });
+  }
+
+  async waitCollaborationMessage(id:string,expectedRevision:number,waitingFor:"capacity"|"workspace"):Promise<void>{
+    const previous=this.collaborationMessages().find(item=>item.id===id);if(previous?.waitingFor===waitingFor&&previous.state==="queued")return;
+    await this.mutate("collaboration.wait",`wait:${id}:${expectedRevision}:${waitingFor}`,undefined,{id,expectedRevision,waitingFor},(_revision,now)=>{
+      const current=this.collaborationMessages().find(item=>item.id===id);if(!current||current.revision!==expectedRevision||current.state!=="queued")throw new ProductStoreError("REVISION_CONFLICT","待发送消息已改变");
+      const message={...current,waitingFor,revision:current.revision+1,updatedAt:now};return {value:{},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:id,taskId:current.taskId,payload:message}};
+    });
+  }
+
+  async transitionCollaborationMessage(input:{requestId:string;id:string;expectedRevision:number;state:CollaborationMessageState;reply?:string;error?:string}):Promise<{storeRevision:number;message:CollaborationMessage}> {
+    return this.mutate("collaboration.transition",input.requestId,undefined,input,(_revision,now)=>{
+      const previous=this.collaborationMessages().find(message=>message.id===input.id);
+      if(!previous) throw new ProductStoreError("NOT_FOUND","协作消息不存在");
+      if(previous.revision!==input.expectedRevision) throw new ProductStoreError("REVISION_CONFLICT","消息状态已改变");
+      const allowed:Record<CollaborationMessageState,CollaborationMessageState[]>={queued:["delivering","paused","cancelled"],delivering:["completed","failed","interrupted"],paused:["queued","cancelled"],interrupted:["cancelled"],completed:[],failed:["cancelled"],cancelled:[]};
+      if(!allowed[previous.state].includes(input.state)) throw new ProductStoreError("INVALID_ARGUMENT","不能执行此消息状态变更");
+      const message:CollaborationMessage={...previous,state:input.state,revision:previous.revision+1,updatedAt:now,...(input.reply?{reply:requiredCredentialFreeString(input.reply,"reply",200000)}:{}),...(input.error?{error:requiredCredentialFreeString(input.error,"error",2000)}:{})};
+      delete message.waitingFor;
+      if(input.state==="queued"){delete message.error;delete message.deliveryMode;delete message.targetSessionRunId;}
+      return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
+    });
+  }
+
+  agentProcessExecutions():Array<{taskId:string;agentRunId:string;runtimeId:string;process:import("./process-agent.js").AgentProcessInfo}> {
+    const rows=this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='agentProcess.changed' GROUP BY entity_id) ORDER BY sequence").all() as SQLiteRow[];
+    return rows.map(row=>JSON.parse(text(row,"payload_json")));
+  }
+
+  async recordAgentProcess(input: { requestId: string; taskId: string; agentRunId: string; runtimeId: string; process: import("./process-agent.js").AgentProcessInfo }): Promise<{storeRevision:number}> {
+    return this.mutate("agentProcess.record",input.requestId,undefined,input,()=>{
+      if (!this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=?").get(input.agentRunId,input.taskId)) throw new ProductStoreError("NOT_FOUND","进程所属成员不存在");
+      return {value:{},event:{kind:"agentProcess.changed",entityKind:"agentProcess",entityId:input.process.executionId,taskId:input.taskId,payload:input}};
+    });
+  }
+
+  auxiliaryProcessExecutions():Array<{taskId:string;agentRunId:string;runtimeId:string;sessionRunId:string;process:AuxiliaryProcessInfo}> {
+    return (this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='auxiliaryProcess.changed' GROUP BY entity_id) ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
+  }
+
+  async recordAuxiliaryProcess(input:{requestId:string;taskId:string;agentRunId:string;runtimeId:string;sessionRunId:string;process:AuxiliaryProcessInfo}):Promise<{storeRevision:number}>{
+    return this.mutate("auxiliaryProcess.record",input.requestId,undefined,input,()=>{
+      if(!this.database.prepare("SELECT id FROM session_runs WHERE id=? AND task_id=? AND agent_run_id=? AND runtime_id=?").get(input.sessionRunId,input.taskId,input.agentRunId,input.runtimeId))throw new ProductStoreError("NOT_FOUND","辅助进程缺少所属运行");
+      return {value:{},event:{kind:"auxiliaryProcess.changed",entityKind:"auxiliaryProcess",entityId:input.process.id,taskId:input.taskId,payload:input}};
+    });
+  }
+
+  providerCalls():NonNullable<FoundationSnapshot["providerCalls"]>{
+    return (this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='providerCall.changed' GROUP BY entity_id) ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
+  }
+
+  async recordProviderCall(input:import("./provider-route-stream.js").ProviderCallRecord&{taskId:string;sessionId?:string;sessionRunId?:string;agentRunId?:string}):Promise<{storeRevision:number}>{
+    return this.mutate("providerCall.record",`provider-call:${input.id}:${input.state}`,undefined,input,()=>{
+      if(input.sessionRunId){
+        const run=this.database.prepare("SELECT id FROM session_runs WHERE id=? AND task_id=? AND status IN ('running','waiting')").get(input.sessionRunId,input.taskId);if(!run)throw new ProductStoreError("REVISION_CONFLICT","模型调用不属于当前运行");
+      }else if(input.purpose!=="context_summary"||!input.sessionId||!input.agentRunId||!this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND session_id=?").get(input.agentRunId,input.taskId,input.sessionId))throw new ProductStoreError("REVISION_CONFLICT","辅助模型调用缺少所属会话与成员");
+      return {value:{},event:{kind:"providerCall.changed",entityKind:"providerCall",entityId:input.id,taskId:input.taskId,payload:input}};
+    });
+  }
+
+  async recordRunningModelRoute(input:{requestId:string;sessionRunId:string;agentRunId:string;decision:import("./model-route.js").ModelRouteDecision;systemPromptDigest:string}):Promise<{storeRevision:number}>{
+    return this.mutate("agentModel.reroute",input.requestId,undefined,input,(_revision,now)=>{
+      const run=this.database.prepare("SELECT task_id FROM session_runs WHERE id=? AND agent_run_id=? AND status='running'").get(input.sessionRunId,input.agentRunId) as SQLiteRow|undefined;
+      if(!run||!input.decision.selected)throw new ProductStoreError("REVISION_CONFLICT","当前运行不能更换模型");
+      this.database.prepare("UPDATE agent_runs SET model_provider=?,model_id=?,revision=revision+1,updated_at=? WHERE id=?").run(input.decision.selected.providerId,input.decision.selected.modelId,now,input.agentRunId);
+      return {value:{},event:{kind:"agentModel.rerouted",entityKind:"agentRun",entityId:input.agentRunId,taskId:text(run,"task_id"),payload:input}};
+    });
+  }
+
+  async selectAgentModel(input: {requestId:string;agentRunId:string;decision:import("./model-route.js").ModelRouteDecision}):Promise<{storeRevision:number}> {
+    assertCredentialFreeValue(input.decision,"decision");
+    return this.mutate("agentModel.select",input.requestId,undefined,input,(_revision,now)=>{
+      const run = this.database.prepare("SELECT * FROM agent_runs WHERE id=?").get(input.agentRunId) as SQLiteRow|undefined;
+      if (!run) throw new ProductStoreError("NOT_FOUND","成员不存在");
+      if (["running","waiting"].includes(text(run,"status"))) throw new ProductStoreError("REVISION_CONFLICT","运行期间不能切换模型");
+      const selected = input.decision.selected;
+      if (!selected) throw new ProductStoreError("INVALID_ARGUMENT","没有可用的候选模型");
+      this.database.prepare("UPDATE agent_runs SET model_provider=?,model_id=?,revision=revision+1,updated_at=? WHERE id=?").run(selected.providerId,selected.modelId,now,input.agentRunId);
+      return {value:{},event:{kind:"agentModel.selected",entityKind:"agentRun",entityId:input.agentRunId,taskId:text(run,"task_id"),payload:input}};
+    });
+  }
+
+  private profileModels(profileId: string): AgentModelCandidate[] | undefined {
+    const row = this.database.prepare("SELECT value_json FROM product_settings WHERE key = ?").get(`agent.models.${profileId}`) as SQLiteRow | undefined;
+    return row ? agentModelCandidates(JSON.parse(text(row, "value_json"))) : undefined;
+  }
+
+  private profileRecord(row: SQLiteRow): AgentProfileRecord {
+    const profile = agentProfile(row);
+    const models = this.profileModels(profile.id);
+    return { ...profile, ...(models ? { modelCandidates: models } : {}) };
+  }
+
+  private writeProfileModels(profileId: string, models: AgentModelCandidate[] | null, now: string): void {
+    const key = `agent.models.${profileId}`;
+    if (models === null) { this.database.prepare("DELETE FROM product_settings WHERE key = ?").run(key); return; }
+    for (const model of models) {
+      if (!this.database.prepare("SELECT id FROM model_catalog_entries WHERE provider_id = ? AND model_id = ?").get(model.providerId, model.modelId)) throw new ProductStoreError("NOT_FOUND", "回退链中的模型不在目录中");
+    }
+    this.database.prepare(`INSERT INTO product_settings(key, value_json, source_kind, revision, created_at, updated_at)
+      VALUES (?, ?, 'user', 1, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, revision=product_settings.revision+1, updated_at=excluded.updated_at`)
+      .run(key, canonicalJSON(models), now, now);
+  }
+
   async updateAgentProfile(input: {
     requestId: string;
     expectedStoreRevision: number;
@@ -7024,6 +7611,7 @@ export class ProductStore {
     name: string;
     roleContract: string;
     enabled: boolean;
+    modelCandidates?: AgentModelCandidate[] | null;
   }): Promise<{ storeRevision: number; agentProfile: AgentProfileRecord }> {
     const profileId = requiredString(input.profileId, "profileId", 200);
     const expectedProfileRevision = requiredRevision(input.expectedProfileRevision, "expectedProfileRevision");
@@ -7032,7 +7620,8 @@ export class ProductStore {
     if (typeof input.enabled !== "boolean") {
       throw new ProductStoreError("INVALID_ARGUMENT", "enabled must be a boolean");
     }
-    const params = { profileId, expectedProfileRevision, name, roleContract, enabled: input.enabled };
+    const models = input.modelCandidates === undefined ? undefined : input.modelCandidates === null ? null : agentModelCandidates(input.modelCandidates);
+    const params = { profileId, expectedProfileRevision, name, roleContract, enabled: input.enabled, ...(models !== undefined ? { modelCandidates: models } : {}) };
     return await this.mutate(
       "agentProfile.update",
       input.requestId,
@@ -7041,7 +7630,7 @@ export class ProductStore {
       (_storeRevision, now) => {
         const row = this.database.prepare("SELECT * FROM agent_profiles WHERE id = ?").get(profileId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Agent Profile does not exist", { profileId });
-        const previous = agentProfile(row);
+        const previous = this.profileRecord(row);
         if (previous.revision !== expectedProfileRevision) {
           throw new ProductStoreError(
             "REVISION_CONFLICT",
@@ -7072,6 +7661,10 @@ export class ProductStore {
           profileId,
           expectedProfileRevision,
         );
+        if (models !== undefined) this.writeProfileModels(profileId, models, now);
+        const updatedModels = this.profileModels(profileId);
+        if (updatedModels) updated.modelCandidates = updatedModels;
+        else delete updated.modelCandidates;
         this.faultInjector?.("profile.afterUpdate");
         return {
           value: { agentProfile: updated },
@@ -7092,17 +7685,19 @@ export class ProductStore {
     name: string;
     roleContract: string;
     enabled: boolean;
+    modelCandidates?: AgentModelCandidate[] | null;
   }): Promise<{ storeRevision: number; agentProfile: AgentProfileRecord }> {
     const name = requiredCredentialFreeString(input.name, "name", 200).trim();
     const roleContract = requiredCredentialFreeString(input.roleContract, "roleContract", 20_000);
     if (typeof input.enabled !== "boolean") {
       throw new ProductStoreError("INVALID_ARGUMENT", "enabled must be a boolean");
     }
+    const models = input.modelCandidates == null ? null : agentModelCandidates(input.modelCandidates);
     return await this.mutate(
       "agentProfile.create",
       input.requestId,
       input.expectedStoreRevision,
-      { name, roleContract, enabled: input.enabled },
+      { name, roleContract, enabled: input.enabled, modelCandidates: models },
       (_storeRevision, now) => {
         const record: AgentProfileRecord = {
           id: `profile-${randomUUID()}`,
@@ -7122,6 +7717,10 @@ export class ProductStore {
             profile_version, revision, created_at, updated_at
           ) VALUES (?, 'custom', ?, ?, ?, 0, 1, 1, ?, ?)
         `).run(record.id, name, roleContract, input.enabled ? 1 : 0, now, now);
+        if (models) {
+          this.writeProfileModels(record.id, models, now);
+          record.modelCandidates = models;
+        }
         return {
           value: { agentProfile: record },
           event: {

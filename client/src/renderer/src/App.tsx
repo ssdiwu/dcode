@@ -1,3 +1,6 @@
+import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
+import {TaskContext} from "./components/TaskContext";
+import {ExtensionRequests} from "./components/ExtensionRequests";
 import {WorkspaceFiles,FileCloseDialog} from "./components/WorkspaceFiles";
 import {useWorkspaceFiles,FileReferenceContext} from "./workbench/useWorkspaceFiles";
 import { InspirationWorkspace } from "./components/InspirationWorkspace";
@@ -90,6 +93,9 @@ const stateLabel = (state: string) =>
       completed: "已完成",
       failed: "失败",
       aborted: "已停止",
+      interrupted: "已中断",
+      unknown: "状态待核对",
+      prepared: "待开始",
       cancelled: "已取消",
       pending: "待开始",
       in_progress: "进行中",
@@ -122,6 +128,7 @@ export function App() {
   const [taskTitle, setTaskTitle] = useState("");
   const [taskActionBusy, setTaskActionBusy] = useState(false);
   const [taskActionError, setTaskActionError] = useState<string | null>(null);
+  const [contextOpen,setContextOpen]=useState(false);
   const [target, setTarget] = useState<
     TaskWorkbenchInspectorTarget | null | undefined
   >();
@@ -155,8 +162,7 @@ export function App() {
           display.set({ page: "settings", settingsPage: "models" });
         if (event.event === "shell.candidateRestored")
           display.set({ page: "settings", settingsPage: "evolution" });
-        if (event.event === "shell.newProject")
-          display.set({ projectForm: true });
+        if (event.event === "shell.newProject") display.set({ projectForm: true });
         if (event.event === "shell.newTask") {
           display.set({ page: "task", overview: false });
           setTarget(null);
@@ -357,6 +363,7 @@ export function App() {
           <span className="workspace-title">
             {display.page === "inspiration" ? "灵感" : (work.task?.title ?? "新任务")}
           </span>
+          {display.page==="task"&&work.task&&work.session?.kind==="child"&&<div className="workspace-session" aria-label={`当前成员对话：${work.session.title}`}><button className="text-button" onClick={()=>select(work.task!)} aria-label="返回主对话">主对话</button><ChevronRight size={12}/><strong title={work.session.title}>{work.session.title}</strong></div>}
           {actualProject && display.page === "task" && (
             <span className="workspace-context">
               {actualProject.title}
@@ -369,6 +376,8 @@ export function App() {
             </span>
           )}
           <span className="spacer" />
+          {work.presentation?.nativePaths&&work.presentation.nativePaths.length>1&&display.page==="task"&&<Menu.Root><Menu.Trigger asChild><button className="text-button" aria-label="对话路径">{work.viewingHistory?"历史路径":"当前路径"}</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" sideOffset={5}>{work.presentation.nativePaths.map(path=><Menu.Item className="menu-item" key={path.id} onSelect={()=>{work.selectPath(path.isCurrent?undefined:path.id);files.conversation();}}>{path.title}{path.isCurrent?" · 当前":""}<small>{new Date(path.createdAt).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</small></Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
+          {work.task&&display.page==="task"&&<button className="icon-button" aria-label="上下文与运行依据" onClick={()=>setContextOpen(true)}><FileText size={16}/></button>}
           {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.visible} onClick={()=>files.visible?files.conversation():files.show()}><Folder size={16}/></button>}
           {work.task && display.page==="task" && (
             <Menu.Root>
@@ -463,8 +472,9 @@ export function App() {
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector ? "with-inspector" : ""}`}>
             <section className={`conversation-space ${!work.session ? "new-conversation" : ""}`}>
-              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}`} model={files} work={work} overlay={display.search||display.importing||display.projectForm||!!taskAction}/>: <Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}`} model={files} work={work} overlay={contextOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
+                <ExtensionRequests work={work}/>
                 <Composer
                   work={work}
                   models={models}
@@ -611,6 +621,7 @@ export function App() {
           />
         </Overlay>
       )}
+      {contextOpen&&work.task&&<Overlay label="上下文与运行依据" onClose={()=>setContextOpen(false)}><div className="panel-heading"><strong>上下文与运行依据</strong><button className="icon-button" aria-label="关闭上下文" onClick={()=>setContextOpen(false)}><X size={15}/></button></div><TaskContext key={work.task.id} work={work}/></Overlay>}
       <FileCloseDialog model={files}/>
     </div></FileReferenceContext.Provider>
   );
@@ -640,6 +651,8 @@ function TaskRow({
   recent?: boolean;
   active?: boolean;
 }) {
+  const childDisclosure=useRef<HTMLDetailsElement>(null);
+  useEffect(()=>{if(active&&work.task?.id===task.id&&work.session?.kind==="child"&&childDisclosure.current)childDisclosure.current.open=true;},[active,task.id,work.task?.id,work.session?.id]);
   const children =
     work.snapshot?.sessions.filter(
       (s) => s.taskId === task.id && s.kind === "child",
@@ -651,7 +664,7 @@ function TaskRow({
     <div>
       <button
         className="nav-row task-row"
-        aria-current={active && work.task?.id === task.id ? "page" : undefined}
+        aria-current={active && work.task?.id === task.id && (recent||work.session?.kind!=="child") ? "page" : undefined}
         onClick={() => select(task)}
       >
         <span>{task.title}</span>
@@ -661,7 +674,7 @@ function TaskRow({
         {recent && <small>{relativeTime(task.updatedAt)}</small>}
       </button>
       {!recent && children.length > 0 && (
-        <details className="child-sessions">
+        <details className="child-sessions" ref={childDisclosure}>
           <summary>
             <ChevronRight size={12} />
             <span>子会话</span>
@@ -823,18 +836,18 @@ function Overview({
         "team",
         "团队",
         members.length ? (
-          <ul className="members">
+          <><AuxiliaryActivities work={work} taskWide/><ul className="members">
             {members.map((m) => (
               <li key={m.id}>
                 <button onClick={() => onSelect(task, m.sessionId)}>
                   <span>
-                    {profileName(snapshot.agentProfiles.find((p) => p.id === m.profileId))}
+                    {snapshot.sessions.find(session=>session.id===m.sessionId)?.title??profileName(snapshot.agentProfiles.find((p) => p.id === m.profileId))}
                   </span>
                   <small>{stateLabel(m.status)}</small>
                 </button>
               </li>
             ))}
-          </ul>
+          </ul></>
         ) : (
           <p className="secondary">任务开始后显示执行成员</p>
         ),
@@ -874,7 +887,7 @@ function Overview({
               <li key={r.id}>
                 <button onClick={() => onDetail({ kind: "report", id: r.id })}>
                   <FileText size={13} />
-                  执行报告
+                  {r.reportKind==="verification"?"验收报告":r.reportKind==="coordinator"?"综合报告":"成员报告"} · {snapshot.sessions.find(session=>session.id===snapshot.agentRuns.find(run=>run.id===r.agentRunId)?.sessionId)?.title??"成员"}
                 </button>
               </li>
             ))}
@@ -1000,7 +1013,9 @@ function Inspector({
               (e) => e.id === target.id && e.taskId === taskId,
             )
           : undefined;
-  const title =
+  const verification=target.kind==="report"?snapshot.verifications?.find(record=>record.id===target.id):undefined;
+  const review=verification?snapshot.coordinatorReviews?.find(record=>record.verificationId===verification.id):undefined;
+  const title = verification ? "验收报告" :
     item && "title" in item
       ? item.title
       : target.kind === "report"
@@ -1025,12 +1040,13 @@ function Inspector({
       <div className="inspector-content">
         {item ? (
           <>
-            {content != null && (
+            {verification&&<><p>{verification.verdict==="pass"?"独立验收通过":"独立验收未通过"} · {review?({accepted:"协调复核通过",rework:"已安排返工",recheck:"已安排复验"})[review.outcome]:"待协调者复核"}</p><Markdown text={verification.summary}/>{verification.findings.length>0&&<ul>{verification.findings.map((finding,index)=><li key={index}>{finding.kind==="product"?"成果问题":"验收依据"}：{finding.description}</li>)}</ul>}{review&&<Markdown text={review.reason}/>}<p className="secondary">{verification.evidenceIds.length} 项独立检查记录</p></>}
+            {!verification&&content != null && (
               <Markdown
                 text={
                   typeof content === "string"
                     ? content
-                    : JSON.stringify(content, null, 2)
+                    : typeof content==="object"&&content!==null&&"text" in content&&typeof content.text==="string"?content.text:"记录已保存，可在相关产物与执行过程查看详情。"
                 }
               />
             )}{" "}

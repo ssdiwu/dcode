@@ -36,6 +36,10 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 ## 当前修复范围
 
+- 主对话可提及本任务已创建成员，子对话可直接进入并返回主对话；持续输入、暂停、编辑和重排均连接耐久协作消息。成员创建权归协调者，界面不直接创建运行成员。
+- 成员交办、用户原文、进展更新和流式回复按来源分开呈现；停止、空结果、保存失败不能借用旧回答当成本轮成果。协作收件箱呈现暂停更新，避免隐藏消息阻挡历史续接。
+- 上下文选择和运行依据、档案的模型回退链、技能/命令选择、结构化扩展请求、后台进程停止以及历史路径重走接入真实 Host 合同。历史编辑保留原提交，并从指定来源生成新路径。
+
 - 使用 [C-A 黑白变色龙品牌资源](../app/Resources/README.md)，系统图标与导航、新任务/空对话、“关于”均由同一母版导出；界面标志随深浅主题变色。
 - 新任务先进入草稿，首次提交创建 Task 与协调会话；新项目从项目分组 `+` 或 `⇧⌘N` 创建。任务/子会话切换不停止其他 Runtime。
 - 会话及新任务文字草稿按身份保存；工作台选择、梗概分区、阅读位置与通知开关可恢复。图片和文件附件由 Host 复制到 `~/.dcode/tmp/attachments/`，随草稿恢复；未发送保留 24 小时，提交后保留 30 天。
@@ -54,6 +58,9 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 Swift 按面拆除尚未执行，作为独立迁移收尾保留；当前基础验收不等于这些源文件已经退役。
 
 ## 结构
+
+- `components/conversation/CollaborationFeed.tsx` / `workbench/conversation-origins.ts`：成员定向交流、队列操作、进展来源与输入边界。
+- `components/TaskContext.tsx` / `ModelRouteEditor.tsx` / `ExtensionRequests.tsx` / `AuxiliaryActivities.tsx`：资料与运行依据、候选顺序、结构化决定和后台活动。
 
 - `src/protocol/`：传输无关 Protocol v1 编解码和请求关联。
 - `src/host/`：Electron Node 模式启动、握手、停机、退出事件。

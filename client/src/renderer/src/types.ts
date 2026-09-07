@@ -21,6 +21,8 @@ export type {
   AgentRequestRecord,
   ClientPreferences,
   SessionEntryRecord,
+  NativeSessionPathAction,
+  ComposerDraftRecord,
 } from "../../../../host/src/product-store.js";
 export type { SessionInspection, HostEvent, PromptImageInput };
 export type { InspirationView, IdeaNode, IdeaDraft, IdeaKind, IdeaPosition, InspirationOperation } from "../../../../host/src/inspiration.js";
@@ -30,12 +32,16 @@ export type ProviderView =
   import("../../../../host/src/model-providers.js").ProviderView;
 
 export interface DCodeSessionPresentation {
+  nativePaths?:import("../../../../host/src/product-store.js").SessionPathRecord[];
+  selectedNativePathId?:string;
+  nativeEntries?:import("../../../../host/src/product-store.js").SessionEntryRecord[];
+  collaborationInputs?: Array<{sourceEntryId:string;author:string;messageId:string}>;
   dcodeSession: DCodeSessionRecord;
   adapterState: "ready" | "unbound" | "unavailable";
   runtime: { runtimeId: string; state: unknown } | null;
   binding: { sessionId: string; adapterSessionId: string } | null;
   inspection: SessionInspection | null;
-  submissions?: {text:string;effectiveText:string;attachments:import("../../../../host/src/attachment-files.js").ManagedAttachment[]}[];
+  submissions?: {sourceEntryId?:string;text:string;effectiveText:string;attachments:import("../../../../host/src/attachment-files.js").ManagedAttachment[]}[];
 }
 export interface DcodeApi {
   htmlPreview:(input:Record<string,unknown>)=>Promise<unknown>;
@@ -63,6 +69,7 @@ export interface DcodeApi {
   clearDiagnostics: () => Promise<boolean>;
   openNotificationSettings: () => Promise<void>;
   revealCandidate: (path: string) => Promise<void>;
+  chooseContextFiles:()=>Promise<string[]>;
   chooseDirectory: () => Promise<string | null>;
   openExternal: (url: string) => Promise<void>;
   restartHost: () => Promise<boolean>;

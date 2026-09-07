@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("dcode", {
     ipcRenderer.invoke("dcode:notificationSettings"),
   revealCandidate: (path: string) =>
     ipcRenderer.invoke("dcode:revealCandidate", path),
+  chooseContextFiles:()=>ipcRenderer.invoke("dcode:chooseContextFiles"),
   chooseDirectory: () => ipcRenderer.invoke("dcode:chooseDirectory"),
   openExternal: (url: string) => ipcRenderer.invoke("dcode:openExternal", url),
   restartHost: () => ipcRenderer.invoke("dcode:restartHost"),

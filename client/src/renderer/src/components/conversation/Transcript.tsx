@@ -1,5 +1,8 @@
+import {projectConversationOrigins} from "../../workbench/conversation-origins";
+import {AuxiliaryActivities} from "../AuxiliaryActivities";
+import { CollaborationFeed } from "./CollaborationFeed";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Copy, CornerDownLeft, Sparkles } from "lucide-react";
+import { ArrowDown, Copy, CornerDownLeft, GitBranch, Pencil, Sparkles } from "lucide-react";
 import { Markdown } from "../Markdown";
 import type { Workbench } from "../../useWorkbench";
 import { messageRows, type MessageRow } from "../../workbench";
@@ -20,18 +23,19 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
   const [showLatest, setShowLatest] = useState(false);
   const [imagePreview,setImagePreview] = useState<string|null>(null);
   const storedRows = useMemo(
-    () => [
+    () => projectConversationOrigins([
       ...messageRows(
         work.imported.map((e) => ({
-          id: e.id,
+          id: e.sourceEntryId??e.id,
           type: "message",
           timestamp: e.sourceTimestamp ?? e.createdAt,
           message: { role: e.messageRole, content: e.content },
         })),
       ),
+      ...messageRows((work.presentation?.nativeEntries??[]).filter(entry=>entry.sourceKind==="native"&&["user","assistant","other"].includes(entry.messageRole)&&(!work.presentation?.inspection||(entry.content as {handled?:boolean})?.handled===true)).map(entry=>({id:entry.sourceEntryId??entry.id,type:"message",timestamp:entry.createdAt,message:{role:entry.messageRole==="other"?"user":entry.messageRole,content:typeof entry.content==="object"&&entry.content!==null&&"text" in entry.content?String(entry.content.text):entry.content}}))),
       ...messageRows(work.presentation?.inspection?.entries ?? []),
-    ],
-    [work.presentation, work.imported],
+    ].sort((a,b)=>a.time&&b.time?a.time.localeCompare(b.time):0),work.presentation?.collaborationInputs??[],work.session?.kind==="child"),
+    [work.presentation, work.imported,work.session?.kind],
   );
   const restored = useRef(false);
   useEffect(() => {
@@ -54,7 +58,7 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
   const executions = useMemo(() => executionTurns(rows, work.stream, work.running), [rows, work.stream, work.running]);
   const turns = useMemo(() => conversationTurns(rows, ""), [rows]);
   const navigation = useConversationNavigation(turns, scroll, content);
-  const rowSignature = `${rows.map(row=>row.parts.map(part=>part.text.length).join(",")).join(":")}:${work.stream.tools?.map(tool=>tool.output.length).join(",")}`;
+  const rowSignature = `${work.snapshot?.collaborationMessages?.map(message=>message.revision).join(":")}:${rows.map(row=>row.parts.map(part=>part.text.length).join(",")).join(":")}:${work.stream.tools?.map(tool=>tool.output.length).join(",")}`;
   useEffect(() => {
     if (atBottom.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -69,7 +73,8 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
     });
     document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus();
   };
-  const renderMessage = (row: MessageRow) => <article className={`message ${row.role}`} key={row.id} data-conversation-turn={row.role === "user" ? row.id : undefined} aria-label={row.role === "user" ? "你的消息" : "D Code 回答"}>
+  const renderMessage = (row: MessageRow) => <article className={`message ${row.role}`} key={row.id} data-conversation-turn={row.role === "user"||row.role==="coordination" ? row.id : undefined} aria-label={row.role === "user" ? "你的消息" : row.role==="coordination"?"收到的工作安排":"D Code 回答"}>
+    {row.role==="coordination"&&<strong className="message-attribution">来自主对话的安排</strong>}
     {row.parts.filter(part=>part.kind === "text" || part.kind === "image" || part.kind === "file").map((part,index)=>{
       if(part.kind === "file" && part.attachment)return <button key={index} className="message-file" aria-label={`预览 ${part.attachment.name}`} onClick={()=>void work.previewAttachment(part.attachment!.id)}><span className="file-type">{fileType(part.attachment.name)}</span><span>{part.attachment.name}</span>{Date.parse(part.attachment.expiresAt)<=Date.now()&&<small>已过期</small>}</button>;
       if(part.kind === "image")return <button key={index} className="message-image-button" aria-label={`放大预览 ${part.attachment?.name??"消息图片"}`} onClick={()=>part.attachment?void work.previewAttachment(part.attachment.id):setImagePreview(`data:${part.mimeType};base64,${part.text}`)}><img className="message-image" alt={part.attachment?.name??"消息图片"} src={`data:${part.mimeType};base64,${part.text}`}/></button>;
@@ -80,6 +85,7 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
       <button className="icon-button" aria-label="复制消息" onClick={()=>void navigator.clipboard.writeText(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n")).catch(work.fail)}><Copy size={13}/></button>
       <button className="icon-button" aria-label="引用到输入框" onClick={()=>quote(row.parts.filter(part=>part.kind === "text").map(part=>part.text).join("\n"))}><CornerDownLeft size={13}/></button>
       {onSaveInspiration&&row.parts.some(part=>part.kind==="text"&&part.text.trim())&&<button className="icon-button" aria-label="保存到灵感" onClick={()=>onSaveInspiration(row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("\n"))}><Sparkles size={13}/></button>}
+      {(row.role==="user"||row.role==="assistant")&&work.presentation?.nativeEntries?.some(entry=>entry.sourceEntryId===row.id)&&<button className="icon-button" disabled={work.running||work.sending} aria-label={row.role==="user"?"编辑并从这里继续":"从这里继续"} onClick={()=>work.startPath(row.role==="user"?"editUser":"continueAssistant",row.id,row.role==="user"?row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("\n"):"")}>{row.role==="user"?<Pencil size={13}/>:<GitBranch size={13}/>}</button>}
       {row.time && <time dateTime={row.time}>{new Date(row.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</time>}
     </div>
   </article>;
@@ -134,12 +140,14 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
           ) : (
             <div className="message-list">
               {executions.map(turn => <div className="conversation-turn" key={turn.id}>
+                {turn.updateLabel&&<div className="collaboration-update-heading">{turn.updateLabel}</div>}
                 {turn.user && renderMessage(turn.user)}
                 <ExecutionProcess turn={turn}/>
                 {turn.answer && renderMessage(turn.answer)}
               </div>)}
             </div>
           )}
+          <AuxiliaryActivities work={work}/><CollaborationFeed work={work}/>
         </div>
       </div>
       {showLatest && (

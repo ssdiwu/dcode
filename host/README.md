@@ -8,14 +8,18 @@
 
 ## 当前能力
 
+- 默认使用本机架构，不引入远程 worker 或跨机器控制面。独立主进程按需启动、空闲回收后以新执行身份续接；辅助进程组单独登记，停止请求不立即释放目录占用，真实退出或未确认状态分别记录。
+- 自动派发遵循每个成员的有序模型回退链，复用 `pi-dusage` 查询机制，验证启用、访问、能力和原始剩余比例；适用额度高于 1% 才可选用，未知/过期/低额度不冒充可用，不按余额重排。
+- 本轮报告、输入完成状态和固定协调者通知在同一 SQLite 事务内保存。消息的 `completionReference` 标识处理它的运行，通知的 `resultReference` 标识被回传的成员运行与报告；两者不混用。保存未完成只显示保存中/未确认，不发送可靠完成通知；旧候选通知缺口在重启时幂等补齐并暂停，未保存的执行结果恢复为中断，不自动重做。
+
 - `workspace.*` 仅访问已登记的项目、任务目录和产物；文件/资源读取与 Git 命令从拒绝符号链接的原生目录句柄开始。Markdown/HTML 保存校验原内容摘要，并与 Runtime 写入互斥；敏感路径不进入文件或 Git 展示，单文件产物不扩大父目录范围。
 
 - 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
 - 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；沿用 Schema 2。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
 - 原生拥有 User Scope / Project、Task、Coordination / Child Session、Session Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence 投影；
 - 外部 Pi Session 先预览、再经显式 `piImport.importAsTask` 单向导入；D Code 已管理的旧会话在首次晋升时自动接管，其他 Pi 会话不自动进入产品数据库；
-- Runtime Supervisor 按 Task / Session / Agent Run / Runtime 身份同时维护多个 AgentSession；同一 Session 单写、workspace 写入冲突、12 个活动 Runtime 上限和 shared-read-only 工具证明均在启动前阻断；
-- Team Run 由 Coordinator 先规划，Child Agent Provider 请求真实并行，成员 Report 落库后 Coordinator 再在同一 Coordination Session 综合；成员完成不自动验收 Task；
+- Runtime Supervisor 在本机按 Task / Session / Agent Run / Runtime 身份维护独立智能体进程；Host 仍负责工具副作用、Provider IO 和产品事实，进程就绪后还须完成本轮接收确认才开始模型循环；同一 Session 单写、workspace 写入冲突、12 个活动 Runtime 上限和 shared-read-only 工具证明均在启动前阻断；
+- 每个交互任务由协调者承接，简单工作可直办，后台工作经 `dcode_team` 按需创建成员；成员可以独立执行、接受主对话提及或子对话输入，多名验收者和局部返工通过 `dcode_verification` 回收。旧 `team.create/start` 入口明确拒绝；成员完成、独立验收、协调复核和用户接受分别成立；
 - `dcode_request` 原生工具把阻塞决定写成耐久 Agent Request，回答回到同一 Tool Result；回答或停止单个成员均携带完整身份、revision 和预写 Attempt，不影响其他 Runtime；
 - 每个 Provider 请求使用 D Code 自有 System Prompt 与活动工具清单；Effective Input、Session Run、Prompt Receipt 和 Provider Attempt 在请求前同事务持久化，Pi 默认 Prompt 与外部扩展不进入显式 D Code Runtime；
 - Tool Invocation 在执行前创建 Attempt，结果只以 digest 和有界 Evidence 入库；凭据形态在原生输入、导入、请求和 legacy 迁移边界被拒绝、脱敏或省略；
@@ -35,7 +39,7 @@
 - 通过 Pi SDK 持久修改当前 Session Name，同一名称供 Pi、D Code 左栏、搜索与窗口顶部使用；空名称恢复 Pi 的自动标题；
 - 打开既有会话即以 `force` 取得 Session Lease 并成为唯一写入所有者；没有只读观察模式。外部写入或另一 D Code 实例抢占会触发明确冲突、停止当前运行并关闭失效所有权，草稿由 App 保留后可显式重新接管；
 - 使用固定 Pi SDK 加载现有 settings、模型、会话、流式事件及可兼容的结构化扩展能力；
-- 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，Host 不另建产品队列；
+- 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，原生输入与协作队列由 Product Store 维护，Pi 内部队列不代替耐久消息；
 - 运行中可在 Host Run State 仍为 `running` 时使用 Pi 原生 steer 介入下一安全模型边界；它不替换 Run ID，也不伪装成立即中止工具；
 - `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
 - D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，API Key、OAuth 值和认证响应不经 D Code IPC；
@@ -59,6 +63,12 @@ npm start -- --agent-dir ~/.pi/agent
 ```
 
 ## 目录
+
+- `src/process-agent.ts` / `agent-process-*` / `process-agent-session.ts`：本机执行进程、就绪与接收握手、Pi 会话组合和回收续接。
+- `src/auxiliary-process*`：工具辅助进程组、停止确认、恢复身份校验与目录占用。
+- `src/model-quota.ts` / `model-route.ts` / `provider-route-stream.ts`：配额归一、有序候选与模型调用边界回退。
+- `src/collaboration-*` / `verification-context.ts`：按需派发、消息来源、独立验收和复核；耐久状态与原子结果回传由 `product-store.ts` 拥有。
+- `src/input-expansion.ts` / `runtime-privacy.ts`：提交原文、生效输入与资料回执分离，私有运行历史脱敏。
 
 - `src/workspace-files.ts` / `workspace-access.ts` / `workspace-write-guard.ts`：文件/Git 协议、来源边界与编辑保存的写入保留。
 - `native/WorkspaceFiles.swift` / `FileHelper.swift`：安全目录遍历、稳定读取、原子保存和有界 Git 读取；`scripts/build-native.mjs` 随 Host 构建生成 `dist/bin/dcode-files`，客户端打包一并携带。

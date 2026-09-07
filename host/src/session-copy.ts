@@ -1,3 +1,4 @@
+import {sanitizeRuntimeValue} from "./runtime-privacy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
@@ -30,6 +31,7 @@ export interface SessionCopyResult {
     entryCount: number;
     leafId: string | null;
     origin: true;
+    credentialsRedacted?:boolean;
   };
 }
 
@@ -44,6 +46,7 @@ interface StreamedSource {
   entryCount: number;
   leafId: string | null;
   bodyDigest: string;
+  credentialsRedacted?:boolean;
   name?: string;
   messageCount: number;
   firstMessage: string;
@@ -327,6 +330,7 @@ async function streamSourceIntoPrepared(options: {
   preparedPath: string;
   targetHeader: Record<string, unknown>;
   origin: Record<string, unknown>;
+  sanitizeCredentials?:boolean;
 }): Promise<StreamedSource> {
   const sourcePath = resolve(options.source.path);
   const handle = await open(options.preparedPath, "wx", 0o600);
@@ -339,6 +343,7 @@ async function streamSourceIntoPrepared(options: {
   let name: string | undefined;
   let messageCount = 0;
   let firstMessage = "";
+  let credentialsRedacted=false;
   try {
     await handle.write(`${JSON.stringify(options.targetHeader)}\n`);
     await handle.write(`${JSON.stringify(options.origin)}\n`);
@@ -388,7 +393,9 @@ async function streamSourceIntoPrepared(options: {
           }
         }
       }
-      const serialized = `${line}\n`;
+      const safe=options.sanitizeCredentials?sanitizeRuntimeValue(record):record;
+      if(options.sanitizeCredentials&&JSON.stringify(safe)!==JSON.stringify(record))credentialsRedacted=true;
+      const serialized = `${options.sanitizeCredentials?JSON.stringify(safe):line}\n`;
       digest.update(serialized);
       await handle.write(serialized);
     }
@@ -401,6 +408,7 @@ async function streamSourceIntoPrepared(options: {
     entryCount,
     leafId,
     bodyDigest: digest.digest("hex"),
+    ...(credentialsRedacted?{credentialsRedacted:true}:{}),
     ...(name ? { name } : {}),
     messageCount,
     firstMessage,
@@ -454,6 +462,7 @@ export class SessionCopier {
     source: SessionSummary;
     targetCwd: string;
     assertSourceStable: () => Promise<void>;
+    sanitizeCredentials?:boolean;
   }): Promise<SessionCopyResult> {
     const canonicalCwd = await canonicalDirectory(options.targetCwd);
     const sourcePath = resolve(options.source.path);
@@ -492,6 +501,7 @@ export class SessionCopier {
         preparedPath,
         targetHeader,
         origin,
+        sanitizeCredentials:options.sanitizeCredentials,
       });
       await verifyPrepared({
         path: preparedPath,
@@ -526,6 +536,7 @@ export class SessionCopier {
           entryCount: streamed.entryCount,
           leafId: streamed.leafId ?? originId,
           origin: true,
+          ...(streamed.credentialsRedacted?{credentialsRedacted:true}:{}),
         },
       };
     } finally {

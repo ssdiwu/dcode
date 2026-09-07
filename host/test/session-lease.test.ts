@@ -101,14 +101,18 @@ test("concurrent stale-lease recovery grants exactly one owner", async () => {
 test("quiet window rejects a changing session", async () => {
   const { root, agentDir, sessionPath } = await fixture();
   try {
-    const change = setTimeout(() => {
-      void writeFile(sessionPath, `${JSON.stringify({ type: "custom", id: "external", parentId: "leaf-one", timestamp: new Date().toISOString(), customType: "probe" })}\n`, { flag: "a" });
-    }, 10);
-    await expectLeaseCode(
-      SessionLease.acquire({ agentDir, sessionId: "session-one", sessionPath, quietWindowMs: 80 }),
-      "SESSION_NOT_IDLE",
-    );
-    clearTimeout(change);
+    const acquiring = SessionLease.acquire({ agentDir, sessionId: "session-one", sessionPath, quietWindowMs: 250 });
+    const rejected = expectLeaseCode(acquiring, "SESSION_NOT_IDLE");
+    // The owner is written after the first fingerprint. Mutating before this
+    // boundary only tests an already-stable session on a loaded test machine.
+    const ownerPath = join(agentDir, "pi-dcode", "leases", "session-one.lock", "owner.json");
+    const deadline = Date.now() + 2000;
+    while (!await readFile(ownerPath, "utf8").then(() => true, () => false)) {
+      if (Date.now() > deadline) throw new Error("Lease owner did not appear");
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    await writeFile(sessionPath, `${JSON.stringify({ type: "custom", id: "external", parentId: "leaf-one", timestamp: new Date().toISOString(), customType: "probe" })}\n`, { flag: "a" });
+    await rejected;
   } finally {
     await rm(root, { recursive: true, force: true });
   }

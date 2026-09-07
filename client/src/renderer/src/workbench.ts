@@ -18,7 +18,9 @@ export interface MessagePart {
 }
 export interface MessageRow {
   id: string;
-  role: "user" | "assistant" | "process";
+  role: "user" | "assistant" | "process" | "coordination";
+  collaborationGroupId?:string;
+  inputBoundary?:boolean;
   time?: string;
   parts: MessagePart[];
   messageId?: string;
@@ -50,11 +52,7 @@ export function messageRows(
       parts.push({
         kind: "text",
         text:
-          typeof msg.errorMessage === "string"
-            ? msg.errorMessage
-            : msg.stopReason === "aborted"
-              ? "本次执行已停止。"
-              : "本次执行失败，请重试。",
+          msg.stopReason === "aborted" ? "本次执行已停止。" : typeof msg.errorMessage === "string" ? msg.errorMessage : "本次执行失败，请重试。",
       });
     const content =
       typeof msg.content === "string"
@@ -100,6 +98,7 @@ export function messageRows(
 }
 export interface LiveMessage {
   id: string;
+  inputMessageId?:string;
   text: string;
   thinking: string;
   ended: boolean;
@@ -108,6 +107,7 @@ export interface LiveMessage {
 }
 export interface LiveTool {
   id: string;
+  inputMessageId?:string;
   name: string;
   input: string;
   output: string;
@@ -115,6 +115,7 @@ export interface LiveTool {
 }
 export interface StreamState {
   sessionId: string;
+  inputMessageId?:string;
   messages: LiveMessage[];
   active: boolean;
   tools?: LiveTool[];
@@ -140,6 +141,8 @@ export function reduceStream(
   if (data.type === "agent_start")
     return { ...emptyStream(adapterSessionId), active: true };
   if (data.type === "agent_end") return { ...next, active: false };
+  if (["message_start","message_end"].includes(String(data.type)) && record(data.message).role === "user")
+    return {...next,inputMessageId:record(data.message).timestamp==null?undefined:String(record(data.message).timestamp)};
   if (String(data.type).startsWith("tool_execution_")) {
     const tools = [...(next.tools ?? [])];
     const id = String(data.toolCallId);
@@ -147,7 +150,7 @@ export function reduceStream(
     const previous = tools[index];
     const result = record(data.type === "tool_execution_update" ? data.partialResult : data.result);
     const output = Array.isArray(result.content) ? result.content.map(value => String(record(value).text ?? "")).filter(Boolean).join("\n") : "";
-    const tool: LiveTool = {id, name: String(data.toolName ?? previous?.name ?? "工具"), input: data.args === undefined ? previous?.input ?? "" : JSON.stringify(data.args, null, 2), output: output || previous?.output || "", state: data.type === "tool_execution_end" ? data.isError ? "error" : "complete" : "running"};
+    const tool: LiveTool = {id,inputMessageId:previous?.inputMessageId??next.inputMessageId, name: String(data.toolName ?? previous?.name ?? "工具"), input: data.args === undefined ? previous?.input ?? "" : JSON.stringify(data.args, null, 2), output: output || previous?.output || "", state: data.type === "tool_execution_end" ? data.isError ? "error" : "complete" : "running"};
     if (index < 0) tools.push(tool); else tools[index] = tool;
     return {...next, tools};
   }
@@ -162,6 +165,7 @@ export function reduceStream(
         ...next.messages,
         {
           id: String(record(data.message).timestamp ?? next.messages.length),
+          inputMessageId:next.inputMessageId,
           text: "",
           thinking: "",
           ended: false,
@@ -182,7 +186,7 @@ export function reduceStream(
   if (complete.parts) {
     const messages = [...next.messages];
     const last = messages.at(-1);
-    const current = last && !last.ended ? last : {id: String(record(data.message ?? delta.partial).timestamp ?? messages.length), text: "", thinking: "", ended: false};
+    const current = last && !last.ended ? last : {id: String(record(data.message ?? delta.partial).timestamp ?? messages.length),inputMessageId:next.inputMessageId, text: "", thinking: "", ended: false};
     if (current !== last) messages.push(current);
     messages[messages.length - 1] = {...current, ...complete};
     return {...next, active: true, messages};
@@ -194,7 +198,7 @@ export function reduceStream(
   const current =
     last && !last.ended
       ? last
-      : { id: String(messages.length), text: "", thinking: "", ended: false };
+      : { id: String(messages.length),inputMessageId:next.inputMessageId, text: "", thinking: "", ended: false };
   if (current !== last) messages.push(current);
   messages[messages.length - 1] = {
     ...current,
@@ -245,11 +249,14 @@ export function mutationQueue(client: RevisionApi) {
         } catch (error) {
           const code = record(error).code;
           if (
-            attempt >= 3 ||
+            attempt >= 6 ||
             (code !== "REVISION_CONFLICT" &&
               !String(error).includes("REVISION_CONFLICT"))
           )
             throw error;
+          // Independent members can publish several receipts between a read
+          // and write. Yield between retries instead of racing the same burst.
+          await new Promise(resolve=>setTimeout(resolve,Math.min(15*2**attempt,120)));
         }
       }
     };

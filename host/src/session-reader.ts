@@ -610,7 +610,10 @@ function findDgoalWorkState(entries: SessionEntry[]): { plan: unknown; proposal:
 }
 
 export class SessionReader {
+  private readonly additionalDirectories=new Set<string>();
   constructor(readonly sessionsDirectory: string) {}
+  addDirectory(directory:string):void{if(directory!==this.sessionsDirectory)this.additionalDirectories.add(directory);}
+  private async files():Promise<string[]>{return [...new Set((await Promise.all([this.sessionsDirectory,...this.additionalDirectories].map(directory=>collectSessionFiles(directory)))).flat())];}
 
   async list(options: {
     query?: string;
@@ -620,7 +623,7 @@ export class SessionReader {
     sessionIds?: string[];
     excludedSessionIds?: string[];
   } = {}): Promise<SessionSummary[]> {
-    const files = await collectSessionFiles(this.sessionsDirectory);
+    const files = await this.files();
     const query = options.query?.trim().toLocaleLowerCase();
     const matchesCwd = await createCwdMatcher(options.cwdScope);
     const includedSessionIds = options.sessionIds ? new Set(options.sessionIds) : undefined;
@@ -692,7 +695,7 @@ export class SessionReader {
   }
 
   async resolve(sessionId: string): Promise<SessionSummary> {
-    const files = await collectSessionFiles(this.sessionsDirectory);
+    const files = await this.files();
     const namedCandidates = files.filter((path) => basename(path).includes(sessionId));
     const ids = await mapConcurrent(files, LIST_CONCURRENCY * 2, async (path) => ({
       path,
@@ -718,7 +721,7 @@ export class SessionReader {
 
   async hasDescendantSession(parentPath: string): Promise<boolean> {
     const canonicalParent = await canonicalPath(parentPath);
-    const files = await collectSessionFiles(this.sessionsDirectory);
+    const files = await this.files();
     for (const path of files) {
       if (path === parentPath) continue;
       const identity = await readHeaderIdentity(path);

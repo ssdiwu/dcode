@@ -1,5 +1,17 @@
 import {WorkspaceWriteGuard} from "./workspace-write-guard.js";
+import {verificationContext} from "./verification-context.js";
+import {AuxiliaryProcesses} from "./auxiliary-process.js";
+import type {ProviderRouteControl,ProviderModel} from "./provider-route-stream.js";
+import {sanitizeRuntimeValue} from "./runtime-privacy.js";
+import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
+import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
+import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
+import type { CollaborationMessage } from "./collaboration-message.js";
+import { ModelQuotaService, assessModelQuota } from "./model-quota.js";
+import { chooseAgentModel, type ModelRouteDecision, type AgentModelCandidate } from "./model-route.js";
+import { ProcessAgent } from "./process-agent.js";
+import { createProcessAgentSession } from "./process-agent-session.js";
 import { type ManagedAttachment, attachmentPrompt } from "./attachment-files.js";
 import type { ClientPreferences } from "./product-store.js";
 import type { DCodeModelsView, ModelChoice } from "./model-catalog-view.js";
@@ -11,8 +23,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { link, lstat, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join } from "node:path";
-import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { basename, dirname, extname, join, resolve, relative, isAbsolute } from "node:path";
+import {fileURLToPath} from "node:url";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthType } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
@@ -29,6 +42,7 @@ import {
   resolveModelScopeWithDiagnostics,
   type AgentSession,
   type AgentSessionEvent,
+  type CreateAgentSessionOptions,
   type SessionEntry,
   type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
@@ -132,7 +146,11 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
   "dcode_facts",
   DCODE_AGENT_REQUEST_TOOL_NAME,
   DCODE_TASK_ACCEPTANCE_TOOL_NAME,
+  DCODE_TEAM_TOOL_NAME,
+  DCODE_VERIFICATION_TOOL_NAME,
 ]);
+
+function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
 
 type Emit = (event: string, data?: unknown) => void;
 const HOST_VERSION = "0.0.29";
@@ -173,7 +191,7 @@ const RUNTIME_CONTROL_METHODS = new Set<HostMethod>([
   "agentRun.stop",
 ]);
 
-type RunPhase = "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
+type RunPhase = "saving" | "running" | "waitingForUser" | "stopRequested" | "completed" | "failed" | "aborted" | "unknown";
 type RunOutcome = "completed" | "failed" | "aborted" | "unknown";
 type RunWaitKind = "select" | "confirm" | "input" | "editor";
 
@@ -196,13 +214,23 @@ interface ActiveRun {
   sessionRunId?: string;
   providerAttemptId?: string;
   rawInputId?: string;
+  latestRawInputId?:string;
+  knownUserUpdates?:Map<string,string>;
+  messageReadCoverage?:Map<string,number>;
+  steering?:Map<string,{message:CollaborationMessage;effectiveText:string;inputSources:import("./input-expansion.js").InputSourceReceipt[];knownUserUpdates:Map<string,string>;timestamp:number;sourceEntryId?:string;effectiveInputId?:string}>;
+  steeringPersistence?:Promise<void>;
   effectiveInputId?: string;
   promptReceiptId?: string;
   pathEntryId?: string;
+  persistenceFailed?:boolean;
+  pathAction?:import("./product-store.js").NativeSessionPathAction;
   toolCalls: Map<string, { toolName: string; args: unknown }>;
   state: RunState;
   outcome?: RunOutcome;
+  handledInput?:boolean;
+  commandFailed?:boolean;
   finalization?: Promise<void>;
+  completion?:Promise<void>;
 }
 
 function runWaitKind(value: unknown): RunWaitKind | undefined {
@@ -221,6 +249,7 @@ export interface PiHostOptions {
   leaseAgentDir?: string;
   leaseQuietWindowMs?: number;
   conflictPollMs?: number;
+  agentIdleTimeoutMs?: number;
   searchCacheDirectory?: string;
   trashDirectory?: string;
   emit: Emit;
@@ -249,6 +278,8 @@ interface WritableSession {
   activeProposal: unknown;
   fastMode: DCodeFastController;
   closing: boolean;
+  auxiliary?:AuxiliaryProcesses;
+  closePromise?:Promise<void>;
   currentRun?: ActiveRun;
   lastRunState?: RunState;
   runtimeIdentity?: RuntimeIdentity;
@@ -258,6 +289,8 @@ interface WritableSession {
   writePoison?: { sessionId: string; reason: string };
   assembledPrompt?: AssembledDCodePrompt;
   promptEnvironment?: DCodePromptEnvironment;
+  promptDocuments?:Awaited<ReturnType<typeof loadDCodePromptDocuments>>;
+  promptImportedHistory?:Awaited<ReturnType<ProductStore["importedSessionHistoryProjection"]>>;
   activePromptTools: DCodePromptTool[];
   toolsWritable: boolean;
   attemptController?: DCodeOperationAttemptController;
@@ -285,6 +318,7 @@ type RuntimePromptIdentity = Omit<RuntimeIdentity, "adapterSessionId">;
 
 interface WorkspaceClaim {
   access: "sharedReadOnly" | "exclusiveWrite";
+  writerRuntimeId?: string;
   runtimeIds: Set<string>;
 }
 
@@ -295,11 +329,6 @@ interface PendingAgentRequestResolution {
   removeAbortListener?: () => void;
 }
 
-interface TeamStartFlight {
-  requestId: string;
-  fingerprint: string;
-  promise: Promise<unknown>;
-}
 
 interface PromptCallContext {
   active: WritableSession;
@@ -308,6 +337,7 @@ interface PromptCallContext {
   confirmation?: Promise<void>;
   persistedEntryId?: string;
   rollbackLeafId?: string | null;
+  nativePath?:{id:string;previousId:string};
 }
 
 interface ModelScopeProjection {
@@ -334,6 +364,9 @@ function modelKey(provider: string, modelId: string): string {
 }
 
 interface SessionPathAction {
+  fromPathId?:string;
+  expectedCurrentPathId?:string;
+  expectedCurrentPathRevision?:number;
   kind: "editUser" | "continueAssistant" | "continuePath";
   entryId: string;
 }
@@ -483,18 +516,6 @@ function errorRecord(error: unknown): { code: string; message: string; details?:
   return { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
 }
 
-function teamStartFingerprint(params: Record<string, unknown>): string {
-  return createHash("sha256").update(JSON.stringify({
-    requestId: params.requestId,
-    expectedStoreRevision: params.expectedStoreRevision,
-    expectedTeamRunRevision: params.expectedTeamRunRevision,
-    scope: params.scope,
-    taskId: params.taskId,
-    teamRunId: params.teamRunId,
-    message: params.message,
-    ...(params.workspace === undefined ? {} : { workspace: params.workspace }),
-  })).digest("hex");
-}
 
 function derivedRequestId(prefix: string, values: Record<string, unknown>): string {
   return `${prefix}-${createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 48)}`;
@@ -528,8 +549,6 @@ export class PiHost {
   private readonly runtimeContext = new AsyncLocalStorage<string | undefined>();
   private readonly runtimeQueues = new Map<string, Promise<void>>();
   private readonly pendingAgentRequests = new Map<string, PendingAgentRequestResolution>();
-  private readonly teamLifecycles = new Map<string, Promise<void>>();
-  private readonly teamStartFlights = new Map<string, TeamStartFlight>();
   private shutdownRequested = false;
   private operationQueue = Promise.resolve();
   private writePoison?: { sessionId: string; reason: string };
@@ -591,17 +610,26 @@ export class PiHost {
     runtimeId: string,
     access: WorkspaceClaim["access"],
   ): void {
-    const current = claims.get(cwd);
-    if (!current) {
-      claims.set(cwd, { access, runtimeIds: new Set([runtimeId]) });
-      return;
+    for(const [path,claim] of claims){
+      if(this.workspacesOverlap(path,cwd) && this.claimConflict(claim,runtimeId,access))throw new PiHostError("WORKSPACE_IN_USE","Runtime workspace claim conflicts with an active writer",{cwd});
     }
-    if (current.access !== "sharedReadOnly" || access !== "sharedReadOnly") {
-      if (!current.runtimeIds.has(runtimeId) || current.runtimeIds.size > 1) {
-        throw new PiHostError("WORKSPACE_IN_USE", "Runtime workspace claim conflicts with an active writer", { cwd });
-      }
-    }
+    const current=claims.get(cwd);
+    if(!current){claims.set(cwd,{access,...(access==="exclusiveWrite"?{writerRuntimeId:runtimeId}:{}),runtimeIds:new Set([runtimeId])});return;}
     current.runtimeIds.add(runtimeId);
+    if(access==="exclusiveWrite"){current.writerRuntimeId=runtimeId;current.access=access;}
+  }
+
+  private workspacesOverlap(a:string,b:string):boolean {
+    const normalized=(path:string)=>path.normalize("NFD").toLowerCase().replace(/\/+$/u,"")+"/";
+    a=normalized(a);b=normalized(b);return a.startsWith(b)||b.startsWith(a);
+  }
+
+  private claimConflict(claim:WorkspaceClaim,runtimeId:string,access:WorkspaceClaim["access"]):string|undefined {
+    const other=[...claim.runtimeIds].find(id=>id!==runtimeId);if(!other)return;
+    if(access==="exclusiveWrite") {
+      if(claim.writerRuntimeId&&claim.writerRuntimeId!==runtimeId || !this.directWorkerRuntimes.has(runtimeId))return other;
+    }else if(claim.writerRuntimeId&&!this.directWorkerRuntimes.has(claim.writerRuntimeId))return other;
+    return;
   }
 
   private releaseWorkspaceClaim(
@@ -612,17 +640,17 @@ export class PiHost {
     const current = claims.get(cwd);
     if (!current) return;
     current.runtimeIds.delete(runtimeId);
+    if(current.writerRuntimeId===runtimeId){delete current.writerRuntimeId;current.access="sharedReadOnly";}
     if (current.runtimeIds.size === 0) claims.delete(cwd);
+    this.wakeCollaboration();
   }
 
   private workspaceConflict(cwd: string, runtimeId: string, access: WorkspaceClaim["access"]): string | undefined {
     const fileWriter=this.workspaceFileWrites.conflict(cwd);if(fileWriter)return fileWriter;
-    for (const claims of [this.runtimeWorkspaceClaims, this.openingWorkspaceClaims]) {
-      const current = claims.get(cwd);
-      if (!current) continue;
-      const otherRuntime = [...current.runtimeIds].find((candidate) => candidate !== runtimeId);
-      if (!otherRuntime) continue;
-      if (current.access === "exclusiveWrite" || access === "exclusiveWrite") return otherRuntime;
+    if(access==="exclusiveWrite")for(const record of this.productStore?.auxiliaryProcessExecutions()??[]){if(record.process.status==="unknown"&&!this.runtimes.has(record.runtimeId)&&this.workspacesOverlap(record.process.cwd,cwd))return record.runtimeId;}
+    for(const claims of [this.runtimeWorkspaceClaims,this.openingWorkspaceClaims])for(const [path,claim] of claims){
+      if(!this.workspacesOverlap(path,cwd))continue;
+      const conflict=this.claimConflict(claim,runtimeId,access);if(conflict)return conflict;
     }
     return undefined;
   }
@@ -678,6 +706,7 @@ export class PiHost {
 
   async start(): Promise<void> {
     await this.getProductStore();
+    if(this.productStore)for(const assignment of (await this.productStore.snapshot()).agentAssignments)if(assignment.assignmentKind!=="coordinator"&&assignment.agentRunId)await this.ensureAdaptiveInitialInput(this.productStore,assignment.agentRunId,true);
     await this.ensureDCodeRuntimeModelCatalog();
     await this.productStore?.sweepAttachments().catch(error=>this.options.emit("attachment.cleanupFailed",{message:error instanceof Error?error.message:String(error)}));
     this.attachmentSweep=setInterval(()=>{void this.productStore?.sweepAttachments().catch(error=>this.options.emit("attachment.cleanupFailed",{message:error instanceof Error?error.message:String(error)}));},60*60*1000);
@@ -698,6 +727,8 @@ export class PiHost {
     });
     try {
       this.productStore = await this.productStoreOpening;
+      const privateSessions=join(this.productStore.layout.runtimeDirectory,"pi-sessions");
+      this.reader.addDirectory(privateSessions);this.searchIndex.addDirectory(privateSessions);
       return this.productStore;
     } catch (error) {
       this.productStoreOpening = undefined;
@@ -713,6 +744,7 @@ export class PiHost {
     const promptSourceReadCache: DCodePromptSourceReadCache = new Map();
     return {
       ...snapshot,
+      runtimeDialogs:[...this.runtimes.values()].flatMap(runtime=>runtime.runtimeIdentity?runtime.ui.pendingRequests.map(request=>({...request,runtimeId:runtime.runtimeIdentity!.runtimeId,taskId:runtime.runtimeIdentity!.taskId,sessionId:runtime.runtimeIdentity!.dcodeSessionId})):[]),
       promptReceipts: await Promise.all(snapshot.promptReceipts.map(async (receipt) => ({
         ...receipt,
         sourceStates: await inspectDCodePromptSourceReceipts(
@@ -826,6 +858,7 @@ export class PiHost {
         throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Agent Run does not match its Task and Session");
       }
       if (agentRun.role === "worker") {
+        if(await this.checkDirectWorkerWorkspace(snapshot,agentRun,task,identity.workspace))return;
         const managedWorktree = snapshot.managedWorkerWorktrees.find((candidate) => (
           candidate.agentRunId === agentRun.id && candidate.taskId === task.id
         ));
@@ -875,6 +908,7 @@ export class PiHost {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime Agent Run does not match its Task or D Code Session");
     }
     if (agentRun.role !== "worker") return;
+    if(await this.checkDirectWorkerWorkspace(snapshot,agentRun,task,input.workspace))return;
     const managedWorktree = snapshot.managedWorkerWorktrees.find((candidate) => (
       candidate.agentRunId === agentRun.id && candidate.taskId === task.id
     ));
@@ -1048,7 +1082,9 @@ export class PiHost {
     if (!task || !taskContextSet || !session || !role || !roleContract || !storedProfileId || profileVersion === undefined) {
       throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Runtime prompt facts are incomplete in the Product Store");
     }
-    const runtimeModelSelection = snapshot.runtimeModelSelection;
+    const runtimeModelSelection = childRun?.modelProvider && childRun.modelId
+      ? {providerId:childRun.modelProvider,modelId:childRun.modelId,sourceKind:"user" as const,revision:childRun.revision}
+      : store.sessionModelSelection(session.id)??snapshot.runtimeModelSelection;
     if (!runtimeModelSelection) {
       throw new PiHostError(
         "D_CODE_MODEL_SELECTION_REQUIRED",
@@ -1155,7 +1191,7 @@ export class PiHost {
   private async refreshRuntimePrompt(active: WritableSession): Promise<void> {
     const identity = active.runtimeIdentity;
     if (!identity) return;
-    const context = await this.runtimePromptContext(identity);
+    const context = active.currentRun&&active.promptEnvironment&&active.promptDocuments?{environment:{...active.promptEnvironment,workspaceAccess:identity.workspace.access},documents:active.promptDocuments,importedHistory:active.promptImportedHistory}:await this.runtimePromptContext(identity);
     const activeToolNames = active.session.getActiveToolNames();
     const activeToolNameSet = new Set(activeToolNames);
     const tools = active.session.getAllTools()
@@ -1193,6 +1229,7 @@ export class PiHost {
     active.session.agent.state.systemPrompt = assembled.text;
     active.assembledPrompt = assembled;
     active.promptEnvironment = context.environment;
+    active.promptDocuments=context.documents;active.promptImportedHistory=context.importedHistory;
     active.activePromptTools = tools;
     active.toolsWritable = toolsWritable;
     if (active.session.systemPrompt !== assembled.text) {
@@ -1211,15 +1248,18 @@ export class PiHost {
     ...this.openingLegacyWorkspaces, ...this.closingWorkspaces.values(),
     ...[...this.runtimeWorkspaceClaims].filter(([,claim])=>claim.access==="exclusiveWrite").map(([root])=>root),
     ...this.openingWorkspaceClaims.keys(),
+    ...(this.productStore?.auxiliaryProcessExecutions().filter(record=>record.process.status==="unknown").map(record=>record.process.cwd)??[]),
     ...(this.legacyActive?[this.legacyActive.inspection.summary.cwd]:[]),
   ]);
   private workspaceAccess=new WorkspaceAccess(()=>this.getProductStore(),async(root,save)=>{
     const key=await this.resolveWorkspaceIsolationKey(await realpath(root));
-    return this.workspaceFileWrites.run(key,save);
+    try{return await this.workspaceFileWrites.run(key,save);}finally{this.wakeCollaboration();}
   });
 
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
     if(method.startsWith("workspace."))return this.workspaceAccess.handle(method,params);
+    if (method === "dcodeModels.quotas") return this.modelQuotaSnapshot(params);
+
     if (method === "extension.respond") {
       if (typeof params.runtimeId === "string") {
         return await this.handleRuntimeRequest(method, params);
@@ -1281,6 +1321,7 @@ export class PiHost {
   }
 
   async close(): Promise<void> {
+    this.collaborationClosing = true;
     clearInterval(this.attachmentSweep);
     await this.maintenance?.close();
     this.modelAuth.close();
@@ -1291,6 +1332,7 @@ export class PiHost {
       await Promise.all([...this.runtimeQueues.values()]);
       await Promise.all([...this.runtimes.keys()].map(async (runtimeId) => {
         await this.runtimeContext.run(runtimeId, async () => { await this.closeActive(); });
+    this.directWorkerRuntimes.delete(runtimeId);
       }));
       await this.closeActive();
     } finally {
@@ -1504,7 +1546,7 @@ export class PiHost {
         if(!source||!task)throw new PiHostError("DCODE_SESSION_NOT_FOUND","Source task/session does not exist");
         const binding=snapshot.sessionRuntimeBindings.find(b=>b.sessionId===sourceSessionId);
         const runtimeId=this.runtimeByDCodeSessionId.get(sourceSessionId);
-        const copied=binding ? await this.runtimeContext.run(runtimeId??"",async()=>await this.copySession(binding.adapterSessionId,task.cwd)) as import("./session-copy.js").SessionCopyResult : undefined;
+        const copied=binding ? await this.runtimeContext.run(runtimeId??"",async()=>await this.copySession(binding.adapterSessionId,task.cwd,true)) as import("./session-copy.js").SessionCopyResult : undefined;
         let result;
         try { result=await store.copyTaskSession({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,sourceSessionId,...(copied?{adapter:{id:copied.target.id,path:copied.target.path}}:{})}); }
         catch(error) {
@@ -1519,8 +1561,9 @@ export class PiHost {
         }
         this.options.emit("foundation.changed",{kind:"dcodeSession.copied",storeRevision:result.storeRevision,taskId:result.task.id});return result;
       }
+      case "dcodeSession.commands":return this.dcodeCommands(params.dcodeSessionId as string|undefined,params.projectId as string|undefined);
       case "dcodeSession.presentation":
-        return await this.dcodeSessionPresentation(params.dcodeSessionId as string);
+        return sanitizeRuntimeValue(await this.dcodeSessionPresentation(params.dcodeSessionId as string,params.pathId as string|undefined));
       case "dcodeSession.composerDraft.set": {
         const result = await (await this.getProductStore()).setDCodeSessionComposerDraft({
           requestId: params.requestId as string,
@@ -1528,6 +1571,9 @@ export class PiHost {
           taskId: params.taskId as string,
           sessionId: params.dcodeSessionId as string,
           text: params.text as string,
+          targetAgentRunId: params.targetAgentRunId as string|null|undefined,
+          pathAction:params.pathAction as import("./product-store.js").NativeSessionPathAction|null|undefined,
+          pathDraftBackup:params.pathDraftBackup as import("./product-store.js").ComposerDraftRecord["pathDraftBackup"]|null|undefined,
           attachmentIds:params.attachmentIds as string[]|undefined,
         });
         this.options.emit("foundation.changed", {
@@ -1539,9 +1585,27 @@ export class PiHost {
         });
         return result;
       }
+      case "collaboration.messageEdit": {
+        const result=await (await this.getProductStore()).editCollaborationMessage(params as Parameters<ProductStore["editCollaborationMessage"]>[0]);
+        this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",storeRevision:result.storeRevision,taskId:result.message.taskId});return result;
+      }
+      case "collaboration.queueReorder": {
+        const result=await (await this.getProductStore()).reorderCollaborationMessages(params as Parameters<ProductStore["reorderCollaborationMessages"]>[0]);
+        this.options.emit("foundation.changed",{kind:"collaboration.queueOrdered",storeRevision:result.storeRevision});return result;
+      }
+      case "collaboration.messageControl": {
+        const result=await (await this.getProductStore()).transitionCollaborationMessage({requestId:params.requestId as string,id:params.id as string,expectedRevision:params.expectedRevision as number,state:params.state as "queued"|"paused"|"cancelled"});
+        this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",storeRevision:result.storeRevision,taskId:result.message.taskId});
+        if(result.message.state==="queued") void this.drainCollaboration(result.message.targetSessionId);
+        return result;
+      }
       case "dcodeSession.prompt":
         return await this.promptDCodeSession({
           dcodeSessionId: params.dcodeSessionId as string,
+          targetAgentRunId: params.targetAgentRunId as string|undefined,
+          deliveryMode:params.deliveryMode as "steer"|undefined,
+          expectedSessionRunId:params.expectedSessionRunId as string|undefined,
+          pathAction:params.pathAction as import("./product-store.js").NativeSessionPathAction|undefined,
           promptId: params.promptId as string,
           message: params.message as string,
           attachmentIds:params.attachmentIds as string[]|undefined,
@@ -1562,6 +1626,7 @@ export class PiHost {
         });
         return result;
       }
+      case "workspace.describe": case "workspace.tree": case "workspace.read": case "workspace.asset": case "workspace.preview": case "workspace.save": case "workspace.git": case "workspace.diff": case "workspace.reference": return this.workspaceAccess.handle(method,params);
       case "project.gitBranch":
         return await this.projectGitBranch(params.projectId as string);
       case "task.manage": {
@@ -1589,6 +1654,8 @@ export class PiHost {
         });
         return result;
       }
+      case "task.context.inspectFiles":return this.inspectTaskContextFiles(params.taskId as string,params.paths as string[]);
+      case "sessionRun.inputs":return (await this.getProductStore()).sessionRunInputs(params.taskId as string,params.sessionRunId as string);
       case "task.context.replace": {
         const result = await (await this.getProductStore()).replaceTaskContext({
           requestId: params.requestId as string,
@@ -1750,29 +1817,9 @@ export class PiHost {
         });
         return { ...result, deliveredToRuntime };
       }
-      case "team.create": {
-        const result = await (await this.getProductStore()).createTeamRun({
-          requestId: params.requestId as string,
-          expectedStoreRevision: params.expectedStoreRevision as number,
-          taskId: params.taskId as string,
-          scope: params.scope as TaskScope,
-          members: params.members as Array<{
-            profileId: string;
-            title: string;
-            taskPacket: Record<string, unknown>;
-          }>,
-        });
-        this.options.emit("foundation.changed", {
-          storeRevision: result.storeRevision,
-          kind: "teamRun.created",
-          entityKind: "teamRun",
-          entityId: result.teamRun.id,
-          taskId: result.teamRun.taskId,
-        });
-        return result;
-      }
+      case "team.create":
       case "team.start":
-        return await this.startTeamRun(params);
+        throw new PiHostError("COORDINATOR_REQUIRED","旧团队入口已停用，请在任务主对话中交办，由协调者按需创建成员");
       case "agentRequest.answer": {
         const serializedAnswer = JSON.stringify(params.answer);
         if (redactCredentialText(serializedAnswer).redacted) {
@@ -1815,6 +1862,13 @@ export class PiHost {
         });
         return { ...result, deliveredToRuntime };
       }
+      case "agentProcess.stopAuxiliary": {
+        const store=await this.getProductStore(),record=store.auxiliaryProcessExecutions().find(item=>item.process.id===params.processId&&item.taskId===params.taskId&&item.agentRunId===params.agentRunId);
+        if(!record)throw new PiHostError("PROCESS_NOT_FOUND","后台活动不属于所选任务和成员");
+        if(record.process.status==="exited")return {stopped:true};
+        const runtime=this.runtimes.get(record.runtimeId);if(!runtime?.auxiliary)throw new PiHostError("PROCESS_NOT_OWNED","该活动来自上次运行，当前无法确认控制权，请先核对进程状态");
+        await runtime.auxiliary.stop(record.process.id);return {stopped:true};
+      }
       case "agentRun.stop":
         return await this.stopAgentRun(params);
       case "agentProfile.update": {
@@ -1826,6 +1880,7 @@ export class PiHost {
           name: params.name as string,
           roleContract: params.roleContract as string,
           enabled: params.enabled as boolean,
+          ...(params.modelCandidates !== undefined ? { modelCandidates: params.modelCandidates as AgentModelCandidate[] | null } : {}),
         });
         this.options.emit("foundation.changed", {
           storeRevision: result.storeRevision,
@@ -1842,6 +1897,7 @@ export class PiHost {
           name: params.name as string,
           roleContract: params.roleContract as string,
           enabled: params.enabled as boolean,
+          ...(params.modelCandidates !== undefined ? { modelCandidates: params.modelCandidates as AgentModelCandidate[] | null } : {}),
         });
         this.options.emit("foundation.changed", {
           storeRevision: result.storeRevision,
@@ -2030,9 +2086,14 @@ export class PiHost {
         );
       case "session.abort": {
         const active = this.requireWritable();
+        if(active.currentRun?.persistenceFailed)throw new PiHostError("RESULT_SAVE_FAILED","本轮已结束但结果尚未保存，请重新连接后核对");
+        if(active.runtimeIdentity) {
+          const store=await this.getProductStore();
+          for(const message of store.collaborationMessages(active.runtimeIdentity.taskId).filter(message=>message.targetSessionId===active.runtimeIdentity!.dcodeSessionId&&message.state==="queued")) await store.transitionCollaborationMessage({requestId:`stop-queue:${message.id}:${message.revision}`,id:message.id,expectedRevision:message.revision,state:"paused"});
+        }
         if (active.currentRun) this.updateRunState(active, active.currentRun, "stopRequested");
         try {
-          await active.session.abort();
+          await Promise.all([active.auxiliary?.stopAll(),active.session.abort()]);
           return { aborted: true };
         } catch (error) {
           if (active.currentRun) {
@@ -2075,11 +2136,15 @@ export class PiHost {
         const store=await this.getProductStore();
         const sessionId=params.dcodeSessionId as string | undefined;
         if(sessionId){const session=(await store.snapshot()).sessions.find(s=>s.id===sessionId);if(!session||session.state==="archived")throw new PiHostError("SESSION_NOT_AVAILABLE","会话不存在或已归档");}
+        const selectionInput=sessionId&&method==="dcodeModels.select"?{requestId:params.requestId as string,sessionId,providerId:params.providerId as string,modelId:params.modelId as string}:undefined;
+        if(selectionInput&&await store.replaySessionModelSelection(selectionInput))return this.dcodeModelsView(sessionId);
         const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
+        if(runtimeId){const active=this.runtimes.get(runtimeId);if(active)this.assertSessionMetadataIdle(active);}
         const view=await this.dcodeModelsView(sessionId);
         if(method === "dcodeModels.select"){
           const model=view.models.find(m=>m.providerId===params.providerId&&m.modelId===params.modelId);
           if(!model?.available)throw new PiHostError("MODEL_NOT_AVAILABLE","模型尚未连接，请刷新连接或配置供应商");
+          if(!model.enabled)throw new PiHostError("MODEL_DISABLED","该模型已停用，请先在模型设置中启用");
         } else if(!view.thinkingLevels.includes(params.level as string))throw new PiHostError("THINKING_NOT_SUPPORTED","当前模型不支持这个思考强度");
         if(runtimeId && sessionId) {
           const command=await store.prepareRuntimeModelControl({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,method,sessionId,runtimeId,values:method==="dcodeModels.select"?{providerId:params.providerId,modelId:params.modelId}:{level:params.level}});
@@ -2093,9 +2158,11 @@ export class PiHost {
             if(active)await registerCatalogProviders(active.session.modelRuntime,await store.snapshot());
             if(method==="dcodeModels.select")await this.handleRuntimeRequest("session.setModel",{runtimeId,provider:params.providerId,modelId:params.modelId});
             else await this.handleRuntimeRequest("session.setThinking",{runtimeId,level:params.level});
+            if(selectionInput)await store.setSessionModelSelection(selectionInput);
             await store.finishOperationAttempt({attemptId:command.attemptId,outcome:"succeeded"});
           } catch(error){await store.finishOperationAttempt({attemptId:command.attemptId,outcome:"unknown"});throw error;}
-        } else if(method === "dcodeModels.select")await store.setRuntimeModelSelection({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,providerId:params.providerId as string,modelId:params.modelId as string});
+        } else if(selectionInput)await store.setSessionModelSelection(selectionInput);
+        else if(method === "dcodeModels.select")await store.setRuntimeModelSelection({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,providerId:params.providerId as string,modelId:params.modelId as string});
         else await store.setClientPreferences({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,defaultThinking:params.level as string});
         this.options.emit("foundation.changed",{kind:"runtimeModelSelection.updated"});
         return await this.dcodeModelsView(sessionId);
@@ -2147,6 +2214,8 @@ export class PiHost {
       }
       case "session.setFastMode":
         return await this.setFastMode(params.enabled as boolean);
+      case "dcodeModels.quotas":
+        return this.modelQuotaSnapshot(params);
       case "host.shutdown":
         if(params.requireIdle===true){
           const snapshot=await (await this.getProductStore()).snapshot();
@@ -2173,6 +2242,7 @@ export class PiHost {
   }
 
   private async stopAgentRun(params: Record<string, unknown>): Promise<unknown> {
+    if(this.active?.currentRun?.persistenceFailed)throw new PiHostError("RESULT_SAVE_FAILED","本轮已结束但结果尚未保存，停止不能替代保存或改写执行结果");
     const store = await this.getProductStore();
     const prepared = await store.prepareAgentRunStop({
       requestId: params.requestId as string,
@@ -2227,7 +2297,7 @@ export class PiHost {
     });
     this.updateRunState(active, run, "stopRequested");
     try {
-      await active.session.abort();
+      await Promise.all([active.auxiliary?.stopAll(),active.session.abort()]);
       await active.session.waitForIdle();
       await this.finalizeRun(active, run, "aborted");
       await this.finishDurableSessionRun(active, run, "aborted");
@@ -2244,7 +2314,7 @@ export class PiHost {
         taskId: identity.taskId,
         runtimeId: identity.runtimeId,
       });
-      return { stopped: true, attemptId: prepared.attemptId, storeRevision: finished.storeRevision };
+      return { stopped: true, attemptId: prepared.attemptId, storeRevision: (await store.snapshot()).storeRevision };
     } catch (error) {
       await store.finishOperationAttempt({
         attemptId: prepared.attemptId,
@@ -2315,7 +2385,365 @@ export class PiHost {
     }
   }
 
-  private async dcodeSessionPresentation(dcodeSessionIdValue: string): Promise<unknown> {
+  private readonly directWorkerRuntimes = new Set<string>();
+  private readonly collaborationDrains = new Set<string>();
+
+  private isDirectWorker(snapshot:Awaited<ReturnType<ProductStore["snapshot"]>>,run:AgentRunRecord):boolean {
+    if(run.role!=="worker" || snapshot.managedWorkerWorktrees.some(tree=>tree.agentRunId===run.id))return false;
+    const assignment=snapshot.agentAssignments.find(item=>item.agentRunId===run.id);
+    const packet=assignment?.taskPacket as {workspacePolicy?:string}|undefined;
+    return packet?.workspacePolicy==="task_directory" && snapshot.agentAssignments.some(item=>item.teamRunId===assignment?.teamRunId && item.assignmentKind==="coordinator" && (item.taskPacket as {adaptive?:boolean})?.adaptive===true);
+  }
+
+  private async checkDirectWorkerWorkspace(snapshot:Awaited<ReturnType<ProductStore["snapshot"]>>,run:AgentRunRecord,task:TaskRecord,workspace:RuntimeIdentity["workspace"]):Promise<boolean> {
+    if(!this.isDirectWorker(snapshot,run))return false;
+    const packet=snapshot.agentAssignments.find(item=>item.agentRunId===run.id)!.taskPacket as {workspaceRootDigest:string};
+    const canonical=await realpath(task.cwd);
+    if(workspace.access!=="exclusiveWrite" || workspace.workspaceId!==`task-directory:${run.id}` || await realpath(workspace.cwd)!==canonical || packet.workspaceRootDigest!==createHash("sha256").update(canonical).digest("hex"))throw new PiHostError("WORKSPACE_TASK_SCOPE_REQUIRED","成员目录已改变，需要重新安排工作");
+    return true;
+  }
+
+  private async adaptiveWorkspacePolicy(task:TaskRecord,snapshot:Awaited<ReturnType<ProductStore["snapshot"]>>):Promise<"managed_worktree"|"task_directory"> {
+    if(task.scope.kind==="user")return "task_directory";
+    try {
+      const source=await inspectManagedWorkerWorktreeSource({projectDirectory:task.cwd});
+      await assertManagedWorkerWorktreeContextSourcesMaterialize({source,relativePaths:(snapshot.taskContextSets.find(set=>set.taskId===task.id)?.sources??[]).filter(item=>item.kind==="scope_document").map(item=>item.relativePath),includeCurrentAgents:true});
+      return "managed_worktree";
+    }catch(error){
+      if(error instanceof ManagedWorkerWorktreeError && ["WORKSPACE_GIT_REPOSITORY_REQUIRED","WORKSPACE_SOURCE_HEAD_REQUIRED","WORKSPACE_SOURCE_DIRTY","WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED"].includes(error.code))return "task_directory";
+      throw error;
+    }
+  }
+
+  private collaborationClosing = false;
+
+  private async setCoordinatorAccess(active:WritableSession,access:"sharedReadOnly"|"exclusiveWrite"):Promise<void> {
+    if(access==="sharedReadOnly"&&active.auxiliary?.hasLive)throw new PiHostError("WORKSPACE_BUSY","当前成员仍有后台活动，请停止后再移交目录写入权");
+    const identity=active.runtimeIdentity;
+    if(!identity||active.promptEnvironment?.role!=="coordinator") return;
+    const key=this.workspaceClaimKey(identity.workspace);
+    if(access==="exclusiveWrite"&&this.workspaceConflict(key,identity.runtimeId,access))return;
+    const names=active.session.getAllTools().filter(tool=>SHARED_READ_ONLY_TOOL_NAMES.has(tool.name)||(access==="exclusiveWrite"&&["bash","edit","write"].includes(tool.name))).map(tool=>tool.name);
+    active.session.setActiveToolsByName(names);
+    this.releaseWorkspaceClaim(this.runtimeWorkspaceClaims,key,identity.runtimeId);
+    identity.workspace.access=access;
+    this.addWorkspaceClaim(this.runtimeWorkspaceClaims,key,identity.runtimeId,access);
+    await this.refreshRuntimePrompt(active);
+  }
+
+  private async prepareCoordinatorDirectWork(active:WritableSession):Promise<void> {
+    const identity=active.runtimeIdentity;
+    if(!identity||active.promptEnvironment?.role!=="coordinator"||active.currentRun)return;
+    const snapshot=await (await this.getProductStore()).snapshot();
+    if(snapshot.agentRuns.some(run=>run.taskId===identity.taskId&&run.role!=="coordinator"&&["prepared","running","waiting"].includes(run.status)))return;
+    const key=this.workspaceClaimKey(identity.workspace);
+    for(const [otherId,other] of this.runtimes) {
+      if(otherId!==identity.runtimeId&&other.runtimeIdentity&&this.workspaceClaimKey(other.runtimeIdentity.workspace)===key&&!other.currentRun&&!other.session.isStreaming&&!other.auxiliary?.hasLive&&!this.collaborationDrains.has(other.runtimeIdentity.dcodeSessionId))await this.closeRuntime(otherId);
+    }
+    await this.setCoordinatorAccess(active,"exclusiveWrite");
+  }
+
+  private async handleVerification(identity:RuntimePromptIdentity,callId:string,input:VerificationAction):Promise<unknown> {
+    const store=await this.getProductStore();const snapshot=await store.snapshot();
+    const actor=snapshot.agentRuns.find(run=>run.id===identity.agentRunId&&run.taskId===identity.taskId&&run.sessionId===identity.dcodeSessionId);
+    if(!actor||!["coordinator","verifier"].includes(actor.role)) throw new PiHostError("VERIFICATION_ROLE_REQUIRED","当前成员没有验收权限");
+    const taskId=identity.taskId;
+    if(input.action==="context")return verificationContext(snapshot,taskId);
+    if(input.action==="read_report"){
+      const report=snapshot.agentReports.find(report=>report.id===input.subjectReportId&&report.taskId===taskId);if(!report)throw new PiHostError("REPORT_NOT_FOUND","报告不属于当前任务");
+      const body=JSON.stringify(report.body),offset=input.offset??0,end=Math.min(body.length,offset+(input.limit??12000));return {reportId:report.id,agentRunId:report.agentRunId,reportKind:report.reportKind,content:body.slice(offset,end),totalLength:body.length,...(end<body.length?{nextOffset:end}:{})};
+    }
+    const run=this.runtimes.get(identity.runtimeId)?.currentRun;
+    const requestId=`verification:${createHash("sha256").update(`${taskId}\0${run?.id}\0${callId}`).digest("hex").slice(0,48)}`;
+    if(input.action==="submit") {
+      if(actor.role!=="verifier"||!input.subjectReportId||!input.verdict||!input.summary) throw new PiHostError("VERIFIER_REQUIRED","需要验收成员指定报告、结论和依据");
+      const result=await store.submitVerification({requestId,taskId,verifierAgentRunId:actor.id,subjectReportId:input.subjectReportId,verdict:input.verdict,evidenceIds:input.evidenceIds??[],findings:input.findings??[],summary:input.summary});
+      this.options.emit("foundation.changed",{kind:"verification.submitted",taskId,storeRevision:result.storeRevision});return result;
+    }
+    if(actor.role!=="coordinator"||!input.verificationId||!input.outcome||!input.reason) throw new PiHostError("COORDINATOR_REQUIRED","需要协调者对已有验收做复核");
+    const result=await store.reviewVerification({requestId,taskId,coordinatorAgentRunId:actor.id,verificationId:input.verificationId,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{})});
+    if(input.outcome!=="accepted")await this.enqueueCollaboration({requestId:`follow-${requestId}`,taskId,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:input.outcome==="rework"?result.verification.subjectAgentRunId:result.verification.verifierAgentRunId,author:"coordinator",originRawInputId:run?.rawInputId,text:`${input.outcome==="rework"?"请修复对应成果":"请重新独立核验"}：${input.reason}\n${input.strategyChange?`方法调整：${input.strategyChange}`:""}\n验收记录：${result.verification.id}。完成后提交具体结果与新证据，保留无关已通过工作。`});
+    this.options.emit("foundation.changed",{kind:"verification.reviewed",taskId,storeRevision:result.storeRevision});return result;
+  }
+
+  private async coordinateTeam(identity:RuntimePromptIdentity, callId:string, action:TeamAction):Promise<unknown> {
+    const store=await this.getProductStore();
+    let snapshot=await store.snapshot();
+    const owner=snapshot.agentRuns.find(run=>run.id===identity.agentRunId && run.taskId===identity.taskId && run.sessionId===identity.dcodeSessionId && run.role==="coordinator");
+    const task=snapshot.tasks.find(task=>task.id===identity.taskId);
+    const ownerRun=this.runtimes.get(identity.runtimeId)?.currentRun;
+    const originRawInputId=ownerRun?.latestRawInputId??ownerRun?.rawInputId;
+    callId=createHash("sha256").update(`${identity.taskId}\0${identity.agentRunId}\0${originRawInputId}\0${callId}`).digest("hex").slice(0,48);
+    if(!owner||!task) throw new PiHostError("COORDINATOR_REQUIRED","只有本任务协调者可以创建与安排成员");
+    if(action.action==="list") return {profiles:snapshot.agentProfiles.filter(profile=>profile.enabled&&profile.role!=="coordinator"),members:snapshot.agentRuns.filter(run=>run.taskId===task.id&&run.role!=="coordinator").map(run=>({...run,title:snapshot.sessions.find(session=>session.id===run.sessionId)?.title})),messages:store.collaborationMessages(task.id).slice(-50).map(message=>({...message,text:message.text.slice(0,1200),complete:message.text.length<=1200})),artifacts:snapshot.artifacts.filter(artifact=>artifact.taskId===task.id)};
+    if(action.action==="read_message"){
+      const message=store.collaborationMessages(task.id).find(message=>message.id===action.messageId);if(!message)throw new PiHostError("MESSAGE_NOT_FOUND","消息不属于当前任务");
+      const offset=action.offset??0,end=Math.min(message.text.length,offset+(action.limit??20000));
+      if(ownerRun){ownerRun.messageReadCoverage??=new Map();const previous=ownerRun.messageReadCoverage.get(message.id)??0;if(offset<=previous){ownerRun.messageReadCoverage.set(message.id,Math.max(previous,end));if(end>=message.text.length&&message.author==="user")this.acknowledgeUserUpdate(ownerRun,message,store);}}
+      return {messageId:message.id,author:message.author,sourceSessionId:message.sourceSessionId,targetAgentRunId:message.targetAgentRunId,text:message.text.slice(offset,end),...(end<message.text.length?{nextOffset:end}:{}),totalLength:message.text.length};
+    }
+    if(action.action==="cancel_input"||action.action==="resume_input") {
+      const message=store.collaborationMessages(task.id).find(message=>message.id===action.messageId);
+      if(!message||!action.reason?.trim())throw new PiHostError("INVALID_ARGUMENT","需要本任务的消息和取消依据");
+      const result=await store.transitionCollaborationMessage({requestId:`cancel-input:${callId}`,id:message.id,expectedRevision:message.revision,state:action.action==="resume_input"?"queued":"cancelled",error:action.reason});
+      if(action.action==="resume_input")void this.drainCollaboration(result.message.targetSessionId);
+      this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id,storeRevision:result.storeRevision});return result;
+    }
+    if(action.action==="send"||action.action==="stop") {
+      const target=snapshot.agentRuns.find(run=>run.id===action.agentRunId&&run.taskId===task.id&&run.role!=="coordinator");
+      if(!target) throw new PiHostError("MEMBER_NOT_FOUND","只能选择本任务已创建的成员");
+      if(action.action==="stop") {
+        let paused=0;for(const message of store.collaborationMessages(task.id).filter(message=>message.targetAgentRunId===target.id&&message.state==="queued")){await store.transitionCollaborationMessage({requestId:`stop-member:${callId}:${message.id}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"该成员的后续工作已停止，继续后才会发送"});paused++;}
+        const runtimeId=this.runtimeByDCodeSessionId.get(target.sessionId);
+        if(runtimeId) await this.handleRuntimeRequest("session.abort",{runtimeId});
+        this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id});
+        return {agentRunId:target.id,stopped:true,hadActiveRuntime:!!runtimeId,pausedInputs:paused};
+      }
+      if(!action.message?.trim()) throw new PiHostError("INVALID_ARGUMENT","需要发送的内容");
+      const pendingUser=store.collaborationMessages(task.id).find(message=>message.targetAgentRunId===target.id&&message.author==="user"&&["queued","delivering"].includes(message.state)&&!store.isCollaborationMessageApplied(message.id));
+      if(pendingUser)return {sent:false,reason:"用户的新要求正在等待该成员接收，请在生效后核对再交办",messageId:pendingUser.id};
+      const latest=store.latestAppliedUserMessage(target.id),newer=latest&&!ownerRun?.knownUserUpdates?.has(latest.id)?latest:undefined;
+      if(newer){if(newer.text.length<=8000)this.acknowledgeUserUpdate(ownerRun,newer,store);return {sent:false,reason:"先核对该成员最新直接要求与当前用户要求的关系，再交办修订内容",messageId:newer.id,userUpdate:newer.text.slice(0,8000),complete:newer.text.length<=8000,sourceSessionId:newer.sourceSessionId,...(newer.text.length>8000?{nextAction:"用 read_message 读取完整要求"}:{})};}
+      if(action.deliveryMode==="steer")return this.queueSteering({requestId:`team-steer:${callId}`,taskId:task.id,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:target.id,author:"coordinator",originRawInputId,text:action.message});
+      return this.enqueueCollaboration({requestId:`team-send:${callId}`,taskId:task.id,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:target.id,author:"coordinator",originRawInputId,text:action.message});
+    }
+    if(!action.members?.length) throw new PiHostError("INVALID_ARGUMENT","需要有边界的成员工作说明");
+    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance}})));
+    if(original){for(const run of original.childAgentRuns)await this.ensureAdaptiveInitialInput(store,run.id);return {created:true,scheduled:true,replayed:true,teamRunId:original.teamRun.id,members:original.childAgentRuns};}
+    for(const [runtimeId,runtime] of this.runtimes) {
+      if(this.runtimes.size+action.members.length<=MAX_ACTIVE_RUNTIMES) break;
+      if(runtimeId!==identity.runtimeId&&!runtime.currentRun&&!runtime.session.isStreaming&&!runtime.auxiliary?.hasLive&&runtime.promptEnvironment?.role!=="coordinator") await this.closeRuntime(runtimeId);
+    }
+
+    const models=await this.dcodeModelsView();
+    const decisions:ModelRouteDecision[]=[];
+    const resolvedChains:AgentModelCandidate[][]=[];
+    const quotaReads=new Map<string,ReturnType<ModelQuotaService["get"]>>();
+    for(const member of action.members) {
+      const profile=snapshot.agentProfiles.find(profile=>profile.id===member.profileId&&profile.enabled&&profile.role!=="coordinator");
+      if(!profile) throw new PiHostError("PROFILE_UNAVAILABLE","成员档案不可用");
+      const candidates=profile.modelCandidates??(ownerRuntimeModel(owner) ? [ownerRuntimeModel(owner)!] : snapshot.runtimeModelSelection?[snapshot.runtimeModelSelection]:[]);
+      resolvedChains.push(candidates);
+      const decision=await chooseAgentModel({candidates,models:models.models,quotas:{get:(provider)=>{let read=quotaReads.get(provider);if(!read){read=this.quotaService().get(provider,true);quotaReads.set(provider,read);}return read;}}});
+      if(!decision.selected) return {started:false,blockedMember:member.title,reason:"回退链中没有额度明确高于 1% 的可用模型",decision};
+      decisions.push(decision);
+    }
+    const ownerRuntime=this.runtimes.get(identity.runtimeId);
+    if(ownerRuntime) {
+      if([...ownerRuntime.currentRun?.toolCalls.values()??[]].some(call=>!SHARED_READ_ONLY_TOOL_NAMES.has(call.toolName))) throw new PiHostError("WORKSPACE_BUSY","写入工作正在收尾，完成后再派发成员");
+      await this.setCoordinatorAccess(ownerRuntime,"sharedReadOnly");
+    }
+    const workspacePolicy=action.members.some(member=>snapshot.agentProfiles.find(profile=>profile.id===member.profileId)?.role==="worker")?await this.adaptiveWorkspacePolicy(task,snapshot):"managed_worktree";
+    const workspaceRootDigest=createHash("sha256").update(await realpath(task.cwd)).digest("hex");
+    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
+    const members=[];
+    for(const [index,run] of created.childAgentRuns.entries()) {
+      const queued=await this.ensureAdaptiveInitialInput(store,run.id);
+      members.push({agentRunId:run.id,sessionId:run.sessionId,title:action.members[index]!.title,plannedModel:decisions[index]!.selected,message:queued});
+    }
+    this.options.emit("foundation.changed",{kind:"teamRun.created",taskId:task.id});
+    return {created:true,scheduled:true,members};
+  }
+
+  private async ensureAdaptiveInitialInput(store:ProductStore,agentRunId:string,recovery=false):Promise<CollaborationMessage|undefined>{
+    const initial=store.initialCollaborationMessage(agentRunId);if(initial)return initial;
+    const snapshot=await store.snapshot(),assignment=snapshot.agentAssignments.find(item=>item.agentRunId===agentRunId),packet=assignment?.taskPacket as {instruction?:string;acceptance?:string;sourceSessionId?:string;originRawInputId?:string}|undefined;
+    if(!assignment||!packet?.instruction||!packet.sourceSessionId||!packet.originRawInputId)return;
+    const body=`${packet.instruction}\n\n验收要求：${packet.acceptance??""}`;
+    const previous=store.collaborationMessages(assignment.taskId).find(message=>message.targetAgentRunId===agentRunId&&message.author==="coordinator"&&message.text===body&&message.originRawInputId===packet.originRawInputId);if(previous)return previous;
+    const result=await store.queueCollaborationMessage({requestId:`delegate-initial:${agentRunId}`,taskId:assignment.taskId,sourceSessionId:packet.sourceSessionId,targetAgentRunId:agentRunId,author:"coordinator",originRawInputId:packet.originRawInputId,text:body});
+    let message=result.message;
+    if(recovery)message=(await store.transitionCollaborationMessage({requestId:`recover-initial:${agentRunId}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"已恢复创建成员时尚未发出的工作说明，请核对后继续"})).message;
+    else void this.drainCollaboration(message.targetSessionId);
+    this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:assignment.taskId});return message;
+  }
+
+  private async openMemberRuntime(run:AgentRunRecord,task:TaskRecord,tree?:ManagedWorkerWorktreeRecord):Promise<string> {
+    const existing=this.runtimeByDCodeSessionId.get(run.sessionId);
+    if(existing) {
+      if(this.runtimes.get(existing)?.runtimeIdentity?.agentRunId!==run.id)throw new PiHostError("RUNTIME_IDENTITY_MISMATCH","该会话已有其他成员持有的运行");
+      return existing;
+    }
+    if(this.runtimes.size+this.openingDCodeSessionIds.size>=MAX_ACTIVE_RUNTIMES){
+      for(const [runtimeId,runtime] of this.runtimes){
+        if(runtime.currentRun||runtime.closing||runtime.session.isCompacting||runtime.auxiliary?.hasLive||this.runtimeQueues.has(runtimeId)||this.collaborationDrains.has(runtime.runtimeIdentity?.dcodeSessionId??""))continue;
+        if(runtime.promptEnvironment?.role==="coordinator"&&runtime.runtimeIdentity?.taskId===task.id)continue;
+        await this.closeRuntime(runtimeId);break;
+      }
+    }
+    const snapshot=await (await this.getProductStore()).snapshot();
+    const direct=this.isDirectWorker(snapshot,run);
+    if(!tree && run.role==="worker")tree=snapshot.managedWorkerWorktrees.find(item=>item.agentRunId===run.id&&item.state==="ready");
+    if(!tree&&run.role==="worker"&&!direct&&run.teamRunId){
+      const existingTree=snapshot.managedWorkerWorktrees.find(item=>item.agentRunId===run.id);
+      if(existingTree)tree=await this.recoverAdaptiveWorktree(existingTree,task);
+      else {const provisioned=await this.provisionTeamWorkerWorktrees({store:await this.getProductStore(),task,teamRunId:run.teamRunId,agentRuns:[run],requestId:`adaptive-worktree:${run.id}`,projects:snapshot.projects,taskContextSources:snapshot.taskContextSets.find(set=>set.taskId===task.id)?.sources??[]});tree=provisioned.get(run.id);}
+    }
+    const runtimeId=`runtime-${run.id}`;
+    if(direct)this.directWorkerRuntimes.add(runtimeId);
+    try {
+      await this.runtimeContext.run(runtimeId,()=>this.startDCodeRuntime({runtimeId,taskId:task.id,dcodeSessionId:run.sessionId,agentRunId:run.id,scope:task.scope,workspace:tree?{workspaceId:tree.workspaceId,cwd:tree.workspaceCwd,access:"exclusiveWrite"}:{workspaceId:direct?`task-directory:${run.id}`:`source:${run.id}`,cwd:task.cwd,access:direct?"exclusiveWrite":"sharedReadOnly"}}));
+    }catch(error){this.directWorkerRuntimes.delete(runtimeId);throw error;}
+    return runtimeId;
+  }
+
+  private async recoverAdaptiveWorktree(previous:ManagedWorkerWorktreeRecord,task:TaskRecord):Promise<ManagedWorkerWorktreeRecord>{
+    if(await realpath(task.cwd)!==await realpath(previous.sourceProjectDirectory))throw new PiHostError("WORKSPACE_SCOPE_CHANGED","原任务目录已变化，请重新核对成员工作范围");
+    const store=await this.getProductStore(),snapshot=await store.snapshot();
+    const plan={...previous,worktreeRoot:previous.managedPath};
+    // Verify any existing directory before recording another attempt. Never
+    // delete, replace or merge a target whose identity cannot be established.
+    const present=await lstat(plan.worktreeRoot).then(()=>true,error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return false;throw error;});
+    if(present)await verifyManagedWorkerWorktree(plan);
+    const prepared=await store.retryManagedWorkerWorktree({artifactId:previous.artifactId,expectedRevision:previous.revision});
+    try{
+      const ready=await provisionManagedWorkerWorktree(plan,{allowExisting:present,contextRelativePaths:(snapshot.taskContextSets.find(set=>set.taskId===task.id)?.sources??[]).filter(source=>source.kind==="scope_document").map(source=>source.relativePath),includeCurrentAgents:true});
+      const result=await store.finishManagedWorkerWorktree({requestId:`worktree-recovered:${prepared.provisionAttemptId}`,artifactId:prepared.artifactId,provisionAttemptId:prepared.provisionAttemptId,state:"ready",resultDigest:`sha256:${createHash("sha256").update(JSON.stringify({workspaceId:ready.workspaceId,baseCommit:ready.baseCommit,worktreeRoot:ready.worktreeRoot,reused:ready.reused})).digest("hex")}`});
+      this.options.emit("foundation.changed",{kind:"managedWorkerWorktree.ready",taskId:task.id});return result.worktree;
+    }catch(error){await store.finishManagedWorkerWorktree({requestId:`worktree-retry-failed:${prepared.provisionAttemptId}`,artifactId:prepared.artifactId,provisionAttemptId:prepared.provisionAttemptId,state:"unknown",failureCode:errorRecord(error).code}).catch(()=>undefined);throw error;}
+  }
+
+  private async coordinatorUpdates(active:WritableSession,text:string):Promise<{text:string;known:Map<string,string>}> {
+    const known=new Map<string,string>();if(active.promptEnvironment?.role!=="coordinator"||!active.runtimeIdentity)return {text,known};
+    const store=await this.getProductStore(),snapshot=await store.snapshot();
+    const updates=snapshot.agentRuns.filter(run=>run.taskId===active.runtimeIdentity!.taskId&&run.role!=="coordinator").flatMap(run=>{const message=store.latestAppliedUserMessage(run.id);return message?[{message,member:snapshot.sessions.find(session=>session.id===run.sessionId)?.title??"成员"}]:[];});
+    if(!updates.length||text.length>194000)return {text,known};
+    let budget=Math.min(30000,198000-text.length);const rows=[];
+    for(const {message,member} of updates){const length=Math.max(0,Math.min(4000,budget-500)),complete=message.text.length<=length;const content=message.text.slice(0,length);budget-=content.length+500;if(budget<0)break;if(complete)known.set(message.id,message.originRawInputId);rows.push({messageId:message.id,member,userText:content,complete,...(!complete?{nextAction:"用 dcode_team read_message 继续读取，再安排此成员"}:{})});}
+    return {text:`${text}\n\n<dcode_member_updates>\n以下是用户在成员对话中已经生效的直接要求。保留来源，核对与当前要求的关系，不用旧安排默默覆盖它们。\n${JSON.stringify(rows)}\n</dcode_member_updates>`,known};
+  }
+
+  private acknowledgeUserUpdate(run:ActiveRun|undefined,message:CollaborationMessage,store:ProductStore):void {
+    if(!run)return;run.knownUserUpdates??=new Map();run.knownUserUpdates.set(message.id,message.originRawInputId);
+    const previous=run.latestRawInputId??run.rawInputId;if(!previous||store.rawInputSequence(message.originRawInputId)>store.rawInputSequence(previous))run.latestRawInputId=message.originRawInputId;
+  }
+
+  private async queueSteering(input:Parameters<ProductStore["queueCollaborationMessage"]>[0],expectedSessionRunId?:string):Promise<{message:CollaborationMessage;queued:boolean}> {
+    const id=this.runtimeByDCodeSessionId.get((await (await this.getProductStore()).snapshot()).agentRuns.find(run=>run.id===input.targetAgentRunId)?.sessionId??"");
+    const runtime=id?this.runtimes.get(id):undefined,run=runtime?.currentRun;
+    if(!runtime||!run?.sessionRunId||run.state.phase!=="running"||!runtime.session.isStreaming||runtime.ui.hasPendingDialogs||expectedSessionRunId&&expectedSessionRunId!==run.sessionRunId)throw new PiHostError("SESSION_NOT_RUNNING","当前工作已结束或正在等待回答，输入内容已保留");
+    const expansion=await expandDCodeInput(input.text,runtime.session);if(expansion.command)throw new PiHostError("STEER_COMMAND_UNSUPPORTED","命令需要单独执行，请选择排到后面");
+    const store=await this.getProductStore();const managed=await Promise.all((input.attachmentIds??[]).map(id=>store.resolveAttachment(id)));
+    const projected=await this.coordinatorUpdates(runtime,attachmentPrompt(expansion.text,managed.map(item=>item.attachment),store.layout));
+    const effectiveText=projected.text;
+    input=this.acknowledgedCoordinatorInput(store,input);
+    const result=await store.queueCollaborationMessage({...input,deliveryMode:"steer",targetSessionRunId:run.sessionRunId});
+    const latest=store.collaborationMessages().find(message=>message.id===result.message.id)!;
+    if(latest.state!=="queued")return {message:latest,queued:false};
+    if(runtime.currentRun!==run||!runtime.session.isStreaming){const paused=await store.transitionCollaborationMessage({requestId:`late-steer:${latest.id}`,id:latest.id,expectedRevision:latest.revision,state:"paused",error:"前一轮已经结束，已保留为待发送消息"});this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:input.taskId});return {message:paused.message,queued:true};}
+    const delivered=await store.transitionCollaborationMessage({requestId:`steer-deliver:${latest.id}`,id:latest.id,expectedRevision:latest.revision,state:"delivering"});
+    run.steering??=new Map();const timestamp=Date.now();run.steering.set(latest.id,{message:delivered.message,effectiveText,inputSources:expansion.sources,knownUserUpdates:projected.known,timestamp});
+    if(runtime.currentRun!==run||!runtime.session.isStreaming){await store.transitionCollaborationMessage({requestId:`steer-ended:${latest.id}`,id:latest.id,expectedRevision:delivered.message.revision,state:"interrupted",error:"运行在接收补充前结束，未自动重发"});run.steering.delete(latest.id);return {message:store.collaborationMessages().find(message=>message.id===latest.id)!,queued:false};}
+    if(input.author==="coordinator"&&this.unacknowledgedMemberInput(store,delivered.message)){
+      await store.transitionCollaborationMessage({requestId:`stale-steer:${latest.id}`,id:latest.id,expectedRevision:delivered.message.revision,state:"interrupted",error:"成员收到更新的用户要求，当前补充未注入，请核对后重新交办"});run.steering.delete(latest.id);this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:input.taskId});return {message:store.collaborationMessages().find(message=>message.id===latest.id)!,queued:false};
+    }
+    runtime.session.agent.steer({role:"user",content:[{type:"text",text:effectiveText},...managed.filter(item=>item.data&&item.attachment.mimeType.startsWith("image/")).map(item=>({type:"image" as const,mimeType:item.attachment.mimeType,data:item.data!}))],timestamp,dcodeSteerId:latest.id} as AgentMessage);
+    this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:input.taskId});return {message:delivered.message,queued:false};
+  }
+
+  private acknowledgedCoordinatorInput(store:ProductStore,input:Parameters<ProductStore["queueCollaborationMessage"]>[0]):Parameters<ProductStore["queueCollaborationMessage"]>[0] {
+    if(input.author!=="coordinator")return input;
+    const id=this.runtimeByDCodeSessionId.get(input.sourceSessionId),source=id?this.runtimes.get(id):undefined;
+    const latest=store.latestAppliedUserMessage(input.targetAgentRunId);
+    return source?.promptEnvironment?.role==="coordinator"&&latest&&source.currentRun?.knownUserUpdates?.has(latest.id)?{...input,acknowledgedUserMessageId:latest.id}:input;
+  }
+
+  private unacknowledgedMemberInput(store:ProductStore,message:CollaborationMessage):CollaborationMessage|undefined {
+    const pending=store.collaborationMessages(message.taskId).find(item=>item.targetAgentRunId===message.targetAgentRunId&&item.author==="user"&&["queued","delivering"].includes(item.state)&&!store.isCollaborationMessageApplied(item.id));
+    const applied=store.latestAppliedUserMessage(message.targetAgentRunId);
+    return pending??(applied&&message.acknowledgedUserMessageId!==applied.id?applied:undefined);
+  }
+
+  private memberInputNotice(message:CollaborationMessage):string {
+    return `消息 ${message.id}（${message.state}）：\n${message.text.slice(0,8000)}${message.text.length>8000?"\n内容尚未完整显示，请用 dcode_team read_message 分段读取。":""}`;
+  }
+
+  private async enqueueCollaboration(input:Parameters<ProductStore["queueCollaborationMessage"]>[0]):Promise<Awaited<ReturnType<ProductStore["queueCollaborationMessage"]>>> {
+    const store=await this.getProductStore();
+    input=this.acknowledgedCoordinatorInput(store,input);
+    const result=await store.queueCollaborationMessage(input);
+    this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",storeRevision:result.storeRevision,taskId:input.taskId});
+    void this.drainCollaboration(result.message.targetSessionId);
+    return result;
+  }
+
+  private async drainCollaboration(sessionId:string):Promise<void> {
+    if(this.collaborationClosing||this.collaborationDrains.has(sessionId)) return;
+    const runtimeId=this.runtimeByDCodeSessionId.get(sessionId);
+    if(runtimeId&&(this.runtimes.get(runtimeId)?.currentRun||this.runtimes.get(runtimeId)?.closing)) return;
+    this.collaborationDrains.add(sessionId);
+    let delivered:CollaborationMessage|undefined;
+    let pending:CollaborationMessage|undefined;
+    try {
+      const store=await this.getProductStore();
+      const message=store.collaborationMessages().find(message=>message.targetSessionId===sessionId&&message.state==="queued"&&message.deliveryMode!=="steer");
+      if(!message){this.collaborationDrains.delete(sessionId);return;}
+      pending=message;
+      const snapshot=await store.snapshot();
+      const target=snapshot.agentRuns.find(run=>run.id===message.targetAgentRunId)!;
+      const task=snapshot.tasks.find(task=>task.id===message.taskId)!;
+      const newer=message.author==="coordinator"&&target.role!=="coordinator"?this.unacknowledgedMemberInput(store,message):undefined;
+      if(newer){
+        await store.transitionCollaborationMessage({requestId:`stale-input:${message.id}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"这条安排早于用户已生效的新要求，需由协调者核对后重新交办"});
+        const owner=snapshot.agentRuns.find(run=>run.taskId===task.id&&run.role==="coordinator");
+        if(owner)await this.enqueueCollaboration({requestId:`stale-awareness:${message.id}`,taskId:task.id,sourceSessionId:target.sessionId,targetAgentRunId:owner.id,author:"member",originRawInputId:newer.originRawInputId,text:`成员 ${target.id} 的旧安排 ${message.id} 已暂停。用户最新要求：\n${this.memberInputNotice(newer)}\n请核对后取消旧消息并交办更新内容，不要覆盖用户已生效的要求。`});
+        this.collaborationDrains.delete(sessionId);this.wakeCollaboration();this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id});return;
+      }
+      if(target.role!=="coordinator") {
+        const profile=target.profileSnapshot as {modelCandidates?:AgentModelCandidate[]};
+        const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===target.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
+        const candidates=this.memberModelCandidates(store,target.sessionId,packet?.resolvedModelCandidates??profile.modelCandidates??(target.modelProvider&&target.modelId?[{providerId:target.modelProvider,modelId:target.modelId}]:snapshot.runtimeModelSelection?[snapshot.runtimeModelSelection]:[]));
+        const decision=await chooseAgentModel({candidates,models:(await this.dcodeModelsView()).models,quotas:this.quotaService(),capabilities:message.attachmentIds?.some(id=>store.attachmentCatalog().find(item=>item.id===id)?.mimeType.startsWith("image/"))?["image"]:[]});
+        if(!decision.selected) {
+          await store.transitionCollaborationMessage({requestId:`quota-paused:${message.id}:${message.revision}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"没有额度明确高于 1% 的可用候选，请刷新额度后继续"});
+          this.collaborationDrains.delete(sessionId);
+          this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:message.taskId});
+          return;
+        }
+        await store.selectAgentModel({requestId:`message-model:${message.id}:${message.revision}:${createHash("sha256").update(JSON.stringify(decision)).digest("hex").slice(0,16)}`,agentRunId:target.id,decision});
+        target.modelProvider=decision.selected.providerId;target.modelId=decision.selected.modelId;
+      }
+      const selected=store.sessionModelSelection(target.sessionId);
+      if(target.role==="coordinator"&&selected){target.modelProvider=selected.providerId;target.modelId=selected.modelId;}
+      const targetRuntimeId=await this.openMemberRuntime(target,task);
+      if(target.role!=="coordinator"&&target.modelProvider&&target.modelId) await this.handleRuntimeRequest("session.setModel",{runtimeId:targetRuntimeId,provider:target.modelProvider,modelId:target.modelId});
+      delivered=(await store.transitionCollaborationMessage({requestId:`deliver:${message.id}`,id:message.id,expectedRevision:message.revision,state:"delivering"})).message;
+      await this.handleRuntimeRequest("session.prompt",{runtimeId:targetRuntimeId,promptId:`collab:${message.id}`,message:message.text,...(message.pathAction?{pathAction:message.pathAction}:{}),...(message.attachmentIds?.length?{attachmentIds:message.attachmentIds}:{})});
+    } catch(error) {
+      this.collaborationDrains.delete(sessionId);
+      if(delivered) await (await this.getProductStore()).transitionCollaborationMessage({requestId:`delivery-failed:${delivered.id}`,id:delivered.id,expectedRevision:delivered.revision,state:"failed",error:"成员未能接收消息，请查看运行结果"}).catch(()=>undefined);
+      const waiting=error instanceof PiHostError&&["WORKSPACE_IN_USE","RUNTIME_LIMIT_REACHED"].includes(error.code)?error.code==="WORKSPACE_IN_USE"?"workspace":"capacity":undefined;
+      if(!delivered&&pending&&waiting){await (await this.getProductStore()).waitCollaborationMessage(pending.id,pending.revision,waiting).catch(()=>undefined);this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:pending.taskId});}
+      else if(!delivered&&pending){await (await this.getProductStore()).transitionCollaborationMessage({requestId:`delivery-paused:${pending.id}:${pending.revision}`,id:pending.id,expectedRevision:pending.revision,state:"paused",error:errorRecord(error).message}).catch(()=>undefined);}
+      if(!waiting)this.options.emit("collaboration.failed",errorRecord(error));
+    }
+  }
+
+  private collaborationWakePending=false;
+  private wakeCollaboration():void {
+    if(this.collaborationClosing||this.collaborationWakePending||!this.productStore)return;
+    this.collaborationWakePending=true;
+    setImmediate(()=>{
+      this.collaborationWakePending=false;if(this.collaborationClosing)return;
+      const messages=this.productStore?.collaborationMessages().filter(message=>message.state==="queued")??[];
+      for(const sessionId of new Set(messages.map(message=>message.targetSessionId)))void this.drainCollaboration(sessionId);
+    });
+  }
+
+  private async afterPromptSettled(active:WritableSession,run:ActiveRun):Promise<void> {
+    if(run.persistenceFailed)return;
+    if(active.currentRun===run)active.currentRun=undefined;
+    const identity=active.runtimeIdentity;if(!identity)return;
+    try {
+      if(!active.closing&&!active.auxiliary?.hasLive&&this.directWorkerRuntimes.has(identity.runtimeId))await this.closeRuntime(identity.runtimeId);
+    }finally{
+      this.collaborationDrains.delete(identity.dcodeSessionId);
+      this.wakeCollaboration();
+    }
+  }
+
+
+  private async dcodeSessionPresentation(dcodeSessionIdValue: string,pathId?:string): Promise<unknown> {
     const dcodeSessionId = dcodeSessionIdValue.trim();
     const store = await this.getProductStore();
     const snapshot = await store.snapshot();
@@ -2323,22 +2751,34 @@ export class PiHost {
     if (!dcodeSession) {
       throw new PiHostError("DCODE_SESSION_NOT_FOUND", "D Code Session does not exist", { dcodeSessionId });
     }
-    const catalog=store.attachmentCatalog();
-    const submissions=(await store.importedSessionEntries(dcodeSessionId)).filter(entry=>entry.sourceKind === "native" && entry.messageRole === "user").flatMap(entry=>{
-      const content=entry.content as {text?:string;attachmentRefs?:ManagedAttachment[]};
-      const attachments=(content.attachmentRefs??[]).filter(item=>item.id?.startsWith("attachment-")).map(item=>catalog.find(current=>current.id===item.id)??item);
-      if(!attachments.length)return [];
-      const text=content.text??"";
-      return [{text,effectiveText:attachmentPrompt(text,attachments,store.layout),attachments}];
+    const binding = snapshot.sessionRuntimeBindings.find(candidate=>candidate.sessionId===dcodeSession.id);
+    const anchors=store.sessionAdapterAnchors(dcodeSessionId);
+    if(binding&&anchors.length){
+      const document=await this.reader.inspectDocument(binding.adapterSessionId);
+      const entries=new Map(document.entries.map(entry=>[entry.id,entry]));const links=[];
+      for(const anchor of anchors){let entry=entries.get(anchor.assistantSourceEntryId);let steps=0;while(entry&&steps++<10000){entry=entry.parentId?entries.get(entry.parentId):undefined;if(entry?.type==="message"&&(entry.message as {role?:string}).role==="user")break;}
+        if(entry?.type==="message"&&extractSearchableMessage(entry.message)?.body===anchor.effectiveText)links.push({userEntryId:anchor.userEntryId,sourceEntryId:entry.id});}
+      if(links.length)await store.linkSessionAdapterEntries(dcodeSessionId,links);
+    }
+    const nativePaths=snapshot.sessionPaths.filter(path=>path.sessionId===dcodeSessionId);
+    const selectedNativePath=nativePaths.find(path=>pathId?path.id===pathId:path.isCurrent);
+    if(!selectedNativePath)throw new PiHostError("SESSION_PATH_NOT_FOUND","对话路径不存在");
+    const nativeEntries=await store.sessionPathEntries(dcodeSessionId,selectedNativePath.id);
+    const pathPresentation={nativePaths,selectedNativePathId:selectedNativePath.id,nativeEntries};
+    const collaborationInputs=nativeEntries.flatMap(entry=>{
+      const content=entry.content as {collaborationMessageId?:string;author?:string};
+      return content.collaborationMessageId&&entry.sourceEntryId?[{sourceEntryId:entry.sourceEntryId,author:content.author,messageId:content.collaborationMessageId}]:[];
     });
-    const binding = snapshot.sessionRuntimeBindings.find((candidate) => candidate.sessionId === dcodeSession.id);
+    const submissions=store.sessionSubmittedInputs(dcodeSessionId,selectedNativePath.id);
     const active = [...this.runtimes.values()].find((candidate) => (
       candidate.runtimeIdentity?.dcodeSessionId === dcodeSession.id
     ));
     if (!binding) {
       return {
         dcodeSession,
+        ...pathPresentation,
         submissions,
+        collaborationInputs,
         binding: null,
         runtime: active?.runtimeIdentity
           ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
@@ -2350,19 +2790,23 @@ export class PiHost {
     try {
       return {
         dcodeSession,
+        ...pathPresentation,
         submissions,
+        collaborationInputs,
         binding,
         runtime: active?.runtimeIdentity
           ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
           : null,
         adapterState: "ready",
-        inspection: await this.reader.inspect(binding.adapterSessionId),
+        inspection: !selectedNativePath.isCurrent&&!selectedNativePath.sourceLeafEntryId?null:await this.reader.inspect(binding.adapterSessionId,selectedNativePath.isCurrent?undefined:selectedNativePath.sourceLeafEntryId??undefined),
       };
     } catch (error) {
       if (error instanceof SessionReadError) {
         return {
           dcodeSession,
+        ...pathPresentation,
         submissions,
+        collaborationInputs,
           binding,
           runtime: active?.runtimeIdentity
             ? { runtimeId: active.runtimeIdentity.runtimeId, state: this.runtimeState(active) }
@@ -2377,6 +2821,10 @@ export class PiHost {
 
   private async promptDCodeSession(input: {
     dcodeSessionId: string;
+    targetAgentRunId?: string;
+    deliveryMode?:"steer";
+    expectedSessionRunId?:string;
+    pathAction?:import("./product-store.js").NativeSessionPathAction;
     promptId: string;
     message: string;
     images?: PromptImageInput[];
@@ -2392,6 +2840,34 @@ export class PiHost {
       });
     }
     if(task.state==="archived")throw new PiHostError("TASK_ARCHIVED","请先恢复归档任务，再发送消息");
+    if(input.pathAction){
+      if(input.targetAgentRunId)throw new PiHostError("INVALID_PATH_ACTION","历史路径操作只能在消息所属会话中进行");
+      const runningId=this.runtimeByDCodeSessionId.get(dcodeSession.id);
+      if(runningId&&this.runtimes.get(runningId)?.currentRun || store.collaborationMessages(task.id).some(message=>message.targetSessionId===dcodeSession.id&&["queued","paused","delivering"].includes(message.state)))throw new PiHostError("SESSION_BUSY","请先结束当前运行并处理待发送消息，再从历史继续");
+    }
+    if(input.deliveryMode==="steer"){
+      if(input.pathAction)throw new PiHostError("INVALID_ARGUMENT","历史路径修改需要单独开始，不能作为即时补充");
+      const target=snapshot.agentRuns.find(run=>run.taskId===task.id&&(input.targetAgentRunId?run.id===input.targetAgentRunId:run.sessionId===dcodeSession.id));
+      if(!target)throw new PiHostError("MEMBER_NOT_FOUND","当前会话没有运行成员");
+      const result=await this.queueSteering({requestId:`user-steer:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:target.id,author:"user",text:input.message,attachmentIds:input.attachmentIds},input.expectedSessionRunId);
+      const coordinator=snapshot.agentRuns.find(run=>run.taskId===task.id&&run.role==="coordinator");
+      if(coordinator&&coordinator.id!==target.id)await this.enqueueCollaboration({requestId:`steer-awareness:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:coordinator.id,author:"coordinator",originRawInputId:result.message.originRawInputId,text:`用户正在向成员 ${target.id} 补充当前工作要求，请核对最新输入并同步安排：\n${this.memberInputNotice(result.message)}`});
+      return {accepted:true,...result};
+    }
+    if(input.targetAgentRunId || dcodeSession.kind==="child") {
+      const target=snapshot.agentRuns.find(run=>run.taskId===task.id && (input.targetAgentRunId?run.id===input.targetAgentRunId:run.sessionId===dcodeSession.id));
+      if(!target||target.role==="coordinator") throw new PiHostError("MEMBER_NOT_FOUND","请选择本任务已创建的成员");
+      const queued=await this.enqueueCollaboration({requestId:`user-directed:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:target.id,author:"user",text:input.message,attachmentIds:input.attachmentIds,...(input.pathAction?{pathAction:input.pathAction}:{})});
+      const coordinator=snapshot.agentRuns.filter(run=>run.taskId===task.id&&run.role==="coordinator").at(-1);
+      if(coordinator) await this.enqueueCollaboration({requestId:`directed-awareness:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:coordinator.id,author:"coordinator",originRawInputId:queued.message.originRawInputId,text:`用户正在向成员 ${target.id} 定向补充要求，请同步调整安排，不重复执行该成员的工作：\n${this.memberInputNotice(queued.message)}`});
+      return {accepted:true,queued:true,message:queued.message};
+    }
+    const busyId=this.runtimeByDCodeSessionId.get(dcodeSession.id);
+    const busyRuntime=busyId?this.runtimes.get(busyId):undefined;
+    if((busyRuntime?.currentRun||busyRuntime?.closing||this.collaborationDrains.has(dcodeSession.id))&&busyRuntime?.runtimeIdentity?.agentRunId) {
+      const queued=await this.enqueueCollaboration({requestId:`user-queued:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:busyRuntime.runtimeIdentity.agentRunId,author:"user",text:input.message,attachmentIds:input.attachmentIds});
+      return {accepted:true,queued:true,message:queued.message};
+    }
     let runtimeId = this.runtimeByDCodeSessionId.get(dcodeSession.id);
     let existingRuntime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
     let agentRunId = existingRuntime?.runtimeIdentity?.agentRunId;
@@ -2402,14 +2878,11 @@ export class PiHost {
       runtimeId && existingRuntime && dcodeSession.kind === "coordination"
       && previousAgent && ["aborted", "failed", "interrupted", "unknown"].includes(previousAgent.status)
     ) {
-      const activeTeam = snapshot.teamRuns.some((team) => (
-        team.coordinatorAgentRunId === previousAgent.id && ["prepared", "active", "waiting"].includes(team.status)
-      ));
-      if (existingRuntime.currentRun || activeTeam) {
+      if (existingRuntime.currentRun) {
         throw new PiHostError("DCODE_SESSION_SETTLING", "The previous Coordinator run is still settling; retry after it finishes");
       }
-      // A stopped/failed Agent Run remains terminal evidence. A new explicit
-      // prompt starts a fresh owner after closing only the settled Runtime.
+      // Keep the task's coordinator identity. Only the execution process and
+      // new Session Run change; prior run results remain durable evidence.
       if (existingRuntime.session.model) {
         settledModel = { provider: existingRuntime.session.model.provider, modelId: existingRuntime.session.model.id };
       }
@@ -2472,10 +2945,13 @@ export class PiHost {
     }
     if (settledModel) await this.handleRuntimeRequest("session.setModel", { runtimeId, ...settledModel });
     if (settledThinking) await this.handleRuntimeRequest("session.setThinking", { runtimeId, level: settledThinking });
+    const coordinatorRuntime=this.runtimes.get(runtimeId);
+    if(coordinatorRuntime)await this.prepareCoordinatorDirectWork(coordinatorRuntime);
     const result = await this.handleRuntimeRequest("session.prompt", {
       runtimeId,
       promptId: input.promptId,
       message: input.message,
+      ...(input.pathAction?{pathAction:input.pathAction}:{}),
       ...(input.attachmentIds?.length ? {attachmentIds:input.attachmentIds} : {}),
       ...(input.images ? { images: input.images } : {}),
     });
@@ -2591,282 +3067,31 @@ export class PiHost {
     }
   }
 
-  private async startTeamRun(params: Record<string, unknown>): Promise<unknown> {
-    const taskId = params.taskId as string;
-    const teamRunId = params.teamRunId as string;
-    const requestId = params.requestId as string;
-    const key = `${taskId}\0${teamRunId}`;
-    const fingerprint = teamStartFingerprint(params);
-    const existing = this.teamStartFlights.get(key);
-    if (existing) {
-      if (existing.requestId !== requestId) {
-        throw new PiHostError(
-          "TEAM_START_IN_PROGRESS",
-          "Another Team start request is still provisioning this Team; D Code did not merge their inputs",
-          { taskId, teamRunId },
-        );
-      }
-      if (existing.fingerprint !== fingerprint) {
-        throw new PiHostError(
-          "IDEMPOTENCY_KEY_REUSED",
-          "The same Team start requestId was reused with different parameters",
-          { taskId, teamRunId, requestId },
-        );
-      }
-      return await existing.promise;
-    }
-    const promise = this.startTeamRunOnce(params);
-    const flight: TeamStartFlight = { requestId, fingerprint, promise };
-    this.teamStartFlights.set(key, flight);
-    try {
-      return await promise;
-    } finally {
-      if (this.teamStartFlights.get(key) === flight) this.teamStartFlights.delete(key);
-    }
-  }
 
-  private async startTeamRunOnce(params: Record<string, unknown>): Promise<unknown> {
-    const taskId = params.taskId as string;
-    const teamRunId = params.teamRunId as string;
-    const message = params.message as string;
-    const store = await this.getProductStore();
-    const claimed = await store.claimTeamRunStart({
-      requestId: params.requestId as string,
-      expectedStoreRevision: params.expectedStoreRevision as number,
-      expectedTeamRunRevision: params.expectedTeamRunRevision as number,
-      scope: params.scope as TaskScope,
-      taskId,
-      teamRunId,
-    });
-    this.options.emit("foundation.changed", {
-      storeRevision: claimed.storeRevision,
-      kind: "teamRun.startClaimed",
-      entityKind: "teamRun",
-      entityId: teamRunId,
-      taskId,
-    });
-    const snapshot = await store.snapshot();
-    const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
-    const teamRun = snapshot.teamRuns.find((candidate) => candidate.id === teamRunId && candidate.taskId === taskId);
-    if (!task || !teamRun) {
-      throw new PiHostError("TEAM_RUN_NOT_ACTIVE", "Team Run is missing", { taskId, teamRunId });
-    }
-    if (JSON.stringify(task.scope) !== JSON.stringify(params.scope)) {
-      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task Scope does not match the stored Task");
-    }
-    const agentRuns = snapshot.agentRuns.filter((candidate) => (
-      candidate.teamRunId === teamRunId || candidate.id === teamRun.coordinatorAgentRunId
-    ));
-    const taskContextSet = snapshot.taskContextSets.find((candidate) => candidate.taskId === taskId);
-    if (agentRuns.length < 2) {
-      throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run requires a Coordinator and at least one member");
-    }
-    if (!taskContextSet) {
-      throw new PiHostError("RUNTIME_IDENTITY_MISMATCH", "Team Run Task has no durable Context Selection set");
-    }
-    const runtimeDescriptors = agentRuns.map((agentRun) => ({
-      runtimeId: this.runtimeByDCodeSessionId.get(agentRun.sessionId) ?? `runtime-${agentRun.id}`,
-      agentRunId: agentRun.id,
-      sessionId: agentRun.sessionId,
-    }));
-    if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(teamRun.status)) {
-      const agentRunIds = new Set(agentRuns.map((agentRun) => agentRun.id));
-      const started = snapshot.sessionRuns.some((run) => run.agentRunId && agentRunIds.has(run.agentRunId));
-      return {
-        taskId,
-        teamRunId,
-        runtimes: runtimeDescriptors,
-        coordinatorManaged: true,
-        started,
-        terminalStatus: teamRun.status,
-        replayed: true,
-      };
-    }
-    if (this.teamLifecycles.has(teamRunId)) {
-      return { taskId, teamRunId, runtimes: runtimeDescriptors, coordinatorManaged: true, started: true, replayed: true };
-    }
-    let managedWorkerWorktrees: Map<string, ManagedWorkerWorktreeRecord>;
-    try {
-      managedWorkerWorktrees = await this.provisionTeamWorkerWorktrees({
-        store,
-        task,
-        teamRunId,
-        agentRuns,
-        expectedStoreRevision: claimed.storeRevision,
-        requestId: params.requestId as string,
-        projects: snapshot.projects,
-        taskContextSources: taskContextSet.sources,
-      });
-    } catch (error) {
-      const reasonCode = error instanceof PiHostError ? error.code : "WORKSPACE_WORKTREE_CREATE_UNKNOWN";
-      await this.finishTeamRunDurably({
-        requestId: `team-start-failed:${teamRunId}:${reasonCode}`,
-        taskId,
-        teamRunId,
-        status: "failed",
-        reason: error instanceof Error ? error.message : "Worker worktree provisioning failed before Runtime start",
-        reasonCode,
-      });
-      return {
-        taskId,
-        teamRunId,
-        runtimes: runtimeDescriptors,
-        coordinatorManaged: true,
-        started: false,
-        terminalStatus: "failed",
-        reasonCode,
-      };
-    }
-    const sourceWorkspace = {
-      workspaceId: `source:${task.id}`,
-      cwd: task.cwd,
-      access: "sharedReadOnly" as const,
-    };
-    const settlements = await Promise.allSettled(agentRuns.map(async (agentRun) => {
-      const existingRuntimeId = this.runtimeByDCodeSessionId.get(agentRun.sessionId);
-      const existingRuntime = existingRuntimeId ? this.runtimes.get(existingRuntimeId) : undefined;
-      if (existingRuntime && existingRuntimeId) {
-        if (
-          agentRun.id !== teamRun.coordinatorAgentRunId
-          || existingRuntime.runtimeIdentity?.agentRunId !== agentRun.id
-        ) {
-          throw new PiHostError(
-            "SESSION_ALREADY_ACTIVE",
-            "An active D Code Session Runtime does not belong to this Team Coordinator Agent Run",
-            {
-              dcodeSessionId: agentRun.sessionId,
-              runtimeId: existingRuntimeId,
-              agentRunId: agentRun.id,
-            },
-          );
-        }
-        return { agentRun, runtimeId: existingRuntimeId, result: { reused: true } };
-      }
-      const runtimeId = `runtime-${agentRun.id}`;
-      const workerWorktree = managedWorkerWorktrees.get(agentRun.id);
-      const runtimeWorkspace = workerWorktree
-        ? {
-          workspaceId: workerWorktree.workspaceId,
-          cwd: workerWorktree.workspaceCwd,
-          access: "exclusiveWrite" as const,
-        }
-        : {
-          workspaceId: `${sourceWorkspace.workspaceId}:${agentRun.id}`,
-          cwd: sourceWorkspace.cwd,
-          access: sourceWorkspace.access,
-        };
-      const result = await this.runtimeContext.run(runtimeId, async () => await this.startDCodeRuntime({
-        requestId: `${params.requestId as string}:${agentRun.id}`,
-        runtimeId,
-        taskId,
-        dcodeSessionId: agentRun.sessionId,
-        agentRunId: agentRun.id,
-        scope: task.scope,
-        workspace: runtimeWorkspace,
-      }));
-      return { agentRun, runtimeId, result };
-    }));
-    const started = settlements.flatMap((settlement) => settlement.status === "fulfilled" ? [settlement.value] : []);
-    const failedStart = settlements.find((settlement) => settlement.status === "rejected");
-    if (failedStart?.status === "rejected") {
-      await Promise.all(started.map(async ({ runtimeId }) => await this.closeRuntime(runtimeId)));
-      await this.finishTeamRunDurably({
-        requestId: `team-start-failed:${teamRunId}:partial-runtime-open`,
-        taskId,
-        teamRunId,
-        status: "failed",
-        reason: "One or more Team Runtimes could not be opened safely",
-      });
-      return {
-        taskId,
-        teamRunId,
-        runtimes: runtimeDescriptors,
-        coordinatorManaged: true,
-        started: false,
-        terminalStatus: "failed",
-        reasonCode: errorRecord(failedStart.reason).code,
-      };
-    }
-    const assignments = snapshot.agentAssignments.filter((candidate) => candidate.teamRunId === teamRunId);
-    const rawLifecycle = this.runCoordinatedTeamLifecycle({
-      taskId,
-      teamRunId,
-      message,
-      coordinatorAgentRunId: teamRun.coordinatorAgentRunId,
-      started,
-      assignments,
-    });
-    const lifecycle = rawLifecycle.catch(async (error) => {
-      await this.finishTeamRunDurably({
-        requestId: `team-lifecycle-failed:${teamRunId}`,
-        taskId,
-        teamRunId,
-        status: "failed",
-        reason: "Coordinator lifecycle failed before durable completion",
-      }).catch(() => undefined);
-      throw error;
-    }).finally(async () => {
-      await Promise.all(started.map(async ({ runtimeId }) => await this.closeRuntime(runtimeId)));
-    });
-    this.teamLifecycles.set(teamRunId, lifecycle);
-    void lifecycle.catch((error) => {
-      this.options.emit("team.lifecycleFailed", {
-        taskId,
-        teamRunId,
-        ...errorRecord(error),
-      });
-    }).finally(() => {
-      if (this.teamLifecycles.get(teamRunId) === lifecycle) this.teamLifecycles.delete(teamRunId);
-    });
-    return {
-      taskId,
-      teamRunId,
-      runtimes: runtimeDescriptors,
-      coordinatorManaged: true,
-      started: true,
-      claimStoreRevision: claimed.storeRevision,
-    };
-  }
 
   private async closeRuntime(runtimeId: string): Promise<void> {
     await this.runtimeContext.run(runtimeId, async () => { await this.closeActive(); });
   }
 
-  private async finishTeamRunDurably(input: {
-    requestId: string;
-    taskId: string;
-    teamRunId: string;
-    status: "failed" | "aborted";
-    reason: string;
-    reasonCode?: string;
-  }): Promise<void> {
-    const result = await (await this.getProductStore()).finishTeamRun(input);
-    this.options.emit("foundation.changed", {
-      storeRevision: result.storeRevision,
-      kind: `teamRun.${result.teamRun.status}`,
-      entityKind: "teamRun",
-      entityId: result.teamRun.id,
-      taskId: result.teamRun.taskId,
-    });
-  }
 
   private async provisionTeamWorkerWorktrees(input: {
     store: ProductStore;
     task: TaskRecord;
     teamRunId: string;
     agentRuns: AgentRunRecord[];
-    expectedStoreRevision: number;
+    expectedStoreRevision?: number;
     requestId: string;
     projects: Array<{ id: string; directory: string }>;
     taskContextSources: TaskContextSourceRecord[];
   }): Promise<Map<string, ManagedWorkerWorktreeRecord>> {
-    const workers = input.agentRuns.filter((agentRun) => agentRun.role === "worker");
+    const workspaceSnapshot=await input.store.snapshot();
+    const workers = input.agentRuns.filter((agentRun) => agentRun.role === "worker" && !this.isDirectWorker(workspaceSnapshot,agentRun));
     if (workers.length === 0) return new Map();
     const scope = input.task.scope;
     if (scope.kind !== "project") {
       throw new PiHostError(
         "WORKSPACE_PROJECT_SCOPE_REQUIRED",
-        "Worker requires a Project Scope with a Git repository; User Scope remains read-only in this release",
+        "Managed worktrees require a Git Project; ordinary directories use the task-directory worker policy",
       );
     }
     const project = input.projects.find((candidate) => candidate.id === scope.projectId);
@@ -3018,107 +3243,8 @@ export class PiHost {
     return ready;
   }
 
-  private async runCoordinatedTeamLifecycle(input: {
-    taskId: string;
-    teamRunId: string;
-    message: string;
-    coordinatorAgentRunId: string;
-    started: Array<{ agentRun: { id: string; sessionId: string }; runtimeId: string; result: unknown }>;
-    assignments: Array<{ agentRunId?: string; taskPacket: unknown }>;
-  }): Promise<void> {
-    const coordinator = input.started.find(({ agentRun }) => agentRun.id === input.coordinatorAgentRunId);
-    if (!coordinator) throw new PiHostError("TEAM_RUN_INCOMPLETE", "Team Run has no Coordinator Runtime");
-    const members = input.started.filter(({ agentRun }) => agentRun.id !== input.coordinatorAgentRunId);
-    await this.handleRuntimeRequest("session.prompt", {
-      runtimeId: coordinator.runtimeId,
-      message: `${input.message}\n\n第一阶段：先理解目标、边界和成员职责，形成协调计划；不要假装成员已经完成。`,
-      promptId: `team:${input.teamRunId}:coordinator-plan`,
-    });
-    const planningStatus = await this.waitForAgentRunTerminal(input.coordinatorAgentRunId);
-    if (planningStatus !== "completed") {
-      await this.finishTeamRunDurably({
-        requestId: `team-lifecycle-terminal:${input.teamRunId}:planning`,
-        taskId: input.taskId,
-        teamRunId: input.teamRunId,
-        status: planningStatus === "aborted" ? "aborted" : "failed",
-        reason: `Coordinator planning ended as ${planningStatus}`,
-      });
-      return;
-    }
 
-    await Promise.all(members.map(async ({ agentRun, runtimeId }) => {
-      const assignment = input.assignments.find((candidate) => candidate.agentRunId === agentRun.id);
-      await this.handleRuntimeRequest("session.prompt", {
-        runtimeId,
-        message: `执行 D Code Agent Assignment（智能体指派）：\n${JSON.stringify(assignment?.taskPacket ?? {})}`,
-        promptId: `team:${input.teamRunId}:${agentRun.id}:work`,
-      });
-    }));
-    await Promise.all(members.map(async ({ agentRun }) => await this.waitForAgentRunTerminal(agentRun.id)));
 
-    const memberIds = new Set(members.map(({ agentRun }) => agentRun.id));
-    const snapshot = await (await this.getProductStore()).snapshot();
-    const reports = snapshot.agentReports
-      .filter((report) => memberIds.has(report.agentRunId))
-      .map((report) => ({
-        agentRunId: report.agentRunId,
-        reportKind: report.reportKind,
-        body: report.body,
-      }));
-    await this.handleRuntimeRequest("session.prompt", {
-      runtimeId: coordinator.runtimeId,
-      message: [
-        "第二阶段：下面是已经持久化的 Child Agent Reports（子代理报告）。",
-        "只综合报告中真实存在的事实、分歧、未知与证据；不要把成员完成自动等同于 Task 验收。",
-        JSON.stringify(reports),
-      ].join("\n"),
-      promptId: `team:${input.teamRunId}:coordinator-synthesis`,
-    });
-    const synthesisStatus = await this.waitForAgentRunTerminal(input.coordinatorAgentRunId);
-    if (synthesisStatus !== "completed") {
-      await this.finishTeamRunDurably({
-        requestId: `team-lifecycle-terminal:${input.teamRunId}:synthesis`,
-        taskId: input.taskId,
-        teamRunId: input.teamRunId,
-        status: synthesisStatus === "aborted" ? "aborted" : "failed",
-        reason: `Coordinator synthesis ended as ${synthesisStatus}`,
-      });
-      return;
-    }
-    await this.waitForTeamTerminal(input.teamRunId);
-    this.options.emit("foundation.changed", {
-      kind: "teamRun.coordinatorSynthesized",
-      entityKind: "teamRun",
-      entityId: input.teamRunId,
-      taskId: input.taskId,
-    });
-  }
-
-  private async waitForAgentRunTerminal(agentRunId: string, timeoutMs = 120_000): Promise<string> {
-    const deadline = Date.now() + timeoutMs;
-    while (true) {
-      const snapshot = await (await this.getProductStore()).snapshot();
-      const status = snapshot.agentRuns.find((run) => run.id === agentRunId)?.status;
-      if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(status ?? "")) return status!;
-      if (Date.now() >= deadline) {
-        throw new PiHostError("TEAM_RUN_TIMEOUT", "Timed out while waiting for an Agent Run", { agentRunId, status });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-
-  private async waitForTeamTerminal(teamRunId: string, timeoutMs = 120_000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (true) {
-      const snapshot = await (await this.getProductStore()).snapshot();
-      const status = snapshot.teamRuns.find((run) => run.id === teamRunId)?.status;
-      if (["completed", "failed", "aborted", "interrupted", "unknown"].includes(status ?? "")) return;
-      if (Date.now() >= deadline) {
-        throw new PiHostError("TEAM_RUN_TIMEOUT", "Timed out while waiting for Coordinator synthesis", { teamRunId, status });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
 
   private async createSession(cwd: string): Promise<unknown> {
     this.assertWriteHealthy();
@@ -3131,7 +3257,8 @@ export class PiHost {
         cause: error instanceof Error ? error.message : String(error),
       });
     }
-    const sessionDir = join(this.sessionsDirectory, sessionDirectoryName(canonicalCwd));
+    const baseDirectory=this.runtimeContext.getStore()?join((await this.getProductStore()).layout.runtimeDirectory,"pi-sessions"):this.sessionsDirectory;
+    const sessionDir = join(baseDirectory, sessionDirectoryName(canonicalCwd));
     const draft = SessionManager.create(canonicalCwd, sessionDir);
     const sessionPath = draft.getSessionFile();
     if (!sessionPath) throw new PiHostError("SESSION_CREATE_FAILED", "Pi did not allocate a session path");
@@ -3168,7 +3295,7 @@ export class PiHost {
     };
   }
 
-  private async copySession(sessionId: string, targetCwd: string): Promise<unknown> {
+  private async copySession(sessionId: string, targetCwd: string,productOwned=false): Promise<unknown> {
     this.assertWriteHealthy();
     const current = this.active;
     let source: SessionSummary;
@@ -3219,7 +3346,8 @@ export class PiHost {
           await lease.assertUnchanged();
         };
       }
-      const result = await this.sessionCopier.copy({ source, targetCwd, assertSourceStable });
+      const copier=productOwned?new SessionCopier(join((await this.getProductStore()).layout.runtimeDirectory,"pi-sessions")):this.sessionCopier;
+      const result = await copier.copy({ source, targetCwd, assertSourceStable, sanitizeCredentials:productOwned });
       this.searchIndex.invalidate();
       return result;
     } finally {
@@ -3714,6 +3842,7 @@ export class PiHost {
     }
 
     let session: AgentSession | undefined;
+    let auxiliary:AuxiliaryProcesses|undefined;
     let ui: ExtensionUIBridge | undefined;
     let unsubscribe: (() => void) | undefined;
     let conflictTimer: ReturnType<typeof setInterval> | undefined;
@@ -3778,6 +3907,10 @@ export class PiHost {
               factory: createDCodeOperationAttemptExtension(attemptController),
             }]
             : []),
+          ...(runtimeIdentity && ["coordinator","verifier"].includes(promptContext?.environment.role??"")
+            ? [{name:"dcode-verification",hidden:true,factory:createVerificationExtension(promptContext!.environment.role,(callId,action)=>this.handleVerification(runtimeIdentity,callId,action))}] : []),
+          ...(runtimeIdentity && promptContext?.environment.role === "coordinator"
+            ? [{name:"dcode-collaboration",hidden:true,factory:createCollaborationExtension((callId,action)=>this.coordinateTeam(runtimeIdentity,callId,action))}] : []),
           ...(agentRequestController
             ? [{
               name: "dcode-agent-request",
@@ -3792,14 +3925,13 @@ export class PiHost {
         ...(runtimeIdentity ? { allowExternalExtensions: false, disabledResources: () => new Set(this.productStore?.clientPreferences().disabledResources ?? []) } : {}),
       });
       await resourceLoader.reload();
-      const created = await createAgentSession({
-        ...(runtimeIdentity ? {modelRuntime:await ModelRuntime.create({authPath:join(this.agentDir,"auth.json"),modelsPath:join(this.agentDir,"models.json"),modelsStorePath:join((await this.getProductStore()).layout.root,"models-cache.json"),allowModelNetwork:false})} : {}),
+      const sessionOptions = {
         cwd: manager.getCwd(),
         agentDir: this.agentDir,
         sessionManager: manager,
         settingsManager: sourceSettingsManager,
         resourceLoader,
-        ...(promptContext && new Set(["coordinator", "explore", "verifier", "custom"]).has(promptContext.environment.role)
+        ...(promptContext && new Set(["explore", "verifier", "custom"]).has(promptContext.environment.role)
           ? {
             tools: [
               "read",
@@ -3808,13 +3940,46 @@ export class PiHost {
               "ls",
               "dcode_facts",
               DCODE_AGENT_REQUEST_TOOL_NAME,
-              ...(promptContext.environment.role === "coordinator" ? [DCODE_TASK_ACCEPTANCE_TOOL_NAME] : []),
+              ...(["coordinator","verifier"].includes(promptContext.environment.role)?[DCODE_VERIFICATION_TOOL_NAME]:[]),
+              ...(promptContext.environment.role === "coordinator" ? [DCODE_TASK_ACCEPTANCE_TOOL_NAME, DCODE_TEAM_TOOL_NAME] : []),
             ],
           }
           : {}),
         sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: inspection.summary.path },
-      });
+      } satisfies CreateAgentSessionOptions;
+      if(runtimeIdentity?.agentRunId){
+        const sourceRuns=new Map<string,string>();
+        auxiliary=new AuxiliaryProcesses(async(processInfo)=>{
+          const store=await this.getProductStore();let sourceRun=sourceRuns.get(processInfo.id);
+          if(!sourceRun){sourceRun=activeForFacts?.currentRun?.sessionRunId;if(!sourceRun)throw new PiHostError("RUN_REQUIRED","辅助进程缺少所属运行");sourceRuns.set(processInfo.id,sourceRun);}
+          const result=await store.recordAuxiliaryProcess({requestId:`auxiliary:${randomUUID()}`,taskId:runtimeIdentity.taskId,agentRunId:runtimeIdentity.agentRunId!,runtimeId:runtimeIdentity.runtimeId,sessionRunId:sourceRun,process:processInfo});
+          this.options.emit("foundation.changed",{kind:"auxiliaryProcess.changed",taskId:runtimeIdentity.taskId,storeRevision:result.storeRevision});
+          if(processInfo.status==="exited"){sourceRuns.delete(processInfo.id);setImmediate(()=>{const active=activeForFacts;if(active&&!active.closing&&!active.currentRun&&!active.auxiliary?.hasLive){
+            if(this.directWorkerRuntimes.has(runtimeIdentity.runtimeId))void this.closeRuntime(runtimeIdentity.runtimeId).catch(error=>this.options.emit("collaboration.failed",errorRecord(error)));
+            else if(active.promptEnvironment?.role==="coordinator")void this.setCoordinatorAccess(active,"sharedReadOnly").catch(error=>this.options.emit("collaboration.failed",errorRecord(error)));
+          }this.wakeCollaboration();});}
+        });
+      }
+      const created = runtimeIdentity
+        ? await createProcessAgentSession({
+          ...sessionOptions,
+          modelRuntime: await ModelRuntime.create({ authPath: join(this.agentDir, "auth.json"), modelsPath: join(this.agentDir, "models.json"), modelsStorePath: join((await this.getProductStore()).layout.root, "models-cache.json"), allowModelNetwork: false }),
+          providerControl:this.providerRouteControl(runtimeIdentity,()=>activeForFacts),
+          ...(auxiliary?{baseToolsOverride:{bash:auxiliary.tool(manager.getCwd())}}:{}),
+          processOptions: {
+            idleTimeoutMs: this.options.agentIdleTimeoutMs,
+            onProcessChanged: async (processInfo) => {
+              if(runtimeIdentity.agentRunId) {
+                const recorded=await (await this.getProductStore()).recordAgentProcess({requestId:`process:${randomUUID()}`,runtimeId:runtimeIdentity.runtimeId,taskId:runtimeIdentity.taskId,agentRunId:runtimeIdentity.agentRunId,process:processInfo});
+                this.options.emit("foundation.changed",{storeRevision:recorded.storeRevision,kind:"agentProcess.changed",taskId:runtimeIdentity.taskId});
+              }
+              this.options.emit("runtime.processChanged", {runtimeId:runtimeIdentity.runtimeId,taskId:runtimeIdentity.taskId,agentRunId:runtimeIdentity.agentRunId,process:processInfo});
+            },
+          },
+        })
+        : await createAgentSession(sessionOptions);
       session = created.session;
+      if(promptContext?.environment.role==="coordinator" && runtimeIdentity?.workspace.access==="sharedReadOnly") session.setActiveToolsByName(session.getAllTools().filter(tool=>SHARED_READ_ONLY_TOOL_NAMES.has(tool.name)).map(tool=>tool.name));
       if (promptContext) {
         await registerCatalogProviders(session.modelRuntime, await (await this.getProductStore()).snapshot());
         const selectedModel = session.modelRuntime.getAvailableSnapshot().find((candidate) => (
@@ -3920,6 +4085,7 @@ export class PiHost {
         activeProposal: inspection.activeProposal,
         fastMode,
         closing: false,
+        ...(auxiliary?{auxiliary}:{}),
         ...(runtimeIdentity ? { runtimeIdentity } : {}),
         runtimeEventSequence: 0,
         seenPromptIds: new Map(),
@@ -4124,7 +4290,7 @@ export class PiHost {
           this.shutdownRequested = true;
           this.options.emit("host.shutdownRequested", { source: "extension" });
         },
-        onError: (error) => this.options.emit("extension.error", error),
+        onError: (error) => {if(active.currentRun&&error.event==="command")active.currentRun.commandFailed=true;this.emitRuntimeEvent(active,"extension.error",error);},
       });
       await this.synchronizeOwnedSnapshot(active);
       if (active.conflict) throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
@@ -4168,6 +4334,7 @@ export class PiHost {
       if (conflictTimer) clearInterval(conflictTimer);
       unsubscribe?.();
       ui?.cancelAll("Session open failed");
+      await auxiliary?.dispose();
       session?.dispose();
       attemptController?.dispose();
       agentRequestController?.dispose();
@@ -4190,10 +4357,15 @@ export class PiHost {
   private async closeActive(): Promise<void> {
     const active = this.active;
     if (!active) return;
+    active.closePromise??=this.disposeActiveRuntime(active);
+    await active.closePromise;
+  }
+
+  private async disposeActiveRuntime(active:WritableSession):Promise<void> {
     this.closingWorkspaces.set(active,active.inspection.summary.cwd);
-    this.active = undefined;
     clearInterval(active.conflictTimer);
     active.closing = true;
+    if(active.currentRun)active.currentRun.outcome??="aborted";
     active.ui.cancelAll("Session closing");
     let safeToRelease = true;
     try {
@@ -4215,12 +4387,17 @@ export class PiHost {
         const leaseSettled = await this.cleanupStep(active, "lease synchronization", active.leaseSync, 2_000);
         safeToRelease = abortSettled && shutdownSettled && leaseSettled;
       }
+      const persistenceSettled=active.currentRun?.completion?await this.cleanupStep(active,"run persistence",active.currentRun.completion,5000):true;
+      safeToRelease=safeToRelease&&persistenceSettled&&!active.currentRun?.persistenceFailed;
     } finally {
+      await active.auxiliary?.dispose();
       active.unsubscribe();
       active.session.dispose();
+      if (active.session.agent instanceof ProcessAgent) await active.session.agent.disposeProcess();
       active.fastMode.dispose();
       active.attemptController?.dispose();
       active.agentRequestController?.dispose();
+      safeToRelease=safeToRelease&&!active.currentRun?.persistenceFailed;
       if (safeToRelease) {
         try {
           await active.lease.release();
@@ -4229,9 +4406,10 @@ export class PiHost {
           this.options.emit("session.cleanupError", { step: "lease release", ...errorRecord(error) });
         }
       }
-      if (!safeToRelease) this.poisonWrites(active, "The previous runtime did not stop cleanly");
+      if (!safeToRelease) this.poisonWrites(active, active.currentRun?.persistenceFailed?"本轮结果尚未保存，重新连接后需核对执行记录":"The previous runtime did not stop cleanly");
       this.emitRuntimeEvent(active, "session.closed", { mode: "writable", sessionId: active.inspection.summary.id });
     }
+    if(safeToRelease&&this.active===active)this.active=undefined;
     if(safeToRelease)this.closingWorkspaces.delete(active);
   }
 
@@ -4314,6 +4492,8 @@ export class PiHost {
     const manager = active.session.sessionManager;
     const target = manager.getEntry(action.entryId);
     if (!target) {
+      const native=active.runtimeIdentity&&action.fromPathId?(await (await this.getProductStore()).sessionPathEntries(active.runtimeIdentity.dcodeSessionId,action.fromPathId)).find(entry=>entry.sourceEntryId===action.entryId&&entry.sourceKind==="pi_import"):undefined;
+      if(native){const oldLeaf=manager.getLeafId();await this.withOwnedMutation(active,async()=>{manager.resetLeaf();active.session.agent.state.messages=manager.buildSessionContext().messages;await active.session.extensionRunner.emit({type:"session_tree",newLeafId:manager.getLeafId(),oldLeafId:oldLeaf});});await this.refreshWritablePathSnapshot(active);return oldLeaf;}
       throw new PiHostError("SESSION_PATH_NOT_FOUND", `Session path entry not found: ${action.entryId}`);
     }
     if (action.kind === "editUser" && (
@@ -4369,9 +4549,8 @@ export class PiHost {
     const active = call.active;
     const manager = active.session.sessionManager;
     const oldLeafId = manager.getLeafId();
-    if (oldLeafId === rollbackLeafId) return;
     try {
-      await this.withOwnedMutation(active, async () => {
+      if(oldLeafId!==rollbackLeafId)await this.withOwnedMutation(active, async () => {
         if (rollbackLeafId === null) manager.resetLeaf();
         else manager.branch(rollbackLeafId);
         active.session.agent.state.messages = manager.buildSessionContext().messages;
@@ -4381,6 +4560,7 @@ export class PiHost {
           oldLeafId,
         });
       });
+      if(call.nativePath&&active.runtimeIdentity){await (await this.getProductStore()).restoreNativeSessionPath(active.runtimeIdentity.dcodeSessionId,call.nativePath.id,call.nativePath.previousId);call.nativePath=undefined;}
       await this.refreshWritablePathSnapshot(active);
     } catch (error) {
       this.markConflict(active, new PiHostError(
@@ -4401,7 +4581,7 @@ export class PiHost {
     const attachmentStore=attachmentIds?.length?await this.getProductStore():undefined;
     const managed = attachmentStore?await Promise.all((attachmentIds??[]).map(id=>attachmentStore.resolveAttachment(id))):[];
     const rawMessage=message;
-    const effectiveMessage=attachmentStore?attachmentPrompt(message,managed.map(item=>item.attachment),attachmentStore.layout):message;
+    let effectiveMessage=attachmentStore?attachmentPrompt(message,managed.map(item=>item.attachment),attachmentStore.layout):message;
     images=[...(images??[]),...managed.filter(item=>item.data).map(item=>({type:"image" as const,mimeType:item.attachment.mimeType,data:item.data!}))];
     if(images.length>8||images.reduce((sum,item)=>sum+item.data.length,0)>12_000_000)throw new PiHostError("ATTACHMENT_LIMIT","图片附件超过本次提交上限，请减少后重试。");
     if (pathAction && message.trim().length === 0) {
@@ -4425,21 +4605,25 @@ export class PiHost {
     await this.beforeMutation(active);
     this.assertPathActionIdle(active);
     const runtimeIdentity = active.runtimeIdentity;
-    if (runtimeIdentity) await this.refreshRuntimePrompt(active);
+    const expansion=runtimeIdentity?await expandDCodeInput(rawMessage,active.session):{text:rawMessage,sources:[]};
+    if(runtimeIdentity)effectiveMessage=attachmentStore?attachmentPrompt(expansion.text,managed.map(item=>item.attachment),attachmentStore.layout):expansion.text;
+    const memberUpdates=runtimeIdentity?await this.coordinatorUpdates(active,effectiveMessage):{text:effectiveMessage,known:new Map<string,string>()};effectiveMessage=memberUpdates.text;
     const call: PromptCallContext = {
       active,
       promptId,
       confirmed: false,
     };
     if (pathAction) {
-      call.rollbackLeafId = await this.applyPathAction(active, pathAction);
+      if(runtimeIdentity&&(!pathAction.fromPathId||!pathAction.expectedCurrentPathId||!Number.isInteger(pathAction.expectedCurrentPathRevision)))throw new PiHostError("INVALID_PATH_ACTION","历史路径需要有效的来源和当前版本");
+      call.rollbackLeafId=active.session.sessionManager.getLeafId();
       try {
+        if(runtimeIdentity){const changed=await (await this.getProductStore()).beginNativeSessionPath({requestId:`path:${createHash("sha256").update(`${runtimeIdentity.runtimeId}\0${promptId}`).digest("hex")}`,sessionId:runtimeIdentity.dcodeSessionId,action:pathAction as import("./product-store.js").NativeSessionPathAction});call.nativePath={id:changed.pathId,previousId:pathAction.expectedCurrentPathId!};}
+        await this.applyPathAction(active,pathAction);
         this.assertPathActionIdle(active);
-      } catch (error) {
-        await this.rollbackPromptPath(call);
-        throw error;
-      }
+      } catch(error){await this.rollbackPromptPath(call);throw error;}
     }
+    try{if(runtimeIdentity)await this.refreshRuntimePrompt(active);}catch(error){await this.rollbackPromptPath(call);throw error;}
+
     let preparedRun: Awaited<ReturnType<ProductStore["prepareSessionRun"]>> | undefined;
     if (runtimeIdentity) {
       const assembledPrompt = active.assembledPrompt;
@@ -4453,13 +4637,15 @@ export class PiHost {
         digest: `sha256:${createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex")}`,
         bytes: Buffer.byteLength(image.data, "base64"),
       }))];
-      preparedRun = await (await this.getProductStore()).prepareSessionRun({
+      try { preparedRun = await (await this.getProductStore()).prepareSessionRun({
         requestId: `provider-${createHash("sha256")
           .update(`${runtimeIdentity.runtimeId}\0${promptId}`)
           .digest("hex")
           .slice(0, 48)}`,
         taskId: runtimeIdentity.taskId,
         scope: runtimeIdentity.scope,
+        ...(pathAction?{pathAction:pathAction as import("./product-store.js").NativeSessionPathAction,...(call.nativePath?{preparedPathId:call.nativePath.id}:{})}:{}),
+        ...(promptId.startsWith("collab:")?{collaborationMessageId:promptId.slice(7)}:{}),
         sessionId: runtimeIdentity.dcodeSessionId,
         runtimeId: runtimeIdentity.runtimeId,
         ...(runtimeIdentity.agentRunId ? { agentRunId: runtimeIdentity.agentRunId } : {}),
@@ -4467,6 +4653,8 @@ export class PiHost {
         cwd: runtimeIdentity.workspace.cwd,
         workspaceAccess: runtimeIdentity.workspace.access,
         message: rawMessage,
+        effectiveMessage,
+        inputSources:expansion.sources,
         managedAttachmentIds: attachmentIds,
         attachmentRefs,
         ...(active.session.model
@@ -4484,7 +4672,7 @@ export class PiHost {
         systemPromptDigest: assembledPrompt.digest,
         promptSources: assembledPrompt.sources,
         ...(assembledPrompt.importedHistory ? { importedHistoryReceipt: assembledPrompt.importedHistory } : {}),
-      });
+      }); }catch(error){await this.rollbackPromptPath(call);throw error;}
       this.options.emit("foundation.changed", {
         storeRevision: preparedRun.storeRevision,
         kind: "sessionRun.prepared",
@@ -4497,6 +4685,8 @@ export class PiHost {
     const startedAt = new Date().toISOString();
     const run: ActiveRun = {
       id: promptId,
+      knownUserUpdates:memberUpdates.known,
+      ...(pathAction&&runtimeIdentity?{pathAction:pathAction as import("./product-store.js").NativeSessionPathAction}:{}),
       ...(preparedRun ? {
         sessionRunId: preparedRun.sessionRunId,
         providerAttemptId: preparedRun.providerAttemptId,
@@ -4539,12 +4729,12 @@ export class PiHost {
         }
         return await active.session.prompt(effectiveMessage, {
           source: "rpc",
-          ...(runtimeIdentity ? { expandPromptTemplates: false } : {}),
+          ...(runtimeIdentity ? { expandPromptTemplates:!!expansion.command } : {}),
           ...(images && images.length > 0 ? { images } : {}),
           preflightResult: (success) => { if (success) accept(false); },
         });
       });
-      void operation.then(async () => {
+      run.completion=operation.then(async () => {
         if (call.confirmation) await call.confirmation;
         if (!call.confirmed) {
           await this.rollbackPromptPath(call);
@@ -4553,6 +4743,7 @@ export class PiHost {
             throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
           }
           call.confirmed = true;
+          run.handledInput=true;run.outcome=run.commandFailed?"failed":"completed";
           this.emitRuntimeEvent(active, "session.promptCompleted", {
             sessionId: active.session.sessionId,
             promptId,
@@ -4560,24 +4751,29 @@ export class PiHost {
           });
         }
         await this.finalizeRun(active, run);
-        const durableOutcome = run.state.phase === "completed"
+        const durableOutcome = run.outcome === "completed"
           ? "succeeded"
-          : run.state.phase === "aborted"
+          : run.outcome === "aborted"
             ? "aborted"
-            : run.state.phase === "failed"
+            : run.outcome === "failed"
               ? "failed"
               : "unknown";
         await this.finishDurableSessionRun(active, run, durableOutcome).catch((storeError) => {
-          this.emitRuntimeEvent(active, "session.persistenceError", errorRecord(storeError));
+          run.persistenceFailed=true;
+          this.updateRunState(active,run,"unknown",{retryable:false});
+          this.emitRuntimeEvent(active,"session.persistenceError",{code:"RESULT_SAVE_FAILED",message:"本轮结果未能保存，交付尚未完成。请重新连接后核对本轮记录；不会自动重新执行。",cause:errorRecord(storeError).code});
         });
-        accept(true);
+        if(!run.persistenceFailed)accept(true);
+        else if(!responded)reject(new PiHostError("RESULT_SAVE_FAILED","本轮结果未能保存，未宣告交付完成"));
       }).catch(async (error) => {
         if (call.confirmation) await call.confirmation;
         await this.rollbackPromptPath(call);
         await this.finalizeRun(active, run, run.outcome ?? "failed");
         const durableOutcome = run.outcome === "aborted" ? "aborted" : "failed";
         await this.finishDurableSessionRun(active, run, durableOutcome).catch((storeError) => {
-          this.emitRuntimeEvent(active, "session.persistenceError", errorRecord(storeError));
+          run.persistenceFailed=true;
+          this.updateRunState(active,run,"unknown",{retryable:false});
+          this.emitRuntimeEvent(active,"session.persistenceError",{code:"RESULT_SAVE_FAILED",message:"本轮结果未能保存，交付尚未完成。请重新连接后核对本轮记录；不会自动重新执行。",cause:errorRecord(storeError).code});
         });
         if (!responded) reject(error);
         else this.emitRuntimeEvent(active, "session.promptFailed", {
@@ -4587,6 +4783,7 @@ export class PiHost {
           ...errorRecord(error),
         });
       });
+      void run.completion.finally(()=>this.afterPromptSettled(active,run)).catch(error=>this.options.emit("collaboration.failed",errorRecord(error)));
     });
   }
 
@@ -4596,6 +4793,7 @@ export class PiHost {
     outcome: "succeeded" | "failed" | "aborted" | "unknown",
   ): Promise<void> {
     if (!run.sessionRunId || !run.providerAttemptId) return;
+    await run.steeringPersistence;
     const completionEntry = run.state.completionEntryId
       ? active.session.sessionManager.getEntry(run.state.completionEntryId)
       : undefined;
@@ -4609,13 +4807,22 @@ export class PiHost {
       sessionRunId: run.sessionRunId,
       providerAttemptId: run.providerAttemptId,
       outcome,
+      ...(run.handledInput?{handledInput:true}:{}),
       resultReference: {
         piRunId: run.id,
+        ...(run.handledInput?{handledWithoutProvider:true}:{}),
         ...(run.state.completionEntryId ? { completionEntryId: run.state.completionEntryId } : {}),
       },
       ...(assistantText ? { assistantText } : {}),
       ...(run.state.completionEntryId ? { assistantSourceEntryId: run.state.completionEntryId } : {}),
+      ...(run.pathEntryId?{userSourceEntryId:run.pathEntryId}:{}),
+      ...(active.session.sessionManager.getLeafId()&&(!run.pathAction||run.pathEntryId)?{sourceLeafEntryId:active.session.sessionManager.getLeafId()!}:{}),
+      ...(run.pathAction&&!run.pathEntryId?{rollbackPathId:run.pathAction.expectedCurrentPathId}:{}),
     });
+    if(active.promptEnvironment?.role==="coordinator"&&!active.auxiliary?.hasLive) await this.setCoordinatorAccess(active,"sharedReadOnly");
+    if(run.steering?.size)active.session.agent.clearSteeringQueue();
+    this.updateRunState(active,run,outcome==="succeeded"?"completed":outcome);
+    this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:active.runtimeIdentity?.taskId,storeRevision:result.storeRevision});
     this.emitRuntimeEvent(active, "session.durableRunFinished", {
       sessionRunId: run.sessionRunId,
       providerAttemptId: run.providerAttemptId,
@@ -4727,9 +4934,10 @@ export class PiHost {
       let outcome = forcedOutcome ?? run.outcome ?? "unknown";
       if (active.conflict) outcome = "unknown";
       const completedAt = new Date().toISOString();
-      if (outcome === "completed") {
+      if(outcome==="completed"&&run.handledInput){
+        this.updateRunState(active,run,run.sessionRunId?"saving":"completed",{completionId:`${run.id}:handled`,completedAt,inputPersisted:false,retryable:false});
+      }else if (outcome === "completed") {
         const manager = active.session.sessionManager;
-        const leaf = manager.getLeafEntry();
         const branch = manager.getBranch();
         const boundary = run.pathEntryId
           ? branch.findIndex((entry) => entry.id === run.pathEntryId)
@@ -4740,9 +4948,9 @@ export class PiHost {
                 entry.type === "message" && entry.message.role === "assistant"
               ))
             : undefined
-          : leaf?.type === "message" && leaf.message.role === "assistant" ? leaf : undefined;
+          : undefined;
         if (completionEntry?.type === "message" && completionEntry.message.role === "assistant") {
-          this.updateRunState(active, run, "completed", {
+          this.updateRunState(active, run, run.sessionRunId?"saving":"completed", {
             completionId: `${run.id}:${completionEntry.id}`,
             completionEntryId: completionEntry.id,
             completedAt,
@@ -4754,13 +4962,13 @@ export class PiHost {
         }
       }
       if (outcome !== "completed") {
-        this.updateRunState(active, run, outcome, {
+        this.updateRunState(active, run, run.sessionRunId?"saving":outcome, {
           completedAt,
           inputPersisted: run.pathEntryId !== undefined,
           retryable: outcome === "failed" && run.pathEntryId === undefined,
         });
       }
-      if (active.currentRun === run) active.currentRun = undefined;
+      run.outcome=outcome;
     })();
     await run.finalization;
   }
@@ -4848,6 +5056,8 @@ export class PiHost {
       sessionName: active.session.sessionName,
       cwd: active.session.sessionManager.getCwd(),
       model: safeModel(active.session.model),
+      auxiliaryProcesses:active.auxiliary?.snapshot??[],
+      process: active.session.agent instanceof ProcessAgent ? active.session.agent.processInfo ?? null : null,
       thinkingLevel: active.session.thinkingLevel,
       activePlan: active.activePlan,
       isStreaming: active.session.isStreaming,
@@ -4954,6 +5164,38 @@ export class PiHost {
     const active = this.requireWritable();
     await active.session.compact();
     return { ok: true };
+  }
+
+  private async inspectTaskContextFiles(taskId:string,paths:string[]):Promise<{sources:TaskContextSourceInput[];requiredAgents:boolean}> {
+    const snapshot=await (await this.getProductStore()).snapshot();const task=snapshot.tasks.find(task=>task.id===taskId);if(!task)throw new PiHostError("TASK_NOT_FOUND","任务不存在");
+    const cwd=await realpath(task.cwd),home=await realpath(snapshot.currentUser.homeDirectory);const sources:TaskContextSourceInput[]=[];let requiredAgents=false;
+    const required=await stat(join(cwd,"AGENTS.md")).catch(()=>undefined);
+    for(const requested of paths){const path=await realpath(requested),info=await stat(path);if(required&&info.dev===required.dev&&info.ino===required.ino){requiredAgents=true;continue;}
+      const local=relative(cwd,path);const inTask=local!==""&&local!==".."&&!local.startsWith("../")&&!isAbsolute(local);
+      const root=inTask?cwd:dirname(path),localHome=relative(home,root);
+      if(!inTask&&(!localHome||localHome===".."||localHome.startsWith("../")||isAbsolute(localHome)))throw new PiHostError("CONTEXT_SOURCE_OUTSIDE_SCOPE","附加资料需位于任务目录内，或个人目录中的资料文件夹");
+      const relativePath=inTask?local:basename(path);const file=await this.workspaceAccess.files.read(root,relativePath);
+      if(file.kind==="image"||file.bytes>64*1024)throw new PiHostError("CONTEXT_SOURCE_TOO_LARGE","附加资料需为不超过 64 KB 的文本；较大的文件可以在对话中引用");
+      const source:TaskContextSourceInput={kind:inTask?"scope_document":"global_knowledge",relativePath,title:basename(path),...(!inTask?{rootPath:root}:{})};
+      if(!sources.some(item=>item.kind===source.kind&&item.rootPath===source.rootPath&&item.relativePath===source.relativePath))sources.push(source);
+    }
+    return {sources,requiredAgents};
+  }
+
+  private async dcodeCommands(sessionId?:string,projectId?:string):Promise<unknown> {
+    const snapshot=await (await this.getProductStore()).snapshot();
+    const session=sessionId?snapshot.sessions.find(session=>session.id===sessionId):undefined;
+    if(sessionId&&!session)throw new PiHostError("DCODE_SESSION_NOT_FOUND","会话不存在");
+    const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
+    if(runtimeId)return this.runtimeContext.run(runtimeId,()=>this.getCommands());
+    const task=session?snapshot.tasks.find(task=>task.id===session.taskId):undefined;
+    const project=projectId?snapshot.projects.find(project=>project.id===projectId):undefined;
+    if(projectId&&!project)throw new PiHostError("PROJECT_NOT_FOUND","项目不存在");
+    const cwd=task?.cwd??project?.directory??snapshot.currentUser.homeDirectory;
+    const settings=SettingsManager.create(cwd,this.agentDir);
+    const loader=new DCodeResourceLoader({cwd,agentDir:this.agentDir,sourceSettingsManager:settings,extensionFactories:[],allowExternalExtensions:false,disabledResources:()=>new Set(this.productStore?.clientPreferences().disabledResources??[])});
+    await loader.reload();
+    return {commands:[...loader.getPrompts().prompts.map(prompt=>({name:prompt.name,description:prompt.description,source:"prompt"})),...loader.getSkills().skills.map(skill=>({name:`skill:${skill.name}`,description:skill.description,source:"skill"}))]};
   }
 
   private getCommands(): unknown {
@@ -5133,6 +5375,101 @@ export class PiHost {
     await store.seedRuntimeModelCatalog({ requestId: force ? `catalog-refresh-${randomUUID()}` : requestId, providers, ...(defaultSelection ? { defaultSelection } : {}) });
   }
 
+  private memberModelCandidates(store:ProductStore,sessionId:string,base:AgentModelCandidate[]):AgentModelCandidate[]{
+    const chosen=store.sessionModelSelection(sessionId);if(!chosen)return base;
+    const preferred={providerId:chosen.providerId,modelId:chosen.modelId};return [preferred,...base.slice(1).filter(candidate=>candidate.providerId!==preferred.providerId||candidate.modelId!==preferred.modelId)];
+  }
+
+  private providerRouteControl(identity:RuntimeIdentity,active:()=>WritableSession|undefined):ProviderRouteControl {
+    const callInputs=new Map<string,Pick<Parameters<ProductStore["recordProviderCall"]>[0],"sessionId"|"sessionRunId"|"taskId"|"agentRunId"|"rawInputIds"|"effectiveInputIds"|"purpose"|"sourceLeafEntryId">>();
+    return {
+      response:(model,status,headers)=>{if(status===429)this.quotaService().blockProvider(model.provider,headers["retry-after"]);},
+      select:async(model,context,signal,rejected)=>{
+        const runtime=active(),run=runtime?.currentRun;if(!runtime)throw new PiHostError("RUNTIME_UNAVAILABLE","模型调用所属运行环境已关闭");
+        const auxiliary=runtime.session.isCompacting;
+        if(!auxiliary&&!run?.sessionRunId)throw new PiHostError("RUN_REQUIRED","普通模型调用缺少当前运行");
+        await run?.steeringPersistence;
+        if(signal?.aborted)throw new PiHostError("ABORTED","执行已停止");
+        const store=await this.getProductStore(),snapshot=await store.snapshot();
+        const agent=snapshot.agentRuns.find(agent=>agent.id===identity.agentRunId);
+        const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===agent?.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
+        const profile=agent?.profileSnapshot as {modelCandidates?:AgentModelCandidate[]}|undefined;
+        const automatic=auxiliary||!!packet?.resolvedModelCandidates||!!profile?.modelCandidates||!!run?.id.startsWith("collab:");
+        const availableChoices=(await this.dcodeModelsView()).models;
+        const currentChoice=availableChoices.find(choice=>choice.providerId===model.provider&&choice.modelId===model.id);
+        if(!automatic&&!rejected.size&&currentChoice?.enabled&&currentChoice.available){const quota=await this.quotaService().get(model.provider);if(quota.status==="unknown"||assessModelQuota(quota,model.id,Date.now()).eligible)return {model,context};}
+        const candidates=this.memberModelCandidates(store,identity.dcodeSessionId,packet?.resolvedModelCandidates??profile?.modelCandidates??[{providerId:model.provider,modelId:model.id}]);
+        const models=availableChoices.map(choice=>rejected.has(choice.providerId)?{...choice,available:false}:choice);
+        const hasImages=context.messages.some(message=>Array.isArray(message.content)&&message.content.some(part=>part.type==="image"));
+        const usage=runtime.session.getContextUsage();let imageCount=0;
+        const textSize=Buffer.byteLength(JSON.stringify(context,(_key,value)=>{if(value&&typeof value==="object"&&value.type==="image"){imageCount++;return {type:"image"};}return value;}));
+        const minimumContext=Math.max(!auxiliary&&typeof usage?.tokens==="number"?usage.tokens+1024:0,Math.ceil(textSize/2)+imageCount*4096+2048);
+        const decision=await chooseAgentModel({candidates,models,quotas:this.quotaService(),capabilities:hasImages?["image"]:[],minimumContext});
+        if(!decision.selected)throw new PiHostError("MODEL_ROUTE_BLOCKED",`回退链暂无可调用模型（${[...new Set(decision.considered.map(item=>item.reason))].join("；")}），当前进度已保留`);
+        if(decision.selected.providerId===model.provider&&decision.selected.modelId===model.id)return {model,context};
+        if(run?.toolCalls.size||runtime.ui.hasPendingDialogs||snapshot.operationAttempts.some(attempt=>run&&attempt.sessionRunId===run.sessionRunId&&attempt.operationKind==="tool_invocation"&&(["prepared","unknown"].includes(attempt.status)||attempt.status==="failed"&&!SHARED_READ_ONLY_TOOL_NAMES.has(attempt.targetIdentity))))throw new PiHostError("MODEL_ROUTE_UNSAFE","工具执行尚未确认，已停止模型切换并保留进度");
+        const next=runtime.session.modelRuntime.getAvailableSnapshot().find(candidate=>candidate.provider===decision.selected!.providerId&&candidate.id===decision.selected!.modelId);if(!next)throw new PiHostError("MODEL_NOT_FOUND","候选模型已不可用");
+        // Summary prompts are private to this call. They must never replace the
+        // member's main identity, chosen model or current prompt receipt.
+        if(auxiliary)return {model:next as ProviderModel,context};
+        if(!run?.sessionRunId)throw new PiHostError("RUN_REQUIRED","模型切换缺少当前运行");
+        const systemPrompt=(context.systemPrompt??"").replace(/^- Model: .*$/mu,`- Model: ${next.provider}/${next.id}`);
+        const digest=`sha256:${createHash("sha256").update(systemPrompt).digest("hex")}`;
+        await this.withOwnedMutation(runtime,async()=>{await runtime.session.setModel(next);});
+        const internals=runtime.session as unknown as {_baseSystemPrompt:string;_systemPromptOverride?:string};internals._baseSystemPrompt=systemPrompt;internals._systemPromptOverride=undefined;runtime.session.agent.state.systemPrompt=systemPrompt;
+        if(runtime.assembledPrompt)runtime.assembledPrompt={...runtime.assembledPrompt,text:systemPrompt,digest};
+        await store.recordRunningModelRoute({requestId:`reroute:${randomUUID()}`,sessionRunId:run.sessionRunId,agentRunId:identity.agentRunId!,decision,systemPromptDigest:digest});
+
+        this.options.emit("foundation.changed",{kind:"agentModel.rerouted",taskId:identity.taskId});
+        return {model:next as ProviderModel,context:{...context,systemPrompt},reasoning:runtime.session.thinkingLevel==="off"?null:runtime.session.thinkingLevel};
+      },
+      record:async(call)=>{
+        const runtime=active(),run=runtime?.currentRun;const store=await this.getProductStore();
+        if(call.state==="started"){
+          const auxiliary=runtime?.session.isCompacting===true;
+          if(!runtime||!auxiliary&&!run?.sessionRunId)throw new PiHostError("RUN_REQUIRED","模型调用缺少所属运行");
+          const rawInputIds=auxiliary?[]:[...new Set([run?.rawInputId,...(run?.knownUserUpdates?.values()??[]),...[...run?.steering?.values()??[]].filter(item=>item.effectiveInputId).map(item=>item.message.originRawInputId)].filter((id):id is string=>!!id))];
+          const effectiveInputIds=auxiliary?[]:[run?.effectiveInputId,...[...run?.steering?.values()??[]].map(item=>item.effectiveInputId)].filter((id):id is string=>!!id);
+          callInputs.set(call.id,{taskId:identity.taskId,sessionId:identity.dcodeSessionId,...(run?.sessionRunId?{sessionRunId:run.sessionRunId}:{}),...(identity.agentRunId?{agentRunId:identity.agentRunId}:{}),purpose:auxiliary?"context_summary":"agent",...(auxiliary&&runtime.session.sessionManager.getLeafId()?{sourceLeafEntryId:runtime.session.sessionManager.getLeafId()!}:{}),rawInputIds,effectiveInputIds});
+        }
+        const inputs=callInputs.get(call.id);if(!inputs)throw new PiHostError("PROVIDER_CALL_NOT_STARTED","模型结果缺少对应的调用记录");
+        await store.recordProviderCall({...sanitizeRuntimeValue(call),...inputs});
+        if(call.state!=="started")callInputs.delete(call.id);
+        this.options.emit("foundation.changed",{kind:"providerCall.changed",taskId:identity.taskId});
+      },
+    };
+  }
+
+  private quotaServiceValue?: ModelQuotaService;
+  private quotaService(): ModelQuotaService {
+    this.quotaServiceValue ??= new ModelQuotaService({
+      offline:()=>process.env.PI_OFFLINE!==undefined,
+      resolveCredential: async (providerId) => {
+        const runtime = await this.sharedModelRuntime();
+        await registerCatalogProviders(runtime, await (await this.getProductStore()).snapshot());
+        const model = runtime.getModels(providerId)[0];
+        if (!model) return undefined;
+        const resolved = await runtime.getAuth(model);
+        return resolved ? { auth: resolved.auth, sourceBaseUrl: model.baseUrl } : undefined;
+      },
+      onUpdated: (snapshot) => this.options.emit("modelQuota.updated", snapshot),
+    });
+    return this.quotaServiceValue;
+  }
+
+  private async modelQuotaSnapshot(params: Record<string, unknown>): Promise<unknown> {
+    const view = await this.dcodeModelsView();
+    const eligibleProviders = new Set(view.models.filter((model) => model.enabled && model.available).map((model) => model.providerId));
+    const requested = params.providerIds as string[] | undefined;
+    if (requested?.some((id) => !view.providers.some((provider) => provider.id === id))) throw new PiHostError("MODEL_PROVIDER_NOT_FOUND", "配额查询来源不在模型目录中");
+    const providers = (requested ?? [...eligibleProviders]).filter((id) => eligibleProviders.has(id));
+    const snapshots = await this.quotaService().collect(providers, params.force === true);
+    return { snapshots, assessments: view.models.filter((model) => eligibleProviders.has(model.providerId)).map((model) => {
+      const quota = snapshots.find((snapshot) => snapshot.providerId === model.providerId);
+      return { providerId: model.providerId, modelId: model.modelId, ...(quota ? assessModelQuota(quota, model.modelId, Date.now()) : { eligible: false, reason: "额度尚未查询" }) };
+    }) };
+  }
+
   private modelRefreshState: DCodeModelsView["refresh"] = {failedProviders:[],offline:false};
 
   private async dcodeModelsView(sessionId?: string): Promise<DCodeModelsView> {
@@ -5145,11 +5482,13 @@ export class PiHost {
     const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
     const active=runtimeId?this.runtimes.get(runtimeId):undefined;
     const defaultKey=snapshot.runtimeModelSelection?`${snapshot.runtimeModelSelection.providerId}::${snapshot.runtimeModelSelection.modelId}`:null;
-    const selectedKey=active?.session.model?`${active.session.model.provider}::${active.session.model.id}`:defaultKey;
+    const sessionSelection=sessionId?store.sessionModelSelection(sessionId):undefined;
+    const prior=sessionId?snapshot.agentRuns.find(run=>run.sessionId===sessionId):undefined;
+    const selectedKey=active?.session.model?`${active.session.model.provider}::${active.session.model.id}`:sessionSelection?`${sessionSelection.providerId}::${sessionSelection.modelId}`:prior?.modelProvider&&prior.modelId?`${prior.modelProvider}::${prior.modelId}`:defaultKey;
     const models:ModelChoice[]=snapshot.modelCatalogEntries.map(model=>{
       const key=`${model.providerId}::${model.modelId}`;
       const definition=runtime.getModel(model.providerId,model.modelId);
-      return {key,providerId:model.providerId,providerName:snapshot.modelProviders.find(p=>p.id===model.providerId)?.name??model.providerId,modelId:model.modelId,name:model.name,available:available.has(key),enabled:preferences.enabledModels==null||preferences.enabledModels.includes(key),reasoning:model.reasoning,contextWindow:model.contextWindow??null,thinkingLevels:definition?[...getSupportedThinkingLevels(definition)]:["off"]};
+      return {key,providerId:model.providerId,providerName:snapshot.modelProviders.find(p=>p.id===model.providerId)?.name??model.providerId,modelId:model.modelId,name:model.name,available:available.has(key),enabled:preferences.enabledModels==null||preferences.enabledModels.includes(key),reasoning:model.reasoning,input:definition?.input,contextWindow:model.contextWindow??null,thinkingLevels:definition?[...getSupportedThinkingLevels(definition)]:["off"]};
     });
     const thinkingLevels=models.find(m=>m.key===selectedKey)?.thinkingLevels??["off","minimal","low","medium","high","xhigh","max"];
     const defaultThinking=preferences.defaultThinking??"medium";
@@ -5492,6 +5831,7 @@ export class PiHost {
 
   private async setModel(provider: string, modelId: string): Promise<unknown> {
     const active = this.requireWritable();
+    this.assertSessionMetadataIdle(active);
     await this.beforeMutation(active);
     const model = active.session.modelRuntime.getAvailableSnapshot().find((candidate) => candidate.provider === provider && candidate.id === modelId);
     if (!model) throw new PiHostError("MODEL_NOT_FOUND", `Model not found: ${provider}/${modelId}`);
@@ -5570,8 +5910,18 @@ export class PiHost {
   }
 
   private onPersistedAgentEvent(active: WritableSession, event: AgentEvent): void {
-    if (!this.isActiveSession(active) || active.closing) return;
+    if (!this.isActiveSession(active)) return;
     const call = this.promptCall.getStore();
+    if(event.type==="message_end"&&event.message.role==="user"&&active.currentRun?.steering){
+      const run=active.currentRun,leaf=active.session.sessionManager.getLeafEntry();
+      const pending=[...run.steering!.values()].find(item=>!item.sourceEntryId&&(event.message as {dcodeSteerId?:string}).dcodeSteerId===item.message.id&&extractSearchableMessage(event.message)?.body===item.effectiveText);
+      if(pending&&leaf?.type==="message"&&leaf.message===event.message){
+        pending.sourceEntryId=leaf.id;run.latestRawInputId=pending.message.originRawInputId;
+        run.steeringPersistence=(run.steeringPersistence??Promise.resolve()).then(async()=>{const saved=await (await this.getProductStore()).consumeSteeringMessage({messageId:pending.message.id,sessionRunId:run.sessionRunId!,sourceEntryId:leaf.id,effectiveText:pending.effectiveText,inputSources:pending.inputSources});pending.effectiveInputId=saved.effectiveInputId;for(const [id,raw] of pending.knownUserUpdates){run.knownUserUpdates??=new Map();run.knownUserUpdates.set(id,raw);}this.options.emit("foundation.changed",{kind:"collaboration.steeringConsumed",taskId:pending.message.taskId});});
+        void run.steeringPersistence.catch(error=>this.markConflict(active,error));
+      }
+    }
+
     if (
       event.type === "message_end"
       && event.message.role === "user"
@@ -5750,6 +6100,7 @@ export class PiHost {
   private requireWritable(): WritableSession {
     this.assertWriteHealthy();
     const active = this.requireActive();
+    if(active.closing)throw new PiHostError("SESSION_CLOSING","当前运行正在收尾");
     if (active.conflict) throw new PiHostError(active.conflict.code, active.conflict.message, active.conflict.details);
     return active;
   }

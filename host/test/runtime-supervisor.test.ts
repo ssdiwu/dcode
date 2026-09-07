@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
-import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
 import { PiHost, PiHostError } from "../src/pi-host.js";
 
-const execFile = promisify(execFileCallback);
-
-async function git(args: string[], cwd: string): Promise<void> {
-  await execFile("git", args, { cwd, encoding: "utf8" });
+// Completed work can still publish independent process lifecycle facts. Match
+// the client's revision-conflict protocol for new task/project intents, while
+// retaining the request identity and every target-specific validation.
+async function createDuringRuntime(host:PiHost,method:"project.create"|"task.create",params:Record<string,unknown>):Promise<unknown>{
+  let next={...params};
+  for(let attempt=0;attempt<8;attempt++) {
+    try{return await host.handle(method,next);}catch(error){
+      const failure=error as {code?:string;details?:{expectedStoreRevision?:unknown;currentStoreRevision?:unknown}};
+      if(failure.code!=="REVISION_CONFLICT"||typeof failure.details?.expectedStoreRevision!=="number"||typeof failure.details.currentStoreRevision!=="number"||attempt===7)throw error;
+      next={...next,expectedStoreRevision:(await host.handle("foundation.snapshot",{}) as {storeRevision:number}).storeRevision};
+    }
+  }
+  throw new Error("Unreachable mutation retry");
 }
 
 async function writeSession(
@@ -149,19 +156,19 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       currentUser: { id: string };
       storeRevision: number;
     };
-    const projectA = await host.handle("project.create", {
+    const projectA = await createDuringRuntime(host,"project.create", {
       requestId: "project-a",
       expectedStoreRevision: initial.storeRevision,
       title: "Project A",
       directory: workspaceA,
     }) as { storeRevision: number; project: { id: string } };
-    const projectB = await host.handle("project.create", {
+    const projectB = await createDuringRuntime(host,"project.create", {
       requestId: "project-b",
       expectedStoreRevision: projectA.storeRevision,
       title: "Project B",
       directory: workspaceB,
     }) as { storeRevision: number; project: { id: string } };
-    const taskA = await host.handle("task.create", {
+    const taskA = await createDuringRuntime(host,"task.create", {
       requestId: "task-a",
       expectedStoreRevision: projectB.storeRevision,
       scope: { kind: "project", projectId: projectA.project.id },
@@ -172,7 +179,7 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       task: { id: string };
       coordinationSession: { id: string };
     };
-    const taskB = await host.handle("task.create", {
+    const taskB = await createDuringRuntime(host,"task.create", {
       requestId: "task-b",
       expectedStoreRevision: taskA.storeRevision,
       scope: { kind: "project", projectId: projectB.project.id },
@@ -225,13 +232,13 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
     );
     const adapterSessionsAfterWrongWorkspace = await host.handle("session.list", {}) as { sessions: Array<{ id: string }> };
     assert.deepEqual(adapterSessionsAfterWrongWorkspace.sessions.map((session) => session.id), adapterSessionsBeforeWrongWorkspace.sessions.map((session) => session.id));
-    const projectC = await host.handle("project.create", {
+    const projectC = await createDuringRuntime(host,"project.create", {
       requestId: "project-c",
       expectedStoreRevision: selectedContext.storeRevision,
       title: "Project C",
       directory: workspaceC,
     }) as { storeRevision: number; project: { id: string } };
-    const taskC = await host.handle("task.create", {
+    const taskC = await createDuringRuntime(host,"task.create", {
       requestId: "task-c",
       expectedStoreRevision: projectC.storeRevision,
       scope: { kind: "project", projectId: projectC.project.id },
@@ -359,6 +366,13 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       if (overlapTimer) clearTimeout(overlapTimer);
     }
     assert.equal(providerArrivals, 2, "both Provider requests must be in flight before either response is released");
+    const processA = (await host.handle("session.getState", { runtimeId: "runtime-a" }) as { process: { pid: number; status: string } }).process;
+    const processB = (await host.handle("session.getState", { runtimeId: "runtime-b" }) as { process: { pid: number; status: string } }).process;
+    assert.equal(processA.status, "running");
+    assert.equal(processB.status, "running");
+    assert.notEqual(processA.pid, process.pid);
+    assert.notEqual(processA.pid, processB.pid);
+
     releaseProvider?.();
     await prompts;
     const completionDeadline = Date.now() + 5_000;
@@ -465,92 +479,8 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
       expectedSessionId: nativeStarted.binding.adapterSessionId,
     });
 
-    const beforeTeam = await host.handle("foundation.snapshot", {}) as {
-      storeRevision: number;
-    };
-    const team = await host.handle("team.create", {
-      requestId: "create-team-a",
-      expectedStoreRevision: beforeTeam.storeRevision,
-      taskId: taskA.task.id,
-      scope: identityA.scope,
-      members: [
-        {
-          profileId: "builtin-explore",
-          title: "Explore facts",
-          taskPacket: { objective: "Explore independently" },
-        },
-        {
-          profileId: "builtin-verifier",
-          title: "Verify evidence",
-          taskPacket: { objective: "Verify independently" },
-        },
-      ],
-    }) as { teamRun: { id: string; revision: number } };
-    const teamStartStoreRevision = (await host.handle("foundation.snapshot", {}) as { storeRevision: number }).storeRevision;
-    const teamStartParams = {
-      requestId: "start-team-a",
-      expectedStoreRevision: teamStartStoreRevision,
-      expectedTeamRunRevision: team.teamRun.revision,
-      taskId: taskA.task.id,
-      scope: identityA.scope,
-      teamRunId: team.teamRun.id,
-      message: "Coordinate the Task",
-    };
-    const startedTeam = await host.handle("team.start", teamStartParams) as {
-      runtimes: Array<{ runtimeId: string; agentRunId: string }>;
-    };
-    assert.equal(startedTeam.runtimes.length, 3);
-    let childOverlapTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        childProviderOverlap,
-        new Promise<never>((_resolve, reject) => {
-          childOverlapTimer = setTimeout(() => reject(new Error("Child Provider requests did not overlap")), 5_000);
-        }),
-      ]);
-    } finally {
-      if (childOverlapTimer) clearTimeout(childOverlapTimer);
-    }
-    assert.equal(childProviderArrivals, 2);
-    const teamRuntimeIds = new Set(startedTeam.runtimes.map((runtime) => runtime.runtimeId));
-    const activeTeamRuntimeList = await host.handle("runtime.list", {}) as {
-      runtimes: Array<{ identity: { runtimeId: string }; activeToolNames: string[] }>;
-    };
-    const activeTeamRuntimes = activeTeamRuntimeList.runtimes
-      .filter((runtime) => teamRuntimeIds.has(runtime.identity.runtimeId));
-    assert.equal(activeTeamRuntimes.length, 3);
-    assert.ok(activeTeamRuntimes.every((runtime) => !runtime.activeToolNames.includes("write")));
-    releaseChildProviders?.();
-    const teamDeadline = Date.now() + 5_000;
-    let teamStatus = "active";
-    while (teamStatus !== "completed") {
-      if (Date.now() >= teamDeadline) throw new Error("Team Run did not complete");
-      const teamSnapshot = await host.handle("foundation.snapshot", {}) as {
-        teamRuns: Array<{ id: string; status: string }>;
-        agentReports: Array<{ taskId: string }>;
-      };
-      teamStatus = teamSnapshot.teamRuns.find((candidate) => candidate.id === team.teamRun.id)?.status ?? "missing";
-      if (teamStatus === "completed") {
-        assert.equal(teamSnapshot.agentReports.filter((report) => report.taskId === taskA.task.id).length, 4);
-      }
-      if (teamStatus !== "completed") await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    while (true) {
-      const teamRuntimeList = await host.handle("runtime.list", {}) as {
-        runtimes: Array<{ identity: { runtimeId: string } }>;
-      };
-      if (teamRuntimeList.runtimes.every((runtime) => !teamRuntimeIds.has(runtime.identity.runtimeId))) break;
-      if (Date.now() >= teamDeadline) throw new Error("Completed Team Runtimes were not reclaimed");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    const arrivalsBeforeReplay = providerArrivals;
-    const replayedTeamStart = await host.handle("team.start", teamStartParams) as { replayed?: boolean };
-    assert.equal(replayedTeamStart.replayed, true);
-    assert.equal(providerArrivals, arrivalsBeforeReplay, "Team start replay must not issue new Provider requests");
-    assert.ok(
-      providerRequestBodies.some((body) => body.includes("Child Agent Reports")),
-      "Coordinator must receive a second synthesis turn after child reports are durable",
-    );
+    await assert.rejects(host.handle("team.create",{}),error=>error instanceof PiHostError&&error.code==="COORDINATOR_REQUIRED");
+    await assert.rejects(host.handle("team.start",{}),error=>error instanceof PiHostError&&error.code==="COORDINATOR_REQUIRED");
     const finalFoundation = await host.handle("foundation.snapshot", {}) as {
       promptReceipts: Array<{ systemPromptDigest: string }>;
     };
@@ -573,26 +503,26 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
     await mkdir(repositoryA, { recursive: true });
     await mkdir(repositoryB, { recursive: true });
     const isolationSnapshot = await host.handle("foundation.snapshot", {}) as { storeRevision: number; currentUser: { id: string } };
-    const isolationProjectA = await host.handle("project.create", {
+    const isolationProjectA = await createDuringRuntime(host,"project.create", {
       requestId: "isolation-project-a",
       expectedStoreRevision: isolationSnapshot.storeRevision,
       title: "Isolation A",
       directory: repositoryA,
     }) as { storeRevision: number; project: { id: string } };
-    const isolationProjectB = await host.handle("project.create", {
+    const isolationProjectB = await createDuringRuntime(host,"project.create", {
       requestId: "isolation-project-b",
       expectedStoreRevision: isolationProjectA.storeRevision,
       title: "Isolation B",
       directory: repositoryB,
     }) as { storeRevision: number; project: { id: string } };
-    const isolationTaskA = await host.handle("task.create", {
+    const isolationTaskA = await createDuringRuntime(host,"task.create", {
       requestId: "isolation-task-a",
       expectedStoreRevision: isolationProjectB.storeRevision,
       scope: { kind: "project", projectId: isolationProjectA.project.id },
       title: "Isolation Task A",
       goal: "Own the Git worktree",
     }) as { storeRevision: number; task: { id: string; scope: { kind: "project"; projectId: string } }; coordinationSession: { id: string } };
-    const isolationTaskB = await host.handle("task.create", {
+    const isolationTaskB = await createDuringRuntime(host,"task.create", {
       requestId: "isolation-task-b",
       expectedStoreRevision: isolationTaskA.storeRevision,
       scope: { kind: "project", projectId: isolationProjectB.project.id },
@@ -671,7 +601,7 @@ test("Provider HTTP failure is durable failed state rather than completed succes
       currentUser: { id: string };
       storeRevision: number;
     };
-    const task = await host.handle("task.create", {
+    const task = await createDuringRuntime(host,"task.create", {
       requestId: "failure-task",
       expectedStoreRevision: initial.storeRevision,
       scope: { kind: "user", userId: initial.currentUser.id },
@@ -716,7 +646,7 @@ test("Provider HTTP failure is durable failed state rather than completed succes
   }
 });
 
-test("stopping the Coordinator aborts the Team before Child dispatch and replays durably", async () => {
+test("stopping a standalone Coordinator records an idempotent native stop without creating a Team", async () => {
   const root = await mkdtemp(join(tmpdir(), "dcode-stop-coordinator-"));
   const agentDir = join(root, "agent");
   const sessionsDirectory = join(agentDir, "sessions");
@@ -758,463 +688,23 @@ test("stopping the Coordinator aborts the Team before Child dispatch and replays
       currentUser: { id: string };
       storeRevision: number;
     };
-    const task = await host.handle("task.create", {
+    const task = await createDuringRuntime(host,"task.create", {
       requestId: "stop-team-task",
       expectedStoreRevision: initial.storeRevision,
       scope: { kind: "user", userId: initial.currentUser.id },
       title: "Stop Coordinator",
-      goal: "Do not dispatch children after stop",
+      goal: "Stop only the selected member",
     }) as { task: { id: string; scope: { kind: "user"; userId: string } }; coordinationSession: { id: string }; storeRevision: number };
-    const team = await host.handle("team.create", {
-      requestId: "stop-team-create",
-      expectedStoreRevision: task.storeRevision,
-      scope: task.task.scope,
-      taskId: task.task.id,
-      members: [
-        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Must not start" } },
-        { profileId: "builtin-verifier", title: "Verify", taskPacket: { objective: "Must not start" } },
-      ],
-    }) as { teamRun: { id: string; revision: number }; coordinatorAgentRun: { id: string } };
-    const beforeStart = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
-    await host.handle("team.start", {
-      requestId: "stop-team-start",
-      expectedStoreRevision: beforeStart.storeRevision,
-      expectedTeamRunRevision: team.teamRun.revision,
-      scope: task.task.scope,
-      taskId: task.task.id,
-      teamRunId: team.teamRun.id,
-      message: "Plan before dispatch",
-    });
-    const deadline = Date.now() + 5_000;
-    let stopSnapshot: {
-      storeRevision: number;
-      agentRuns: Array<{ id: string; revision: number; status: string }>;
-      sessionRuns: Array<{ id: string; agentRunId?: string; status: string }>;
-    } | undefined;
-    while (!stopSnapshot) {
-      const snapshot = await host.handle("foundation.snapshot", {}) as {
-        storeRevision: number;
-        agentRuns: Array<{ id: string; revision: number; status: string }>;
-        sessionRuns: Array<{ id: string; agentRunId?: string; status: string }>;
-      };
-      const coordinator = snapshot.agentRuns.find((run) => run.id === team.coordinatorAgentRun.id);
-      const sessionRun = snapshot.sessionRuns.find((run) => run.agentRunId === team.coordinatorAgentRun.id);
-      if (coordinator?.status === "running" && sessionRun?.status === "running") stopSnapshot = snapshot;
-      else {
-        if (Date.now() >= deadline) throw new Error("Coordinator did not reach running state");
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-    const coordinator = stopSnapshot.agentRuns.find((run) => run.id === team.coordinatorAgentRun.id)!;
-    const sessionRun = stopSnapshot.sessionRuns.find((run) => run.agentRunId === coordinator.id)!;
-    const stopParams = {
-      requestId: "stop-coordinator-request",
-      expectedStoreRevision: stopSnapshot.storeRevision,
-      runtimeId: `runtime-${coordinator.id}`,
-      scope: task.task.scope,
-      taskId: task.task.id,
-      teamRunId: team.teamRun.id,
-      agentRunId: coordinator.id,
-      sessionRunId: sessionRun.id,
-      expectedAgentRunRevision: coordinator.revision,
-    };
-    const stopped = await host.handle("agentRun.stop", stopParams) as { stopped: boolean };
-    assert.equal(stopped.stopped, true);
-    while (true) {
-      const snapshot = await host.handle("foundation.snapshot", {}) as {
-        teamRuns: Array<{ id: string; status: string }>;
-        agentRuns: Array<{ teamRunId?: string; status: string }>;
-      };
-      const status = snapshot.teamRuns.find((run) => run.id === team.teamRun.id)?.status;
-      if (status === "aborted") {
-        assert.ok(snapshot.agentRuns.filter((run) => run.teamRunId === team.teamRun.id).every((run) => run.status === "aborted"));
-        break;
-      }
-      if (Date.now() >= deadline) throw new Error(`Team did not abort after Coordinator stop: ${status}`);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(providerRequests, 1, "Child Provider requests must never start after Coordinator abort");
-    const replayed = await host.handle("agentRun.stop", stopParams) as { stopped: boolean; replayed?: boolean };
-    assert.equal(replayed.stopped, true);
-    assert.equal(replayed.replayed, true);
-    assert.equal(providerRequests, 1);
-
-    const workerBase = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
-    const workerTask = await host.handle("task.create", {
-      requestId: "worker-team-task",
-      expectedStoreRevision: workerBase.storeRevision,
-      scope: task.task.scope,
-      title: "Worker isolation",
-      goal: "Reject missing worktree before partial start",
-    }) as { task: { id: string; scope: { kind: "user"; userId: string } }; storeRevision: number };
-    const workerTeam = await host.handle("team.create", {
-      requestId: "worker-team-create",
-      expectedStoreRevision: workerTask.storeRevision,
-      scope: workerTask.task.scope,
-      taskId: workerTask.task.id,
-      members: [
-        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
-        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
-      ],
-    }) as { teamRun: { id: string; revision: number }; storeRevision: number };
-    const workerStartParams = {
-      requestId: "worker-team-start",
-        expectedStoreRevision: workerTeam.storeRevision,
-        expectedTeamRunRevision: workerTeam.teamRun.revision,
-        scope: workerTask.task.scope,
-      taskId: workerTask.task.id,
-      teamRunId: workerTeam.teamRun.id,
-      message: "Must reject before opening",
-    };
-    const refusedWorkerStart = await host.handle("team.start", workerStartParams) as {
-      started: boolean;
-      reasonCode?: string;
-    };
-    assert.equal(refusedWorkerStart.started, false);
-    assert.equal(refusedWorkerStart.reasonCode, "WORKSPACE_PROJECT_SCOPE_REQUIRED");
-    const workerAfter = await host.handle("foundation.snapshot", {}) as {
-      teamRuns: Array<{ id: string; status: string }>;
-      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
-    };
-    assert.equal(workerAfter.teamRuns.find((run) => run.id === workerTeam.teamRun.id)?.status, "failed");
-    assert.equal(
-      workerAfter.teamFailures.find((failure) => failure.teamRunId === workerTeam.teamRun.id)?.reasonCode,
-      "WORKSPACE_PROJECT_SCOPE_REQUIRED",
-    );
-    const activeAfterWorkerFailure = await host.handle("runtime.list", {}) as { runtimes: unknown[] };
-    assert.equal(activeAfterWorkerFailure.runtimes.length, 0);
-    assert.equal(providerRequests, 1);
-    const replayedWorkerStart = await host.handle("team.start", workerStartParams) as {
-      started: boolean;
-      terminalStatus?: string;
-      replayed?: boolean;
-    };
-    assert.equal(replayedWorkerStart.started, false);
-    assert.equal(replayedWorkerStart.terminalStatus, "failed");
-    assert.equal(replayedWorkerStart.replayed, true);
-
-    const nonGitDirectory = join(root, "worker-non-git-project");
-    await mkdir(nonGitDirectory);
-    const nonGitBase = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
-    const nonGitProject = await host.handle("project.create", {
-      requestId: "worker-non-git-project",
-      expectedStoreRevision: nonGitBase.storeRevision,
-      title: "Non Git Worker Project",
-      directory: nonGitDirectory,
-    }) as { storeRevision: number; project: { id: string } };
-    const nonGitTask = await host.handle("task.create", {
-      requestId: "worker-non-git-task",
-      expectedStoreRevision: nonGitProject.storeRevision,
-      scope: { kind: "project", projectId: nonGitProject.project.id },
-      title: "Non Git Worker",
-      goal: "Reject before any runtime opens",
-    }) as { task: { id: string; scope: { kind: "project"; projectId: string } }; storeRevision: number };
-    const nonGitTeam = await host.handle("team.create", {
-      requestId: "worker-non-git-team",
-      expectedStoreRevision: nonGitTask.storeRevision,
-      scope: nonGitTask.task.scope,
-      taskId: nonGitTask.task.id,
-      members: [
-        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
-        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
-      ],
-    }) as { teamRun: { id: string; revision: number }; storeRevision: number };
-    const nonGitStart = await host.handle("team.start", {
-      requestId: "worker-non-git-start",
-      expectedStoreRevision: nonGitTeam.storeRevision,
-      expectedTeamRunRevision: nonGitTeam.teamRun.revision,
-      scope: nonGitTask.task.scope,
-      taskId: nonGitTask.task.id,
-      teamRunId: nonGitTeam.teamRun.id,
-      message: "Must reject non Git Project",
-    }) as { started: boolean; reasonCode?: string };
-    assert.equal(nonGitStart.started, false);
-    assert.equal(nonGitStart.reasonCode, "WORKSPACE_GIT_REPOSITORY_REQUIRED");
-    const nonGitAfter = await host.handle("foundation.snapshot", {}) as {
-      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
-    };
-    assert.equal(
-      nonGitAfter.teamFailures.find((failure) => failure.teamRunId === nonGitTeam.teamRun.id)?.reasonCode,
-      "WORKSPACE_GIT_REPOSITORY_REQUIRED",
-    );
-    assert.equal((await host.handle("runtime.list", {}) as { runtimes: unknown[] }).runtimes.length, 0);
-
-    const ignoredContextRepository = join(root, "worker-ignored-context-repository");
-    await mkdir(ignoredContextRepository);
-    await git(["init", "--initial-branch=main"], ignoredContextRepository);
-    await git(["config", "user.email", "dcode-test@example.invalid"], ignoredContextRepository);
-    await git(["config", "user.name", "D Code Test"], ignoredContextRepository);
-    await writeFile(join(ignoredContextRepository, "README.md"), "Ignored context source\n");
-    await writeFile(join(ignoredContextRepository, ".gitignore"), "DESIGN.md\n");
-    await git(["add", "."], ignoredContextRepository);
-    await git(["commit", "-m", "initial"], ignoredContextRepository);
-    await writeFile(join(ignoredContextRepository, "DESIGN.md"), "# Ignored source-only design\n");
-    const ignoredContextBase = await host.handle("foundation.snapshot", {}) as {
-      storeRevision: number;
-    };
-    const ignoredContextProject = await host.handle("project.create", {
-      requestId: "worker-ignored-context-project",
-      expectedStoreRevision: ignoredContextBase.storeRevision,
-      title: "Ignored Context Worker Project",
-      directory: ignoredContextRepository,
-    }) as { storeRevision: number; project: { id: string } };
-    const ignoredContextTask = await host.handle("task.create", {
-      requestId: "worker-ignored-context-task",
-      expectedStoreRevision: ignoredContextProject.storeRevision,
-      scope: { kind: "project", projectId: ignoredContextProject.project.id },
-      title: "Ignored Context Worker",
-      goal: "Reject a selected source absent from the frozen commit",
-    }) as {
-      storeRevision: number;
-      task: { id: string; scope: { kind: "project"; projectId: string } };
-    };
-    const ignoredContextSnapshot = await host.handle("foundation.snapshot", {}) as {
-      storeRevision: number;
-      taskContextSets: Array<{ taskId: string; revision: number }>;
-    };
-    const ignoredContextSet = ignoredContextSnapshot.taskContextSets.find((set) => set.taskId === ignoredContextTask.task.id);
-    assert.ok(ignoredContextSet);
-    const ignoredContextSelection = await host.handle("task.context.replace", {
-      requestId: "worker-ignored-context-selection",
-      expectedStoreRevision: ignoredContextSnapshot.storeRevision,
-      taskId: ignoredContextTask.task.id,
-      scope: ignoredContextTask.task.scope,
-      expectedContextRevision: ignoredContextSet!.revision,
-      sources: [{ kind: "scope_document", relativePath: "DESIGN.md", title: "忽略的设计" }],
-    }) as { storeRevision: number };
-    const ignoredContextTeam = await host.handle("team.create", {
-      requestId: "worker-ignored-context-team",
-      expectedStoreRevision: ignoredContextSelection.storeRevision,
-      scope: ignoredContextTask.task.scope,
-      taskId: ignoredContextTask.task.id,
-      members: [
-        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read" } },
-        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write" } },
-      ],
-    }) as { storeRevision: number; teamRun: { id: string; revision: number } };
-    const providerRequestsBeforeIgnoredContext = providerRequests;
-    const ignoredContextStart = await host.handle("team.start", {
-      requestId: "worker-ignored-context-start",
-      expectedStoreRevision: ignoredContextTeam.storeRevision,
-      expectedTeamRunRevision: ignoredContextTeam.teamRun.revision,
-      scope: ignoredContextTask.task.scope,
-      taskId: ignoredContextTask.task.id,
-      teamRunId: ignoredContextTeam.teamRun.id,
-      message: "Do not create an incomplete Worker worktree",
-    }) as { started: boolean; reasonCode?: string };
-    assert.equal(ignoredContextStart.started, false);
-    assert.equal(ignoredContextStart.reasonCode, "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED");
-    const ignoredContextAfter = await host.handle("foundation.snapshot", {}) as {
-      managedWorkerWorktrees: Array<{ taskId: string }>;
-      teamFailures: Array<{ teamRunId: string; reasonCode?: string }>;
-    };
-    assert.equal(ignoredContextAfter.managedWorkerWorktrees.some((worktree) => worktree.taskId === ignoredContextTask.task.id), false);
-    assert.equal(
-      ignoredContextAfter.teamFailures.find((failure) => failure.teamRunId === ignoredContextTeam.teamRun.id)?.reasonCode,
-      "WORKSPACE_CONTEXT_SOURCE_NOT_MATERIALIZED",
-    );
-    assert.equal((await host.handle("runtime.list", {}) as { runtimes: unknown[] }).runtimes.length, 0);
-    assert.equal(providerRequests, providerRequestsBeforeIgnoredContext);
-
-    globalThis.fetch = (async () => new Response([
-      `data: ${JSON.stringify({
-        id: "managed-worker-completion",
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1_000),
-        model: "barrier-model",
-        choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }],
-      })}\n\n`,
-      `data: ${JSON.stringify({
-        id: "managed-worker-completion",
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1_000),
-        model: "barrier-model",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      })}\n\n`,
-      "data: [DONE]\n\n",
-    ].join(""), {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    })) as typeof fetch;
-
-    const workerRepository = join(root, "worker-repository");
-    await mkdir(workerRepository);
-    await git(["init", "--initial-branch=main"], workerRepository);
-    await git(["config", "user.email", "dcode-test@example.invalid"], workerRepository);
-    await git(["config", "user.name", "D Code Test"], workerRepository);
-    await writeFile(join(workerRepository, "README.md"), "Worker source\n");
-    await git(["add", "."], workerRepository);
-    await git(["commit", "-m", "initial"], workerRepository);
-    const workerProjectBase = await host.handle("foundation.snapshot", {}) as { storeRevision: number };
-    const workerProject = await host.handle("project.create", {
-      requestId: "worker-project-create",
-      expectedStoreRevision: workerProjectBase.storeRevision,
-      title: "Worker Project",
-      directory: workerRepository,
-    }) as { storeRevision: number; project: { id: string } };
-    const managedWorkerTask = await host.handle("task.create", {
-      requestId: "managed-worker-task",
-      expectedStoreRevision: workerProject.storeRevision,
-      scope: { kind: "project", projectId: workerProject.project.id },
-      title: "Managed Worker isolation",
-      goal: "Give Worker an exclusive Git worktree",
-    }) as { task: { id: string; scope: { kind: "project"; projectId: string } }; storeRevision: number };
-    const managedWorkerTeam = await host.handle("team.create", {
-      requestId: "managed-worker-team-create",
-      expectedStoreRevision: managedWorkerTask.storeRevision,
-      scope: managedWorkerTask.task.scope,
-      taskId: managedWorkerTask.task.id,
-      members: [
-        { profileId: "builtin-explore", title: "Explore", taskPacket: { objective: "Read source" } },
-        { profileId: "builtin-worker", title: "Worker", taskPacket: { objective: "Write isolated change" } },
-      ],
-    }) as { teamRun: { id: string; revision: number }; storeRevision: number };
-    const beforeManagedStart = await host.handle("foundation.snapshot", {}) as {
-      agentRuns: Array<{ id: string; taskId: string; sessionId: string; role: string }>;
-    };
-    const unprovisionedWorker = beforeManagedStart.agentRuns.find((run) => (
-      run.taskId === managedWorkerTask.task.id && run.role === "worker"
-    ));
-    assert.ok(unprovisionedWorker);
-    await assert.rejects(
-      host.handle("runtime.start", {
-        requestId: "managed-worker-preflight-bypass",
-        runtimeId: "runtime-managed-worker-preflight-bypass",
-        taskId: managedWorkerTask.task.id,
-        dcodeSessionId: unprovisionedWorker.sessionId,
-        agentRunId: unprovisionedWorker.id,
-        scope: managedWorkerTask.task.scope,
-        workspace: { workspaceId: "caller-controlled", cwd: workerRepository, access: "exclusiveWrite" },
-      }),
-      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
-    );
-    const managedWorkerStarted = await host.handle("team.start", {
-      requestId: "managed-worker-team-start",
-      expectedStoreRevision: managedWorkerTeam.storeRevision,
-      expectedTeamRunRevision: managedWorkerTeam.teamRun.revision,
-      scope: managedWorkerTask.task.scope,
-      taskId: managedWorkerTask.task.id,
-      teamRunId: managedWorkerTeam.teamRun.id,
-      message: "Coordinate an isolated Worker",
-    }) as { started: boolean; runtimes: Array<{ agentRunId: string; runtimeId: string }> };
-    assert.equal(managedWorkerStarted.started, true);
-    const workerRuntimeList = await host.handle("runtime.list", {}) as {
-      runtimes: Array<{
-        identity: { agentRunId?: string; workspace: { cwd: string; access: string } };
-        activeToolNames: string[];
-      }>;
-    };
-    const managedWorkerRuntime = workerRuntimeList.runtimes.find((runtime) => runtime.identity.agentRunId
-      && managedWorkerStarted.runtimes.some((started) => started.agentRunId === runtime.identity.agentRunId)
-      && runtime.identity.workspace.access === "exclusiveWrite");
-    assert.ok(managedWorkerRuntime, "Worker must open with an exclusive Runtime workspace");
-    assert.ok(managedWorkerRuntime.activeToolNames.includes("bash"), "Worker must retain bash in its real Active Tool Set");
-    const managedWorkerSnapshot = await host.handle("foundation.snapshot", {}) as {
-      managedWorkerWorktrees: Array<{
-        taskId: string;
-        state: string;
-        workspaceCwd: string;
-        managedPath: string;
-        baseCommit: string;
-      }>;
-    };
-    const managedWorktree = managedWorkerSnapshot.managedWorkerWorktrees.find((worktree) => (
-      worktree.taskId === managedWorkerTask.task.id
-    ));
-    assert.equal(managedWorktree?.state, "ready");
-    assert.notEqual(managedWorktree?.workspaceCwd, workerRepository);
-    await writeFile(join(managedWorktree!.workspaceCwd, "worker-marker.txt"), "isolated\n");
-    await assert.rejects(lstat(join(workerRepository, "worker-marker.txt")), { code: "ENOENT" });
-    const managedTeamDeadline = Date.now() + 5_000;
-    let completedWorkerAgentRun: { id: string; sessionId: string } | undefined;
-    while (true) {
-      const snapshot = await host.handle("foundation.snapshot", {}) as {
-        teamRuns: Array<{ id: string; status: string }>;
-        agentRuns: Array<{ id: string; taskId: string; sessionId: string; role: string }>;
-      };
-      if (snapshot.teamRuns.find((run) => run.id === managedWorkerTeam.teamRun.id)?.status === "completed") {
-        const workerAgentRun = snapshot.agentRuns.find((run) => (
-          run.taskId === managedWorkerTask.task.id && run.role === "worker"
-        ));
-        assert.ok(workerAgentRun);
-        completedWorkerAgentRun = workerAgentRun;
-        break;
-      }
-      if (Date.now() >= managedTeamDeadline) throw new Error("Managed Worker Team did not complete");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    while ((await host.handle("runtime.list", {}) as { runtimes: Array<{ identity: { agentRunId?: string } }> }).runtimes
-      .some((runtime) => runtime.identity.agentRunId === completedWorkerAgentRun?.id)) {
-      if (Date.now() >= managedTeamDeadline) throw new Error("Managed Worker Runtime did not close after Team completion");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    await assert.rejects(
-      host.handle("runtime.start", {
-        requestId: "managed-worker-bypass",
-        runtimeId: "runtime-managed-worker-bypass",
-        taskId: managedWorkerTask.task.id,
-        dcodeSessionId: completedWorkerAgentRun!.sessionId,
-        agentRunId: completedWorkerAgentRun!.id,
-        scope: managedWorkerTask.task.scope,
-        workspace: { workspaceId: "caller-controlled", cwd: workerRepository, access: "exclusiveWrite" },
-      }),
-      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_REQUIRED",
-    );
-    await host.close();
-    const restoredHost = new PiHost({
-      agentDir,
-      sessionsDirectory,
-      dataRoot,
-      userHome: root,
-      leaseQuietWindowMs: 1,
-      emit: () => undefined,
-    });
-    await restoredHost.start();
-    const restoredManagedSnapshot = await restoredHost.handle("foundation.snapshot", {}) as {
-      managedWorkerWorktrees: Array<{
-        taskId: string;
-        state: string;
-        workspaceId: string;
-        workspaceCwd: string;
-        managedPath: string;
-      }>;
-    };
-    const restoredManagedWorktree = restoredManagedSnapshot.managedWorkerWorktrees.find((worktree) => (
-      worktree.taskId === managedWorkerTask.task.id
-    ));
-    assert.equal(restoredManagedWorktree?.state, "ready");
-    assert.equal(restoredManagedWorktree?.workspaceCwd, managedWorktree!.workspaceCwd);
-    await rm(restoredManagedWorktree!.managedPath, { recursive: true, force: true });
-    await mkdir(restoredManagedWorktree!.workspaceCwd, { recursive: true });
-    await assert.rejects(
-      restoredHost.handle("runtime.start", {
-        requestId: "managed-worker-replaced-worktree",
-        runtimeId: "runtime-managed-worker-replaced-worktree",
-        taskId: managedWorkerTask.task.id,
-        dcodeSessionId: completedWorkerAgentRun!.sessionId,
-        agentRunId: completedWorkerAgentRun!.id,
-        scope: managedWorkerTask.task.scope,
-        workspace: {
-          workspaceId: restoredManagedWorktree!.workspaceId,
-          cwd: restoredManagedWorktree!.workspaceCwd,
-          access: "exclusiveWrite",
-        },
-      }),
-      (error: unknown) => error instanceof PiHostError && error.code === "WORKSPACE_MANAGED_WORKTREE_UNKNOWN",
-    );
-    const invalidatedSnapshot = await restoredHost.handle("foundation.snapshot", {}) as {
-      managedWorkerWorktrees: Array<{ taskId: string; state: string; failureCode?: string }>;
-    };
-    const invalidatedWorktree = invalidatedSnapshot.managedWorkerWorktrees.find((worktree) => (
-      worktree.taskId === managedWorkerTask.task.id
-    ));
-    assert.equal(invalidatedWorktree?.state, "unknown");
-    assert.equal(invalidatedWorktree?.failureCode, "WORKSPACE_WORKTREE_VERIFICATION_FAILED");
-    await restoredHost.close();
-  } finally {
-    await host.close();
-    globalThis.fetch = originalFetch;
-    await rm(root, { recursive: true, force: true });
-  }
+    const prompted=await host.handle("dcodeSession.prompt",{dcodeSessionId:task.coordinationSession.id,promptId:"start",message:"开始检查"}) as {runtimeId:string};
+    let snapshot=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const deadline=Date.now()+10000;while(!providerRequests){if(Date.now()>deadline)throw new Error("Provider did not start");await new Promise(resolve=>setTimeout(resolve,20));}
+    snapshot=await host.handle("foundation.snapshot",{}) as typeof snapshot;
+    const coordinator=snapshot.agentRuns.find(run=>run.role==="coordinator")!,run=snapshot.sessionRuns.find(run=>run.agentRunId===coordinator.id)!;
+    const params={requestId:"stop-once",expectedStoreRevision:snapshot.storeRevision,runtimeId:prompted.runtimeId,scope:task.task.scope,taskId:task.task.id,agentRunId:coordinator.id,sessionRunId:run.id,expectedAgentRunRevision:coordinator.revision};
+    const stopped=await host.handle("agentRun.stop",params) as {stopped:boolean;attemptId:string};assert.equal(stopped.stopped,true);
+    assert.equal((await host.handle("agentRun.stop",params) as {replayed:boolean}).replayed,true);
+    snapshot=await host.handle("foundation.snapshot",{}) as typeof snapshot;
+    assert.equal(snapshot.sessionRuns.find(item=>item.id===run.id)!.status,"aborted");assert.equal(snapshot.agentRuns.find(item=>item.id===coordinator.id)!.status,"aborted");assert.equal(snapshot.teamRuns.length,0);assert.equal(providerRequests,1);
+    assert.ok(snapshot.operationAttempts.some(attempt=>attempt.id===stopped.attemptId&&attempt.status==="succeeded"));
+  }finally{await host.close();globalThis.fetch=originalFetch;await rm(root,{recursive:true,force:true});}
 });

@@ -115,6 +115,7 @@ test(
       home = join(root, "home");
     await mkdir(join(agent, "sessions"), { recursive: true });
     await mkdir(home);
+    await writeFile(join(home,"selected-context.md"),"已选择的测试资料。\n");
     await writeFile(
       join(agent, "settings.json"),
       JSON.stringify({
@@ -200,6 +201,7 @@ test(
       readyToQuit() {},
       restartHost: async () => true,
       chooseDirectory: async () => null,
+      chooseContextFiles: async () => [join(home,"selected-context.md")],
       getPathForFile: (file) => file.name,
       openExternal: async () => {},
     };
@@ -336,6 +338,8 @@ test(
       });
       fireEvent.click(screen.getByText("send"));
       await waitFor(() => assert.equal(work.running, true));
+      // Test cancellation after Provider arrival; process startup is a separate boundary.
+      await waitFor(() => assert.equal(providerCalls, 2));
       fireEvent.click(screen.getByText("stop"));
       await waitFor(() => assert.equal(work.running, false), {
         timeout: 10000,
@@ -401,10 +405,11 @@ test(
           ),
         { timeout: 10000 },
       );
-      await waitFor(
-        () => assert.ok(screen.getByRole("button", { name: "发送" })),
-        { timeout: 10000 },
-      );
+      await waitFor(async () => {
+        const presentation=await host.handle("dcodeSession.presentation",{dcodeSessionId:sessionA});
+        assert.equal(presentation.runtime.state.isStreaming,false);
+        assert.equal(presentation.runtime.state.runState.phase,"completed");
+      },{timeout:10000});
       fireEvent.click(screen.getByRole("button",{name:"文件与 Git"}));await waitFor(()=>assert.ok(screen.getByRole("tab",{name:"对话"})));fireEvent.click(screen.getByRole("tab",{name:"对话"}));
       fireEvent.pointerDown(screen.getByRole("button", { name: "选择模型" }), {
         button: 0,
@@ -420,16 +425,26 @@ test(
         });
         assert.equal(p.inspection.context.model.modelId, "model-b");
       });
+      await waitFor(()=>assert.equal(screen.getByRole("button",{name:"选择模型"}).disabled,false),{timeout:10000});
+      fireEvent.click(screen.getByRole("button",{name:"上下文与运行依据"}));
+      fireEvent.click(screen.getByRole("button",{name:"添加文件"}));await waitFor(()=>assert.ok(screen.getByRole("button",{name:"移除资料 selected-context.md"})));
+      fireEvent.click(screen.getByRole("button",{name:"保存选择"}));await waitFor(()=>assert.ok(screen.getByText("已保存，下次运行开始使用。")));
+      fireEvent.click(screen.getByRole("button",{name:"关闭上下文"}));fireEvent.click(screen.getByRole("button",{name:"上下文与运行依据"}));assert.ok(screen.getByRole("button",{name:"移除资料 selected-context.md"}));fireEvent.click(screen.getByRole("button",{name:"关闭上下文"}));
       const priorLateKey=process.env.DCODE_UI_LATE_PROVIDER;process.env.DCODE_UI_LATE_PROVIDER="fixture-only";
       try {
-        await host.handle("dcodeModelProvider.save",{requestId:"late-provider",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision,provider:{id:"late-provider",name:"Late provider",apiKind:"openai-completions",baseUrl:"https://dcode-test.invalid/v1",credentialEnv:"DCODE_UI_LATE_PROVIDER",models:[{modelId:"model-c",name:"Late model C",reasoning:false,contextWindow:100000,maxTokens:4096}]}});
-        await host.handle("dcodeModels.select",{requestId:"select-late-provider",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision,dcodeSessionId:sessionA,providerId:"late-provider",modelId:"model-c"});
+        await work.mutateStore("dcodeModelProvider.save",{provider:{id:"late-provider",name:"Late provider",apiKind:"openai-completions",baseUrl:"https://dcode-test.invalid/v1",credentialEnv:"DCODE_UI_LATE_PROVIDER",models:[{modelId:"model-c",name:"Late model C",reasoning:false,contextWindow:100000,maxTokens:4096}]}});
+        const lateView=await host.handle("dcodeModels.get",{dcodeSessionId:sessionA});
+        assert.equal(lateView.models.find(model=>model.key==="late-provider::model-c").available,true,"new provider auth is registered for the existing session");
+        await assert.rejects(host.handle("dcodeModels.select",{requestId:"disabled-late-provider",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision,dcodeSessionId:sessionA,providerId:"late-provider",modelId:"model-c"}),/已停用/);
+        await work.mutateStore("clientPreferences.set",{enabledModels:[...lateView.models.filter(model=>model.enabled).map(model=>model.key),"late-provider::model-c"]});
+        await work.mutateStore("dcodeModels.select",{dcodeSessionId:sessionA,providerId:"late-provider",modelId:"model-c"});
         assert.equal((await host.handle("dcodeSession.presentation",{dcodeSessionId:sessionA})).inspection.context.model.modelId,"model-c");
       } finally {if(priorLateKey===undefined)delete process.env.DCODE_UI_LATE_PROVIDER;else process.env.DCODE_UI_LATE_PROVIDER=priorLateKey;}
+      const selectWithCurrentRevision=async input=>{let params={...input};for(let attempt=0;;attempt++){try{return await host.handle("dcodeModels.select",params);}catch(error){if(attempt>=7||error?.code!=="REVISION_CONFLICT"||typeof error.details?.expectedStoreRevision!=="number"||typeof error.details?.currentStoreRevision!=="number")throw error;params={...params,expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision};}}};
       const selectA={requestId:"replay-select-a",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision,dcodeSessionId:sessionA,providerId:"local-test",modelId:"model-a"};
-      await host.handle("dcodeModels.select",selectA);
-      await host.handle("dcodeModels.select",{...selectA,requestId:"replay-select-b",modelId:"model-b",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision});
-      await host.handle("dcodeModels.select",selectA);
+      await selectWithCurrentRevision(selectA);
+      await selectWithCurrentRevision({...selectA,requestId:"replay-select-b",modelId:"model-b",expectedStoreRevision:(await host.handle("foundation.snapshot",{})).storeRevision});
+      await selectWithCurrentRevision(selectA);
       assert.equal((await host.handle("dcodeModels.get",{dcodeSessionId:sessionA})).selectedKey,"local-test::model-b");
       await assert.rejects(host.handle("dcodeModels.select",{...selectA,modelId:"model-b"}),/requestId|REQUEST_ID|different/i);
       fireEvent.change(screen.getByRole("textbox", { name: "任务消息" }), {

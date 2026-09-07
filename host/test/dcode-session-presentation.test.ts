@@ -170,66 +170,10 @@ test("D Code Session presentation reads its own binding and Coordinator prompts 
       && run.teamRunId === undefined
     ));
     assert.ok(standaloneCoordinator, "the first Coordinator prompt must create a durable standalone Agent Run");
-    const team = await host.handle("team.create", {
-      requestId: "create-team-after-coordinator-prompt",
-      expectedStoreRevision: beforeTeam.storeRevision,
-      taskId: task.task.id,
-      scope: { kind: "user", userId: initial.currentUser.id },
-      members: [{
-        profileId: "builtin-explore",
-        title: "Explore after coordinator context",
-        taskPacket: { objective: "Check the Coordinator handoff" },
-      }],
-    }) as { storeRevision: number; teamRun: { id: string; revision: number; coordinatorAgentRunId: string } };
-    assert.equal(team.teamRun.coordinatorAgentRunId, standaloneCoordinator?.id);
-    const startedTeam = await host.handle("team.start", {
-      requestId: "start-team-after-coordinator-prompt",
-      expectedStoreRevision: team.storeRevision,
-      expectedTeamRunRevision: team.teamRun.revision,
-      taskId: task.task.id,
-      scope: { kind: "user", userId: initial.currentUser.id },
-      teamRunId: team.teamRun.id,
-      message: "Continue from the Coordinator conversation and delegate the check.",
-    }) as { started: boolean; runtimes: Array<{ agentRunId: string; runtimeId: string }> };
-    assert.equal(startedTeam.started, true, JSON.stringify(startedTeam));
-    assert.ok(startedTeam.runtimes.some((runtime) => runtime.agentRunId === standaloneCoordinator?.id));
-    const teamDeadline = Date.now() + 5_000;
-    while (true) {
-      const snapshot = await host.handle("foundation.snapshot", {}) as {
-        teamRuns: Array<{ id: string; status: string }>;
-      };
-      const status = snapshot.teamRuns.find((candidate) => candidate.id === team.teamRun.id)?.status;
-      if (status === "completed") break;
-      if (Date.now() >= teamDeadline) throw new Error("Team after Coordinator prompt did not complete");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    while (true) {
-      const runtimes = await host.handle("runtime.list", {}) as {
-        runtimes: Array<{ identity: { dcodeSessionId: string } }>;
-      };
-      if (!runtimes.runtimes.some((runtime) => runtime.identity.dcodeSessionId === task.coordinationSession.id)) break;
-      if (Date.now() >= teamDeadline) throw new Error("Completed Team did not release the Coordinator Runtime");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    const continuedAfterTeam = await host.handle("dcodeSession.prompt", {
-      dcodeSessionId: task.coordinationSession.id,
-      promptId: "coordinator-after-team",
-      message: "团队收口后继续和协调者校准下一步。",
-    }) as { started: boolean; runtimeId: string };
-    assert.equal(continuedAfterTeam.started, true);
-    const continuationDeadline = Date.now() + 5_000;
-    while (true) {
-      const snapshot = await host.handle("foundation.snapshot", {}) as {
-        sessionRuns: Array<{ sessionId: string; status: string; agentRunId?: string }>;
-      };
-      const run = snapshot.sessionRuns.filter((candidate) => candidate.sessionId === task.coordinationSession.id).at(-1);
-      if (run?.status === "completed") {
-        assert.equal(run.agentRunId, standaloneCoordinator?.id);
-        break;
-      }
-      if (Date.now() >= continuationDeadline) throw new Error("Coordinator did not resume after Team completion");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await assert.rejects(host.handle("team.create",{}),error=>error instanceof Error&&"code" in error&&error.code==="COORDINATOR_REQUIRED");
+    await host.handle("session.close",{runtimeId:prompted.runtimeId});
+    const continued=await host.handle("dcodeSession.prompt",{dcodeSessionId:task.coordinationSession.id,promptId:"coordinator-resumed",message:"回收后继续原主对话。"}) as {started:boolean};assert.equal(continued.started,true);
+    const resumedDeadline=Date.now()+10000;while(true){const snap=await host.handle("foundation.snapshot",{}) as {sessionRuns:Array<{sessionId:string;status:string;agentRunId?:string}>};const run=snap.sessionRuns.filter(run=>run.sessionId===task.coordinationSession.id).at(-1);if(run?.status==="completed"){assert.equal(run.agentRunId,standaloneCoordinator.id);break;}if(Date.now()>resumedDeadline)throw new Error("Coordinator continuation did not settle");await new Promise(resolve=>setTimeout(resolve,20));}
   } finally {
     await host.close();
     globalThis.fetch = originalFetch;

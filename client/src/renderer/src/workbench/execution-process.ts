@@ -12,42 +12,52 @@ export interface ProcessStep {
 export interface ExecutionTurn {
   id: string;
   user?: MessageRow;
+  updateLabel?:string;
   steps: ProcessStep[];
   answer?: MessageRow;
   running: boolean;
   status: "running" | "complete" | "error" | "aborted";
   hasResponse: boolean;
 }
-export const toolLabel = (name: string) => ({bash:"终端",read:"读取文件",write:"写入文件",edit:"编辑文件",grep:"搜索内容",find:"查找文件",ls:"查看目录"})[name] ?? name;
+export const toolLabel = (name: string) => ({bash:"终端",read:"读取文件",write:"写入文件",edit:"编辑文件",grep:"搜索内容",find:"查找文件",ls:"查看目录",dcode_team:"协作安排",dcode_verification:"验收记录",dcode_request:"等待决定",dcode_request_task_acceptance:"任务验收"})[name] ?? name;
 
 /** Merge the live adapter view into the current turn by message identity, never by an older answer's text. */
 export function mergeLiveRows(rows: MessageRow[], stream: StreamState): MessageRow[] {
   const result = [...rows];
-  const lastUser = result.findLastIndex(row => row.role === "user");
-  const claimed = new Set<number>();
+  const boundary=(row:MessageRow)=>row.role==="user"||row.role==="coordination"||row.inputBoundary;
+  const claimed = new Set<string>();
   for (const message of stream.messages) {
+    const lastUser=result.findLastIndex(boundary);
+    const inputIndex=message.inputMessageId?result.findLastIndex(row=>boundary(row)&&row.messageId===message.inputMessageId):-1;
+    const anchor=inputIndex>=0?inputIndex:lastUser;
+    const nextInput=result.findIndex((row,index)=>index>anchor&&boundary(row));
+    const segmentEnd=nextInput>=0?nextInput:result.length;
     const parts: MessagePart[] = message.parts ?? [
       ...(message.thinking.trim() ? [{kind:"thinking" as const,text:message.thinking}] : []),
       ...(message.text ? [{kind:"text" as const,text:message.text}] : []),
     ];
-    const index = result.findIndex((row, index) => index > lastUser && !claimed.has(index) && row.role === "assistant" && (
-      row.messageId === message.id || (!row.messageId && message.ended && !!message.text && row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("") === message.text)
-    ));
+    // A steering input does not end the Agent run. Earlier live messages can
+    // already be durable before the newest input; identities cover every row.
+    let index=result.findIndex(row=>!claimed.has(row.id)&&row.role==="assistant"&&row.messageId===message.id);
+    if(index<0)index=result.findIndex((row,index)=>index>anchor&&index<segmentEnd&&!claimed.has(row.id)&&row.role==="assistant"&&!row.messageId&&message.ended&&!!message.text&&row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("")===message.text);
     if (index >= 0) {
-      claimed.add(index);
-      // The durable record takes over only once this message has ended.
+      claimed.add(result[index]!.id);
       if (!message.ended) result[index] = {...result[index], parts, stopReason:message.stopReason};
-    } else if (parts.length) result.push({id:`live-${message.id}`,messageId:message.id,role:"assistant",parts,stopReason:message.stopReason});
+    } else if (parts.length) {
+      const group=result[anchor]?.collaborationGroupId;
+      result.splice(segmentEnd,0,{id:`live-${message.id}`,messageId:message.id,role:"assistant",parts,stopReason:message.stopReason,...(group?{collaborationGroupId:group}:{})});
+    }
   }
   return result;
 }
 
 /** One disclosure per user turn; final answer stays outside, intermediate statements and tools stay in order. */
 export function executionTurns(rows: MessageRow[], stream: StreamState, running: boolean): ExecutionTurn[] {
-  const grouped: {id:string;user?:MessageRow;rows:MessageRow[]}[] = [];
+  const grouped: {id:string;user?:MessageRow;rows:MessageRow[];collaborationGroupId?:string;updateLabel?:string}[] = [];
   for (const row of rows) {
-    if (row.role === "user") grouped.push({id:row.id,user:row,rows:[]});
+    if (row.role === "user"||row.role==="coordination") grouped.push({id:row.id,user:row,rows:[],collaborationGroupId:row.collaborationGroupId});
     else {
+      if(row.collaborationGroupId&&grouped.at(-1)?.collaborationGroupId!==row.collaborationGroupId)grouped.push({id:`update-${row.collaborationGroupId}`,rows:[],collaborationGroupId:row.collaborationGroupId,updateLabel:"进展更新"});
       if (!grouped.length) grouped.push({id:row.id,rows:[]});
       grouped.at(-1)!.rows.push(row);
     }
@@ -70,19 +80,23 @@ export function executionTurns(rows: MessageRow[], stream: StreamState, running:
         else steps.push({id,kind:"tool",title:toolLabel(part.toolName ?? "工具"),text:"",output:part.text,state:part.isError?"error":"complete"});
       } else if (part.kind !== "file" && part.text.trim()) steps.push({id,kind:part.kind,title:part.kind==="thinking"?"思考":part.kind==="tool"?toolLabel(part.toolName ?? "工具"):"进展",text:part.kind==="tool"?part.text.slice(part.text.indexOf("\n")+1):part.text,mimeType:part.mimeType});
     }
-    if (index === grouped.length-1) for (const tool of stream.tools ?? []) {
+    for (const tool of stream.tools ?? []) {
+      const recordedOwner=grouped.findIndex(candidate=>candidate.rows.some(row=>row.parts.some(part=>part.toolCallId===tool.id)));
+      const inputOwner=tool.inputMessageId?grouped.findIndex(candidate=>candidate.user?.messageId===tool.inputMessageId||candidate.rows.some(row=>row.inputBoundary&&row.messageId===tool.inputMessageId)):-1;
+      if(index!==(recordedOwner>=0?recordedOwner:inputOwner>=0?inputOwner:grouped.length-1))continue;
       const existing = steps.find(step=>step.id===tool.id);
       if (existing) {existing.output=tool.output || existing.output;existing.state=tool.state;}
       else steps.push({id:tool.id,kind:"tool",title:toolLabel(tool.name),text:tool.input,output:tool.output,state:tool.state});
     }
     const terminal = latestAssistant?.stopReason;
-    return {id:group.id,user:group.user,steps,answer:final,running:active,status:active?"running":terminal==="error"?"error":terminal==="aborted"?"aborted":"complete",hasResponse:active||group.rows.length>0};
+    return {id:group.id,user:group.user,updateLabel:group.updateLabel,steps,answer:final,running:active,status:active?"running":terminal==="error"?"error":terminal==="aborted"?"aborted":"complete",hasResponse:active||group.rows.some(row=>!row.inputBoundary)};
   });
 }
 
 export function processPreview(turn: ExecutionTurn): string {
   const step = turn.steps.at(-1);
   if (!step) return turn.running ? "正在生成回复…" : "";
+  if(["协作安排","验收记录","等待决定","任务验收"].includes(step.title)) return `${step.title} · ${step.state==="error"?"未完成，展开查看原因":step.state==="running"?"正在处理…":"已返回结果"}`;
   const text = (step.output || step.text).replace(/\s+/g," ").trim();
   const tail = text.length > 180 ? `…${text.slice(-180)}` : text;
   return `${step.kind === "tool" ? `${step.title} · ` : ""}${tail}`;

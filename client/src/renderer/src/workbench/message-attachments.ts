@@ -7,7 +7,7 @@ export function projectMessageAttachments(rows:MessageRow[],submissions:DCodeSes
   return rows.map(row=>{
     if(row.role!=="user")return row;
     const text=row.parts.filter(part=>part.kind==="text").map(part=>part.text).join("");
-    const index=submissions?.findIndex((submission,index)=>!used.has(index)&&submission.effectiveText===text)??-1;
+    const index=submissions?.findIndex((submission,index)=>!used.has(index)&&(submission.sourceEntryId?submission.sourceEntryId===row.id:submission.effectiveText===text))??-1;
     if(index<0||!submissions)return row;
     used.add(index);
     const submission=submissions[index];

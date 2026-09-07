@@ -15,6 +15,7 @@ import type {
 
 interface SearchWorkerData {
   sessionsDirectory: string;
+  additionalDirectories?:string[];
   cacheDirectory: string;
 }
 
@@ -395,7 +396,7 @@ async function discoverCandidates(
   excludedSessionIds: ReadonlySet<string>,
   shouldCancel: () => boolean,
 ): Promise<CandidateDiscovery> {
-  const files = await collectSessionFiles(data.sessionsDirectory, shouldCancel);
+  const files = [...new Set((await Promise.all([data.sessionsDirectory,...(data.additionalDirectories??[])].map(directory=>collectSessionFiles(directory,shouldCancel)))).flat())];
   const sourceSet = new Set(sourceFolders);
   const candidates = await mapConcurrent(
     files,
@@ -791,7 +792,7 @@ async function probeFreshness(scopeKey: string, generation: number): Promise<boo
   }
   const shouldCancel = (): boolean => refreshCancelled(scopeKey, generation);
   const promise = (async (): Promise<boolean> => {
-    const paths = await collectSessionFiles(data.sessionsDirectory, shouldCancel);
+    const paths = [...new Set((await Promise.all([data.sessionsDirectory,...(data.additionalDirectories??[])].map(directory=>collectSessionFiles(directory,shouldCancel)))).flat())];
     if (paths.length !== knownSessionPaths.size
       || paths.some((path) => !knownSessionPaths.has(path))) return true;
     const changed = await mapConcurrent(
@@ -1535,6 +1536,10 @@ async function search(params: SessionSearchParams): Promise<SessionSearchRespons
 port.on("message", (message: unknown) => {
   if (typeof message !== "object" || message === null || Array.isArray(message)) return;
   const value = message as Record<string, unknown>;
+  if(value.type==="addDirectory"&&typeof value.directory==="string"){
+    data.additionalDirectories??=[];if(!data.additionalDirectories.includes(value.directory))data.additionalDirectories.push(value.directory);
+    value.type="invalidate";
+  }
   if (value.type === "invalidate") {
     if (status.state === "failed") forceDatabaseRebuild = true;
     failedGeneration = undefined;

@@ -1,3 +1,4 @@
+import { ModelRouteEditor, type ModelRouteDraft } from "./ModelRouteEditor";
 import { ModelPicker } from "./ModelPicker";
 import type { ModelControls } from "../workbench/useModels";
 import { thinkingLabels, profilePresentation } from "../workbench/presentation";
@@ -168,7 +169,7 @@ export function SettingsWorkspace({
             <Resources work={work} execute={execute} busy={busy} />
           )}
           {page === "profiles" && (
-            <Profiles work={work} execute={execute} busy={busy} />
+            <Profiles work={work} models={models} execute={execute} busy={busy} />
           )}
           {page === "appearance" && (
             <>
@@ -1006,7 +1007,8 @@ function Resources({ work, execute, busy }: Controls) {
     </>
   );
 }
-function Profiles({ work, execute, busy }: Controls) {
+function Profiles({ work, models, execute, busy }: Controls & { models: ModelControls }) {
+  const [routes, setRoutes] = useState<ModelRouteDraft[]>([]);
   const [name, setName] = useState(""),
     [contract, setContract] = useState(""),
     [edit, setEdit] = useState<string | null>(null);
@@ -1023,9 +1025,11 @@ function Profiles({ work, execute, busy }: Controls) {
           role: "custom",
           roleContract: contract,
           enabled: p?.enabled ?? true,
+          modelCandidates: routes.length ? routes.map((row) => row.model) : null,
         },
       );
       setEdit(null);
+      setRoutes([]);
       setName("");
       setContract("");
     });
@@ -1041,6 +1045,7 @@ function Profiles({ work, execute, busy }: Controls) {
               className="text-button"
               onClick={() => {
                 setEdit(p.id);
+                setRoutes((p.modelCandidates ?? []).map((model) => ({ id: crypto.randomUUID(), model })));
                 setName(profilePresentation(p).name);
                 setContract(profilePresentation(p).description);
               }}
@@ -1093,6 +1098,7 @@ function Profiles({ work, execute, busy }: Controls) {
             onChange={(e) => setContract(e.target.value)}
           />
         </label>
+        <ModelRouteEditor value={routes} onChange={setRoutes} models={models.data?.models ?? []} busy={busy} />
         <div className="dialog-actions">
           {edit && (
             <button
@@ -1100,6 +1106,7 @@ function Profiles({ work, execute, busy }: Controls) {
               className="text-button"
               onClick={() => {
                 setEdit(null);
+                setRoutes([]);
                 setName("");
                 setContract("");
               }}
@@ -1108,7 +1115,7 @@ function Profiles({ work, execute, busy }: Controls) {
             </button>
           )}
           <button
-            disabled={busy || !name.trim() || !contract.trim()}
+            disabled={busy || !name.trim() || !contract.trim() || routes.some((row) => !row.model.providerId || !row.model.modelId)}
             className="primary-button"
           >
             保存档案

@@ -10,7 +10,7 @@
 
 D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能力配置，通过 Runtime Adapter 使用 Pi SDK 等 Agent Runtime；Pi JSONL 只作为可选择的单向导入来源。难逆转边界见 [ADR 0037](doc/决策档案/0037-D-Code-原生产品数据权威与-Pi-单向导入边界.md)。
 
-当前客户端主路径位于 `client/`：Electron + React 工作台消费 Host 的 Project / Task / Session、模型与能力配置、消息附件和灵感数据，并提供文件树、Markdown/HTML 编辑、隔离预览与 Git 差异查看。产品事实与恢复状态归当前用户 `~/.dcode/`，Pi JSONL 不双写。`app/` 保留尚未完成退役的 Swift 客户端源码；基本验收、未迁移内容面与后续清理状态由[版本实施方案](doc/40-版本实施方案/README.md)维护。
+当前客户端主路径位于 `client/`：Electron + React 工作台消费 Host 的 Project / Task / Session、模型与能力配置、消息附件和灵感数据，并提供文件树、Markdown/HTML 编辑、隔离预览与 Git 差异查看。任务内协作由主智能体按需组织，支持成员定向交流、独立验收与原生历史续接。产品事实与恢复状态归当前用户 `~/.dcode/`，Pi JSONL 不双写。`app/` 保留尚未完成退役的 Swift 客户端源码；基本验收、未迁移内容面与后续清理状态由[版本实施方案](doc/40-版本实施方案/README.md)维护。
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 

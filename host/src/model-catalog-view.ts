@@ -9,6 +9,7 @@ export interface ModelChoice {
   available: boolean;
   enabled: boolean;
   reasoning: boolean;
+  input?: string[];
   contextWindow: number | null;
   thinkingLevels: string[];
 }

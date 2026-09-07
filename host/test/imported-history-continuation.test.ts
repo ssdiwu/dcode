@@ -184,6 +184,20 @@ test("an imported Pi Session continues through a bounded D Code history projecti
     assert.match(receipt?.importedHistoryReceipt?.sourcePathId ?? "", /^leaf:/);
     assert.match(receipt?.importedHistoryReceipt?.digest ?? "", /^sha256:[a-f0-9]{64}$/);
     assert.equal(JSON.stringify(receipt).includes("历史任务背景"), false);
+    const pathsBefore=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const originalPath=pathsBefore.sessionPaths.find(path=>path.sessionId===imported.coordinationSession.id&&path.isCurrent)!;
+    const branch=async(kind:"editUser"|"continueAssistant",entryId:string,message:string)=>{
+      const current=(await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot).sessionPaths.find(path=>path.sessionId===imported.coordinationSession.id&&path.isCurrent)!;
+      await host.handle("session.prompt",{runtimeId:"runtime-imported-session",promptId:`path-${kind}`,message,pathAction:{kind,entryId,fromPathId:originalPath.id,expectedCurrentPathId:current.id,expectedCurrentPathRevision:current.revision}});
+      const stop=Date.now()+5000;while((await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot).sessionRuns.some(run=>["prepared","running"].includes(run.status))){if(Date.now()>stop)throw new Error("Imported path did not finish");await new Promise(resolve=>setTimeout(resolve,10));}
+    };
+    await branch("editUser","source-user","修改导入的第一个问题");
+    const editedSystem=String(JSON.parse(providerBodies.at(-1)!).messages.find((message:{role:string})=>message.role==="system").content);
+    const editedHistory=editedSystem.match(/<dcode_imported_history[^>]*>([\s\S]*?)<\/dcode_imported_history>/u)?.[1]??"";
+    assert.ok(!editedHistory.includes("历史任务背景：先核对现状"));assert.ok(!editedHistory.includes("历史结论：继续前先检查"));assert.ok(providerBodies.at(-1)!.includes("修改导入的第一个问题"));
+    await branch("continueAssistant","source-assistant","从导入的结论继续");
+    assert.ok(providerBodies.at(-1)!.includes("历史任务背景：先核对现状"));assert.ok(providerBodies.at(-1)!.includes("历史结论：继续前先检查"));assert.ok(!providerBodies.at(-1)!.includes("修改导入的第一个问题"));
+    assert.equal((await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot).sessionPaths.filter(path=>path.sessionId===imported.coordinationSession.id).length,3);
     assert.equal(sha256(await readFile(sourcePath)), sourceDigestBefore);
   } finally {
     await host.close();

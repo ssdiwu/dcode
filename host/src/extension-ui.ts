@@ -6,7 +6,10 @@ import type {
 
 type Emit = (event: string, data?: unknown) => void;
 
+export interface RuntimeDialog {requestId:string;method:"select"|"confirm"|"input"|"editor";title:string;options?:string[];message?:string;placeholder?:string;prefill?:string;expiresAt?:number}
+
 interface PendingDialog {
+  request:RuntimeDialog;
   method: string;
   finish: (response: unknown) => void;
   cancel: () => void;
@@ -27,6 +30,8 @@ export class ExtensionUIBridge {
   constructor(private readonly emit: Emit) {
     this.context = this.createContext();
   }
+
+  get pendingRequests():RuntimeDialog[]{return [...this.pendingDialogs.values()].map(dialog=>({...dialog.request}));}
 
   get hasPendingDialogs(): boolean { return this.pendingDialogs.size > 0; }
 
@@ -71,7 +76,9 @@ export class ExtensionUIBridge {
         resolve(value);
       };
       const cancel = () => settle(fallback);
+      const request={requestId,method,...payload,...(options?.timeout?{expiresAt:Date.now()+options.timeout}:{})} as RuntimeDialog;
       this.pendingDialogs.set(requestId, {
+        request,
         method,
         finish: (response) => {
           const record = responseRecord(response);
@@ -120,7 +127,7 @@ export class ExtensionUIBridge {
         "select",
         { title, options },
         undefined,
-        (response) => typeof response.value === "string" ? response.value : undefined,
+        (response) => typeof response.value === "string" && options.includes(response.value) ? response.value : undefined,
         dialogOptions,
       ),
       confirm: (title, message, dialogOptions) => bridge.requestDialog(

@@ -1,3 +1,4 @@
+import { agentModelCandidates } from "./model-route.js";
 export const PROTOCOL_VERSION = 1 as const;
 
 export const HOST_METHODS = [
@@ -27,8 +28,12 @@ export const HOST_METHODS = [
   "dcodeModelProvider.remove",
   "taskWorkbenchViewState.patch",
   "dcodeSession.presentation",
+  "dcodeSession.commands",
   "dcodeSession.composerDraft.set",
   "dcodeSession.prompt",
+  "collaboration.messageControl",
+  "collaboration.messageEdit",
+  "collaboration.queueReorder",
   "dcodeSession.copy",
   "project.create",
   "project.gitBranch",
@@ -44,6 +49,8 @@ export const HOST_METHODS = [
   "task.create",
   "task.manage",
   "task.context.replace",
+  "task.context.inspectFiles",
+  "sessionRun.inputs",
   "task.plan.create",
   "task.plan.update",
   "task.workItem.create",
@@ -74,6 +81,7 @@ export const HOST_METHODS = [
   "session.prompt",
   "session.steer",
   "session.abort",
+  "agentProcess.stopAuxiliary",
   "session.getState",
   "session.contextBreakdown",
   "session.getCommands",
@@ -86,6 +94,7 @@ export const HOST_METHODS = [
   "modelProviders.remove",
   "session.getModels",
   "dcodeModels.get",
+  "dcodeModels.quotas",
   "dcodeModels.refresh",
   "dcodeModels.select",
   "dcodeModels.setThinking",
@@ -577,6 +586,8 @@ export function parseRequest(value: unknown): HostRequest {
 export function validateMethodParams(method: HostMethod, params: Record<string, unknown>): void {
   if (params.runtimeId !== undefined) requireBoundedString(params, "runtimeId", 128);
   switch (method) {
+    case "agentProcess.stopAuxiliary":
+      requireBoundedString(params,"taskId",200);requireBoundedString(params,"agentRunId",200);requireBoundedString(params,"processId",200);return;
     case "host.hello":
     case "runtime.list":
     case "session.abort":
@@ -758,6 +769,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "dcodeSessionId", 200);
       return;
     case "dcodeSession.composerDraft.set": {
+      if(params.targetAgentRunId!=null)requireBoundedString(params,"targetAgentRunId",200);
       if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
@@ -769,7 +781,25 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       }
       return;
     }
+    case "collaboration.messageEdit":
+      requireBoundedString(params,"id",200);requireBoundedString(params,"requestId",128);requireInteger(params,"expectedRevision",1,Number.MAX_SAFE_INTEGER);requireBoundedString(params,"text",200000);return;
+    case "collaboration.queueReorder":
+      requireInteger(params,"expectedQueueRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"sessionId",200);requireBoundedString(params,"requestId",128);
+      if(!Array.isArray(params.messages)||params.messages.length<1||params.messages.length>1000)throw new ProtocolValidationError("INVALID_PARAMS","Invalid queue order");
+      for(const item of params.messages){if(!item||typeof item!=="object"||Array.isArray(item))throw new ProtocolValidationError("INVALID_PARAMS","Invalid queue entry");requireBoundedString(item,"id",200);requireInteger(item,"revision",1,Number.MAX_SAFE_INTEGER);}return;
+    case "collaboration.messageControl":
+      requireBoundedString(params,"id",200);
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedRevision",1,Number.MAX_SAFE_INTEGER);
+      if(!["queued","paused","cancelled"].includes(String(params.state))) throw new ProtocolValidationError("INVALID_PARAMS","Invalid message control");
+      return;
+    case "dcodeSession.commands":
+      if(params.dcodeSessionId!==undefined)requireBoundedString(params,"dcodeSessionId",200);if(params.projectId!==undefined)requireBoundedString(params,"projectId",200);return;
     case "dcodeSession.prompt": {
+      if(params.deliveryMode!==undefined&&params.deliveryMode!=="steer")throw new ProtocolValidationError("INVALID_PARAMS","Invalid input delivery mode");if(params.expectedSessionRunId!==undefined)requireBoundedString(params,"expectedSessionRunId",200);
+      if(params.pathAction!==undefined){const action=params.pathAction;if(!isRecord(action)||!["editUser","continueAssistant","continuePath"].includes(String(action.kind)))throw new ProtocolValidationError("INVALID_PARAMS","Invalid native session path action");requireBoundedString(action,"entryId",200);requireBoundedString(action,"fromPathId",200);requireBoundedString(action,"expectedCurrentPathId",200);requireInteger(action,"expectedCurrentPathRevision",1,Number.MAX_SAFE_INTEGER);}
+      if(params.targetAgentRunId!==undefined) requireBoundedString(params,"targetAgentRunId",200);
       requireBoundedString(params, "dcodeSessionId", 200);
       const message = requireString(params, "message", { allowEmpty: true });
       if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
@@ -822,6 +852,8 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "goal", 4_000);
       requireStringArray(params, "acceptance", 100, true);
       return;
+    case "task.context.inspectFiles":requireBoundedString(params,"taskId",200);requireStringArray(params,"paths",31);return;
+    case "sessionRun.inputs":requireBoundedString(params,"taskId",200);requireBoundedString(params,"sessionRunId",200);return;
     case "task.context.replace":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
@@ -1001,6 +1033,10 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "sessionRunId", 200);
       requireInteger(params, "expectedAgentRunRevision", 1, Number.MAX_SAFE_INTEGER);
       return;
+    case "dcodeModels.quotas":
+      if (params.providerIds !== undefined && (!Array.isArray(params.providerIds) || params.providerIds.length > 64 || params.providerIds.some((id) => typeof id !== "string" || !id || id.length > 200))) throw new ProtocolValidationError("INVALID_PARAMS", "Invalid quota providers");
+      if (params.force !== undefined && typeof params.force !== "boolean") throw new ProtocolValidationError("INVALID_PARAMS", "Invalid quota refresh flag");
+      return;
     case "agentProfile.update":
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
@@ -1011,6 +1047,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if (typeof params.enabled !== "boolean") {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
       }
+      if (params.modelCandidates !== undefined && params.modelCandidates !== null) {
+        try { agentModelCandidates(params.modelCandidates); } catch { throw new ProtocolValidationError("INVALID_PARAMS", "Invalid model fallback chain"); }
+      }
       return;
     case "agentProfile.create":
       requireBoundedString(params, "requestId", 128);
@@ -1019,6 +1058,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "roleContract", 20_000);
       if (typeof params.enabled !== "boolean") {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.enabled to be a boolean");
+      }
+      if (params.modelCandidates !== undefined && params.modelCandidates !== null) {
+        try { agentModelCandidates(params.modelCandidates); } catch { throw new ProtocolValidationError("INVALID_PARAMS", "Invalid model fallback chain"); }
       }
       return;
     case "piImport.listCandidates":

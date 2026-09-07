@@ -64,6 +64,7 @@ interface PendingRequest {
 
 export interface SessionSearchIndexOptions {
   sessionsDirectory: string;
+  additionalDirectories?:string[];
   cacheDirectory?: string;
   emit: (event: string, data?: unknown) => void;
 }
@@ -89,6 +90,12 @@ export class SessionSearchIndex {
     });
     worker.postMessage({ type: "search", id, params });
     return await promise;
+  }
+
+  addDirectory(directory:string):void {
+    const directories=this.options.additionalDirectories??=[];
+    if(directory===this.options.sessionsDirectory||directories.includes(directory))return;
+    directories.push(directory);this.worker?.postMessage({type:"addDirectory",directory});
   }
 
   invalidate(): void {
@@ -121,6 +128,7 @@ export class SessionSearchIndex {
     const worker = new Worker(new URL("./session-search-worker.js", import.meta.url), {
       workerData: {
         sessionsDirectory: this.options.sessionsDirectory,
+        additionalDirectories:this.options.additionalDirectories??[],
         cacheDirectory: this.cacheDirectory,
       },
       execArgv,

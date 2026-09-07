@@ -12,12 +12,14 @@ const preview = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 180)
 /** A turn starts at a user message; tools and thinking never create extra turns. */
 export function conversationTurns(rows: readonly MessageRow[], liveAnswer = ""): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
+  let inputGroup:string|undefined;
   for (const row of rows) {
     const text = row.parts.filter(part => part.kind === "text").map(part => part.text).join("\n");
-    if (row.role === "user") {
+    if (row.role === "user"||row.role==="coordination") {
+      inputGroup=row.collaborationGroupId;
       const imageCount = row.parts.filter(part => part.kind === "image").length;
       turns.push({id: row.id, question: preview(text) || preview(row.parts.filter(part=>part.attachment).map(part=>part.attachment!.name).join("、")) || (imageCount ? `图片消息（${imageCount} 张）` : "用户消息"), answer: ""});
-    } else if (row.role === "assistant" && turns.length) {
+    } else if (row.role === "assistant" && turns.length && (!row.collaborationGroupId||row.collaborationGroupId===inputGroup)) {
       const last = turns[turns.length - 1];
       last.answer = preview([last.answer, text].filter(Boolean).join(" "));
     }

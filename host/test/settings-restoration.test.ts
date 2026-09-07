@@ -268,6 +268,9 @@ test("settings preferences, native providers and archive actions survive restart
     }) as typeof fetch;
     try {
       await mutate("dcodeModelProvider.save", { provider });
+      // The earlier preference test enabled only test::model. Native provider
+      // execution must explicitly enable its model before selecting it.
+      await mutate("clientPreferences.set", { enabledModels: ["test::model", "settings-test::a"] });
       await mutate("runtimeModelSelection.set", {
         providerId: provider.id,
         modelId: "a",
@@ -286,7 +289,7 @@ test("settings preferences, native providers and archive actions survive restart
         )
       ) {
         if (Date.now() > deadline)
-          throw new Error("Native provider did not complete");
+          throw new Error(`Native provider did not complete: ${JSON.stringify((await snapshot()).sessionRuns.filter(r=>r.sessionId===task.coordinationSession.id))}`);
         await new Promise((r) => setTimeout(r, 20));
       }
       assert.equal(requestedModel, "a");
@@ -309,6 +312,15 @@ test("settings preferences, native providers and archive actions survive restart
         .length,
       1,
     );
+    const route = [{providerId:"settings-test",modelId:"a"},{providerId:"legacy-settings",modelId:"legacy-model"}];
+    const routed = await mutate("agentProfile.create", {name:"按序候选",roleContract:"Review assigned work",enabled:true,modelCandidates:route}) as {agentProfile: FoundationSnapshot["agentProfiles"][number]};
+    assert.deepEqual(routed.agentProfile.modelCandidates,route);
+    const beforeInvalid = await snapshot();
+    await assert.rejects(mutate("agentProfile.update", {profileId:routed.agentProfile.id,expectedProfileRevision:routed.agentProfile.revision,name:"must rollback",roleContract:"Review assigned work",enabled:true,modelCandidates:[{providerId:"missing",modelId:"missing"}]}),/不在目录/);
+    assert.equal((await snapshot()).storeRevision,beforeInvalid.storeRevision);
+    assert.equal((await snapshot()).agentProfiles.find(p=>p.id===routed.agentProfile.id)?.name,"按序候选");
+    await mutate("agentProfile.update",{profileId:routed.agentProfile.id,expectedProfileRevision:routed.agentProfile.revision,name:"按序候选",roleContract:"Updated contract",enabled:true});
+    assert.deepEqual((await snapshot()).agentProfiles.find(p=>p.id===routed.agentProfile.id)?.modelCandidates,route);
     const profile = (await snapshot()).agentProfiles[0]!;
     await mutate("agentProfile.update", {
       profileId: profile.id,
@@ -345,6 +357,10 @@ test("settings preferences, native providers and archive actions survive restart
       "dark",
     );
     assert.equal((await snapshot()).tasks.length, 2);
+    const restoredRoute = (await snapshot()).agentProfiles.find(p=>p.id===routed.agentProfile.id)!;
+    assert.deepEqual(restoredRoute.modelCandidates,route);
+    await mutate("agentProfile.update",{profileId:restoredRoute.id,expectedProfileRevision:restoredRoute.revision,name:restoredRoute.name,roleContract:restoredRoute.roleContract,enabled:true,modelCandidates:null});
+    assert.equal((await snapshot()).agentProfiles.find(p=>p.id===restoredRoute.id)?.modelCandidates,undefined);
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });

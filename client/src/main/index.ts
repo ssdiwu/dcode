@@ -330,6 +330,7 @@ function setupIPC() {
       throw new Error("候选路径无效");
     shell.showItemInFolder(path);
   });
+  trustedHandle("dcode:chooseContextFiles",async()=>{if(!window)return [];const result=await dialog.showOpenDialog(window,{title:"选择任务附加资料",properties:["openFile","multiSelections"],filters:[{name:"文本与代码",extensions:["md","markdown","txt","json","ts","tsx","js","py","swift","yaml","yml","toml"]}]});return result.canceled?[]:result.filePaths;});
   trustedHandle("dcode:chooseDirectory", async () => {
     if (!window) return null;
     const result = await dialog.showOpenDialog(window, {
