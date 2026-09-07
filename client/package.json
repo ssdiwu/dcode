@@ -26,7 +26,8 @@
     "test:canvas": "npm run build && node test/layout/inspiration.mjs",
     "test:preview": "npm run build:main && node node_modules/electron/cli.js test/main/html-preview.mjs",
     "verify:threeui": "node scripts/verify-threeui.mjs",
-    "test:new-task": "npm run build && node test/main/new-task-ui.mjs"
+    "test:new-task": "npm run build && node test/main/new-task-ui.mjs",
+    "test:command-menu": "node test/main/command-menu.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -45,6 +46,7 @@
   },
   "dependencies": {
     "@designcodeio/threeui": "1.2.0",
+    "@floating-ui/react-dom": "2.1.9",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
     "@shikijs/rehype": "^4.4.3",
     "lucide-react": "^1.41.0",

@@ -1,5 +1,7 @@
+import {CommandMenu} from "./CommandMenu";
+import {commandOptions,hasCommandArguments} from "../workbench/command-menu";
 import {useCommands} from "../workbench/useCommands";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Square, Plus, ImagePlus, FileText, X, Slash } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { SelectMenu } from "./SelectMenu";
@@ -15,12 +17,16 @@ export function Composer({
   models,
   pathForFile,
   onSettings,
+  onCommandMenuChange,
 }: {
   work: Workbench;
   models: ModelControls;
   pathForFile: (file: File) => string;
   onSettings: () => void;
+  onCommandMenuChange?: (open: boolean) => void;
 }) {
+  const composer = useRef<HTMLDivElement>(null);
+  const commandTrigger = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const filesInput = useRef<HTMLInputElement>(null);
   const {reading,add,thumbnails} = useComposerAttachments(work,pathForFile);
@@ -33,10 +39,15 @@ export function Composer({
   const [mentionIndex,setMentionIndex]=useState(0);
   const [mentionOpen,setMentionOpen]=useState(false);
   const [commandOpen,setCommandOpen]=useState(false),[commandIndex,setCommandIndex]=useState(0);
+  const [commandMode,setCommandMode]=useState<"browse"|"typing">("browse");
   const {commands,error:commandError,loading:commandsLoading}=useCommands(work,commandOpen);
-  const query=draft.text.match(/^\/(\S*)$/u)?.[1]?.toLowerCase()??"";
-  const commandMatches=commands.filter(command=>command.name.toLowerCase().includes(query)||command.description?.toLowerCase().includes(query)).slice(0,50);
-  const chooseCommand=(name:string)=>{setCommandOpen(false);updateDraft(draftKey,{...draft,text:/^\/[^/\s]*$/u.test(draft.text)?`/${name} `:`/${name} ${draft.text}`});textarea.current?.focus();};
+  const query=(commandMode==="typing"?draft.text.match(/^\/([^/\n]*)$/u):draft.text.match(/^\/(\S*)$/u))?.[1]??"";
+  const commandMatches=useMemo(()=>commandOptions(commands,query),[commands,query]);
+  const activeCommand=Math.min(commandIndex,Math.max(0,commandMatches.length-1));
+  const closeCommands=useCallback(()=>setCommandOpen(false),[]);
+  useEffect(()=>{onCommandMenuChange?.(commandOpen);return()=>onCommandMenuChange?.(false);},[commandOpen,onCommandMenuChange]);
+  useEffect(()=>{if(commandOpen&&commandMode==="typing"&&hasCommandArguments(draft.text,commands))setCommandOpen(false);},[commandOpen,commandMode,draft.text,commands]);
+  const chooseCommand=(name:string)=>{setCommandOpen(false);updateDraft(draftKey,{...draft,text:(commandMode==="typing"?/^\/[^/\n]*$/u:/^\/[^/\s]*$/u).test(draft.text)?`/${name} `:`/${name} ${draft.text}`});textarea.current?.focus();};
 
   const members=(snapshot?.agentRuns??[]).filter(run=>run.taskId===work.task?.id&&run.role!=="coordinator").map(run=>({...run,title:snapshot?.sessions.find(session=>session.id===run.sessionId)?.title??"成员"}));
   useEffect(()=>{setMentionOpen(false);setCommandOpen(false);},[draftKey]);
@@ -73,7 +84,9 @@ export function Composer({
     !work.closing;
   const matchingMembers=members.filter(member=>member.title.includes(draft.text.match(/@([^\s@]*)$/u)?.[1]??""));
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if(commandOpen&&!event.nativeEvent.isComposing){if(event.key==="ArrowDown"||event.key==="ArrowUp"){event.preventDefault();setCommandIndex(index=>Math.max(0,Math.min(commandMatches.length-1,index+(event.key==="ArrowDown"?1:-1))));return;}if(event.key==="Enter"){event.preventDefault();const command=commandMatches[Math.min(commandIndex,commandMatches.length-1)];if(command)chooseCommand(command.name);return;}if(event.key==="Escape"){event.preventDefault();setCommandOpen(false);return;}}
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (commandOpen && event.key === "Tab") {setCommandOpen(false);return;}
+    if(commandOpen&&!event.nativeEvent.isComposing){if(event.key==="ArrowDown"||event.key==="ArrowUp"){event.preventDefault();setCommandIndex(index=>Math.max(0,Math.min(commandMatches.length-1,index+(event.key==="ArrowDown"?1:-1))));return;}if(event.key==="Enter"){event.preventDefault();const command=commandMatches[Math.min(commandIndex,commandMatches.length-1)];if(command)chooseCommand(command.command.name);return;}if(event.key==="Escape"){event.preventDefault();setCommandOpen(false);return;}}
     if(mentionOpen&&!event.nativeEvent.isComposing){
       if(event.key==="ArrowDown"||event.key==="ArrowUp"){event.preventDefault();setMentionIndex(index=>Math.max(0,Math.min(matchingMembers.length-1,index+(event.key==="ArrowDown"?1:-1))));return;}
       if(event.key==="Enter"){event.preventDefault();const member=matchingMembers[Math.min(mentionIndex,matchingMembers.length-1)];if(member)chooseMember(member.id);return;}
@@ -102,7 +115,7 @@ export function Composer({
           </button>
         </div>
       )}
-      <div className={`composer input-surface${dragging ? " is-dragging" : ""}`}
+      <div ref={composer} className={`composer input-surface${dragging ? " is-dragging" : ""}`}
         onDragEnter={event=>{if ([...event.dataTransfer.types].includes("Files") && !work.closing) {event.preventDefault();dragDepth.current++;setDragging(true);}}}
         onDragOver={event=>{if ([...event.dataTransfer.types].includes("Files")) {event.preventDefault();event.dataTransfer.dropEffect=work.closing?"none":"copy";}}}
         onDragLeave={event=>{if (dragDepth.current>0) dragDepth.current--; if (!dragDepth.current) setDragging(false);}}
@@ -141,16 +154,17 @@ export function Composer({
         )}
         {targetMember&&<div className="composer-recipient">发送给 {members.find(member=>member.id===targetMember)?.title??"成员"}<button className="icon-button" aria-label="取消定向发送" onClick={()=>setTargetMember(undefined)}><X size={12}/></button></div>}
         {mentionOpen&&<div className="mention-options" id="member-mentions" role="listbox" aria-label="选择已有成员">{members.length?matchingMembers.map((member,index)=><button role="option" aria-selected={index===mentionIndex} id={`mention-${member.id}`} type="button" className="menu-item" key={member.id} onClick={()=>chooseMember(member.id)}>{member.title}<small>{member.role==="worker"?"执行":member.role==="verifier"?"验收":"调研"}</small></button>):<p className="secondary">暂无成员，可以让主智能体安排工作。</p>}<button className="text-button" onClick={()=>setMentionOpen(false)}>关闭</button></div>}
-        {commandOpen&&<div className="mention-options command-options" id="composer-commands" role="listbox" aria-label="技能与命令">{commandMatches.map((command,index)=><button key={`${command.source}:${command.name}`} id={`composer-command-${index}`} type="button" role="option" aria-selected={index===commandIndex} className="menu-item" onClick={()=>chooseCommand(command.name)}><span>/{command.name}<small>{command.description}</small></span><small>{command.source==="skill"?"技能":command.source==="prompt"?"模板":"命令"}</small></button>)}{commandsLoading&&<p className="secondary" role="status">正在读取技能与命令…</p>}{!commandsLoading&&!commandMatches.length&&<p className="secondary" role={commandError?"alert":undefined}>{commandError||"没有匹配的已启用技能或命令。"}</p>}<button className="text-button" onClick={()=>setCommandOpen(false)}>关闭</button></div>}
+
         <textarea
           ref={textarea}
           aria-controls={mentionOpen?"member-mentions":commandOpen?"composer-commands":undefined}
-          aria-activedescendant={mentionOpen&&matchingMembers[mentionIndex]?`mention-${matchingMembers[mentionIndex].id}`:commandOpen&&commandMatches[commandIndex]?`composer-command-${commandIndex}`:undefined}
+          aria-activedescendant={mentionOpen&&matchingMembers[mentionIndex]?`mention-${matchingMembers[mentionIndex].id}`:commandOpen&&commandMatches[activeCommand]?`composer-command-${activeCommand}`:undefined}
+          aria-haspopup={commandOpen||mentionOpen?"listbox":undefined}
           aria-label="任务消息"
           readOnly={work.closing}
           data-composer
           value={draft.text}
-          onChange={(e) => {updateDraft(draftKey, { ...draft, text: e.target.value });setMentionOpen(!draft.pathAction&&/(?:^|\s)@[^\s@]*$/u.test(e.target.value));setMentionIndex(0);setCommandOpen(/^\/[^/\s]*$/u.test(e.target.value));setCommandIndex(0);}}
+          onChange={(e) => {updateDraft(draftKey, { ...draft, text: e.target.value });setMentionOpen(!draft.pathAction&&/(?:^|\s)@[^\s@]*$/u.test(e.target.value));setMentionIndex(0);setCommandMode("typing");setCommandOpen(/^\/[^/\s]*$/u.test(e.target.value)||(commandOpen&&/^\/[^/\n]*$/u.test(e.target.value)&&!hasCommandArguments(e.target.value,commands)));setCommandIndex(0);}}
           onKeyDown={onKey}
           onPaste={(e) => {
             const files = [...e.clipboardData.files];
@@ -220,7 +234,7 @@ export function Composer({
             }}
           />
           {targetWorking&&!draft.pathAction&&<select className="delivery-select" aria-label="发送时机" value={delivery} onChange={event=>setDelivery(event.target.value as "queue"|"steer")}><option value="queue">排到后面</option><option value="steer">补充当前工作</option></select>}
-          <button type="button" className="text-button composer-command-trigger" aria-label="选择技能或命令" aria-expanded={commandOpen} title="技能与命令（/）" onClick={()=>{setCommandOpen(value=>!value);setMentionOpen(false);textarea.current?.focus();}}><Slash size={14}/><span>技能</span></button>
+          <button ref={commandTrigger} type="button" className="text-button composer-command-trigger" aria-label="选择技能或命令" aria-expanded={commandOpen} title="技能与命令（/）" onClick={()=>{setCommandMode("browse");setCommandOpen(value=>!value);setCommandIndex(0);setMentionOpen(false);textarea.current?.focus();}}><Slash size={14}/><span>技能</span></button>
           {!draft.pathAction&&members.length>0&&<Menu.Root><Menu.Trigger asChild><button type="button" className="text-button" aria-label="提及成员">@ 成员</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" side="top" onCloseAutoFocus={event=>{event.preventDefault();textarea.current?.focus();}}>{members.map(member=><Menu.Item className="menu-item" key={member.id} onSelect={()=>chooseMember(member.id)}>{member.title}</Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
           <span className="spacer" />
           <ModelPicker models={models.data?.models??[]} value={models.data?.selectedKey??null} onChange={models.choose} onManage={onSettings} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy || work.running}/>
@@ -244,6 +258,7 @@ export function Composer({
             </button>
         </div>
       </div>
+      {commandOpen&&<CommandMenu anchor={composer} input={textarea} trigger={commandTrigger} options={commandMatches} active={activeCommand} loading={commandsLoading} error={commandError} onActive={setCommandIndex} onChoose={chooseCommand} onClose={closeCommands}/>}
       {!work.task && (
         <div className="scope-tray">
           <SelectMenu

@@ -91,3 +91,5 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 `npm run verify:threeui` 核对五个原文哈希；`npm run test:new-task` 在独立数据根与隐藏 Electron 窗口验证真实新草稿、已有任务/灵感排除、项目草稿文件、草稿返回、外观持久化、减少动态效果和 WebGL 降级，不操作正在运行的验收应用。
 
 候选的第二、三批已补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签仍使用原有文件工作区合同。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
+
+0.0.32 技能菜单使用 `CommandMenu.tsx` 与 `workbench/command-menu.ts`：前者只拥有浮层、焦点和可见区域，后者把可读名称与调用名分开。Floating UI 2.1.9 从原有传递依赖提升为显式依赖，没有新增另一套菜单/命令事实源。`npm run test:command-menu` 用真实 Composer 与 181 条受控候选检查布局、长列表、搜索和键盘；菜单的 HTML 预览叠层关系继续由 `test:new-task` 在隔离原生窗口验证。

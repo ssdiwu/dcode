@@ -14,6 +14,7 @@ await mkdir(join(temp,"agent"));
 await writeFile(join(temp,"agent/settings.json"),"{}\n");
 await writeFile(join(temp,"a.md"),"# A\n短文件\n");
 await writeFile(join(temp,"long-file-name.md"),"# B\n另一个文件\n");
+await writeFile(join(temp,"preview.html"),"<!doctype html><h1>菜单叠层验证</h1>");
 const runner = join(temp,"runner.cjs");
 await writeFile(runner, `
 const {app,BrowserWindow,nativeTheme}=require('electron');
@@ -75,6 +76,14 @@ app.on('browser-window-created',(_event,win)=>{
    assert.equal(await run('document.querySelector(".file-tab-strip [aria-selected=true]")?.textContent.trim()'),'a.md');
    const pill=await run('(()=>{const p=document.querySelector(".file-tab-highlight").getBoundingClientRect(),b=document.querySelector(".file-tab-strip [aria-selected=true]").getBoundingClientRect();return {left:p.left,targetLeft:b.left,width:p.width,targetWidth:b.width};})()');
    assert.ok(Math.abs(pill.left-pill.targetLeft)<1&&Math.abs(pill.width-pill.targetWidth)<1);
+   await click('preview.html');await until('!!document.querySelector(".html-preview-surface")','HTML preview surface');
+   const previewVisible=()=>win.contentView.children.some(view=>view.webContents&&view.webContents!==win.webContents&&view.getBounds().width>0&&view.getBounds().height>0);
+   for(let i=0;i<100&&!previewVisible();i++)await sleep(30);assert.equal(previewVisible(),true);
+   await click('选择技能或命令');await until('!!document.getElementById("composer-commands")','commands over native HTML');
+   for(let i=0;i<100&&previewVisible();i++)await sleep(30);assert.equal(previewVisible(),false,'native preview yields to command menu');
+   await run('document.querySelector("[data-composer]").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+   for(let i=0;i<100&&!previewVisible();i++)await sleep(30);assert.equal(previewVisible(),true,'native preview restores after menu');
+
    await click('文件与 Git');await until('!!document.querySelector(".new-task-ambient canvas")','return from files to draft');
    await run('(async()=>{for(let attempt=0;;attempt++){const snapshot=await window.dcode.request("foundation.snapshot");try{await window.dcode.request("task.create",{requestId:"ui-empty-task",expectedStoreRevision:snapshot.storeRevision,scope:{kind:"user",userId:snapshot.currentUser.id},title:"已有空任务",goal:"验证既有任务边界",acceptance:[]});break;}catch(error){if(attempt>=5||!String(error).includes("REVISION_CONFLICT"))throw error;await new Promise(resolve=>setTimeout(resolve,50));}}})()');
    await until('Array.from(document.querySelectorAll("button")).some(b=>b.textContent.includes("已有空任务"))','real empty task appears');
@@ -127,7 +136,7 @@ app.on('browser-window-created',(_event,win)=>{
    await run('document.querySelector(".new-task-ambient canvas").dispatchEvent(new Event("webglcontextlost"))');
    await until('!document.querySelector(".new-task-ambient canvas")','context loss static fallback');
    assert.ok(await run('!!document.querySelector("[data-composer]")'));
-   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',projectDraftFiles:'open and close before task creation',fileTabMotion:{start:movingPill,end:pill},draft:'return preserves input',theme:{center,frame,persisted:pref.appearance,scales:scaleChecks,system:true},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
+   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',projectDraftFiles:'open and close before task creation',commandMenuOverHTML:true,fileTabMotion:{start:movingPill,end:pill},draft:'return preserves input',theme:{center,frame,persisted:pref.appearance,scales:scaleChecks,system:true},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
    await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:true,results},null,2));
    app.quit();
   }catch(error){console.error(error);await fs.writeFile(${JSON.stringify(join(temp,"failure.png"))},(await win.webContents.capturePage()).toPNG());await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:false,error:String(error)}));app.quit();}

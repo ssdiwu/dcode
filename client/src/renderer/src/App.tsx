@@ -138,6 +138,7 @@ export function App() {
   const [taskActionBusy, setTaskActionBusy] = useState(false);
   const [taskActionError, setTaskActionError] = useState<string | null>(null);
   const [contextOpen,setContextOpen]=useState(false);
+  const [commandMenuOpen,setCommandMenuOpen]=useState(false);
   const [projectEditingId,setProjectEditingId]=useState<string|null>(null);
   const [target, setTarget] = useState<
     TaskWorkbenchInspectorTarget | null | undefined
@@ -489,7 +490,7 @@ export function App() {
             <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
-              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||commandMenuOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
                 <Composer
@@ -497,6 +498,7 @@ export function App() {
                   models={models}
                   pathForFile={(file)=>api().getPathForFile(file)}
                   onSettings={() => display.set({ page: "settings" })}
+                  onCommandMenuChange={setCommandMenuOpen}
                 />
               </div>
             </section>
