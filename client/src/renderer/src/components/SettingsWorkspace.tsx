@@ -1,3 +1,4 @@
+import { MIN_MODEL_QUOTA_THRESHOLD_PERCENT, MAX_MODEL_QUOTA_THRESHOLD_PERCENT, DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT } from "../../../../../host/src/model-quota-policy.js";
 import { ProviderConnection } from "./ProviderConnection";
 import { ModelRouteEditor, type ModelRouteDraft } from "./ModelRouteEditor";
 import { changeThemeFromButton } from "../workbench/theme-transition";
@@ -449,6 +450,7 @@ function Models({models,onProviders}: {models:ModelControls;onProviders:()=>void
         {available.length?<ModelPicker label="默认模型" models={data?.models??[]} value={data?.defaultKey??null} onChange={models.chooseDefault} onManage={showConnections} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy}/>:<button className="primary-button" onClick={showConnections}>连接模型</button>}
       </Row>
       <Row title="默认思考强度" detail="用于新对话。可选范围随模型变化。"><select aria-label="默认思考强度" disabled={models.busy||levels.length===1} value={levels.includes(data?.defaultThinking??"")?data?.defaultThinking:levels.includes("medium")?"medium":levels[0]} onChange={e=>void models.setDefaultThinking(e.target.value)}>{levels.map(level=><option key={level} value={level}>{thinkingLabels[level]??level}</option>)}</select></Row>
+      <Row title="自动选择的剩余额度门槛" detail="剩余额度不高于此值时，沿原有回退顺序选择下一个模型。用于后续自动派发和回退，不中断正在执行的工作。"><select aria-label="自动选择的剩余额度门槛" disabled={models.busy||!data} value={data?.modelQuotaThresholdPercent??DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT} onChange={e=>void models.setQuotaThreshold(Number(e.target.value))}>{Array.from({length:MAX_MODEL_QUOTA_THRESHOLD_PERCENT-MIN_MODEL_QUOTA_THRESHOLD_PERCENT+1},(_,i)=>i+MIN_MODEL_QUOTA_THRESHOLD_PERCENT).map(value=><option key={value} value={value}>{value}%</option>)}</select></Row>
       <Row title="模型连接" detail={`${data?.providers.filter(p=>p.connected).length??0} 个已配置供应商 · ${available.length} 个可选择模型`}><button className="text-button" onClick={onProviders}>管理自定义供应商</button></Row>
     </Group>
     <div className="settings-toolbar" id="model-connection-list"><h2>模型连接与目录</h2><span className="secondary">{models.refreshing?"正在获取最新目录":data?.refresh.updatedAt?`更新于 ${new Date(data.refresh.updatedAt).toLocaleTimeString()}`:"已缓存的目录"}</span></div>

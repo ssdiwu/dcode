@@ -27,6 +27,7 @@ export function agentModelCandidates(value: unknown): AgentModelCandidate[] {
 
 export async function chooseAgentModel(input: {
   candidates: AgentModelCandidate[];
+  thresholdPercent: number;
   models: readonly RouteModel[];
   quotas: Pick<ModelQuotaService, "get">;
   now?: () => number;
@@ -52,7 +53,7 @@ export async function chooseAgentModel(input: {
       quota = await pending;
     }
     catch { considered.push({ candidate, eligible: false, reason: "额度查询失败" }); continue; }
-    const assessment = input.excludedPools?.has(quota.poolId) ? { eligible: false, reason: "该额度池已停止新派发" } : assessModelQuota(quota, candidate.modelId, input.now?.() ?? Date.now(), input.capabilities);
+    const assessment = input.excludedPools?.has(quota.poolId) ? { eligible: false, reason: "该额度池已停止新派发" } : assessModelQuota(quota, candidate.modelId, input.now?.() ?? Date.now(), input.thresholdPercent, input.capabilities);
     considered.push({ candidate, ...assessment, poolId: quota.poolId, fetchedAt: quota.fetchedAt });
     if (assessment.eligible) return { selected: candidate, considered };
   }

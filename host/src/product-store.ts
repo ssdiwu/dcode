@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT, isModelQuotaThresholdPercent } from "./model-quota-policy.js";
 import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-process.js";
 import type {ProjectDirectoryChange} from "./project-directory-change.js";
 import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
@@ -157,6 +158,7 @@ export interface WebEvolutionReceipt {
 }
 
 export interface ClientPreferences {
+  modelQuotaThresholdPercent: number;
   appearance?: "system" | "light" | "dark";
   fontScale?: "compact" | "standard" | "large";
   sidebarVisible?: boolean;
@@ -2398,7 +2400,7 @@ export class ProductStore {
 
   clientPreferences(): ClientPreferences {
     const row = this.database.prepare("SELECT value_json FROM product_settings WHERE key = 'workbench.clientPreferences'").get() as SQLiteRow | undefined;
-    const defaults:ClientPreferences={notificationsEnabled:typeof this.importedSetting("dcode.notifications.completionEnabled")==="boolean" ? this.importedSetting("dcode.notifications.completionEnabled") as boolean : true,readingPositions:{}};
+    const defaults:ClientPreferences={modelQuotaThresholdPercent:DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT,notificationsEnabled:typeof this.importedSetting("dcode.notifications.completionEnabled")==="boolean" ? this.importedSetting("dcode.notifications.completionEnabled") as boolean : true,readingPositions:{}};
     const appearance=this.importedSetting("dcode.appearance"),fontScale=this.importedSetting("dcode.appearance.fontScale");
     if(["system","light","dark"].includes(appearance as string))defaults.appearance=appearance as ClientPreferences["appearance"];
     if(["compact","standard","large"].includes(fontScale as string))defaults.fontScale=fontScale as ClientPreferences["fontScale"];
@@ -2412,13 +2414,14 @@ export class ProductStore {
     try {
       const value = JSON.parse(text(row, "value_json")) as ClientPreferences;
       if (typeof value.notificationsEnabled !== "boolean" || !value.readingPositions || Object.values(value.readingPositions).some(offset => !Number.isInteger(offset) || offset < 0 || offset > 100_000_000)) throw new Error("invalid shape");
+      if(value.modelQuotaThresholdPercent!==undefined&&!isModelQuotaThresholdPercent(value.modelQuotaThresholdPercent))throw new Error("invalid quota threshold");
       return {...defaults,...value};
     } catch { throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Client preferences are invalid"); }
   }
 
-  async setClientPreferences(input: { requestId: string; expectedStoreRevision: number; notificationsEnabled?: boolean; appearance?: ClientPreferences["appearance"]; fontScale?: ClientPreferences["fontScale"]; sidebarVisible?: boolean; overviewVisible?: boolean; sidebarWidth?: number; inspectorWidth?: number; defaultThinking?: string; enabledModels?: string[] | null; disabledResources?: string[]; readingPosition?: { sessionId: string; offset: number } }): Promise<{ storeRevision: number; preferences: ClientPreferences }> {
+  async setClientPreferences(input: { requestId: string; expectedStoreRevision: number; notificationsEnabled?: boolean; appearance?: ClientPreferences["appearance"]; fontScale?: ClientPreferences["fontScale"]; sidebarVisible?: boolean; overviewVisible?: boolean; sidebarWidth?: number; inspectorWidth?: number; defaultThinking?: string; modelQuotaThresholdPercent?: number; enabledModels?: string[] | null; disabledResources?: string[]; readingPosition?: { sessionId: string; offset: number } }): Promise<{ storeRevision: number; preferences: ClientPreferences }> {
     if (input.notificationsEnabled !== undefined && typeof input.notificationsEnabled !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "notificationsEnabled must be boolean");
-    const settingKeys = ["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"] as const;
+    const settingKeys = ["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"] as const;
     const changes: Partial<ClientPreferences> = {};
     for (const key of settingKeys) if (input[key] !== undefined) Object.assign(changes, { [key]: input[key] });
     if (changes.appearance && !["system", "light", "dark"].includes(changes.appearance)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid appearance");
@@ -2426,6 +2429,7 @@ export class ProductStore {
     for (const key of ["sidebarVisible", "overviewVisible"] as const) if (changes[key] !== undefined && typeof changes[key] !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "Invalid visibility preference");
     for (const key of ["sidebarWidth", "inspectorWidth"] as const) if (changes[key] !== undefined && (!Number.isInteger(changes[key]) || changes[key]! < 180 || changes[key]! > 600)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid rail width");
     if (changes.enabledModels !== undefined && changes.enabledModels !== null && (!Array.isArray(changes.enabledModels) || changes.enabledModels.length > 4096 || changes.enabledModels.some(id => typeof id !== "string" || id.length > 500))) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid enabled models");
+    if(changes.modelQuotaThresholdPercent!==undefined&&!isModelQuotaThresholdPercent(changes.modelQuotaThresholdPercent))throw new ProductStoreError("INVALID_ARGUMENT","配额门槛必须是1至30的整数百分比");
     if (changes.defaultThinking && !["off","minimal","low","medium","high","xhigh","max"].includes(changes.defaultThinking)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid thinking level");
     if(changes.disabledResources && (!Array.isArray(changes.disabledResources)||changes.disabledResources.length>4096||changes.disabledResources.some(key=>typeof key!=="string"||key.length>5000||!/^skill:|^prompt:/.test(key))))throw new ProductStoreError("INVALID_ARGUMENT","Invalid resource selection");
     const position = input.readingPosition;

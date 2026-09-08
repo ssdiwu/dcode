@@ -1,3 +1,4 @@
+import { MIN_MODEL_QUOTA_THRESHOLD_PERCENT, MAX_MODEL_QUOTA_THRESHOLD_PERCENT } from "./model-quota-policy.js";
 import { agentModelCandidates } from "./model-route.js";
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -645,7 +646,8 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
         requireBoundedString(params.readingPosition, "sessionId", 200);
         requireInteger(params.readingPosition, "offset", 0, 100_000_000);
       }
-      const keys = ["notificationsEnabled", "readingPosition", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"];
+      const keys = ["notificationsEnabled", "readingPosition", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"];
+      if(params.modelQuotaThresholdPercent!==undefined)requireInteger(params,"modelQuotaThresholdPercent",MIN_MODEL_QUOTA_THRESHOLD_PERCENT,MAX_MODEL_QUOTA_THRESHOLD_PERCENT);
       if (!keys.some(key => params[key] !== undefined)) throw new ProtocolValidationError("INVALID_PARAMS", "Preference change required");
 
       return;

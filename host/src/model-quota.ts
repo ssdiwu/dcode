@@ -1,3 +1,4 @@
+import { isModelQuotaThresholdPercent } from "./model-quota-policy.js";
 // Query/normalization adapted from 507's MIT-licensed pi-dusage (0.2.0).
 // Host-owned data only: no TUI imports and no direct reading of Pi credentials.
 import { createHash } from "node:crypto";
@@ -100,7 +101,8 @@ export function parseQuotaGroups(provider: QuotaProvider, body: unknown): QuotaG
 }
 
 export interface QuotaAssessment { eligible: boolean; reason: string; remainingPercent?: number; retryAt?: number }
-export function assessModelQuota(snapshot: ModelQuotaSnapshot, modelId: string, now: number, capabilities: readonly string[] = []): QuotaAssessment {
+export function assessModelQuota(snapshot: ModelQuotaSnapshot, modelId: string, now: number, thresholdPercent: number, capabilities: readonly string[] = []): QuotaAssessment {
+  if(!isModelQuotaThresholdPercent(thresholdPercent))throw new Error("配额门槛必须是1至30的整数百分比");
   if (snapshot.status !== "known") return { eligible: false, reason: snapshot.error ?? (snapshot.status === "rate_limited" ? "暂时限流" : "额度未知"), retryAt: snapshot.retryAt };
   if (now >= snapshot.validUntil) return { eligible: false, reason: "额度信息已过期" };
   const general = snapshot.groups.filter((group) => group.id === "general");
@@ -115,8 +117,8 @@ export function assessModelQuota(snapshot: ModelQuotaSnapshot, modelId: string, 
   if (quotaCapabilities.some((capability) => !windows.some((window) => window.capability === capability))) return { eligible: false, reason: "未返回所需功能的额度窗口" };
   if (windows.some((window) => window.resetAt !== null && now >= window.resetAt)) return { eligible: false, reason: "额度已到重置时间，需要重新查询" };
   const least = Math.min(...windows.map((window) => window.remainingPercent!));
-  if (least <= 1) return { eligible: false, reason: least === 0 ? "额度已耗尽" : "剩余额度不高于 1%", remainingPercent: least,
-    retryAt: Math.max(...windows.filter((window) => window.remainingPercent! <= 1).map((window) => window.resetAt ?? 0)) || undefined };
+  if (least <= thresholdPercent) return { eligible: false, reason: least === 0 ? "额度已耗尽" : `剩余额度不高于 ${thresholdPercent}%`, remainingPercent: least,
+    retryAt: Math.max(...windows.filter((window) => window.remainingPercent! <= thresholdPercent).map((window) => window.resetAt ?? 0)) || undefined };
   return { eligible: true, reason: "额度可用", remainingPercent: least };
 }
 

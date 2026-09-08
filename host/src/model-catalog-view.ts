@@ -14,6 +14,7 @@ export interface ModelChoice {
   thinkingLevels: string[];
 }
 export interface DCodeModelsView {
+  modelQuotaThresholdPercent: number;
   models: ModelChoice[];
   providers: { id: string; name: string; connected: boolean }[];
   legacyProviders: ProviderView[];

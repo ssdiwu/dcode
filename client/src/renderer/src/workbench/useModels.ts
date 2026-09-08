@@ -64,6 +64,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
     enableAll:()=>run("clientPreferences.set",{enabledModels:null}),
     setEnabled:(key:string,enabled:boolean)=>{const current=data?.models.filter(m=>m.enabled).map(m=>m.key)??[];return run("clientPreferences.set",{enabledModels:enabled?[...new Set([...current,key])]:current.filter(id=>id!==key)});},
     setThinking:(level:string)=>run("dcodeModels.setThinking",{...target,level}),
+    setQuotaThreshold:(modelQuotaThresholdPercent:number)=>run("clientPreferences.set",{modelQuotaThresholdPercent}),
     setDefaultThinking:(level:string)=>run("dcodeModels.setThinking",{level}),
   };
 }

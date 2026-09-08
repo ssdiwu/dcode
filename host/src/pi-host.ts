@@ -1566,7 +1566,7 @@ export class PiHost {
         const result = await (await this.getProductStore()).setClientPreferences({
           requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number,
           ...(typeof params.notificationsEnabled === "boolean" ? { notificationsEnabled: params.notificationsEnabled } : {}),
-          ...Object.fromEntries(["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "enabledModels", "disabledResources"].filter(key => params[key] !== undefined).map(key => [key, params[key]])),
+          ...Object.fromEntries(["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"].filter(key => params[key] !== undefined).map(key => [key, params[key]])),
           ...(params.readingPosition ? { readingPosition: params.readingPosition as { sessionId: string; offset: number } } : {}),
         });
         this.options.emit("foundation.changed", { kind: "clientPreferences.updated", storeRevision: result.storeRevision });
@@ -2632,6 +2632,7 @@ export class PiHost {
     }
 
     const models=await this.dcodeModelsView();
+    const thresholdPercent=store.clientPreferences().modelQuotaThresholdPercent;
     const decisions:ModelRouteDecision[]=[];
     const resolvedChains:AgentModelCandidate[][]=[];
     const quotaReads=new Map<string,ReturnType<ModelQuotaService["get"]>>();
@@ -2640,8 +2641,8 @@ export class PiHost {
       if(!profile) throw new PiHostError("PROFILE_UNAVAILABLE","成员档案不可用");
       const candidates=profile.modelCandidates??(ownerRuntimeModel(owner) ? [ownerRuntimeModel(owner)!] : snapshot.runtimeModelSelection?[snapshot.runtimeModelSelection]:[]);
       resolvedChains.push(candidates);
-      const decision=await chooseAgentModel({candidates,models:models.models,quotas:{get:(provider)=>{let read=quotaReads.get(provider);if(!read){read=this.quotaService().get(provider,true);quotaReads.set(provider,read);}return read;}}});
-      if(!decision.selected) return {started:false,blockedMember:member.title,reason:"回退链中没有额度明确高于 1% 的可用模型",decision};
+      const decision=await chooseAgentModel({candidates,thresholdPercent,models:models.models,quotas:{get:(provider)=>{let read=quotaReads.get(provider);if(!read){read=this.quotaService().get(provider,true);quotaReads.set(provider,read);}return read;}}});
+      if(!decision.selected) return {started:false,blockedMember:member.title,reason:`回退链中没有额度明确高于 ${thresholdPercent}% 的可用模型`,decision};
       decisions.push(decision);
     }
     const ownerRuntime=this.runtimes.get(identity.runtimeId);
@@ -2809,9 +2810,10 @@ export class PiHost {
         const profile=target.profileSnapshot as {modelCandidates?:AgentModelCandidate[]};
         const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===target.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
         const candidates=this.memberModelCandidates(store,target.sessionId,packet?.resolvedModelCandidates??profile.modelCandidates??(target.modelProvider&&target.modelId?[{providerId:target.modelProvider,modelId:target.modelId}]:snapshot.runtimeModelSelection?[snapshot.runtimeModelSelection]:[]));
-        const decision=await chooseAgentModel({candidates,models:(await this.dcodeModelsView()).models,quotas:this.quotaService(),capabilities:message.attachmentIds?.some(id=>store.attachmentCatalog().find(item=>item.id===id)?.mimeType.startsWith("image/"))?["image"]:[]});
+        const thresholdPercent=store.clientPreferences().modelQuotaThresholdPercent;
+        const decision=await chooseAgentModel({candidates,thresholdPercent,models:(await this.dcodeModelsView()).models,quotas:this.quotaService(),capabilities:message.attachmentIds?.some(id=>store.attachmentCatalog().find(item=>item.id===id)?.mimeType.startsWith("image/"))?["image"]:[]});
         if(!decision.selected) {
-          await store.transitionCollaborationMessage({requestId:`quota-paused:${message.id}:${message.revision}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"没有额度明确高于 1% 的可用候选，请刷新额度后继续"});
+          await store.transitionCollaborationMessage({requestId:`quota-paused:${message.id}:${message.revision}`,id:message.id,expectedRevision:message.revision,state:"paused",error:`没有额度明确高于 ${thresholdPercent}% 的可用候选，请刷新额度后继续`});
           this.collaborationDrains.delete(sessionId);
           this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:message.taskId});
           return;
@@ -5537,16 +5539,17 @@ export class PiHost {
         const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===agent?.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
         const profile=agent?.profileSnapshot as {modelCandidates?:AgentModelCandidate[]}|undefined;
         const automatic=auxiliary||!!packet?.resolvedModelCandidates||!!profile?.modelCandidates||!!run?.id.startsWith("collab:");
+        const thresholdPercent=store.clientPreferences().modelQuotaThresholdPercent;
         const availableChoices=(await this.dcodeModelsView()).models;
         const currentChoice=availableChoices.find(choice=>choice.providerId===model.provider&&choice.modelId===model.id);
-        if(!automatic&&!rejected.size&&currentChoice?.enabled&&currentChoice.available){const quota=await this.quotaService().get(model.provider);if(quota.status==="unknown"||assessModelQuota(quota,model.id,Date.now()).eligible)return {model,context};}
+        if(!automatic&&!rejected.size&&currentChoice?.enabled&&currentChoice.available){const quota=await this.quotaService().get(model.provider);if(quota.status==="unknown"||assessModelQuota(quota,model.id,Date.now(),thresholdPercent).eligible)return {model,context};}
         const candidates=this.memberModelCandidates(store,identity.dcodeSessionId,packet?.resolvedModelCandidates??profile?.modelCandidates??[{providerId:model.provider,modelId:model.id}]);
         const models=availableChoices.map(choice=>rejected.has(choice.providerId)?{...choice,available:false}:choice);
         const hasImages=context.messages.some(message=>Array.isArray(message.content)&&message.content.some(part=>part.type==="image"));
         const usage=runtime.session.getContextUsage();let imageCount=0;
         const textSize=Buffer.byteLength(JSON.stringify(context,(_key,value)=>{if(value&&typeof value==="object"&&value.type==="image"){imageCount++;return {type:"image"};}return value;}));
         const minimumContext=Math.max(!auxiliary&&typeof usage?.tokens==="number"?usage.tokens+1024:0,Math.ceil(textSize/2)+imageCount*4096+2048);
-        const decision=await chooseAgentModel({candidates,models,quotas:this.quotaService(),capabilities:hasImages?["image"]:[],minimumContext});
+        const decision=await chooseAgentModel({candidates,thresholdPercent,models,quotas:this.quotaService(),capabilities:hasImages?["image"]:[],minimumContext});
         if(!decision.selected)throw new PiHostError("MODEL_ROUTE_BLOCKED",`回退链暂无可调用模型（${[...new Set(decision.considered.map(item=>item.reason))].join("；")}），当前进度已保留`);
         if(decision.selected.providerId===model.provider&&decision.selected.modelId===model.id)return {model,context};
         if(run?.toolCalls.size||runtime.ui.hasPendingDialogs||snapshot.operationAttempts.some(attempt=>run&&attempt.sessionRunId===run.sessionRunId&&attempt.operationKind==="tool_invocation"&&(["prepared","unknown"].includes(attempt.status)||attempt.status==="failed"&&!SHARED_READ_ONLY_TOOL_NAMES.has(attempt.targetIdentity))))throw new PiHostError("MODEL_ROUTE_UNSAFE","工具执行尚未确认，已停止模型切换并保留进度");
@@ -5610,9 +5613,10 @@ export class PiHost {
     if (requested?.some((id) => !view.providers.some((provider) => provider.id === id))) throw new PiHostError("MODEL_PROVIDER_NOT_FOUND", "配额查询来源不在模型目录中");
     const providers = (requested ?? [...eligibleProviders]).filter((id) => eligibleProviders.has(id));
     const snapshots = await this.quotaService().collect(providers, params.force === true);
-    return { snapshots, assessments: view.models.filter((model) => eligibleProviders.has(model.providerId)).map((model) => {
+    const thresholdPercent=(await this.getProductStore()).clientPreferences().modelQuotaThresholdPercent;
+    return { modelQuotaThresholdPercent:thresholdPercent,snapshots, assessments: view.models.filter((model) => eligibleProviders.has(model.providerId)).map((model) => {
       const quota = snapshots.find((snapshot) => snapshot.providerId === model.providerId);
-      return { providerId: model.providerId, modelId: model.modelId, ...(quota ? assessModelQuota(quota, model.modelId, Date.now()) : { eligible: false, reason: "额度尚未查询" }) };
+      return { providerId: model.providerId, modelId: model.modelId, ...(quota ? assessModelQuota(quota, model.modelId, Date.now(), thresholdPercent) : { eligible: false, reason: "额度尚未查询" }) };
     }) };
   }
 
@@ -5640,7 +5644,7 @@ export class PiHost {
     const thinkingLevels=models.find(m=>m.key===selectedKey)?.thinkingLevels??["off","minimal","low","medium","high","xhigh","max"];
     const defaultThinking=preferences.defaultThinking??"medium";
     const desired=active?.session.thinkingLevel??defaultThinking;
-    return {models,providers:snapshot.modelProviders.map(p=>({id:p.id,name:p.name,connected:models.some(m=>m.providerId===p.id&&m.available)})),legacyProviders:(await this.modelProviders().list()).providers,selectedKey,defaultKey,defaultThinking,thinking:thinkingLevels.includes(desired)?desired:(thinkingLevels.includes("medium")?"medium":thinkingLevels[0]??"off"),thinkingLevels,refresh:{...this.modelRefreshState,offline:process.env.PI_OFFLINE!==undefined}};
+    return {models,modelQuotaThresholdPercent:preferences.modelQuotaThresholdPercent,providers:snapshot.modelProviders.map(p=>({id:p.id,name:p.name,connected:models.some(m=>m.providerId===p.id&&m.available)})),legacyProviders:(await this.modelProviders().list()).providers,selectedKey,defaultKey,defaultThinking,thinking:thinkingLevels.includes(desired)?desired:(thinkingLevels.includes("medium")?"medium":thinkingLevels[0]??"off"),thinkingLevels,refresh:{...this.modelRefreshState,offline:process.env.PI_OFFLINE!==undefined}};
   }
 
   private async projectModelScope(

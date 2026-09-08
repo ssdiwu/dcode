@@ -9,14 +9,14 @@ function snapshot(percent: number | null, poolId = "shared"): ModelQuotaSnapshot
 }
 
 test("quota lower bound uses raw values, all applicable windows, and explicit reset freshness", () => {
-  assert.equal(assessModelQuota(snapshot(1.01), "m", now).eligible, true);
-  for (const value of [1, 0.99, 0, null]) assert.equal(assessModelQuota(snapshot(value), "m", now).eligible, false);
+  assert.equal(assessModelQuota(snapshot(1.01), "m", now, 1).eligible, true);
+  for (const value of [1, 0.99, 0, null]) assert.equal(assessModelQuota(snapshot(value), "m", now, 1).eligible, false);
   const data = snapshot(90);
   data.groups[0]!.windows.push({ id: "short", label: "短期", remainingPercent: 1, resetAt: now + 1000, capability: "text" });
-  assert.equal(assessModelQuota(data, "m", now).eligible, false);
-  assert.match(assessModelQuota(snapshot(80), "m", now + 60_000).reason, /过期/);
+  assert.equal(assessModelQuota(data, "m", now, 1).eligible, false);
+  assert.match(assessModelQuota(snapshot(80), "m", now + 60_000, 1).reason, /过期/);
   const reset = snapshot(80); reset.groups[0]!.windows[0]!.resetAt = now;
-  assert.match(assessModelQuota(reset, "m", now).reason, /重新查询/);
+  assert.match(assessModelQuota(reset, "m", now, 1).reason, /重新查询/);
 });
 
 test("provider parsers retain missing fields as unknown and do not confuse unrelated search quota", () => {
@@ -26,18 +26,18 @@ test("provider parsers retain missing fields as unknown and do not confuse unrel
   assert.equal(minimax.find((group) => group.id === "general")!.windows[1]!.remainingPercent, null);
   const groups = parseQuotaGroups("zai-coding-cn", { success: true, code: 200, data: { limits: [{ type: "TOKENS_LIMIT", percentage: 10, unit: 3, number: 5 }, { type: "TIME_LIMIT", percentage: 100 }] } });
   const data = { ...snapshot(80), groups };
-  assert.equal(assessModelQuota(data, "glm", now).eligible, true);
-  assert.equal(assessModelQuota(data, "glm", now, ["search"]).eligible, false);
+  assert.equal(assessModelQuota(data, "glm", now, 1).eligible, true);
+  assert.equal(assessModelQuota(data, "glm", now, 1, ["search"]).eligible, false);
 });
 
 test("model-specific buckets require a real mapping and add to the general constraint", () => {
   const data = snapshot(80);
   data.groups.push({ id: "special", label: "专属", modelIds: ["special-model"], windows: [{ id: "short", label: "短期", remainingPercent: 0, resetAt: now + 1000, capability: "text" }] });
-  assert.equal(assessModelQuota(data, "ordinary", now).eligible, true);
-  assert.equal(assessModelQuota(data, "special-model", now).eligible, false);
+  assert.equal(assessModelQuota(data, "ordinary", now, 1).eligible, true);
+  assert.equal(assessModelQuota(data, "special-model", now, 1).eligible, false);
   delete data.groups[1]!.modelIds;
-  assert.match(assessModelQuota(data, "ordinary", now).reason, /范围尚未确认/);
-  assert.equal(assessModelQuota(data, "ordinary", now).eligible, false);
+  assert.match(assessModelQuota(data, "ordinary", now, 1).reason, /范围尚未确认/);
+  assert.equal(assessModelQuota(data, "ordinary", now, 1).eligible, false);
 });
 
 test("each member's fallback order survives quota filtering and a shared low pool is not retried per model", async () => {
@@ -45,11 +45,11 @@ test("each member's fallback order survives quota filtering and a shared low poo
   const calls: string[] = [];
   const quotas = { get: async (providerId: string) => { calls.push(providerId); return snapshot(providerId === "shared-provider" ? 1 : providerId === "next" ? 2 : 90, providerId); } };
   const candidates = models.map(({ providerId, modelId }) => ({ providerId, modelId }));
-  const first = await chooseAgentModel({ candidates, models, quotas, now: () => now });
+  const first = await chooseAgentModel({ thresholdPercent:1, candidates, models, quotas, now: () => now });
   assert.equal(first.selected?.modelId, "next");
   assert.deepEqual(calls, ["shared-provider", "next"]);
   assert.deepEqual(first.considered.map((item) => item.reason), ["模型未启用", "剩余额度不高于 1%", "剩余额度不高于 1%", "额度可用"]);
-  const second = await chooseAgentModel({ candidates: candidates.slice().reverse(), models, quotas, now: () => now });
+  const second = await chooseAgentModel({ thresholdPercent:1, candidates: candidates.slice().reverse(), models, quotas, now: () => now });
   assert.equal(second.selected?.modelId, "largest");
 });
 
@@ -57,7 +57,7 @@ test("unknown or inaccessible candidates do not start a model or trigger unneces
   let queried = 0;
   const quotas = { get: async () => { queried++; return { ...snapshot(80), status: "unknown" as const, error: "缺字段" }; } };
   const candidates = [{ providerId: "one", modelId: "offline" }, { providerId: "two", modelId: "unknown" }];
-  const result = await chooseAgentModel({ candidates, models: candidates.map((item) => ({ ...item, enabled: true, available: item.modelId !== "offline" })), quotas, now: () => now });
+  const result = await chooseAgentModel({ thresholdPercent:1, candidates, models: candidates.map((item) => ({ ...item, enabled: true, available: item.modelId !== "offline" })), quotas, now: () => now });
   assert.equal(queried, 1);
   assert.equal(result.selected, null);
 });
@@ -105,15 +105,15 @@ test("unmapped text-model constraints remain unknown while unrelated generation 
   const general = { model_name: "general", current_interval_remaining_percent: 90, current_weekly_remaining_percent: 90 };
   const low = { current_interval_remaining_percent: 0, current_weekly_remaining_percent: 0 };
   const unknown = parseQuotaGroups("minimax-cn", { base_resp: { status_code: 0 }, model_remains: [general, { model_name: "some-model", ...low }] });
-  assert.equal(assessModelQuota({ ...snapshot(80), groups: unknown }, "some-model", now).eligible, false);
+  assert.equal(assessModelQuota({ ...snapshot(80), groups: unknown }, "some-model", now, 1).eligible, false);
   const video = parseQuotaGroups("minimax-cn", { base_resp: { status_code: 0 }, model_remains: [general, { model_name: "video", ...low }] });
-  assert.equal(assessModelQuota({ ...snapshot(80), groups: video }, "text-model", now).eligible, true);
-  assert.equal(assessModelQuota({ ...snapshot(80), groups: video }, "text-model", now, ["video_generation"]).eligible, false);
+  assert.equal(assessModelQuota({ ...snapshot(80), groups: video }, "text-model", now, 1).eligible, true);
+  assert.equal(assessModelQuota({ ...snapshot(80), groups: video }, "text-model", now, 1, ["video_generation"]).eligible, false);
 });
 
 test("missing explicitly required search quota is unknown rather than inferred from text quota", () => {
   const groups = parseQuotaGroups("zai-coding-cn", { success: true, code: 200, data: { limits: [{ type: "TOKENS_LIMIT", percentage: 10, unit: 3, number: 5 }] } });
-  const result = assessModelQuota({ ...snapshot(80), groups }, "glm", now, ["search"]);
+  const result = assessModelQuota({ ...snapshot(80), groups }, "glm", now, 1, ["search"]);
   assert.equal(result.eligible, false);
   assert.match(result.reason, /所需功能/);
 });

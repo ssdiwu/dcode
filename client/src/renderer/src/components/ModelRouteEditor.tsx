@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { ArrowUp, ArrowDown, X, Plus, RefreshCw } from "lucide-react";
 import { api, errorText } from "../types";
@@ -7,7 +7,7 @@ import type { AgentModelCandidate } from "../../../../../host/src/model-route.js
 import type { ModelQuotaSnapshot, QuotaAssessment } from "../../../../../host/src/model-quota.js";
 
 export interface ModelRouteDraft { id: string; model: AgentModelCandidate }
-interface QuotaView { snapshots: ModelQuotaSnapshot[]; assessments: Array<QuotaAssessment & AgentModelCandidate> }
+interface QuotaView { modelQuotaThresholdPercent:number; snapshots: ModelQuotaSnapshot[]; assessments: Array<QuotaAssessment & AgentModelCandidate> }
 
 export function ModelRouteEditor({ value, onChange, models, busy }: {
   value: ModelRouteDraft[];
@@ -16,6 +16,7 @@ export function ModelRouteEditor({ value, onChange, models, busy }: {
   busy: boolean;
 }) {
   const { data, error, mutate } = useSWR<QuotaView>("model-quota-settings", () => api().request("dcodeModels.quotas"), { revalidateOnFocus: false, refreshInterval: 60_000 });
+  useEffect(()=>api().subscribe(event=>{if(event.event==="foundation.changed"&&(event.data as {kind?:string})?.kind==="clientPreferences.updated")void mutate();}),[mutate]);
   const [refreshing, setRefreshing] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const refresh = async () => {
@@ -31,7 +32,7 @@ export function ModelRouteEditor({ value, onChange, models, busy }: {
   };
   return <section className="model-route-editor" aria-label="模型回退顺序">
     <div className="model-route-heading"><h3>模型回退顺序</h3><button type="button" className="text-button" disabled={refreshing || busy} onClick={() => void refresh()}><RefreshCw size={13} />{refreshing ? "正在查询…" : "刷新配额"}</button></div>
-    <p className="secondary">按顺序选择可用模型。适用剩余额度高于 1% 才会自动选用，低额度或未知时检查下一个。</p>
+    <p className="secondary">按顺序选择可用模型。{data?`适用剩余额度高于 ${data.modelQuotaThresholdPercent}% 才会自动选用，低额度或未知时检查下一个。`:"配额门槛以模型设置为准，正在读取当前设置。"}</p>
     {value.length === 0 && <p className="secondary">未单独配置，将沿用创建成员时主对话选用的模型。</p>}
     <ol className="model-route-list">
       {value.map((entry, index) => {

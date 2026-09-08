@@ -95,3 +95,5 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 0.0.32 技能菜单使用 `CommandMenu.tsx` 与 `workbench/command-menu.ts`：前者只拥有浮层、焦点和可见区域，后者把可读名称与调用名分开。Floating UI 2.1.9 从原有传递依赖提升为显式依赖，没有新增另一套菜单/命令事实源。`npm run test:command-menu` 用真实 Composer 与 181 条受控候选检查布局、长列表、搜索和键盘；菜单的 HTML 预览叠层关系继续由 `test:new-task` 在隔离原生窗口验证。
 
 模型连接验收：`node test/main/model-connections.mjs` 在独立隐藏 Electron 窗口运行实际设置页与 Host，仅注入私有假凭据适配器，覆盖取消、失败重试、保存、断开和深浅主题；不使用或改写用户的验收应用。原生窗口的键盘/粘贴及真实账号 OAuth 由人工另行验收。
+
+自动配额门槛：设置→模型的整数百分比控件经现有设置接口由 Host 保存，回退编辑器消费同一生效值。`node test/main/model-quota-threshold.mjs` 使用独立隐藏 Electron 与真实 Host 验证范围、保存、事件更新、双主题及刷新恢复；控件选择通过 DOM change 驱动，焦点样式使用 Chromium 焦点模拟，原生下拉菜单的键盘选择另行人工验收。
