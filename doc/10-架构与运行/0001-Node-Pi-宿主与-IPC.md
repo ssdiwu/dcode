@@ -29,7 +29,7 @@
 - 在 Product Store 中持久化 D Code Model Catalog、Credential Reference 与 Runtime Model Selection；Pi Runtime 只在首次迁入 / 受控发现时提供非敏感 Provider / Model 目录和外部认证桥状态，Runtime 启动前以 Store 选择、目录和凭据引用验证并显式设置模型；
 - 投影 Pi 真实加载的 Extension / Skill / Prompt / Command，受控修改扩展包启停并热重载；
 - 保留 Pi `models.json` / `settings.json` 的只读诊断兼容面，但拒绝 D Code 经其保存 / 删除 Provider、修改默认模型或 enabledModels；认证值不得通过 D Code IPC 进入 Pi `ModelRuntime.login`；
-- 在同一 Pi Agent Loop 注册 `dcode_facts` 只读工具 facade；当前两类生产存储合同缺口由 0.0.15 PRD 记录；
+- 在同一 Pi Agent Loop 注册 `dcode_facts` 只读工具 facade；原生 `evidence`/`changes` 通过 Host 固定的 Task/Session/执行身份读取 Product Store，不把 Pi Session ID 或旧 Library 账本作为原生权威。`isCurrentRun` 严格匹配当前 Agent 与 Session Run；历史导入文件记录单列。原生写入操作摘要不等于持久文件 diff，缺失的文件名/行数/revision 不填造；旧适配入口和历史合同仍由对应版本文档解释；
 - 转发 Pi 流式事件和结构化 Active Plan；
 - 以原生 Unicode 结构渲染受支持的 Mermaid 图表，并为不支持类型返回显式失败；
 - 把标准扩展交互转换为协议事件，并对 custom/widget 等 TUI 能力发出明确 unsupported 事件；

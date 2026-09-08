@@ -1,3 +1,4 @@
+import type { NativeSessionFacts } from "./product-store.js";
 import { homedir } from "node:os";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ export interface DCodeFactsContext {
   sessionId: () => string | undefined;
   cwd: () => string | undefined;
   paths: () => DCodeFactsPathSummary[];
+  nativeFacts?: (kind:"evidence"|"changes") => Promise<NativeSessionFacts>;
 }
 
 type IndependentDocumentStatus = "available" | "missing" | "notRegularFile" | "unavailable";
@@ -74,8 +76,9 @@ export function createDCodeFactsExtension(
     pi.registerTool({
       name: DCODE_FACTS_TOOL_NAME,
       label: "D Code 事实",
-      description:
-        "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目、项目目录、根目录 PRODUCT.md / DESIGN.md 的独立沉淀状态，以及根 AGENTS.md / README.md / doc/**/*.md 的分散依据路径。全部只读。",
+      description: context.nativeFacts
+        ? "只读读取当前 D Code Session 的事实。kind=evidence 从 Product Store 返回真实工具检查的记录ID、工具名、结果、执行身份及摘要；isCurrentRun 仅标记当前智能体本轮实际执行，历史记录不代表本轮验证。kind=changes 从 Product Store 返回 write/edit 操作记录（不是完整文件diff，不提供未采集的文件名、增删行数或Git revision），并单独展示明确导入且属于本会话的历史文件变更。kind=lineage 返回当前 Runtime 可见路径；kind=project 沿既有适配入口查询项目登记和文档路径，未覆盖的原生登记不能推断为没有项目。事实查询不构成验收通过，验收仍须提交本人新证据。"
+        : "读取 D Code 宿主独有的事实。kind=changes 返回当前会话的结构化文件变更归因（来自本机账本，含每次写入的文件、增删行数与 revision 来源）；kind=evidence 返回当前会话真实命令执行的验证证据（命令、退出推导、revision）；kind=lineage 返回当前会话的谱系路径（标题、记录数、当前路径）；kind=project 返回当前工作目录所属 D Code 项目、项目目录、根目录 PRODUCT.md / DESIGN.md 的独立沉淀状态，以及根 AGENTS.md / README.md / doc/**/*.md 的分散依据路径。全部只读。",
       promptSnippet:
         "dcode_facts: 读取 D Code 宿主独有的会话变更归因、验证证据、会话谱系与项目目录；project 同时如实说明独立产品原则文档状态及待阅读的分散依据路径（只读）。",
       parameters: Type.Object({
@@ -121,14 +124,24 @@ async function factsForKind(
 ): Promise<string> {
   switch (kind) {
     case "changes":
+      if(context.nativeFacts)return nativeFactsSummary(await context.nativeFacts(kind),kind);
       return await changeFactsSummary(sessionId, factsDir);
     case "evidence":
+      if(context.nativeFacts)return nativeFactsSummary(await context.nativeFacts(kind),kind);
       return await evidenceFactsSummary(sessionId, factsDir);
     case "lineage":
       return lineageFactsSummary(context);
     case "project":
       return await projectFactsSummary(context, factsDir);
   }
+}
+
+function nativeFactsSummary(facts:NativeSessionFacts,kind:"evidence"|"changes"):string {
+  const {historicalFileChanges,totalHistoricalFileChanges,...current}=facts;
+  const note=kind==="evidence"
+    ? "当前会话已保存的工具执行证据，来源为 D Code Product Store。isCurrentRun=true 才属于当前智能体本轮执行；其他记录仅为历史。每类最多显示最近30条；工具结果不等于任务验收通过。"
+    : "当前会话的 write/edit 工具操作记录，来源为 D Code Product Store。这不是完整文件diff；原生文件路径、增删行数和Git revision尚无可恢复统计，不能据此断言没有文件改动。历史文件变更单列，仅表示明确导入的旧记录，不属于本轮。每类最多显示最近30条。";
+  return `${note}\n${JSON.stringify({...current,...(kind==="changes"?{currentFileStatisticsAvailable:false,totalHistoricalFileChanges,historicalFileChanges}:{})},null,2)}`;
 }
 
 async function changeFactsSummary(sessionId: string, factsDir: string): Promise<string> {

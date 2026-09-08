@@ -46,7 +46,7 @@
 - `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
 - D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，API Key、OAuth 值和认证响应不经 D Code IPC；
 - 投影 Pi `resourceLoader` 真实加载的 Extension、Skill、Prompt 与 Command，按 Pi `SettingsManager.setPackages` 修改扩展包启停并热重载；D Code 自有隐藏扩展不进入用户清单；
-- 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade：`changes`、`evidence`、`lineage` 与 `project` 均为生产合同；`project` 检查项目根目录的 `PRODUCT.md` / `DESIGN.md` 是否为普通文件，并列出根 `AGENTS.md`、根 `README.md` 与有界 `doc/**/*.md` 的分散依据路径。二者都缺失时明确说明“产品原则尚未独立沉淀”；只列路径，不读取内容、不从 Agent 总结生成假权威；
+- 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade：原生 `evidence`/`changes` 由 Host 绑定 D Code Task、Session、Agent Run 与当前 Session Run，从 Product Store 读取，不再回退到旧 `Library` 账本；证据标明是否本轮，`changes` 仅提供 write/edit 工具记录并单列已明确导入的历史文件变更，不伪称完整文件 diff 或生成缺失的行数/revision。旧 Pi 入口保留既有账本合同。`lineage` 与 `project` 仍沿既有适配入口；`project` 检查项目根目录的 `PRODUCT.md` / `DESIGN.md` 是否为普通文件，并列出根 `AGENTS.md`、根 `README.md` 与有界 `doc/**/*.md` 的分散依据路径。二者都缺失时明确说明“产品原则尚未独立沉淀”；只列路径，不读取内容、不从 Agent 总结生成假权威；
 - `modelProviders.save / remove`、`modelSettings.set*` 与 `modelAuth.*` 是保留给旧 Protocol 的显式拒绝入口；D Code 不再改写 Pi `models.json` / `settings.json`，也不接受任何凭据正文或 Pi 认证响应；
 - 为当前 D Code Run 中成功且具有已知结构化结果的 `edit` / `write` 投影有界 `session.changeRecorded` 元数据；不向 App 复制工具参数正文、源码或完整 patch，未知工具和失败结果不猜测；
 - 返回 Pi SDK 的真实 Context Usage（上下文占用），并提供 D Code 自有、会话级持久化的极速模式；极速只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`；
@@ -145,3 +145,5 @@ Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` �
 `dcodeAuth.get/start/cancel/disconnect/refresh` 按固定 SDK 的实际能力列出 API/OAuth 入口。API新输入可短暂经过遮蔽控件及专用IPC/fd3，OAuth输入仍由Host自有交互承接；凭据持久化只在当前数据根对应的钥匙串命名空间；Product Store 只保存安全引用。API 保存和真实请求验证分别呈现，OAuth 刷新继续由 SDK 负责，更新/断开受跨进程锁保护。外部 Pi 认证只读，不能被静默续写或删除；其过期只影响本 Provider 的 D Code 候选可用性。
 
 `npm test` 包含 `model-connections.test.ts`：使用假值、隔离适配器和专用钥匙串命名空间验证。原生辅助程序统一按桌面壳声明的 macOS 12.0 最低目标构建；较旧系统运行兼容性与真实账号登录仍须对应环境人工验收。完整需求与证据归 [PRD 0030](../doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。
+
+`native-session-facts.test.ts` 验证证据所有权、本轮/历史和只读边界；`native-evidence-facade.test.ts` 使用实际 Pi 工具循环、受控模型响应验证 read/write 证据可被原生 facade 查询。历史迁移与验收拒绝门禁仍分别由 `legacy-migration.test.ts` 和 `collaboration-verification.test.ts` 覆盖。

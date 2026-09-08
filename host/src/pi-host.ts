@@ -3994,7 +3994,8 @@ export class PiHost {
         })
         : undefined;
       const factsContext = {
-        sessionId: () => activeForFacts?.inspection.summary.id,
+        ...(runtimeIdentity?{nativeFacts:async(kind:"evidence"|"changes")=>(await this.getProductStore()).nativeSessionFacts({taskId:runtimeIdentity.taskId,sessionId:runtimeIdentity.dcodeSessionId,agentRunId:runtimeIdentity.agentRunId,sessionRunId:activeForFacts?.currentRun?.sessionRunId},kind)}:{}),
+        sessionId: () => runtimeIdentity?.dcodeSessionId ?? activeForFacts?.inspection.summary.id,
         cwd: () => activeForFacts?.inspection.summary.cwd,
         paths: () => (activeForFacts?.inspection.paths ?? []).map((path) => ({
           id: path.id,

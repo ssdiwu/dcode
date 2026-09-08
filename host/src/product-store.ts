@@ -670,6 +670,15 @@ export interface EvidenceRecord {
   createdAt: string;
 }
 
+/** Read-only facts bound by the Host to a native Task, Session and running actor. */
+export interface NativeSessionFacts {
+  taskId:string;sessionId:string;agentRunId?:string;sessionRunId?:string;
+  totalEvidence:number;
+  evidence:Array<Pick<EvidenceRecord,"id"|"evidenceKind"|"commandRedacted"|"exitKind"|"exitCode"|"agentRunId"|"createdAt">&{sessionRunId?:string;legacyRunId?:string;resultDigest?:string;isCurrentRun:boolean}>;
+  totalHistoricalFileChanges:number;
+  historicalFileChanges:Array<{id:string;legacyRunId?:string;filePath:string;operation:string;additions:number;deletions:number;firstChangedLine?:number;occurredAt:string;sourceKind:string}>;
+}
+
 export interface CreatedTeamRun {
   storeRevision: number;
   teamRun: TeamRunRecord;
@@ -7029,6 +7038,36 @@ export class ProductStore {
         throw error;
       }
     });
+  }
+
+  nativeSessionFacts(identity:{taskId:string;sessionId:string;agentRunId?:string;sessionRunId?:string},kind:"evidence"|"changes"):NativeSessionFacts {
+    this.assertOpen();
+    const {taskId,sessionId,agentRunId,sessionRunId}=identity;
+    if(!this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(sessionId,taskId))throw new ProductStoreError("NOT_FOUND","Native facts Session does not belong to Task");
+    // Scope is fixed by the Host, never supplied by the model. The join also
+    // checks ownership so a stale/foreign attempt cannot label evidence current.
+    const filter=kind==="changes"?"AND e.command_redacted IN ('write','edit')":"AND (e.command_redacted IS NULL OR substr(e.command_redacted,1,6)!='dcode_')";
+    const counts=this.database.prepare(`SELECT COUNT(*) AS n FROM evidence_records e WHERE e.task_id=? AND e.session_id=? ${filter}`).get(taskId,sessionId) as SQLiteRow;
+    const rows=this.database.prepare(`SELECT e.*,a.session_run_id AS operation_session_run_id FROM evidence_records e
+      LEFT JOIN operation_attempts a ON a.id=e.source_record_id AND a.task_id=e.task_id AND a.session_id=e.session_id AND a.agent_run_id=e.agent_run_id
+      WHERE e.task_id=? AND e.session_id=? ${filter} ORDER BY e.created_at DESC,e.id DESC LIMIT 30`).all(taskId,sessionId) as SQLiteRow[];
+    const evidence=rows.reverse().map(row=>{
+      const record=evidenceRecord(row),operationRun=typeof row.operation_session_run_id==="string"?row.operation_session_run_id:undefined;
+      const payload=record.payload&&typeof record.payload==="object"?record.payload as Record<string,unknown>:{};
+      return {id:record.id,evidenceKind:record.evidenceKind,commandRedacted:record.commandRedacted,exitKind:record.exitKind,exitCode:record.exitCode,agentRunId:record.agentRunId,createdAt:record.createdAt,
+        ...(operationRun?{sessionRunId:operationRun}:{}),...(typeof row.legacy_run_id==="string"?{legacyRunId:row.legacy_run_id}:{}),
+        ...(typeof payload.resultDigest==="string"&&/^sha256:[a-f0-9]{64}$/.test(payload.resultDigest)?{resultDigest:payload.resultDigest}:{}),
+        isCurrentRun:!!sessionRunId&&!!agentRunId&&operationRun===sessionRunId&&record.agentRunId===agentRunId};
+    });
+    // session_mutations currently contains explicitly adopted legacy changes.
+    // Preserve their recorded values as history; native tool digests do not
+    // provide file paths, line counts or Git revisions and must not invent them.
+    const changeCount=kind==="changes"?this.database.prepare("SELECT COUNT(*) AS n FROM session_mutations WHERE task_id=? AND session_id=?").get(taskId,sessionId) as SQLiteRow:undefined;
+    const changes=kind==="changes"?this.database.prepare("SELECT * FROM session_mutations WHERE task_id=? AND session_id=? ORDER BY occurred_at DESC,id DESC LIMIT 30").all(taskId,sessionId) as SQLiteRow[]:[];
+    return {...identity,totalEvidence:Number(counts.n),evidence,totalHistoricalFileChanges:Number(changeCount?.n??0),historicalFileChanges:changes.reverse().map(row=>({
+      id:text(row,"id"),...(typeof row.legacy_run_id==="string"?{legacyRunId:row.legacy_run_id}:{}),filePath:text(row,"file_path"),operation:text(row,"operation"),additions:Number(row.additions),deletions:Number(row.deletions),
+      ...(typeof row.first_changed_line==="number"?{firstChangedLine:row.first_changed_line}:{}),occurredAt:text(row,"occurred_at"),sourceKind:text(row,"source_kind"),
+    }))};
   }
 
   async recordToolEvidence(input: {

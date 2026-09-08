@@ -508,3 +508,21 @@ test("legacy migration projects session metadata, settings, capabilities and red
     await rm(f.root, { recursive: true, force: true });
   }
 });
+
+
+test("native facts keep explicitly adopted file changes separate from current execution",async()=>{
+  const f=await fixture();let store:ProductStore|undefined;
+  try{
+    await writePiSession(f.sessionsDirectory,"managed-facts",f.home,true);
+    await writePiSession(f.sessionsDirectory,"external-facts",f.home,false);
+    const record={recordId:"change-one",sessionId:"managed-facts",runId:"legacy-run",toolCallId:"old-edit",operation:"edit",filePath:join(f.home,"old.md"),additions:9,deletions:3,firstChangedLine:12,occurredAt:"2026-08-25T00:00:00.000Z",source:"structured-tool-v1"};
+    await writeFile(join(f.applicationSupportDirectory,"session-changes-v1.json"),JSON.stringify({version:1,records:[record,{...record,recordId:"external-change",sessionId:"external-facts",filePath:join(f.home,"external.md")}]}));
+    store=await ProductStore.open({dataRoot:join(f.home,".dcode"),userHome:f.home,legacyMigration:{agentDir:f.agentDir,sessionsDirectory:f.sessionsDirectory,applicationSupportDirectory:f.applicationSupportDirectory}});
+    const snapshot=await store.snapshot(),session=snapshot.sessions[0]!;assert.equal(snapshot.sessions.length,1);
+    const facts=store.nativeSessionFacts({taskId:session.taskId,sessionId:session.id},"changes");assert.equal(facts.totalHistoricalFileChanges,1);assert.equal(facts.evidence.length,0);
+    const imported=facts.historicalFileChanges[0]!;assert.equal(imported.filePath,record.filePath);assert.equal(imported.additions,9);assert.equal(imported.deletions,3);assert.equal(imported.firstChangedLine,12);assert.ok(imported.legacyRunId);assert.equal(imported.sourceKind,"structured-tool-v1");
+    assert.ok(!JSON.stringify(facts).includes("external.md"));
+    const fresh=await store.createTask({requestId:"fresh",expectedStoreRevision:snapshot.storeRevision,scope:{kind:"user",userId:snapshot.currentUser.id},title:"Fresh",goal:"No history mixing"});
+    assert.deepEqual(store.nativeSessionFacts({taskId:fresh.task.id,sessionId:fresh.coordinationSession.id},"changes").historicalFileChanges,[]);
+  }finally{await store?.close();await rm(f.root,{recursive:true,force:true});}
+});
