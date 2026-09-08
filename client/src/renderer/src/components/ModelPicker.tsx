@@ -11,7 +11,7 @@ export function ModelPicker({models,value,onChange,onManage,onRefresh,busy=false
   const available=models.filter(m=>m.available&&(m.enabled||m.key===value));
   const matches=available.filter(m=>`${m.name} ${m.modelId} ${m.providerName}`.toLowerCase().includes(query.toLowerCase()));
   return <Menu.Root onOpenChange={()=>setQuery("")}>
-    <Menu.Trigger asChild><button type="button" className="model-trigger" aria-label={label} disabled={busy}>{selected?.name??(refreshing?"正在读取模型…":"选择模型")}<ChevronDown size={13}/></button></Menu.Trigger>
+    <Menu.Trigger asChild><button type="button" className="model-trigger" aria-label={label} disabled={busy}><span>{selected?.name??(refreshing?"正在读取模型…":"选择模型")}</span><ChevronDown size={13}/></button></Menu.Trigger>
     <Menu.Portal><Menu.Content className="menu model-picker" side="top" align="end" sideOffset={7}>
       <div className="model-picker-search input-surface"><Search size={14}/><input aria-label="搜索可用模型" placeholder="搜索模型或供应商…" value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.stopPropagation()}/></div>
       <div className="model-picker-list">

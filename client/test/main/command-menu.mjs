@@ -23,9 +23,9 @@ import React,{useState} from 'react';import{createRoot}from'react-dom/client';im
 import{Composer}from'/src/components/Composer.tsx';import'/src/style.css';import{installMotionTokens}from'/src/workbench/motion.ts';
 const catalog=${JSON.stringify(commands)};window.menuMode='loaded';window.submissions=[];
 window.dcode={request:async(method)=>{if(method!=='dcodeSession.commands')throw Error('Unexpected '+method);await new Promise(r=>setTimeout(r,window.menuMode==='loading'?900:80));if(window.menuMode==='error')throw Error('测试目录暂不可用');return{commands:window.menuMode==='empty'?[]:catalog};}};
-function Fixture(){const[draft,setDraft]=useState({text:'',images:[]});window.currentDraft=draft.text;
- const work={draft,draftKey:'menu-test',snapshot:{projects:[],agentRuns:[],sessions:[],sessionRuns:[]},session:null,newProjectId:null,preferences:{},running:false,sending:false,closing:false,hostDead:false,updateDraft:(_key,next)=>setDraft(old=>typeof next==='function'?next(old):next),send:async()=>window.submissions.push(draft.text),setNewProjectId:()=>{},fail:()=>{},trackAttachmentImport:()=>{}};
- const models={data:{models:[{key:'fixture',name:'测试模型',modelId:'fixture',available:true,enabled:true,providerId:'local',providerName:'测试'}],selectedKey:'fixture',thinkingLevels:[]},choose:()=>{},refresh:()=>{},setThinking:()=>{}};
+function Fixture(){const[draft,setDraft]=useState({text:'',images:[]});window.currentDraft=draft.text;const[config,setConfig]=useState({});window.configureComposer=setConfig;const[project,setProject]=useState(null);window.fixtureProject=project;
+ const work={draft,draftKey:'menu-test',snapshot:{projects:config.projects??[],agentRuns:config.existing?[{id:'worker',taskId:'task',sessionId:'worker-session',role:'worker'}]:[],sessions:[{id:'worker-session',title:'页面实现成员'}],sessionRuns:[]},task:config.existing?{id:'task'}:null,session:config.existing?{id:'main'}:null,newProjectId:project,preferences:{},running:!!config.running,sending:false,closing:false,hostDead:false,updateDraft:(_key,next)=>setDraft(old=>typeof next==='function'?next(old):next),send:async()=>window.submissions.push(draft.text),setNewProjectId:setProject,stop:()=>{},addAttachment:async()=>{},fail:()=>{},trackAttachmentImport:()=>{}};
+ const models={data:{models:[{key:'fixture',name:config.long?'很长的模型名称用于验证工具栏不会溢出并挤走发送控件':'测试模型',modelId:'fixture',available:true,enabled:true,providerId:'local',providerName:'测试'}],selectedKey:'fixture',thinkingLevels:config.long?['medium','high']:[]},choose:()=>{},refresh:()=>{},setThinking:()=>{}};
  return <main className="fixture-area new-task-stage"><div className="fixture-composer"><Composer work={work} models={models} pathForFile={()=>''} onSettings={()=>{}}/></div></main>;}
 installMotionTokens(document.documentElement);createRoot(document.getElementById('root')).render(<SWRConfig value={{provider:()=>new Map(),dedupingInterval:0}}><Fixture/></SWRConfig>);
 `);
@@ -41,7 +41,12 @@ app.setPath('userData',${JSON.stringify(join(temp,"profile"))});
 app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1200,height:900,webPreferences:{backgroundThrottling:false,sandbox:true}});const errors=[];win.webContents.on('console-message',d=>{if(d.level==='error')errors.push(d.message)});
  const run=code=>win.webContents.executeJavaScript(code,true),sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const until=async(code,label)=>{for(let i=0;i<200;i++){if(await run(code))return;await sleep(25)}throw Error('Timeout '+label)};
- const click=()=>run('document.querySelector(".composer-command-trigger").click()');
+ const click=async()=>{
+  if(${JSON.stringify(baseline)})return run('document.querySelector(".composer-command-trigger").click()');
+  await run('document.querySelector("[aria-label=添加内容]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');
+  await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(i=>i.textContent.includes("技能或命令"))','add menu');
+  await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(i=>i.textContent.includes("技能或命令")).click()');
+ };
  const key=(key,extra={})=>run('document.querySelector("[data-composer]").dispatchEvent(new KeyboardEvent("keydown",'+JSON.stringify({key,bubbles:true,...extra})+'))');
  const setText=text=>run('(()=>{const t=document.querySelector("[data-composer]");Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set.call(t,'+JSON.stringify(text)+');t.dispatchEvent(new Event("input",{bubbles:true}));})()');
  const geometry=()=>run('(()=>{const r=s=>{const b=document.querySelector(s).getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}};return{composer:r(".composer"),input:r("[data-composer]"),controls:r(".composer-controls")};})()');
@@ -49,7 +54,7 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:120
   nativeTheme.themeSource='dark';await win.loadURL(${JSON.stringify(url)});await until('!!document.querySelector("[data-composer]")','composer');
   await sleep(120);const before=await geometry();await click();await until('document.querySelectorAll("#composer-commands [role=option]").length>0','catalog');await sleep(180);const after=await geometry();const count=await run('document.querySelectorAll("#composer-commands [role=option]").length');
   await fs.writeFile(${JSON.stringify(join(temp,"menu-dark.png"))},(await win.webContents.capturePage()).toPNG());
-  const matrix=[];
+  const matrix=[],toolbarMatrix=[];
   if(!${JSON.stringify(baseline)}){
     assert.equal(await run('document.querySelector("#composer-command-0 .command-name").textContent'),'507 Breakdown');
     assert.equal(await run('document.querySelector("#composer-command-0").title.includes("/skill:")'),false);
@@ -88,6 +93,25 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:120
       if(zoom===1)await fs.writeFile(${JSON.stringify(temp)}+'/menu-'+theme+'-'+width+'-'+edge+'.png',(await win.webContents.capturePage()).toPNG());
       await key('Escape');await until('!document.getElementById("composer-commands")','matrix close');
     }
+    await run('Object.assign(document.querySelector(".fixture-composer").style,{position:"static",transform:"none"});void 0;');
+    for(const theme of ['light','dark'])for(const width of [760,400])for(const zoom of [.92,1,1.12])for(const mode of ['empty','project','existing']){
+      nativeTheme.themeSource=theme;win.setContentSize(width,560);win.webContents.setZoomFactor(zoom);
+      const title='这是一个很长的项目名称，完整内容保留以便确认任务归属';
+      await run('window.configureComposer('+JSON.stringify({projects:mode==='empty'?[]:[{id:'project',title}],existing:mode==='existing',running:mode==='existing',long:true})+');');await sleep(60);
+      if(mode==='project'){
+        await run('document.querySelector("[aria-label=任务归属]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');
+        await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(i=>i.title==='+JSON.stringify(title)+')','project choice');
+        await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(i=>i.title==='+JSON.stringify(title)+').click()');await sleep(30);assert.equal(await run('window.fixtureProject'),'project');
+        assert.equal(await run('document.querySelector("[aria-label=任务归属]").title'),title);
+      }
+      const boxes=await run('(()=>{const c=document.querySelector(".composer"),r=c.getBoundingClientRect(),buttons=Array.from(c.querySelectorAll(".composer-controls button,.composer-controls select")).filter(b=>!b.hidden),scope=c.querySelector("[aria-label=任务归属]");return {scope:!!scope,inControls:!!scope?.closest(".composer-controls"),outside:!!document.querySelector(".scope-tray"),bounds:buttons.map(b=>{const v=b.getBoundingClientRect();return {label:b.getAttribute("aria-label"),left:v.left,right:v.right,top:v.top,bottom:v.bottom}}),left:r.left,right:r.right,top:r.top,bottom:r.bottom};})()');
+      assert.equal(boxes.scope,mode!=='existing');assert.equal(boxes.outside,false);if(boxes.scope)assert.equal(boxes.inControls,true);
+      for(const b of boxes.bounds){assert.ok(b.left>=boxes.left&&b.right<=boxes.right&&b.top>=boxes.top&&b.bottom<=boxes.bottom,'toolbar control inside input '+JSON.stringify({mode,width,zoom,b,boxes}));}
+      assert.ok(boxes.bounds.some(b=>b.label==='发送'));if(mode==='existing')assert.ok(boxes.bounds.some(b=>b.label==='停止'));
+      await click();await until('!!document.querySelector("#composer-commands")','same skill entry');await key('Escape');await until('!document.querySelector("#composer-commands")','cancel skill');
+      toolbarMatrix.push({theme,width,zoom,mode,boxes});
+      if(zoom===1&&mode==='project')await fs.writeFile(${JSON.stringify(temp)}+'/toolbar-'+theme+'-'+width+'.png',(await win.webContents.capturePage()).toPNG());
+    }
     for(const mode of ['loading','error','empty']){
       await run('window.menuMode='+JSON.stringify(mode));await new Promise(resolve=>{win.webContents.once('did-finish-load',resolve);win.reload();});await until('!!document.querySelector("[data-composer]")','state reload');await run('window.menuMode='+JSON.stringify(mode));await click();
       if(mode==='loading'){await until('!!document.querySelector("#composer-commands [role=status]")','loading');assert.equal(await run('document.querySelectorAll("#composer-commands [role=option]").length'),0);}
@@ -96,7 +120,7 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:120
       await key('Escape');
     }
   }
-  const report={before,after,count,total:${commands.length},errors,matrix};
+  const report={before,after,count,total:${commands.length},errors,matrix,toolbarMatrix};
   if(!${JSON.stringify(baseline)}){assert.equal(count,${commands.length});for(const part of ['composer','input','controls'])for(const dimension of ['x','y','width','height'])assert.ok(Math.abs(before[part][dimension]-after[part][dimension])<1,part+' '+dimension+' stays fixed');}
   await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify(report,null,2));app.exit(0);
  }catch(error){await fs.writeFile(${JSON.stringify(join(temp,"failure.png"))},(await win.webContents.capturePage()).toPNG());console.error(error);app.exit(1);}

@@ -92,6 +92,8 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 候选的第二、三批已补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签仍使用原有文件工作区合同。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
 
+新任务归属选择在输入卡内部底部“＋”旁；“＋”菜单提供图片、文件和技能/命令，文本 `/` 入口保持。切换归属读取各自草稿，原文字和附件可在切回时恢复；已有任务不显示归属迁移入口。模型、思考和发送控件在同一工具栏内有界换行。
+
 0.0.32 技能菜单使用 `CommandMenu.tsx` 与 `workbench/command-menu.ts`：前者只拥有浮层、焦点和可见区域，后者把可读名称与调用名分开。Floating UI 2.1.9 从原有传递依赖提升为显式依赖，没有新增另一套菜单/命令事实源。`npm run test:command-menu` 用真实 Composer 与 181 条受控候选检查布局、长列表、搜索和键盘；菜单的 HTML 预览叠层关系继续由 `test:new-task` 在隔离原生窗口验证。
 
 模型连接验收：`node test/main/model-connections.mjs` 在独立隐藏 Electron 窗口运行实际设置页与 Host，仅注入私有假凭据适配器，覆盖取消、失败重试、保存、断开和深浅主题；不使用或改写用户的验收应用。API行内输入的失败重试、成功/取消/折叠/离开清理与Host退出重启由同一独立测试覆盖；OAuth原生交互与真实账号仍需人工另行验收。

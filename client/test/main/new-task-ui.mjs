@@ -30,6 +30,11 @@ app.on('browser-window-created',(_event,win)=>{
   const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const until=async(code,label)=>{for(let i=0;i<300;i++){if(await run(code))return;await sleep(30);}throw new Error('Timed out: '+label);};
   const click=label=>run('(()=>{const label='+JSON.stringify(label)+';const b=Array.from(document.querySelectorAll("button")).find(b=>b.getAttribute("aria-label")===label||b.textContent.trim()===label);if(!b)throw new Error("Missing button: "+label);b.click();})()');
+  const openCommands=async()=>{
+    await run('document.querySelector("[aria-label=添加内容]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');
+    await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(i=>i.textContent.includes("技能或命令"))','add menu');
+    await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(i=>i.textContent.includes("技能或命令")).click()');
+  };
   const results=[];
   try{
    await until('!!document.querySelector(".new-task-stage")','real new draft');
@@ -50,7 +55,7 @@ app.on('browser-window-created',(_event,win)=>{
    const geometry=await run('(()=>{const c=document.querySelector(".new-task-ambient canvas");const input=document.querySelector("[data-composer]");return {canvas:c.width>0,inputs:!!input,sceneCount:document.querySelectorAll(".new-task-ambient canvas").length,hidden:document.hidden};})()');
    assert.equal(geometry.sceneCount,1);assert.equal(geometry.inputs,true);nativeTheme.themeSource="light";await sleep(80);
    await fs.writeFile(${JSON.stringify(join(temp,"new-task-light.png"))},(await win.webContents.capturePage()).toPNG());
-   await click('选择技能或命令');
+   await openCommands();
    await until('!!document.getElementById("composer-commands")','real commands menu');
    assert.equal(await run('document.activeElement===document.querySelector("[data-composer]")'),true);
    assert.equal(await run('document.querySelector("[data-composer]").getAttribute("aria-controls")'),'composer-commands');
@@ -59,10 +64,16 @@ app.on('browser-window-created',(_event,win)=>{
    await click('灵感');await until('!document.querySelector(".new-task-ambient")','inspiration excludes scene');
    await click('新建任务');await until('!!document.querySelector(".new-task-ambient canvas")','scene returns');
    await run('(async()=>{for(let attempt=0;;attempt++){const snapshot=await window.dcode.request("foundation.snapshot");try{await window.dcode.request("project.create",{requestId:"ui-project",expectedStoreRevision:snapshot.storeRevision,title:"UI 测试项目",directory:'+JSON.stringify(${JSON.stringify(temp)})+'});break;}catch(error){if(attempt>=5||!String(error).includes("REVISION_CONFLICT"))throw error;await new Promise(resolve=>setTimeout(resolve,50));}}})()');
-   await sleep(200);
-   await run('document.querySelector(".scope-tray button").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');
-   await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(item=>item.textContent.trim()==="UI 测试项目")','project scope menu');
-   await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(item=>item.textContent.trim()==="UI 测试项目").click()');
+   await run('(async()=>{const mutate=async(method,params)=>{for(let i=0;;i++){const s=await window.dcode.request("foundation.snapshot");try{return await window.dcode.request(method,{...params,requestId:crypto.randomUUID(),expectedStoreRevision:s.storeRevision});}catch(e){if(i>=5||!String(e).includes("REVISION_CONFLICT"))throw e;}}};const s=await window.dcode.request("foundation.snapshot"),project=s.projects.find(p=>p.title==="UI 测试项目");for(const [key,scope,text,path] of [["new:user",{kind:"user",userId:s.currentUser.id},"独立任务草稿",'+JSON.stringify(${JSON.stringify(join(temp,"a.md"))})+'],["new:"+project.id,{kind:"project",projectId:project.id},"项目任务草稿",'+JSON.stringify(${JSON.stringify(join(temp,"long-file-name.md"))})+']]){const imported=await mutate("attachment.import",{draftKey:key,source:{path}});await mutate("taskDraft.set",{scope,text,attachmentIds:[imported.attachment.id]});}})()');
+   await new Promise(resolve=>{win.webContents.once('did-finish-load',resolve);win.reload();});await until('document.querySelector("[data-composer]")?.value==="独立任务草稿"','restored user draft');
+   assert.equal(await run('!!document.querySelector(".composer-controls [aria-label=任务归属]")&&!document.querySelector(".scope-tray")'),true);
+   for(const [label,text,attachment] of [['UI 测试项目','项目任务草稿','long-file-name.md'],['独立任务','独立任务草稿','a.md'],['UI 测试项目','项目任务草稿','long-file-name.md']]){
+     await run('document.querySelector("[aria-label=任务归属]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');
+     await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(item=>item.textContent.trim()==='+JSON.stringify(label)+')','project scope menu');
+     await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(item=>item.textContent.trim()==='+JSON.stringify(label)+').click()');
+     await until('document.querySelector("[data-composer]")?.value==='+JSON.stringify(text),'scope draft restores');
+     assert.equal(await run('document.querySelector(".file-attachment .file-name")?.textContent'),attachment);
+   }
    await until('!!Array.from(document.querySelectorAll("button")).find(b=>b.getAttribute("aria-label")==="文件与 Git")','project file action before task');
    await click('文件与 Git');await until('!!document.querySelector(".files-workspace")','project files before creation');
    assert.equal(await run('!!document.querySelector(".new-task-ambient")'),false);
@@ -79,7 +90,7 @@ app.on('browser-window-created',(_event,win)=>{
    await click('preview.html');await until('!!document.querySelector(".html-preview-surface")','HTML preview surface');
    const previewVisible=()=>win.contentView.children.some(view=>view.webContents&&view.webContents!==win.webContents&&view.getBounds().width>0&&view.getBounds().height>0);
    for(let i=0;i<100&&!previewVisible();i++)await sleep(30);assert.equal(previewVisible(),true);
-   await click('选择技能或命令');await until('!!document.getElementById("composer-commands")','commands over native HTML');
+   await openCommands();await until('!!document.getElementById("composer-commands")','commands over native HTML');
    for(let i=0;i<100&&previewVisible();i++)await sleep(30);assert.equal(previewVisible(),false,'native preview yields to command menu');
    await run('document.querySelector("[data-composer]").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
    for(let i=0;i<100&&!previewVisible();i++)await sleep(30);assert.equal(previewVisible(),true,'native preview restores after menu');
@@ -136,7 +147,7 @@ app.on('browser-window-created',(_event,win)=>{
    await run('document.querySelector(".new-task-ambient canvas").dispatchEvent(new Event("webglcontextlost"))');
    await until('!document.querySelector(".new-task-ambient canvas")','context loss static fallback');
    assert.ok(await run('!!document.querySelector("[data-composer]")'));
-   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',projectDraftFiles:'open and close before task creation',commandMenuOverHTML:true,fileTabMotion:{start:movingPill,end:pill},draft:'return preserves input',theme:{center,frame,persisted:pref.appearance,scales:scaleChecks,system:true},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
+   results.push({newDraft:geometry,scope:'inspiration/settings/existing empty task excluded',scopeDrafts:'two nonempty drafts and attachments restore independently',projectDraftFiles:'open and close before task creation',commandMenuOverHTML:true,fileTabMotion:{start:movingPill,end:pill},draft:'return preserves input',theme:{center,frame,persisted:pref.appearance,scales:scaleChecks,system:true},reducedMotion:'static with input available',contextLoss:'static with input available',resize:'passed'});
    await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:true,results},null,2));
    app.quit();
   }catch(error){console.error(error);await fs.writeFile(${JSON.stringify(join(temp,"failure.png"))},(await win.webContents.capturePage()).toPNG());await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:false,error:String(error)}));app.quit();}

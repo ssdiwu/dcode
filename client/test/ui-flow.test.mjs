@@ -608,6 +608,30 @@ test(
         "Failed presentation must not send a ready marker",
       );
       window.dcode.request = realRequest;
+      cleanup();mount();await waitFor(()=>assert.ok(work.snapshot));
+      await act(async()=>{await work.newTask();work.setNewProjectId(null);});
+      await waitFor(()=>assert.equal(work.draftKey,'new:user'));
+      await writeFile(join(home,'scope-user.txt'),'独立任务附件');await writeFile(join(home,'scope-project.txt'),'项目任务附件');
+      await act(async()=>{work.updateDraft(work.draftKey,{text:'独立归属草稿',images:[]});});
+      let userAttachment,projectAttachment;
+      await act(async()=>{userAttachment=await work.addAttachment(work.draftKey,{path:join(home,'scope-user.txt')});});
+      await act(async()=>work.setNewProjectId(managed.project.id));
+      await waitFor(()=>assert.equal(work.draftKey,'new:'+managed.project.id));
+      await act(async()=>{work.updateDraft(work.draftKey,{text:'项目归属草稿',images:[]});});
+      await act(async()=>{projectAttachment=await work.addAttachment(work.draftKey,{path:join(home,'scope-project.txt')});});
+      for(const [project,text,id] of [[null,'独立归属草稿',userAttachment.id],[managed.project.id,'项目归属草稿',projectAttachment.id],[null,'独立归属草稿',userAttachment.id]]){
+        await act(async()=>work.setNewProjectId(project));await waitFor(()=>assert.equal(work.draft.text,text));assert.deepEqual(work.draft.attachments.map(a=>a.id),[id]);
+      }
+      const savedScopes=(await host.handle('foundation.snapshot',{})).composerDrafts.filter(d=>d.draftKind==='new_task');
+      assert.ok(savedScopes.some(d=>d.scope.kind==='user'&&d.text==='独立归属草稿'&&d.attachments[0].id===userAttachment.id));
+      assert.ok(savedScopes.some(d=>d.scope.kind==='project'&&d.scope.projectId===managed.project.id&&d.text==='项目归属草稿'&&d.attachments[0].id===projectAttachment.id));
+      responseDelay=20;
+      await act(async()=>{await work.send();});await waitFor(()=>assert.equal(work.task?.title,'独立归属草稿'),{timeout:10000});assert.equal(work.task.scope.kind,'user');
+      await waitFor(()=>assert.equal(work.running,false),{timeout:10000});
+      await act(async()=>{await work.newTask();work.setNewProjectId(managed.project.id);});await waitFor(()=>assert.equal(work.draft.text,'项目归属草稿'));
+      assert.deepEqual(work.draft.attachments.map(a=>a.id),[projectAttachment.id]);
+      await act(async()=>{await work.send();});await waitFor(()=>assert.equal(work.task?.title,'项目归属草稿'),{timeout:10000});assert.deepEqual(work.task.scope,{kind:'project',projectId:managed.project.id});
+      await waitFor(()=>assert.equal(work.running,false),{timeout:10000});
     } finally {
       cleanup();
       listeners.clear();

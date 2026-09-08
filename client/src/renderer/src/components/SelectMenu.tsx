@@ -29,6 +29,7 @@ export function SelectMenu<T extends string>({
       <DropdownMenu.Trigger asChild>
         <button
           aria-label={ariaLabel}
+          title={current?.label ?? placeholder}
           className={`flex h-6 max-w-[260px] items-center gap-1 rounded-md px-1.5 text-[11px] leading-none hover:bg-ink/5 ${
             accent ? "text-accent" : "text-muted"
           } ${className}`}
@@ -44,11 +45,12 @@ export function SelectMenu<T extends string>({
           side="top"
           align="start"
           sideOffset={6}
-          className="z-50 max-h-[320px] min-w-[220px] overflow-y-auto rounded-lg border border-line bg-raised p-1 shadow-xl"
+          className="z-50 max-h-[320px] min-w-[min(220px,calc(100vw-32px))] max-w-[min(360px,calc(100vw-32px))] overflow-y-auto rounded-lg border border-line bg-raised p-1 shadow-xl"
         >
           {options.map(option => (
             <DropdownMenu.Item
               key={option.value}
+              title={option.label}
               onSelect={() => onChange(option.value)}
               className="flex h-7 cursor-pointer items-center gap-2 rounded-md px-2 text-[12px] outline-none data-[highlighted]:bg-accent-fill data-[highlighted]:text-accent"
             >

@@ -27,6 +27,7 @@ export function Composer({
 }) {
   const composer = useRef<HTMLDivElement>(null);
   const commandTrigger = useRef<HTMLButtonElement>(null);
+  const openCommandsAfterAdd = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const filesInput = useRef<HTMLInputElement>(null);
   const {reading,add,thumbnails} = useComposerAttachments(work,pathForFile);
@@ -178,11 +179,13 @@ export function Composer({
           maxLength={200000}
         />
         <div className="composer-controls">
-          <Menu.Root>
+          <Menu.Root onOpenChange={open=>{if(open){setCommandOpen(false);setMentionOpen(false);}}}>
             <Menu.Trigger asChild>
               <button
                 className="icon-button"
-                aria-label="添加附件"
+                ref={commandTrigger}
+                type="button"
+                aria-label="添加内容"
                 disabled={reading > 0}
               >
                 <Plus size={18} />
@@ -194,6 +197,12 @@ export function Composer({
                 side="top"
                 align="start"
                 sideOffset={8}
+                onCloseAutoFocus={event=>{
+                  if(!openCommandsAfterAdd.current)return;
+                  event.preventDefault();openCommandsAfterAdd.current=false;
+                  setCommandMode("browse");setCommandIndex(0);setCommandOpen(true);
+                  textarea.current?.focus();
+                }}
               >
                 <Menu.Item
                   className="menu-item"
@@ -209,9 +218,29 @@ export function Composer({
                   <FileText size={15} />
                   文件…
                 </Menu.Item>
+                <Menu.Separator className="menu-separator"/>
+                <Menu.Item className="menu-item" onSelect={()=>{openCommandsAfterAdd.current=true;}}>
+                  <Slash size={15}/>技能或命令
+                </Menu.Item>
               </Menu.Content>
             </Menu.Portal>
           </Menu.Root>
+          {!work.task && (
+          <SelectMenu
+            ariaLabel="任务归属"
+            className="task-scope-chip"
+            value={work.newProjectId ?? "user"}
+            placeholder="独立任务"
+            options={[
+              { value: "user", label: "独立任务" },
+              ...(snapshot?.projects ?? []).map((p) => ({
+                value: p.id,
+                label: p.title,
+              })),
+            ]}
+            onChange={(id) => work.setNewProjectId(id === "user" ? null : id)}
+          />
+          )}
           <input
             ref={input}
             hidden
@@ -234,9 +263,8 @@ export function Composer({
             }}
           />
           {targetWorking&&!draft.pathAction&&<select className="delivery-select" aria-label="发送时机" value={delivery} onChange={event=>setDelivery(event.target.value as "queue"|"steer")}><option value="queue">排到后面</option><option value="steer">补充当前工作</option></select>}
-          <button ref={commandTrigger} type="button" className="text-button composer-command-trigger" aria-label="选择技能或命令" aria-expanded={commandOpen} title="技能与命令（/）" onClick={()=>{setCommandMode("browse");setCommandOpen(value=>!value);setCommandIndex(0);setMentionOpen(false);textarea.current?.focus();}}><Slash size={14}/><span>技能</span></button>
           {!draft.pathAction&&members.length>0&&<Menu.Root><Menu.Trigger asChild><button type="button" className="text-button" aria-label="提及成员">@ 成员</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" side="top" onCloseAutoFocus={event=>{event.preventDefault();textarea.current?.focus();}}>{members.map(member=><Menu.Item className="menu-item" key={member.id} onSelect={()=>chooseMember(member.id)}>{member.title}</Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
-          <span className="spacer" />
+          <div className="composer-actions">
           <ModelPicker models={models.data?.models??[]} value={models.data?.selectedKey??null} onChange={models.choose} onManage={onSettings} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy || work.running}/>
           {(models.data?.thinkingLevels.length??0)>1 && <SelectMenu ariaLabel="选择思考强度" value={models.data?.thinking??null} placeholder="思考强度" options={(models.data?.thinkingLevels??[]).map(level=>({value:level,label:`思考 · ${thinkingLabels[level]??level}`}))} onChange={level=>void models.setThinking(level)}/>}
           {work.running ? (
@@ -256,27 +284,10 @@ export function Composer({
             >
               <ArrowUp size={17} />
             </button>
+          </div>
         </div>
       </div>
       {commandOpen&&<CommandMenu anchor={composer} input={textarea} trigger={commandTrigger} options={commandMatches} active={activeCommand} loading={commandsLoading} error={commandError} onActive={setCommandIndex} onChoose={chooseCommand} onClose={closeCommands}/>}
-      {!work.task && (
-        <div className="scope-tray">
-          <SelectMenu
-            ariaLabel="任务归属"
-            className="task-scope-chip"
-            value={work.newProjectId ?? "user"}
-            placeholder="独立任务"
-            options={[
-              { value: "user", label: "独立任务" },
-              ...(snapshot?.projects ?? []).map((p) => ({
-                value: p.id,
-                label: p.title,
-              })),
-            ]}
-            onChange={(id) => work.setNewProjectId(id === "user" ? null : id)}
-          />
-        </div>
-      )}
       <div className="composer-status" role="status">
         {models.loading
           ? "正在读取模型与连接…"
