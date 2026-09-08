@@ -25,6 +25,22 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
     catch(e){setFailure(errorText(e));}
     finally{setConnectionBusy(false);}
   };
+  const apiKeyFlight=useRef(false);
+  const connectApiKey=async(providerId:string,key:string)=>{
+    if(apiKeyFlight.current)return {ok:false as const,code:"BUSY" as const};
+    apiKeyFlight.current=true;setConnectionBusy(true);setFailure(null);
+    try{
+      const result=await api().connectApiKey(providerId,key);key="";
+      // Clear the input from the private receipt; metadata refresh must not hold
+      // the secret or downgrade a confirmed save into an unknown outcome.
+      void (async()=>{
+        if(result.ok||result.code==="SYNC_REQUIRED"||result.code==="FAILED")await mutateConnections(current=>current?{providers:current.providers.map(p=>p.providerId===providerId?{...p,state:result.ok?"configured":result.code==="SYNC_REQUIRED"?"sync_required":"failed",...(result.ok||result.code==="SYNC_REQUIRED"?{managed:true,external:false}:{})}:p)}:current,false);
+        await Promise.all([mutateConnections(),mutate()]);await onChanged();
+      })().catch(()=>setFailure("连接操作已返回，页面刷新失败，请重新刷新连接状态。"));
+      return result;
+    }catch{return {ok:false as const,code:"OUTCOME_UNKNOWN" as const};}
+    finally{key="";apiKeyFlight.current=false;setConnectionBusy(false);}
+  };
   const [refreshing,setRefreshing]=useState(false);
   const [busy,setBusy]=useState(false);
   const [failure,setFailure]=useState<string|null>(null);
@@ -54,7 +70,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
     const model=data?.models.find(m=>m.key===value);
     if(model)return run("dcodeModels.select",{...(asDefault?{}:target),providerId:model.providerId,modelId:model.modelId});
   };
-  return {data,connections,connecting,
+  return {data,connections,connecting,connectApiKey,
     refreshConnections:()=>connectionAction("dcodeAuth.refresh",{}),
     connect:(providerId:string,authType:AuthType)=>connectionAction("dcodeAuth.start",{providerId,authType,flowId:crypto.randomUUID()}),
     cancelConnection:(flowId:string)=>connectionAction("dcodeAuth.cancel",{flowId}),

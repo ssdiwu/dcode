@@ -101,10 +101,10 @@ npm start -- --agent-dir ~/.pi/agent
 - `src/resource-policy.ts`：在 Extension Factory（扩展工厂）执行前排除外部 `pi-dfast`，其余启用扩展仍交由固定 Pi SDK 加载。
 - `src/resources.ts`：Pi 本机资源加载快照、扩展包启停影子清单与热重载。
 - `src/model-providers.ts`：旧 Pi `models.json` 自定义供应商适配 / 只读发现逻辑；D Code 产品路径不调用其写入入口。
-- `src/model-catalog-configuration.ts`：原生模型供应商目录配置的输入校验、种子与注册；配置仅接受无凭据的受管连接选项或环境变量引用；密钥通过独立安全窗口输入。
+- `src/model-catalog-configuration.ts`：原生模型供应商目录配置的输入校验、种子与注册；配置仅接受无凭据的受管连接选项或环境变量引用；API密钥通过行内遮蔽控件与专用保密通道输入。
 - `src/session-lease.ts`：会话租约、静默检查和外部写入检测。
 - `src/extension-ui.ts`：标准结构化扩展 UI，以及 TUI 能力的显式 unsupported 边界。
-- `src/model-connections.ts` / `src/secure-model-credentials.ts`：D Code 安全连接流程与凭据适配；`native/ModelCredentials.swift` 由 Host 私有管道管理安全输入、浏览器与钥匙串。公共 `dcodeAuth.*` 仅携带控制和状态，旧 `modelAuth.*` 继续拒绝。
+- `src/model-connections.ts` / `src/secure-model-credentials.ts`：D Code 安全连接流程与凭据适配；`api-key-channel.ts` 接收API行内保密提交；`native/ModelCredentials.swift`由Host私有管道管理OAuth交互、浏览器与钥匙串。公共 `dcodeAuth.*` 仅携带控制和状态，旧 `modelAuth.*` 继续拒绝。
 - `src/managed-worker-worktree.ts`：Project Worker 受管 detached Git worktree 的创建、验证与 Artifact 记录。
 - `src/maintenance.ts`：本机维护动作（候选检查 / 构建）的子进程执行、持久化状态与中断恢复回执。
 - `src/pi-host.ts`：Pi SDK 会话生命周期与协议动作。
@@ -142,6 +142,6 @@ Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` �
 
 ## 模型安全连接候选
 
-`dcodeAuth.get/start/cancel/disconnect/refresh` 按固定 SDK 的实际能力列出 API/OAuth 入口。凭据正文只留在 Host 内存、Host 子进程私有管道与当前数据根对应的钥匙串命名空间；Product Store 只保存安全引用。API 保存和真实请求验证分别呈现，OAuth 刷新继续由 SDK 负责，更新/断开受跨进程锁保护。外部 Pi 认证只读，不能被静默续写或删除；其过期只影响本 Provider 的 D Code 候选可用性。
+`dcodeAuth.get/start/cancel/disconnect/refresh` 按固定 SDK 的实际能力列出 API/OAuth 入口。API新输入可短暂经过遮蔽控件及专用IPC/fd3，OAuth输入仍由Host自有交互承接；凭据持久化只在当前数据根对应的钥匙串命名空间；Product Store 只保存安全引用。API 保存和真实请求验证分别呈现，OAuth 刷新继续由 SDK 负责，更新/断开受跨进程锁保护。外部 Pi 认证只读，不能被静默续写或删除；其过期只影响本 Provider 的 D Code 候选可用性。
 
 `npm test` 包含 `model-connections.test.ts`：使用假值、隔离适配器和专用钥匙串命名空间验证。原生辅助程序统一按桌面壳声明的 macOS 12.0 最低目标构建；较旧系统运行兼容性与真实账号登录仍须对应环境人工验收。完整需求与证据归 [PRD 0030](../doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。

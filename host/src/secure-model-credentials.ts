@@ -191,6 +191,12 @@ export class DCodeCredentialStore implements CredentialStore {
     this.failedRefresh.delete(id);this.verified.delete(id);this.generations.set(id,this.generation(id)+1);
     this.metadata=undefined;
   }
+  async saveApiKey(id:string,key:string):Promise<void>{
+    rememberCredential({key});
+    await this.vault.transaction(id,async current=>({value:undefined,write:{type:"api_key",...(current?.type==="api_key"&&current.env?{env:current.env}:{}),key}}));
+    this.failedRefresh.delete(id);this.verified.delete(id);this.generations.set(id,this.generation(id)+1);
+    this.metadata=undefined;
+  }
   async delete(id:string,options?:AuthOperationOptions):Promise<void>{
     await this.vault.transaction(id,async()=>({value:undefined,write:null}),options?.signal);
     this.failedRefresh.delete(id);this.verified.delete(id);this.generations.set(id,this.generation(id)+1);

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { inheritedApiKeyChannel } from "./api-key-channel.js";
 import { JsonlDecoder, JsonlWriter } from "./jsonl.js";
 import { PiHost } from "./pi-host.js";
 import type { LegacyStoreKind } from "./legacy-migration.js";
@@ -135,6 +136,9 @@ const host = new PiHost({
   },
 });
 
+let credentialInputReady=false;
+const closeApiKeyChannel=inheritedApiKeyChannel((providerId,key,id)=>credentialInputReady&&!exiting?host.connectApiKey(providerId,key,id):Promise.resolve({ok:false,code:"UNAVAILABLE"}));
+
 async function handleValue(value: unknown): Promise<void> {
   const correlation = rawCorrelation(value);
   try {
@@ -199,6 +203,7 @@ async function drainRequests(): Promise<void> {
 async function shutdown(exitCode: number): Promise<void> {
   if (exiting) return;
   exiting = true;
+  credentialInputReady=false;closeApiKeyChannel();
   if (parentWatch) clearInterval(parentWatch);
   const forcedExitCode = exitCode === 0 ? 1 : exitCode;
   const forceExit = setTimeout(() => process.exit(forcedExitCode), 20_000);
@@ -264,6 +269,7 @@ try {
   process.stderr.write(`D Code host startup error: ${failure.message}\n`);
   process.exit(1);
 }
+credentialInputReady=true;
 await writer.write(protocolEvent("host.ready", {
   protocolVersion: 1,
   pid: process.pid,

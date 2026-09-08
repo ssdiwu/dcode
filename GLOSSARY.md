@@ -462,7 +462,7 @@ _Avoid_: Pi Model Catalog、Pi `models.json` 权威、供应商官网镜像、�
 
 **Credential Reference（凭据安全引用）**：
 Product Store 对某个 Provider 已配置凭据的安全、不可逆引用，记录 Keychain、环境或外部 Runtime Auth Bridge（认证桥）的类型、定位符、配置状态和可选来源摘要，但永不保存 API Key、OAuth Token、认证文件正文或交互输入值。引用缺失或失效时 D Code 显示需要认证，不能用空成功或 Pi 配置副本伪装可运行。
-_Avoid_: API Key 文本、`auth.json` 镜像、IPC 密码框、Provider 配置正文
+_Avoid_: 持久 API Key 文本、`auth.json` 镜像、通用 IPC 密码框、Provider 配置正文
 
 **Runtime Model Selection（未来运行模型选择）**：
 D Code Product Store 为未来 Coordinator / Agent Runtime 保存的 Provider / Model 对。它在 Runtime 启动时与 D Code Model Catalog、Credential Reference 一起校验，再显式应用到 Runtime Adapter；修改它不会回写 Pi `settings.json`、改写历史 Run 或热改已经运行的模型。
@@ -473,8 +473,8 @@ _Avoid_: Pi 默认模型、当前 Session 临时切换、Agent Profile 身份、
 _Avoid_: 禁用供应商、模型权限、认证状态
 
 **Custom Model Provider（自定义模型供应商）**：
-通过 D Code 原生 Provider 合同定义的模型供应商和模型集合。D Code 拥有目录、未来运行选择和认证状态语义，但不得在普通界面、会话、日志、模型上下文或 IPC 中展示 / 接收凭据正文；Pi 等 Runtime 只消费运行所需的安全凭据引用。
-_Avoid_: Pi `models.json` 可写入口、任意 API 代理、凭据正文、IPC API Key
+通过 D Code 原生 Provider 合同定义的模型供应商和模型集合。D Code 拥有目录、未来运行选择和认证状态语义，但不得回显已存凭据，或将机密放入会话、日志、模型上下文及通用 IPC。显式 API 连接的遮蔽输入框可临时收集当次输入，经专用保密通道交给 Host 保存到钥匙串；输入不持久化，成功、取消或离开即清空，失败只在当前输入中保留。Pi 等 Runtime 只消费 Host 内部解析的凭据。
+_Avoid_: Pi `models.json` 可写入口、任意 API 代理、已存凭据回显、通用 IPC API Key
 
 **D Code Capability Module（D Code 自有能力模块）**：
 D Code 为一个明确用户结果拥有的统一实现单位，可以贡献结构化工具、Host（宿主）服务、状态事件、存储与原生呈现。Capability Module 在架构上可以独立装配，但产品上仍必须归入 Basic Capability、Extension Capability、Capability Provider 或普通 Skill / 工具；只有真实注册进 Agent Loop 的结构化工具才可由模型调用。

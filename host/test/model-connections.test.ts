@@ -33,15 +33,21 @@ async function fixture(){
   const close=async()=>{await manager.close();await rm(root,{recursive:true,force:true});};
   return {root,native,store,runtime,manager,events,close};
 }
+function installFakeOAuth(runtime:ModelRuntime){
+  const provider=runtime.getProvider("openai-codex")!;
+  runtime.registerNativeProvider({...provider,auth:{oauth:{...provider.auth.oauth!,login:async interaction=>({type:"oauth",access:await interaction.prompt({type:"manual_code",message:"Enter test callback"}),refresh:"fixture-private-refresh",expires:Date.now()+600_000}),toAuth:async c=>({apiKey:c.access})}}});
+}
 test("built-in methods, safe API setup, duplicate/concurrent starts, restart and external disconnect scope",async()=>{
   const f=await fixture();try{
     const view=await f.manager.get();
     assert.deepEqual(view.providers.find(p=>p.providerId==="openai")?.methods.map(m=>m.type),["api_key"]);
     assert.deepEqual(view.providers.find(p=>p.providerId==="openai-codex")?.methods.map(m=>m.type),["oauth"]);
-    const results=await Promise.all([f.manager.start("openai","api_key","one"),f.manager.start("openai","api_key","one")]);
-    assert.deepEqual(results.map(r=>r.accepted),[true,false]);
-    await assert.rejects(f.manager.start("minimax-cn","api_key","two"),/先完成/);
-    await f.manager.idle();assert.equal(f.native.promptCount,1);
+    const first=f.manager.connectApiKey("openai","fixture-private-secret","one");
+    const duplicate=f.manager.connectApiKey("openai","fixture-private-secret","one");
+    assert.deepEqual(await f.manager.connectApiKey("minimax-cn","fixture-private-secret","two"),{ok:false,code:"BUSY"});
+    assert.deepEqual(await Promise.all([first,duplicate]),[{ok:true},{ok:false,code:"BUSY"}]);
+    assert.equal(f.native.promptCount,0);
+    await assert.rejects(f.manager.start("openai","api_key","no-popup"),/供应商旁输入/);
     assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai")?.state,"configured");
     const restored=new DCodeCredentialStore(f.native,join(f.root,"external.json"));
     assert.equal((await restored.read("openai"))?.type,"api_key");
@@ -56,20 +62,21 @@ test("built-in methods, safe API setup, duplicate/concurrent starts, restart and
 });
 test("cancel and a late prompt result cannot save; native cancel, storage and sync failures do not report success",async()=>{
   const f=await fixture();try{
+    installFakeOAuth(f.runtime);
     let finish:(v:string)=>void=()=>{};
     f.native.answer=async()=>new Promise(r=>{finish=r;});
-    await f.manager.start("openai","api_key","cancel");
+    await f.manager.start("openai-codex","oauth","cancel");
     while(!f.native.promptCount)await new Promise(r=>setTimeout(r,5));
     assert.equal(f.manager.cancel("old").cancelled,false);
     assert.equal(f.manager.cancel("cancel").cancelled,true);
     finish("late-private-secret");await f.manager.idle();
     assert.equal(f.native.data.size,0);
-    assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai")?.state,"cancelled");
+    assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai-codex")?.state,"cancelled");
     f.native.answer=async()=>{throw authCancelled();};
-    await f.manager.start("openai","api_key","native-cancel");await f.manager.idle();
-    assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai")?.state,"cancelled");
+    await f.manager.start("openai-codex","oauth","native-cancel");await f.manager.idle();
+    assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai-codex")?.state,"cancelled");
     f.native.answer=async()=>"fixture-private-secret";f.native.failSave=true;
-    await f.manager.start("openai","api_key","fail");await f.manager.idle();
+    assert.deepEqual(await f.manager.connectApiKey("openai","fixture-private-secret","fail"),{ok:false,code:"FAILED"});
     assert.equal(f.native.data.size,0);
     assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai")?.state,"failed");
     assert.ok(!JSON.stringify(f.events).includes("private"));
@@ -133,7 +140,7 @@ test("real Host API connection refreshes safe Product Store references and model
   let host=new PiHost(options);
   try{
     await host.start();
-    await host.handle("dcodeAuth.start",{providerId:"openai",authType:"api_key",flowId:"host-flow"});
+    assert.deepEqual(await host.connectApiKey("openai","fixture-private-secret","host-flow"),{ok:true});
     for(let i=0;i<300&&!events.some(e=>(e as {data?:{state?:string}}).data?.state==="configured");i++)await new Promise(r=>setTimeout(r,20));
     assert.ok(events.some(e=>(e as {data?:{state?:string}}).data?.state==="configured"));
     const snapshot=await host.handle("foundation.snapshot",{}) as FoundationSnapshot;
@@ -151,13 +158,14 @@ test("real Host API connection refreshes safe Product Store references and model
 
 test("whole-flow deadline rejects a late callback even when no native pipe is open",async()=>{
   const f=await fixture();try{
+    installFakeOAuth(f.runtime);
     let finish:(value:string)=>void=()=>{};
     f.native.answer=async()=>new Promise(r=>{finish=r;});
     const manager=new ModelConnections(f.store,f.native,async()=>f.runtime,async()=>{},(event,data)=>f.events.push({event,data}),{timeoutMs:30});
-    await manager.start("openai","api_key","deadline");
+    await manager.start("openai-codex","oauth","deadline");
     await manager.idle();finish("late-private-result");await new Promise(r=>setTimeout(r,5));
     assert.equal(f.native.data.size,0);
-    assert.equal((await manager.get()).providers.find(p=>p.providerId==="openai")?.state,"timed_out");
+    assert.equal((await manager.get()).providers.find(p=>p.providerId==="openai-codex")?.state,"timed_out");
     await manager.close();
   }finally{await f.close();}
 });
@@ -178,10 +186,10 @@ test("catalog synchronization failure is distinct from saved connection; retry d
   const f=await fixture();try{
     let fail=true;
     const manager=new ModelConnections(f.store,f.native,async()=>f.runtime,async()=>{if(fail)throw Error("private-secret-sync-error");},(event,data)=>f.events.push({event,data}));
-    await manager.start("openai","api_key","sync");await manager.idle();
+    assert.deepEqual(await manager.connectApiKey("openai","fixture-private-secret","sync"),{ok:false,code:"SYNC_REQUIRED"});
     assert.equal((await manager.get()).providers.find(p=>p.providerId==="openai")?.state,"sync_required");
     assert.equal(f.native.data.size,1);fail=false;await manager.refresh();
-    assert.equal(f.native.promptCount,1);
+    assert.equal(f.native.promptCount,0);
     assert.equal((await manager.get()).providers.find(p=>p.providerId==="openai")?.state,"configured");
     await manager.close();
   }finally{await f.close();}
@@ -259,7 +267,7 @@ test("a custom catalog provider can be saved without an environment key, securel
     await host.handle("dcodeModelProvider.save",{requestId:"custom",expectedStoreRevision:snapshot.storeRevision,provider:{id:"custom-fixture",name:"Custom fixture",apiKind:"openai-completions",baseUrl:"https://example.invalid/v1",managedAuth:true,credentialEnv:"",models:[{modelId:"test",name:"Test",reasoning:false,contextWindow:8192,maxTokens:1024}]}});
     const before=await host.handle("dcodeAuth.get",{}) as Awaited<ReturnType<ModelConnections["get"]>>;
     assert.deepEqual(before.providers.find(p=>p.providerId==="custom-fixture")?.methods.map(m=>m.type),["api_key"]);
-    await host.handle("dcodeAuth.start",{providerId:"custom-fixture",authType:"api_key",flowId:"custom-flow"});
+    assert.deepEqual(await host.connectApiKey("custom-fixture","fixture-private-secret","custom-flow"),{ok:true});
     for(let i=0;i<200;i++){const v=await host.handle("dcodeAuth.get",{}) as Awaited<ReturnType<ModelConnections["get"]>>;if(v.providers.find(p=>p.providerId==="custom-fixture")?.state==="configured")break;await new Promise(r=>setTimeout(r,10));}
     assert.ok((await host.handle("dcodeModels.get",{}) as DCodeModelsView).models.find(m=>m.providerId==="custom-fixture")?.available);
     await host.close();host=new PiHost(options);await host.start();
@@ -310,7 +318,7 @@ test("a provider echo of an arbitrary managed key cannot enter public events, ru
   try{
     await host.start();let snapshot=await host.handle("foundation.snapshot",{}) as FoundationSnapshot;
     await host.handle("dcodeModelProvider.save",{requestId:"echo-provider",expectedStoreRevision:snapshot.storeRevision,provider:{id:"echo-provider",name:"Echo Provider",apiKind:"openai-completions",baseUrl:"https://credential-echo.invalid/v1",managedAuth:true,credentialEnv:"",models:[{modelId:"fixture",name:"Fixture",reasoning:false,contextWindow:64000,maxTokens:4096}]}});
-    await host.handle("dcodeAuth.start",{providerId:"echo-provider",authType:"api_key",flowId:"echo-login"});
+    assert.deepEqual(await host.connectApiKey("echo-provider",echo,"echo-login"),{ok:true});
     for(let i=0;i<200;i++){const view=await host.handle("dcodeAuth.get",{}) as Awaited<ReturnType<ModelConnections["get"]>>;if(view.providers.find(p=>p.providerId==="echo-provider")?.state==="configured")break;await new Promise(r=>setTimeout(r,10));}
     snapshot=await host.handle("foundation.snapshot",{}) as FoundationSnapshot;
     await host.handle("dcodeModels.select",{requestId:"echo-model",expectedStoreRevision:snapshot.storeRevision,providerId:"echo-provider",modelId:"fixture"});

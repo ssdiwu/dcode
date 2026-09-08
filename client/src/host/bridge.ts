@@ -1,3 +1,5 @@
+import { ApiKeyChannel } from "./api-key-channel.js";
+import type { Duplex } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import type { HostEvent } from "../protocol/envelope.js";
@@ -24,11 +26,13 @@ export class HostBridge {
   private constructor(
     private readonly child: ChildProcess,
     private readonly client: ProtocolClient,
+    private readonly apiKeys: ApiKeyChannel,
   ) {
     this.child.on("exit", (code, signal) => {
       this.exitCode = code;
       this.exitSignal = signal;
       this.client.dispose();
+      this.apiKeys.close();
       for (const handler of [...this.exitHandlers]) handler(code, signal);
     });
   }
@@ -42,8 +46,8 @@ export class HostBridge {
   static async start(options: HostBridgeOptions): Promise<HostBridge> {
     const plan = planHostLaunch(options);
     const child = spawn(plan.command, plan.args, {
-      env: plan.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      env: {...plan.env,DCODE_CREDENTIAL_PIPE_FD:"3"},
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
     });
     const client = new ProtocolClient({
       sendLine: (line) => child.stdin.write(`${line}\n`),
@@ -57,7 +61,7 @@ export class HostBridge {
       options.onStderr?.(chunk.toString("utf8")),
     );
 
-    const bridge = new HostBridge(child, client);
+    const bridge = new HostBridge(child, client, new ApiKeyChannel(child.stdio[3] as Duplex));
     try {
       await bridge.waitForReady(
         options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
@@ -80,6 +84,8 @@ export class HostBridge {
   ): Promise<T> {
     return this.client.request<T>(method, params, options);
   }
+
+  connectApiKey(providerId:string,key:string){return this.apiKeys.submit(providerId,key);}
 
   onEvent(handler: (event: HostEvent) => void): () => void {
     return this.client.onEvent(handler);

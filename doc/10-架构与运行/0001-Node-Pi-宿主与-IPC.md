@@ -94,7 +94,7 @@ open "client/release/mac-arm64/D Code.app"
 {"version":1,"type":"event","event":"session.opened","data":{}}
 ```
 
-非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。无 Runtime 身份的 Product Store mutation 经过全局队列；带 `runtimeId` 的请求进入对应 Runtime 队列，不再被全局“当前会话”串行化。`extension.respond`、`agentRequest.answer` 与 `agentRun.stop` 属于解除等待或停止的控制请求，会绕过普通 Runtime 队列。认证值没有 D Code IPC 路径。输出仍按写入顺序串行化。
+非法 JSON 或没有安全 correlation id 的非法 envelope 产生 `protocol.error` 事件；具有合法 id 的请求始终以该 id 返回成功或失败响应。无 Runtime 身份的 Product Store mutation 经过全局队列；带 `runtimeId` 的请求进入对应 Runtime 队列，不再被全局“当前会话”串行化。`extension.respond`、`agentRequest.answer` 与 `agentRun.stop` 属于解除等待或停止的控制请求，会绕过普通 Runtime 队列。认证值不进入通用 Protocol v1；API行内输入仅走独立的保密提交通道。输出仍按写入顺序串行化。
 
 ### 方法组
 
@@ -129,7 +129,7 @@ open "client/release/mac-arm64/D Code.app"
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
 | `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` | 仅保留旧 Pi 目录的安全只读诊断 / 迁入来源，不定义 D Code Model Catalog、未来 Runtime 选择或用户可写产品设置 |
 | `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel`、`modelProviders.save`、`modelProviders.remove` | 明确拒绝；D Code 不再经 Pi `SettingsManager` / `models.json` 写产品模型配置 |
-| `dcodeAuth.get/start/cancel/disconnect/refresh` | D Code 安全连接控制；仅 Provider、认证类型、流程 ID 与状态，不能传入密钥或 OAuth 回调。Host 私有窗口/管道与钥匙串承载机密，完整合同归 PRD 0030 |
+| `dcodeAuth.get/start/cancel/disconnect/refresh` | D Code 安全连接控制；仅 Provider、认证类型、流程 ID 与状态，不能传入密钥或 OAuth 回调。API输入经专用保密IPC/fd3，OAuth使用Host私有交互；机密只由Host持久保存到钥匙串，完整合同归PRD0030 |
 | `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 明确拒绝；D Code 不通过 IPC 启动 Pi 认证流程或发送 API Key / OAuth 值，凭据只以安全引用进入 Product Store |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前已绑定 Runtime 的临时会话设置；未来 Runtime 的默认模型仍由 `runtimeModelSelection.set` 归 D Code Product Store 管理 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
@@ -241,3 +241,5 @@ npm test
 早期无插件直接接管曾在临时 agentDir 的真实 `.app` 上完成历史验收，但当时使用“先只读、再确认”的界面，已由 ADR 0006 及其后的 ADR 0018（打开即接管）取代，不能作为当前 UI 证据。当前自动测试证明：打开即取得租约并在关闭时释放；外部写入触发 `session.conflict` 且可经重新打开恢复可写；第二个 Host 打开同一会话直接抢占（`force`），首个实例以 `LEASE_STOLEN` 诚实退出；静默窗口内持续变化有限重试后返回 `SESSION_NOT_IDLE`。
 
 旧全量发现基线曾在真实 `~/.pi/agent` 上完成只读窗口冒烟：Host 握手、最近 60 个扫描结果、当前 stable Session ID 精确搜索、1,202 条当前历史与原生目录选择面板均可达。另以真实 Mermaid 会话验证 flowchart、sequence、state 与 class 的原生呈现、`110%` 缩放、源码复制、图片剪贴板和 `2724 × 398` PNG 导出；gantt 与 pie 显式显示不支持错误并回退原始源码。arm64 本机 App 由 LaunchServices/Finder 路径启动后，进程命令行确认只使用包内 Node 与 Host，`host.hello` 成功、扫描器可返回 60 个真实会话，Finder 环境包含 Homebrew/用户命令目录；App bundle 通过 `codesign --verify --deep --strict`，关窗后内嵌 Node 子进程退出。1233 个 JSONL、约 2.4 GiB 的现实目录下，`session.list(limit=60)` 实测 0.747 秒，随后按 ID `session.inspect` 实测 0.337 秒。该证据只证明扫描器与会话主链路的历史性能，不再代表 `0.0.1` Recent 的产品可见集合，也不证明当前真实会话的最终可写接管或对外分发已经完成。
+
+API Key 行内连接的专用通道：可信页面通过 `dcode:connectApiKey` 提交遮蔽输入，主进程验证发送者/主frame/URL后，经创建Host时继承的fd3转交。非秘密环境标记只说明fd编号，参数/环境不携带密钥。两端独立限制帧/字段/并发并只返回白名单结果；失败和EOF不落入公共解析/异常日志。Host就绪前不执行连接，shutdown先关闭接收再收尾已接受保存。旧公开API-key start不再打开原生输入窗；OAuth流程保持独立。

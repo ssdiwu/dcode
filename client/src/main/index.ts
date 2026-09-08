@@ -123,6 +123,7 @@ async function startHost(): Promise<boolean> {
       sendEvent("host.exit", { code, signal });
     }
   });
+  sendEvent("host.ready", {protocolVersion:1});
   return true;
 }
 const trustedHandle = <Args extends unknown[]>(
@@ -135,6 +136,16 @@ const trustedHandle = <Args extends unknown[]>(
   });
 const htmlPreview=new HTMLPreview(()=>window,()=>bridge,sendEvent);
 function setupIPC() {
+  // Dedicated confidential submission: never use the generic request logger.
+  ipcMain.handle("dcode:connectApiKey",async(event,providerId:unknown,key:unknown)=>{
+    try{
+      assertSender(event);
+      if(typeof providerId!=="string"||typeof key!=="string")return {ok:false,code:"INVALID_INPUT"};
+      if(!bridge)return {ok:false,code:"UNAVAILABLE"};
+      return await bridge.connectApiKey(providerId,key);
+    }catch{return {ok:false,code:"FAILED"};}
+    finally{key=undefined;}
+  });
   trustedHandle("dcode:htmlPreview",(input:Record<string,unknown>)=>{
     if(input.action==="update")return htmlPreview.update(input as unknown as Parameters<HTMLPreview["update"]>[0]);
     if(input.action==="bounds")return htmlPreview.bounds(input.bounds as Parameters<HTMLPreview["bounds"]>[0],input.clientId as string|undefined);

@@ -5412,6 +5412,10 @@ export class PiHost {
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
   /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
+  /** Private inherited channel only; never a Protocol v1 method. */
+  async connectApiKey(providerId:string,key:string,id:string){
+    return (await this.modelConnections()).connectApiKey(providerId,key,id);
+  }
   private credentialStore(): Promise<DCodeCredentialStore> {
     return this.credentialStorePromise ??= this.getProductStore().then(store=>new DCodeCredentialStore(this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),join(this.agentDir,"auth.json")));
   }

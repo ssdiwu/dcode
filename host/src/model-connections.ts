@@ -1,3 +1,4 @@
+import { MAX_API_KEY_LENGTH, type ApiKeyConnectionResult } from "./api-key-connection.js";
 import { rememberAuthInput } from "./credential-material.js";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthType, Credential, CredentialStore } from "@earendil-works/pi-ai";
@@ -11,6 +12,7 @@ export interface ProviderConnection {
   managed:boolean;
   external:boolean;
   flowId?:string;
+  activeMethod?:AuthType;
 }
 interface Flow {id:string;provider:string;type:AuthType;controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>}
 const activeStates=new Set<ConnectionState>(["awaiting_input","awaiting_browser","saving"]);
@@ -42,10 +44,11 @@ export class ModelConnections {
         if(metadata.failed)state="reconnect_required";
       }catch{state="reconnect_required";}
       if(flow&&[...activeStates,"failed","cancelled","sync_required","timed_out"].includes(flow.state))state=flow.state;
-      return {providerId:provider.id,methods,state,managed:owned,external,...(flow?{flowId:flow.id}:{})};
+      return {providerId:provider.id,methods,state,managed:owned,external,...(flow?{flowId:flow.id,activeMethod:flow.type}:{})};
     }))};
   }
   async start(provider:string,type:AuthType,id:string):Promise<{flowId:string;accepted:boolean}>{
+    if(type==="api_key")throw new Error("请在供应商旁输入 API Key 后连接。");
     if(this.seen.has(id))return {flowId:id,accepted:false};
     if(this.mutationPending||[...this.flows.values()].some(flow=>!flow.settled))throw new Error("请先完成或取消当前连接。");
     // Reserve before any await so simultaneous callers cannot both open a prompt.
@@ -65,6 +68,26 @@ export class ModelConnections {
       finally{clearTimeout(flow.timer);flow.settled=true;}
     })();
     return {flowId:id,accepted:true};
+  }
+  async connectApiKey(provider:string,key:string,id:string):Promise<ApiKeyConnectionResult>{
+    if(typeof key!=="string"||!key.trim()||key.length>MAX_API_KEY_LENGTH||!/^[a-z0-9][a-z0-9._-]{0,199}$/i.test(provider))return {ok:false,code:"INVALID_INPUT"};
+    if(this.seen.has(id)||this.mutationPending||[...this.flows.values()].some(flow=>!flow.settled))return {ok:false,code:"BUSY"};
+    this.seen.add(id);if(this.seen.size>256)this.seen.delete(this.seen.values().next().value!);
+    const flow:Flow={id,provider,type:"api_key",controller:new AbortController(),state:"saving",done:Promise.resolve(),settled:false,timedOut:false};
+    this.flows.set(provider,flow);
+    let result:ApiKeyConnectionResult={ok:false,code:"FAILED"};
+    flow.done=(async()=>{
+      let saved=false,announced=false;
+      try{
+        const runtime=await this.runtime();
+        if(!runtime.getProvider(provider)?.auth.apiKey?.login)throw new Error("Unsupported connection method");
+        announced=true;this.emitState(flow,"saving");
+        await this.credentials.saveApiKey(provider,key.trim());saved=true;key="";
+        await this.changed();this.emitState(flow,"configured");result={ok:true};
+      }catch{if(announced)this.emitState(flow,saved?"sync_required":"failed");else this.flows.delete(provider);result={ok:false,code:saved?"SYNC_REQUIRED":"FAILED"};}
+      finally{key="";flow.settled=true;}
+    })();
+    await flow.done;return result;
   }
   private async login(flow:Flow,provider:ReturnType<ModelRuntime["getProvider"]>){
     if(!provider)return;
