@@ -243,3 +243,7 @@ npm test
 旧全量发现基线曾在真实 `~/.pi/agent` 上完成只读窗口冒烟：Host 握手、最近 60 个扫描结果、当前 stable Session ID 精确搜索、1,202 条当前历史与原生目录选择面板均可达。另以真实 Mermaid 会话验证 flowchart、sequence、state 与 class 的原生呈现、`110%` 缩放、源码复制、图片剪贴板和 `2724 × 398` PNG 导出；gantt 与 pie 显式显示不支持错误并回退原始源码。arm64 本机 App 由 LaunchServices/Finder 路径启动后，进程命令行确认只使用包内 Node 与 Host，`host.hello` 成功、扫描器可返回 60 个真实会话，Finder 环境包含 Homebrew/用户命令目录；App bundle 通过 `codesign --verify --deep --strict`，关窗后内嵌 Node 子进程退出。1233 个 JSONL、约 2.4 GiB 的现实目录下，`session.list(limit=60)` 实测 0.747 秒，随后按 ID `session.inspect` 实测 0.337 秒。该证据只证明扫描器与会话主链路的历史性能，不再代表 `0.0.1` Recent 的产品可见集合，也不证明当前真实会话的最终可写接管或对外分发已经完成。
 
 API Key 行内连接的专用通道：可信页面通过 `dcode:connectApiKey` 提交遮蔽输入，主进程验证发送者/主frame/URL后，经创建Host时继承的fd3转交。非秘密环境标记只说明fd编号，参数/环境不携带密钥。两端独立限制帧/字段/并发并只返回白名单结果；失败和EOF不落入公共解析/异常日志。Host就绪前不执行连接，shutdown先关闭接收再收尾已接受保存。旧公开API-key start不再打开原生输入窗；OAuth流程保持独立。
+
+### OAuth 授权页与辅助输入恢复
+
+`dcodeAuth.openBrowser/enterCode` 仅接受有效 flowId，返回操作受理状态；不等待系统应用打开或用户输入，以保留串行协议中的取消/状态请求。Host 私有流程拥有完整授权URL和SDK手动结果请求，页面只有可操作状态与固定错误分类。自动打开失败不终止有效授权；浏览器登录的可选手动结果等待显式操作，窗口取消或故障不冒充整个连接被取消。完成、取消、过期及重启使旧流程入口失效。Swift opener 通过NSWorkspace异步完成回执确认OS已接受交付；真实默认浏览器行为与账号登录仍单独验收。

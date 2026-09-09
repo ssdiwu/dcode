@@ -92,7 +92,9 @@ test("OAuth stays in Host, expired refresh is serialized and external OAuth is n
       return {type:"oauth",access:value,refresh:"fixture-private-refresh",expires:Date.now()+600_000};
     },refresh:async credential=>{refreshes++;await new Promise(r=>setTimeout(r,20));return {...credential,access:"fixture-refreshed-access",expires:Date.now()+600_000};},toAuth:async c=>({apiKey:c.access})}}};
     f.runtime.registerNativeProvider(provider);
-    await f.manager.start("openai-codex","oauth","oauth");await f.manager.idle();
+    await f.manager.start("openai-codex","oauth","oauth");
+    for(let i=0;i<100&&!(await f.manager.get()).providers.find(p=>p.providerId==="openai-codex")?.canEnterCode;i++)await new Promise(r=>setTimeout(r,10));
+    assert.equal(f.manager.enterCode("oauth").accepted,true);await f.manager.idle();
     assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai-codex")?.state,"connected");
     await f.store.save("openai-codex",{type:"oauth",access:"expired-private",refresh:"private-refresh",expires:0});
     assert.equal((await f.manager.get()).providers.find(p=>p.providerId==="openai-codex")?.state,"refresh_pending");
@@ -109,8 +111,8 @@ test("OAuth stays in Host, expired refresh is serialized and external OAuth is n
   }finally{await f.close();}
 });
 test("public connection controls reject every credential-bearing or extra field",()=>{
-  for(const method of ["dcodeAuth.get","dcodeAuth.start","dcodeAuth.cancel","dcodeAuth.disconnect"] as const){
-    const params=method==="dcodeAuth.get"?{}:method==="dcodeAuth.start"?{providerId:"openai",authType:"api_key",flowId:"id"}:method==="dcodeAuth.cancel"?{flowId:"id"}:{providerId:"openai"};
+  for(const method of ["dcodeAuth.get","dcodeAuth.start","dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode","dcodeAuth.disconnect"] as const){
+    const params=method==="dcodeAuth.get"?{}:method==="dcodeAuth.start"?{providerId:"openai",authType:"api_key",flowId:"id"}:["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method)?{flowId:"id"}:{providerId:"openai"};
     assert.doesNotThrow(()=>validateMethodParams(method,params));
     for(const key of ["value","apiKey","access","refresh","code","url","runtimeId"]){assert.throws(()=>validateMethodParams(method,{...params,[key]:"private-secret"}),/does not accept credential/);}
   }

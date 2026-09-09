@@ -86,7 +86,7 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
     return input.stringValue
 }
 @MainActor @main struct ModelCredentials {
-    static func main() {
+    static func main() async {
         let parent = getppid()
         let parentWatch = DispatchSource.makeTimerSource(queue: .global())
         parentWatch.schedule(deadline: .now() + 1, repeating: 1)
@@ -98,9 +98,8 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
             let operation = object["operation"] as? String ?? ""
             if operation == "prompt" { try reply(["value": try prompt(object)]); return }
             if operation == "browser" {
-                _ = NSApplication.shared
-                guard let text = object["url"] as? String, let url = URL(string: text), url.scheme == "https",
-                      url.user == nil, url.password == nil, NSWorkspace.shared.open(url) else { throw Failure.invalid }
+                guard let text = object["url"] as? String, let url = URL(string: text) else { throw Failure.invalid }
+                try await openOAuthBrowser(url)
                 try reply(["ok": true]); return
             }
             if operation == "notice" {

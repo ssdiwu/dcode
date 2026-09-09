@@ -99,3 +99,5 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 模型连接验收：`node test/main/model-connections.mjs` 在独立隐藏 Electron 窗口运行实际设置页与 Host，仅注入私有假凭据适配器，覆盖取消、失败重试、保存、断开和深浅主题；不使用或改写用户的验收应用。API行内输入的失败重试、成功/取消/折叠/离开清理与Host退出重启由同一独立测试覆盖；OAuth原生交互与真实账号仍需人工另行验收。
 
 自动配额门槛：设置→模型的整数百分比控件经现有设置接口由 Host 保存，回退编辑器消费同一生效值。`node test/main/model-quota-threshold.mjs` 使用独立隐藏 Electron 与真实 Host 验证范围、保存、事件更新、双主题及刷新恢复；控件选择通过 DOM change 驱动，焦点样式使用 Chromium 焦点模拟，原生下拉菜单的键盘选择另行人工验收。
+
+OAuth 等待期间在供应商行提供“打开登录页面”和可选“输入授权结果”。自动打开失败与辅助输入故障可原处恢复，页面只发送 flowId，不接收授权URL/回调/token。`node test/main/oauth-login.mjs` 在client目录运行实际设置页、Host及SDK的受控登录回归；OS应用启动另由Host原生测试验证，两者均不冒充用户真实账号登录。

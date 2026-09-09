@@ -7,6 +7,7 @@ import { LoaderCircle } from "lucide-react";
 const labels:Record<Connection["state"],string>={
   refresh_pending:"登录待更新",timed_out:"登录已超时，请重试",sync_required:"连接已保存，目录更新失败",disconnected:"未连接",configured:"连接已保存",connected:"已连接",reconnect_required:"需要重新登录",awaiting_input:"请完成授权步骤",awaiting_browser:"等待浏览器授权",saving:"正在连接…",failed:"连接未完成",cancelled:"已取消连接",
 };
+const oauthFailures={interaction_unavailable:"授权窗口未能完成，请重新登录。",authorization_failed:"供应商授权未完成，请重新登录。",credential_save_failed:"授权已返回，但连接未能保存，请重新登录。",catalog_sync_failed:"连接已保存，请重试更新模型目录。"};
 const failures:Record<Extract<ApiKeyConnectionResult,{ok:false}>["code"],string>={
   INVALID_INPUT:"请输入有效的 API Key。",BUSY:"另一项连接正在处理，请稍后重试。",UNAVAILABLE:"连接服务暂不可用，请稍后重试。",FAILED:"连接失败，请检查后重试。",SYNC_REQUIRED:"密钥已保存，模型目录更新失败。请重试更新。",OUTCOME_UNKNOWN:"连接结果尚未确认，请刷新连接状态后检查。",
 };
@@ -45,6 +46,8 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
       {connection.external&&<span className="secondary">当前使用已有的外部连接。</span>}
     </div>
     <div className="provider-connection-actions">
+      {connection.canOpenBrowser&&<button className="text-button" aria-label="打开登录页面" disabled={connection.browserOpening} onClick={()=>void models.openLoginPage(connection.flowId!)}>{connection.browserOpening?"正在打开…":"打开登录页面"}</button>}
+      {connection.canEnterCode&&<button className="text-button" disabled={connection.inputOpening} onClick={()=>void models.enterLoginCode(connection.flowId!)}>{connection.inputOpening?"等待输入授权结果…":"输入授权结果"}</button>}
       {showInput&&<form className="provider-api-form" onSubmit={event=>void submit(event)} onKeyDown={event=>{if(event.key==="Enter"&&(event.nativeEvent.isComposing||event.nativeEvent.keyCode===229)){event.preventDefault();return;}if(event.key==="Escape"&&!submitting&&!pending){event.preventDefault();event.stopPropagation();clear();}}}>
         <input ref={bindInput} type="password" aria-label="API Key" placeholder="输入 API Key" autoComplete="off" autoCapitalize="off" spellCheck={false} maxLength={16384} required disabled={submitting||pending} onInput={event=>{setHasKey(!!event.currentTarget.value.trim());setError(null);}}/>
         <button type="submit" className="primary-button" disabled={!hasKey||models.connecting||submitting}>{submitting?"连接中…":"连接"}</button>
@@ -58,6 +61,9 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
         {!connection.methods.length&&!connection.managed&&<span className="secondary">使用系统环境或供应商配置连接。</span>}
       </>}
     </div>
+    {connection.browserFailed&&connection.canOpenBrowser&&<p className="provider-connection-error" role="alert">登录页面未能自动打开，请点击“打开登录页面”重试。</p>}
+    {connection.inputIssue&&connection.canEnterCode&&<p className="provider-connection-error" role={connection.inputIssue==="input_cancelled"?"status":"alert"}>{connection.inputIssue==="input_cancelled"?"已关闭输入窗口，仍可在浏览器完成登录。":"授权结果输入窗口未能打开，可继续浏览器登录或重试输入。"}</p>}
+    {connection.failureCode&&["failed","sync_required"].includes(connection.state)&&<p className="provider-connection-error" role="alert">{oauthFailures[connection.failureCode]}</p>}
     {error&&<p className="provider-connection-error" role="alert">{error}</p>}
   </div>;
 }

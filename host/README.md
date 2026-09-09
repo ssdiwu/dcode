@@ -142,8 +142,10 @@ Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` �
 
 ## 模型安全连接候选
 
-`dcodeAuth.get/start/cancel/disconnect/refresh` 按固定 SDK 的实际能力列出 API/OAuth 入口。API新输入可短暂经过遮蔽控件及专用IPC/fd3，OAuth输入仍由Host自有交互承接；凭据持久化只在当前数据根对应的钥匙串命名空间；Product Store 只保存安全引用。API 保存和真实请求验证分别呈现，OAuth 刷新继续由 SDK 负责，更新/断开受跨进程锁保护。外部 Pi 认证只读，不能被静默续写或删除；其过期只影响本 Provider 的 D Code 候选可用性。
+`dcodeAuth.get/start/cancel/disconnect/refresh/openBrowser/enterCode` 按固定 SDK 的实际能力列出 API/OAuth 入口。API新输入可短暂经过遮蔽控件及专用IPC/fd3，OAuth输入仍由Host自有交互承接；凭据持久化只在当前数据根对应的钥匙串命名空间；Product Store 只保存安全引用。API 保存和真实请求验证分别呈现，OAuth 刷新继续由 SDK 负责，更新/断开受跨进程锁保护。外部 Pi 认证只读，不能被静默续写或删除；其过期只影响本 Provider 的 D Code 候选可用性。
 
 `npm test` 包含 `model-connections.test.ts`：使用假值、隔离适配器和专用钥匙串命名空间验证。原生辅助程序统一按桌面壳声明的 macOS 12.0 最低目标构建；较旧系统运行兼容性与真实账号登录仍须对应环境人工验收。完整需求与证据归 [PRD 0030](../doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。
 
 `native-session-facts.test.ts` 验证证据所有权、本轮/历史和只读边界；`native-evidence-facade.test.ts` 使用实际 Pi 工具循环、受控模型响应验证 read/write 证据可被原生 facade 查询。历史迁移与验收拒绝门禁仍分别由 `legacy-migration.test.ts` 和 `collaboration-verification.test.ts` 覆盖。
+
+OAuth 的 `openBrowser` / `enterCode` 只接受 flowId，并立即返回是否受理，系统打开或保密输入在后台推进；URL 和可选手动结果请求仅在 Host 流程内保留。浏览器授权不自动弹出可选粘贴窗口；用户显式打开该辅助输入，关闭或失败不取消仍有效的浏览器流程。原生 `OAuthBrowser.swift` 使用系统完成回执；`node host/test/native/oauth-browser.mjs` 从仓库根运行同一 opener 对现有 Electron 发行包的隔离 OS 交付测试，不测试用户默认浏览器或真实账号。

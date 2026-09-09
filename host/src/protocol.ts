@@ -109,6 +109,8 @@ export const HOST_METHODS = [
   "dcodeAuth.refresh",
   "dcodeAuth.start",
   "dcodeAuth.cancel",
+  "dcodeAuth.openBrowser",
+  "dcodeAuth.enterCode",
   "dcodeAuth.disconnect",
   "modelAuth.start",
   "modelAuth.respond",
@@ -1346,9 +1348,11 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "dcodeAuth.refresh":
     case "dcodeAuth.get":
     case "dcodeAuth.start":
+    case "dcodeAuth.openBrowser":
+    case "dcodeAuth.enterCode":
     case "dcodeAuth.cancel":
     case "dcodeAuth.disconnect": {
-      const allowed = (method === "dcodeAuth.get" || method === "dcodeAuth.refresh") ? [] : method === "dcodeAuth.cancel" ? ["flowId"] : method === "dcodeAuth.disconnect" ? ["providerId"] : ["providerId", "authType", "flowId"];
+      const allowed = (method === "dcodeAuth.get" || method === "dcodeAuth.refresh") ? [] : ["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method) ? ["flowId"] : method === "dcodeAuth.disconnect" ? ["providerId"] : ["providerId", "authType", "flowId"];
       if (Object.keys(params).some(key => !allowed.includes(key))) throw new ProtocolValidationError("INVALID_PARAMS", "Connection control does not accept credential values");
       if (allowed.includes("providerId")) {const id = requireString(params,"providerId");if(!/^[a-z0-9][a-z0-9._-]{0,199}$/i.test(id))throw new ProtocolValidationError("INVALID_PARAMS","Invalid provider identifier");}
       if (allowed.includes("flowId") && !/^[a-z0-9-]{1,128}$/i.test(requireString(params,"flowId"))) throw new ProtocolValidationError("INVALID_PARAMS","Invalid connection identifier");

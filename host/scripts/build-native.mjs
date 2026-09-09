@@ -11,6 +11,6 @@ const result=spawnSync("xcrun",["swiftc","-O","-target",nativeTarget,"-swift-ver
 if(result.error)throw result.error;
 if(result.status!==0)throw new Error(`Native file boundary build failed (${result.status})`);
 
-const auth=spawnSync("xcrun",["swiftc","-O","-target",nativeTarget,"-swift-version","6","-parse-as-library",join(root,"native/ModelCredentials.swift"),"-o",join(root,"dist/bin/dcode-model-credentials")],{stdio:"inherit"});
+const auth=spawnSync("xcrun",["swiftc","-O","-target",nativeTarget,"-swift-version","6","-parse-as-library",join(root,"native/ModelCredentials.swift"),join(root,"native/OAuthBrowser.swift"),"-o",join(root,"dist/bin/dcode-model-credentials")],{stdio:"inherit"});
 if(auth.error)throw auth.error;
 if(auth.status!==0)throw new Error(`Native model credential boundary build failed (${auth.status})`);

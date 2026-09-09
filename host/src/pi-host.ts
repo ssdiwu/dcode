@@ -1373,6 +1373,8 @@ export class PiHost {
     if(method === "dcodeAuth.refresh") return (await this.modelConnections()).refresh();
     if(method === "dcodeAuth.get") return (await this.modelConnections()).get();
     if(method === "dcodeAuth.start") return (await this.modelConnections()).start(params.providerId as string,params.authType as AuthType,params.flowId as string);
+    if(method === "dcodeAuth.openBrowser") return (await this.modelConnections()).openBrowser(params.flowId as string);
+    if(method === "dcodeAuth.enterCode") return (await this.modelConnections()).enterCode(params.flowId as string);
     if(method === "dcodeAuth.cancel") return (await this.modelConnections()).cancel(params.flowId as string);
     if(method === "dcodeAuth.disconnect") return (await this.modelConnections()).disconnect(params.providerId as string);
     if (method === "modelAuth.respond" || method === "modelAuth.cancel") {
@@ -2339,6 +2341,8 @@ export class PiHost {
       case "dcodeAuth.refresh":
       case "dcodeAuth.get":
       case "dcodeAuth.start":
+      case "dcodeAuth.openBrowser":
+      case "dcodeAuth.enterCode":
       case "dcodeAuth.cancel":
       case "dcodeAuth.disconnect":
       case "extension.respond":

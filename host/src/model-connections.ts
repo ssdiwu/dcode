@@ -1,10 +1,12 @@
 import { MAX_API_KEY_LENGTH, type ApiKeyConnectionResult } from "./api-key-connection.js";
 import { rememberAuthInput } from "./credential-material.js";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { AuthType, Credential, CredentialStore } from "@earendil-works/pi-ai";
+import type { AuthType, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { DCodeCredentialStore, authCancelled, type ConfidentialInteraction } from "./secure-model-credentials.js";
 
 export type ConnectionState = "disconnected" | "configured" | "connected" | "reconnect_required" | "awaiting_input" | "awaiting_browser" | "saving" | "failed" | "cancelled" | "sync_required" | "timed_out" | "refresh_pending";
+export type ConnectionFailureCode="interaction_unavailable"|"authorization_failed"|"credential_save_failed"|"catalog_sync_failed";
+interface ManualInput {prompt:AuthPrompt;providerName:string;signal:AbortSignal;resolve:(value:string)=>void;opening:boolean;issue?:"input_unavailable"|"input_cancelled"}
 export interface ProviderConnection {
   providerId:string;
   methods:{type:AuthType;label:string}[];
@@ -13,8 +15,15 @@ export interface ProviderConnection {
   external:boolean;
   flowId?:string;
   activeMethod?:AuthType;
+  canOpenBrowser?:boolean;
+  browserOpening?:boolean;
+  browserFailed?:boolean;
+  canEnterCode?:boolean;
+  inputOpening?:boolean;
+  inputIssue?:ManualInput["issue"];
+  failureCode?:ConnectionFailureCode;
 }
-interface Flow {id:string;provider:string;type:AuthType;controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>}
+interface Flow {id:string;provider:string;type:AuthType;controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>;authUrl?:string;browserOpening?:boolean;browserFailed?:boolean;browserController?:AbortController;manual?:ManualInput;failureCode?:ConnectionFailureCode}
 const activeStates=new Set<ConnectionState>(["awaiting_input","awaiting_browser","saving"]);
 export class ModelConnections {
   private flows=new Map<string,Flow>();
@@ -44,7 +53,9 @@ export class ModelConnections {
         if(metadata.failed)state="reconnect_required";
       }catch{state="reconnect_required";}
       if(flow&&[...activeStates,"failed","cancelled","sync_required","timed_out"].includes(flow.state))state=flow.state;
-      return {providerId:provider.id,methods,state,managed:owned,external,...(flow?{flowId:flow.id,activeMethod:flow.type}:{})};
+      return {providerId:provider.id,methods,state,managed:owned,external,...(flow?{flowId:flow.id,activeMethod:flow.type,failureCode:flow.failureCode,
+        canOpenBrowser:this.live(flow)&&!!flow.authUrl,browserOpening:!!flow.browserOpening,browserFailed:!!flow.browserFailed,
+        canEnterCode:this.live(flow)&&!!flow.manual,inputOpening:!!flow.manual?.opening,inputIssue:flow.manual?.issue}: {})};
     }))};
   }
   async start(provider:string,type:AuthType,id:string):Promise<{flowId:string;accepted:boolean}>{
@@ -64,8 +75,8 @@ export class ModelConnections {
         const selected=runtime.getProvider(provider);
         if(!selected||(type==="oauth"?!selected.auth.oauth?.login:!selected.auth.apiKey?.login))throw new Error("Unsupported connection method");
         await this.login(flow,selected);
-      }catch{this.emitState(flow,flow.timedOut?"timed_out":flow.controller.signal.aborted?"cancelled":"failed");}
-      finally{clearTimeout(flow.timer);flow.settled=true;}
+      }catch{if(!flow.controller.signal.aborted)flow.failureCode??="authorization_failed";this.emitState(flow,flow.timedOut?"timed_out":flow.controller.signal.aborted?"cancelled":"failed");}
+      finally{clearTimeout(flow.timer);flow.settled=true;flow.authUrl=undefined;flow.browserController?.abort();flow.manual=undefined;}
     })();
     return {flowId:id,accepted:true};
   }
@@ -89,6 +100,46 @@ export class ModelConnections {
     })();
     await flow.done;return result;
   }
+  private live(flow:Flow){return this.flows.get(flow.provider)===flow&&!flow.settled&&!flow.controller.signal.aborted&&activeStates.has(flow.state)&&flow.state!=="saving";}
+  openBrowser(id:string):{accepted:boolean;reason?:"inactive"|"busy"}{
+    const flow=[...this.flows.values()].find(f=>f.id===id);
+    if(!flow||!this.live(flow)||!flow.authUrl)return {accepted:false,reason:"inactive"};
+    if(flow.browserOpening)return {accepted:false,reason:"busy"};
+    const url=flow.authUrl,controller=new AbortController();flow.browserController=controller;flow.browserOpening=true;flow.browserFailed=false;this.emitState(flow,flow.state);
+    // Return control immediately so the serial Host channel remains available
+    // for cancel/status while the OS is opening the application.
+    void (async()=>{
+      try{await this.native.browser(url,AbortSignal.any([flow.controller.signal,controller.signal]));}
+      catch{if(this.live(flow))flow.browserFailed=true;}
+      finally{flow.browserOpening=false;if(this.live(flow))this.emitState(flow,flow.state);}
+    })();
+    return {accepted:true};
+  }
+  private waitForManualInput(flow:Flow,providerName:string,prompt:AuthPrompt):Promise<string>{
+    const signal=AbortSignal.any([flow.controller.signal,...(prompt.signal?[prompt.signal]:[])]);
+    return new Promise((resolve,reject)=>{
+      const finish=(value?:string)=>{signal.removeEventListener("abort",abort);if(flow.manual===manual)flow.manual=undefined;if(value===undefined)reject(authCancelled());else resolve(value);};
+      const abort=()=>finish();
+      const manual:ManualInput={prompt,providerName,signal,resolve:value=>finish(value),opening:false};flow.manual=manual;
+      if(signal.aborted){abort();return;}signal.addEventListener("abort",abort,{once:true});this.emitState(flow,"awaiting_browser");
+    });
+  }
+  enterCode(id:string):{accepted:boolean}{
+    const flow=[...this.flows.values()].find(f=>f.id===id),manual=flow?.manual;
+    if(!flow||!this.live(flow)||!manual||manual.opening)return {accepted:false};
+    manual.opening=true;manual.issue=undefined;this.emitState(flow,flow.state);
+    void Promise.resolve().then(()=>this.native.prompt(manual.providerName,manual.prompt,manual.signal)).then(value=>{
+      if(this.live(flow)&&flow.manual===manual&&!manual.signal.aborted){rememberAuthInput(value);manual.resolve(value);}
+    },error=>{
+      if(this.live(flow)&&flow.manual===manual&&!manual.signal.aborted)manual.issue=(error as Error)?.name==="AbortError"?"input_cancelled":"input_unavailable";
+    }).finally(()=>{manual.opening=false;if(this.live(flow))this.emitState(flow,flow.state);});
+    return {accepted:true};
+  }
+  private publishAuthUrl(flow:Flow,url:string){
+    try{const parsed=new URL(url);if(parsed.protocol!=="https:"||parsed.username||parsed.password)throw Error();}
+    catch{flow.failureCode="authorization_failed";flow.controller.abort();return;}
+    flow.authUrl=url;this.emitState(flow,"awaiting_browser");void this.openBrowser(flow.id);
+  }
   private async login(flow:Flow,provider:ReturnType<ModelRuntime["getProvider"]>){
     if(!provider)return;
     const signal=flow.controller.signal;
@@ -107,44 +158,50 @@ export class ModelConnections {
       const result=await runtime.login(provider.id,flow.type,{
         signal,
         prompt:async prompt=>{
+          if(prompt.type==="manual_code"&&flow.authUrl)return this.waitForManualInput(flow,provider.name,prompt);
           if(prompt.type!=="manual_code")this.emitState(flow,"awaiting_input");
-          const value=await this.native.prompt(provider.name,prompt,signal);
-          if(prompt.type==="secret"||prompt.type==="manual_code")rememberAuthInput(value);
-          return value;
+          try{
+            const value=await this.native.prompt(provider.name,prompt,signal);
+            if(prompt.type==="select"&&!prompt.options.some(option=>option.id===value))throw Error("Invalid selection");
+            if(prompt.type==="secret"||prompt.type==="manual_code")rememberAuthInput(value);
+            return value;
+          }catch(error){if((error as Error)?.name!=="AbortError")flow.failureCode="interaction_unavailable";throw error;}
         },
         notify:event=>{
           if(signal.aborted)return;
           let operation:Promise<void>|undefined;
           if(event.type==="auth_url"){
-            this.emitState(flow,"awaiting_browser");operation=this.native.browser(event.url,signal);
+            this.publishAuthUrl(flow,event.url);
           }else if(event.type==="device_code"){
-            this.emitState(flow,"awaiting_browser");
-            operation=this.native.browser(event.verificationUri,signal).then(()=>this.native.notice(`请在浏览器输入验证码：${event.userCode}`,signal));
+            this.publishAuthUrl(flow,event.verificationUri);
+            operation=this.native.notice(`请在浏览器输入验证码：${event.userCode}`,signal);
           }else if(event.type==="info"){
             operation=this.native.notice(event.message,signal);
           }
-          if(operation){nativeOperations.push(operation);void operation.catch(()=>{if(!signal.aborted)nativeFailed=true;flow.controller.abort();});}
+          if(operation){nativeOperations.push(operation);void operation.catch(()=>{if(!signal.aborted){nativeFailed=true;flow.failureCode="interaction_unavailable";}flow.controller.abort();});}
         },
       });
       await Promise.all(nativeOperations);
       signal.throwIfAborted();
       if(this.flows.get(flow.provider)!==flow)throw authCancelled();
       // No cancellation after this visible commit boundary. Login values stay in Host memory.
-      clearTimeout(flow.timer);
-      this.emitState(flow,"saving");
+      clearTimeout(flow.timer);flow.authUrl=undefined;flow.browserController?.abort();
+      this.emitState(flow,"saving");flow.failureCode="credential_save_failed";
       await this.credentials.save(provider.id,result);
-      saved=true;
-      await this.changed();
+      saved=true;flow.failureCode="catalog_sync_failed";
+      await this.changed();flow.failureCode=undefined;
       this.emitState(flow,result.type==="oauth"?"connected":"configured");
     }catch(error){
       if((error as Error).name==="AbortError")flow.controller.abort();
-      this.emitState(flow,saved?"sync_required":flow.timedOut?"timed_out":!nativeFailed&&signal.aborted?"cancelled":"failed");
+      const cancelled=!nativeFailed&&!flow.failureCode&&signal.aborted;
+      if(!flow.timedOut&&!cancelled)flow.failureCode??="authorization_failed";
+      this.emitState(flow,saved?"sync_required":flow.timedOut?"timed_out":cancelled?"cancelled":"failed");
     }finally{staged=undefined;nativeOperations=[];}
   }
   cancel(id:string):{cancelled:boolean}{
     const flow=[...this.flows.values()].find(f=>f.id===id);
     if(!flow||!activeStates.has(flow.state)||flow.state==="saving")return {cancelled:false};
-    flow.controller.abort();
+    flow.authUrl=undefined;flow.controller.abort();
     this.emitState(flow,"cancelled");
     return {cancelled:true};
   }
@@ -165,7 +222,7 @@ export class ModelConnections {
     this.mutationPending=true;
     try{
       await this.changed();
-      for(const flow of this.flows.values())if(flow.state==="sync_required")this.emitState(flow,flow.type==="oauth"?"connected":"configured");
+      for(const flow of this.flows.values())if(flow.state==="sync_required"){flow.failureCode=undefined;this.emitState(flow,flow.type==="oauth"?"connected":"configured");}
       return {refreshed:true};
     }finally{this.mutationPending=false;}
   }
