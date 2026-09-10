@@ -129,7 +129,7 @@ open "client/release/mac-arm64/D Code.app"
 | `session.getModels`、`session.getThinkingLevels` | 获取可用模型及 thinking levels；`session.getModels` 传入规范 `cwd` 时可在尚无活动 Session 的会话前草稿读取 Pi 本机可用模型、精确默认项、默认 thinking level，并为每个模型返回其 thinking levels 与 D Code 极速资格 |
 | `modelSettings.get`、`modelSettings.refresh`、`modelProviders.list` | 仅保留旧 Pi 目录的安全只读诊断 / 迁入来源，不定义 D Code Model Catalog、未来 Runtime 选择或用户可写产品设置 |
 | `modelSettings.setEnabledModels`、`modelSettings.setDefaultModel`、`modelProviders.save`、`modelProviders.remove` | 明确拒绝；D Code 不再经 Pi `SettingsManager` / `models.json` 写产品模型配置 |
-| `dcodeAuth.get/start/cancel/disconnect/refresh` | D Code 安全连接控制；仅 Provider、认证类型、流程 ID 与状态，不能传入密钥或 OAuth 回调。API输入经专用保密IPC/fd3，OAuth使用Host私有交互；机密只由Host持久保存到钥匙串，完整合同归PRD0030 |
+| `dcodeAuth.get/start/cancel/disconnect/refresh/openBrowser/enterCode/authorizeAccess` | D Code 安全连接控制；仅 Provider、认证类型、流程 ID 与状态，不能传入密钥或 OAuth 回调。API输入经专用保密IPC/fd3，OAuth使用Host私有交互；机密只由Host持久保存到钥匙串，完整合同归PRD0030 |
 | `modelAuth.start`、`modelAuth.respond`、`modelAuth.cancel` | 明确拒绝；D Code 不通过 IPC 启动 Pi 认证流程或发送 API Key / OAuth 值，凭据只以安全引用进入 Product Store |
 | `session.setModel`、`session.setThinking` | 经 Pi SDK 修改当前已绑定 Runtime 的临时会话设置；未来 Runtime 的默认模型仍由 `runtimeModelSelection.set` 归 D Code Product Store 管理 |
 | `session.setFastMode` | 写入当前 Session 的 D Code 极速状态；只为明确支持的 `openai-codex` 模型请求 `service_tier: priority`，不承诺服务端接受 |
@@ -247,3 +247,11 @@ API Key 行内连接的专用通道：可信页面通过 `dcode:connectApiKey` �
 ### OAuth 授权页与辅助输入恢复
 
 `dcodeAuth.openBrowser/enterCode` 仅接受有效 flowId，返回操作受理状态；不等待系统应用打开或用户输入，以保留串行协议中的取消/状态请求。Host 私有流程拥有完整授权URL和SDK手动结果请求，页面只有可操作状态与固定错误分类。自动打开失败不终止有效授权；浏览器登录的可选手动结果等待显式操作，窗口取消或故障不冒充整个连接被取消。完成、取消、过期及重启使旧流程入口失效。Swift opener 通过NSWorkspace异步完成回执确认OS已接受交付；真实默认浏览器行为与账号登录仍单独验收。
+
+### 系统钥匙串非交互访问
+
+D Code当前项沿用file-based登录钥匙串。依据[Apple TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)及本机Security头文件，不能把data-protection的查询属性视为旧项的完整交互控制。独立helper在每项操作中调用[SecKeychain交互控制](https://developer.apple.com/documentation/security/seckeychainsetuserinteractionallowed%28_%3A%29)，默认禁止系统对话并恢复之前值；它是针对既有实现的兼容措施，不迁移用户钥匙串或更改ACL。
+
+元数据查询只取属性；SDK确需正文时按provider合并在途读取，默认非交互。读到拒绝、锁定或内部超时后记录不可访问，后续后台查询不重新申请，目录逐provider计算以保留其他可用模型。公开 `dcodeAuth.authorizeAccess` 只有providerId与flowId，立即返回受理；授权阶段60秒可取消，成功后进入状态同步阶段，不能再显示授权超时，失败只重试同步。系统密码只由系统处理。
+
+helper私有进程按provider串行复用以避免逐次启动；没有新增操作性secret缓存，每次读取仍执行OS权限检查。并发结果只服务在途请求，迟到结果不能覆盖更新；替换/缺失清除旧验证标记与元数据，取消/错误销毁对应helper，Host退出关闭全部。内容不进入普通协议、日志、Store或页面持久化，既有字面值脱敏登记不用于取得认证凭据。签名/ACL变化的实际授权仍需对应候选人工验收。

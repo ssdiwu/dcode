@@ -4,8 +4,8 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthType, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { DCodeCredentialStore, authCancelled, type ConfidentialInteraction } from "./secure-model-credentials.js";
 
-export type ConnectionState = "disconnected" | "configured" | "connected" | "reconnect_required" | "awaiting_input" | "awaiting_browser" | "saving" | "failed" | "cancelled" | "sync_required" | "timed_out" | "refresh_pending";
-export type ConnectionFailureCode="interaction_unavailable"|"authorization_failed"|"credential_save_failed"|"catalog_sync_failed";
+export type ConnectionState = "disconnected" | "configured" | "connected" | "reconnect_required" | "awaiting_input" | "awaiting_browser" | "saving" | "failed" | "cancelled" | "sync_required" | "timed_out" | "refresh_pending" | "access_required" | "awaiting_access" | "access_denied" | "access_cancelled" | "access_timeout";
+export type ConnectionFailureCode="interaction_unavailable"|"authorization_failed"|"credential_save_failed"|"catalog_sync_failed"|"keychain_unavailable"|"credential_missing";
 interface ManualInput {prompt:AuthPrompt;providerName:string;signal:AbortSignal;resolve:(value:string)=>void;opening:boolean;issue?:"input_unavailable"|"input_cancelled"}
 export interface ProviderConnection {
   providerId:string;
@@ -15,6 +15,7 @@ export interface ProviderConnection {
   external:boolean;
   flowId?:string;
   activeMethod?:AuthType;
+  canAuthorizeAccess?:boolean;
   canOpenBrowser?:boolean;
   browserOpening?:boolean;
   browserFailed?:boolean;
@@ -23,8 +24,8 @@ export interface ProviderConnection {
   inputIssue?:ManualInput["issue"];
   failureCode?:ConnectionFailureCode;
 }
-interface Flow {id:string;provider:string;type:AuthType;controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>;authUrl?:string;browserOpening?:boolean;browserFailed?:boolean;browserController?:AbortController;manual?:ManualInput;failureCode?:ConnectionFailureCode}
-const activeStates=new Set<ConnectionState>(["awaiting_input","awaiting_browser","saving"]);
+interface Flow {id:string;provider:string;type:AuthType|"keychain";controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>;authUrl?:string;browserOpening?:boolean;browserFailed?:boolean;browserController?:AbortController;manual?:ManualInput;failureCode?:ConnectionFailureCode}
+const activeStates=new Set<ConnectionState>(["awaiting_input","awaiting_browser","saving","awaiting_access"]);
 export class ModelConnections {
   private flows=new Map<string,Flow>();
   private seen=new Set<string>();
@@ -47,13 +48,14 @@ export class ModelConnections {
         const metadata=await this.credentials.connectionMetadata(provider.id);
         external=!owned&&(configured||!!metadata.type);
         if(metadata.type){
-          state=metadata.type==="oauth"?(metadata.expires!>Date.now()+5*60_000?"connected":owned?"refresh_pending":"reconnect_required"):"configured";
+          state=metadata.type==="oauth"?(metadata.expires===undefined?"configured":metadata.expires>Date.now()+5*60_000?"connected":owned?"refresh_pending":"reconnect_required"):"configured";
         }
         if(metadata.verified&&state!=="refresh_pending")state="connected";
         if(metadata.failed)state="reconnect_required";
       }catch{state="reconnect_required";}
-      if(flow&&[...activeStates,"failed","cancelled","sync_required","timed_out"].includes(flow.state))state=flow.state;
-      return {providerId:provider.id,methods,state,managed:owned,external,...(flow?{flowId:flow.id,activeMethod:flow.type,failureCode:flow.failureCode,
+      if(owned&&this.credentials.accessState(provider.id))state=this.credentials.accessState(provider.id)==="access_denied"?"access_denied":"access_required";
+      if(flow&&[...activeStates,"failed","cancelled","sync_required","timed_out","access_required","access_denied","access_cancelled","access_timeout"].includes(flow.state))state=flow.state;
+      return {providerId:provider.id,methods,state,managed:owned,external,canAuthorizeAccess:owned&&!!this.credentials.accessState(provider.id),...(flow?{flowId:flow.id,activeMethod:flow.type==="keychain"?undefined:flow.type,failureCode:flow.failureCode,
         canOpenBrowser:this.live(flow)&&!!flow.authUrl,browserOpening:!!flow.browserOpening,browserFailed:!!flow.browserFailed,
         canEnterCode:this.live(flow)&&!!flow.manual,inputOpening:!!flow.manual?.opening,inputIssue:flow.manual?.issue}: {})};
     }))};
@@ -79,6 +81,29 @@ export class ModelConnections {
       finally{clearTimeout(flow.timer);flow.settled=true;flow.authUrl=undefined;flow.browserController?.abort();flow.manual=undefined;}
     })();
     return {flowId:id,accepted:true};
+  }
+  authorizeAccess(provider:string,id:string):{flowId:string;accepted:boolean}{
+    const active=[...this.flows.values()].find(flow=>flow.provider===provider&&flow.type==="keychain"&&!flow.settled);
+    if(active)return {flowId:active.id,accepted:false};
+    if(this.seen.has(id))return {flowId:id,accepted:false};
+    if(this.mutationPending||[...this.flows.values()].some(flow=>!flow.settled))throw new Error("请先完成或取消当前连接操作。");
+    this.seen.add(id);if(this.seen.size>256)this.seen.delete(this.seen.values().next().value!);
+    const flow:Flow={id,provider,type:"keychain",controller:new AbortController(),state:"awaiting_access",done:Promise.resolve(),settled:false,timedOut:false};this.flows.set(provider,flow);
+    flow.timer=setTimeout(()=>{flow.timedOut=true;flow.controller.abort();},this.options.timeoutMs??60_000);this.emitState(flow,"awaiting_access");
+    flow.done=(async()=>{
+      let granted=false;
+      try{
+        if(!(await this.credentials.managed()).some(item=>item.providerId===provider))throw new Error("Managed connection not found");
+        await this.credentials.authorize(provider,flow.controller.signal);flow.controller.signal.throwIfAborted();granted=true;
+        clearTimeout(flow.timer);this.emitState(flow,"saving");
+        await this.changed();flow.controller.signal.throwIfAborted();
+        this.emitState(flow,this.credentials.accessState(provider)?"access_required":"configured");
+      }catch(error){
+        if(granted&&!flow.controller.signal.aborted){flow.failureCode="catalog_sync_failed";this.emitState(flow,"sync_required");return;}
+        if(!flow.controller.signal.aborted)flow.failureCode=(error as {code?:string})?.code==="reconnect"?"credential_missing":(error as {code?:string})?.code==="access_denied"?undefined:"keychain_unavailable";
+        this.emitState(flow,flow.timedOut?"access_timeout":flow.controller.signal.aborted?"access_cancelled":(error as {code?:string})?.code==="access_denied"?"access_denied":"access_required");
+      }finally{clearTimeout(flow.timer);flow.settled=true;}
+    })();return {flowId:id,accepted:true};
   }
   async connectApiKey(provider:string,key:string,id:string):Promise<ApiKeyConnectionResult>{
     if(typeof key!=="string"||!key.trim()||key.length>MAX_API_KEY_LENGTH||!/^[a-z0-9][a-z0-9._-]{0,199}$/i.test(provider))return {ok:false,code:"INVALID_INPUT"};
@@ -141,7 +166,7 @@ export class ModelConnections {
     flow.authUrl=url;this.emitState(flow,"awaiting_browser");void this.openBrowser(flow.id);
   }
   private async login(flow:Flow,provider:ReturnType<ModelRuntime["getProvider"]>){
-    if(!provider)return;
+    if(!provider||flow.type==="keychain")return;
     const signal=flow.controller.signal;
     let staged:Credential|undefined;
     const scratch:CredentialStore={
@@ -202,7 +227,7 @@ export class ModelConnections {
     const flow=[...this.flows.values()].find(f=>f.id===id);
     if(!flow||!activeStates.has(flow.state)||flow.state==="saving")return {cancelled:false};
     flow.authUrl=undefined;flow.controller.abort();
-    this.emitState(flow,"cancelled");
+    this.emitState(flow,flow.type==="keychain"?"access_cancelled":"cancelled");
     return {cancelled:true};
   }
   async disconnect(provider:string):Promise<{disconnected:boolean}>{
@@ -221,7 +246,7 @@ export class ModelConnections {
     if(this.mutationPending||[...this.flows.values()].some(flow=>!flow.settled))throw new Error("请先完成或取消当前连接。");
     this.mutationPending=true;
     try{
-      await this.changed();
+      await this.credentials.refreshMetadata();await this.changed();
       for(const flow of this.flows.values())if(flow.state==="sync_required"){flow.failureCode=undefined;this.emitState(flow,flow.type==="oauth"?"connected":"configured");}
       return {refreshed:true};
     }finally{this.mutationPending=false;}

@@ -1372,6 +1372,7 @@ export class PiHost {
     }
     if(method === "dcodeAuth.refresh") return (await this.modelConnections()).refresh();
     if(method === "dcodeAuth.get") return (await this.modelConnections()).get();
+    if(method === "dcodeAuth.authorizeAccess") return (await this.modelConnections()).authorizeAccess(params.providerId as string,params.flowId as string);
     if(method === "dcodeAuth.start") return (await this.modelConnections()).start(params.providerId as string,params.authType as AuthType,params.flowId as string);
     if(method === "dcodeAuth.openBrowser") return (await this.modelConnections()).openBrowser(params.flowId as string);
     if(method === "dcodeAuth.enterCode") return (await this.modelConnections()).enterCode(params.flowId as string);
@@ -1453,6 +1454,7 @@ export class PiHost {
       } finally {
         const store = this.productStore
           ?? (this.productStoreOpening ? await this.productStoreOpening.catch(() => undefined) : undefined);
+        if(this.credentialStorePromise)(await this.credentialStorePromise).close();
         await store?.close();
       }
     }
@@ -2340,6 +2342,7 @@ export class PiHost {
         return { shuttingDown: true };
       case "dcodeAuth.refresh":
       case "dcodeAuth.get":
+      case "dcodeAuth.authorizeAccess":
       case "dcodeAuth.start":
       case "dcodeAuth.openBrowser":
       case "dcodeAuth.enterCode":
@@ -4093,7 +4096,7 @@ export class PiHost {
       const created = runtimeIdentity
         ? await createProcessAgentSession({
           ...sessionOptions,
-          modelRuntime: await ModelRuntime.create({ credentials: await this.credentialStore(), modelsPath: join(this.agentDir, "models.json"), modelsStorePath: join((await this.getProductStore()).layout.root, "models-cache.json"), allowModelNetwork: false }),
+          modelRuntime: await this.createCredentialRuntime(),
           providerControl:this.providerRouteControl(runtimeIdentity,()=>activeForFacts),
           ...(auxiliary?{baseToolsOverride:{bash:auxiliary.tool(manager.getCwd())}}:{}),
           processOptions: {
@@ -5422,12 +5425,12 @@ export class PiHost {
     return (await this.modelConnections()).connectApiKey(providerId,key,id);
   }
   private credentialStore(): Promise<DCodeCredentialStore> {
-    return this.credentialStorePromise ??= this.getProductStore().then(store=>new DCodeCredentialStore(this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),join(this.agentDir,"auth.json")));
+    return this.credentialStorePromise ??= this.getProductStore().then(store=>new DCodeCredentialStore(this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),join(this.agentDir,"auth.json"),{knownManagedProviderIds:async()=>(await store.snapshot()).credentialReferences.filter(ref=>ref.referenceKind==="keychain").map(ref=>ref.providerId),onAccessChanged:providerId=>this.options.emit("dcodeAuth.changed",{providerId})}));
   }
   private modelConnections(): Promise<ModelConnections> {
     return this.connectionsPromise ??= Promise.all([this.getProductStore(),this.credentialStore()]).then(([store,credentials])=>new ModelConnections(credentials,this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root),async()=>{const runtime=await this.sharedModelRuntime();await registerCatalogProviders(runtime,await store.snapshot());return runtime;},async()=>{
       const runtimes=new Set([await this.sharedModelRuntime(),...[...this.runtimes.values()].map(active=>active.session.modelRuntime)]);
-      for(const runtime of runtimes)await runtime.refresh({allowNetwork:false});
+      for(const runtime of runtimes)await runtime.refresh({allowNetwork:false,providers:runtime.getProviders().map(provider=>provider.id)});
       await this.ensureDCodeRuntimeModelCatalog(true);
       const snapshot=await store.snapshot();const runtime=await this.sharedModelRuntime();
       const managed=new Set((await credentials.managed()).map(item=>item.providerId));
@@ -5436,14 +5439,13 @@ export class PiHost {
       this.options.emit("foundation.changed",{kind:"modelAuth.changed"});
     },this.options.emit));
   }
+  private async createCredentialRuntime():Promise<ModelRuntime>{
+    const store=await this.getProductStore();
+    const runtime=await ModelRuntime.create({credentials:await this.credentialStore(),modelsPath:join(this.agentDir,"models.json"),modelsStorePath:join(store.layout.root,"models-cache.json"),allowModelNetwork:false,refreshOnCreate:false});
+    await runtime.refresh({allowNetwork:false,providers:runtime.getProviders().map(provider=>provider.id)});return runtime;
+  }
   private sharedModelRuntime(): Promise<ModelRuntime> {
-    this.modelRuntimePromise ??= this.getProductStore().then(async store => ModelRuntime.create({
-      credentials: await this.credentialStore(),
-      modelsPath: join(this.agentDir, "models.json"),
-      modelsStorePath: join(store.layout.root, "models-cache.json"),
-      allowModelNetwork: false,
-    }));
-    return this.modelRuntimePromise;
+    return this.modelRuntimePromise ??= this.createCredentialRuntime();
   }
 
   private async createModelSettingsRuntime(): Promise<ModelRuntime> {
@@ -5637,7 +5639,8 @@ export class PiHost {
     const runtime=await this.sharedModelRuntime();
     await registerCatalogProviders(runtime,snapshot);
     const unavailable=await (await this.credentialStore()).unavailableProviders(runtime.getProviders().map(p=>p.id));
-    const available=new Set((await runtime.getAvailable()).filter(m=>!unavailable.has(m.provider)).map(m=>`${m.provider}::${m.id}`));
+    const perProvider=await Promise.all(runtime.getProviders().map(async provider=>{try{return await runtime.getAvailable(provider.id);}catch{return [];}}));
+    const available=new Set(perProvider.flat().filter(m=>!unavailable.has(m.provider)).map(m=>`${m.provider}::${m.id}`));
     const preferences=await this.handleSerial("clientPreferences.get",{}) as ClientPreferences;
     const runtimeId=sessionId?this.runtimeByDCodeSessionId.get(sessionId):undefined;
     const active=runtimeId?this.runtimes.get(runtimeId):undefined;

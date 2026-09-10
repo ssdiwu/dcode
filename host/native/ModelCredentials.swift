@@ -14,7 +14,11 @@ private func reply(_ object: [String: Any]) throws {
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([10]))
 }
-private enum Failure: Error { case invalid, storage, cancelled }
+private enum Failure: Error { case invalid, storage, cancelled, accessRequired, accessDenied }
+private func checkAccess(_ status: OSStatus) throws {
+    if status == errSecInteractionNotAllowed || status == errSecInteractionRequired { throw Failure.accessRequired }
+    if status == errSecAuthFailed || status == errSecUserCanceled { throw Failure.accessDenied }
+}
 private func query(_ service: String, _ provider: String? = nil) -> [String: Any] {
     var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
     if let provider { q[kSecAttrAccount as String] = provider }
@@ -27,18 +31,21 @@ private func readCredential(_ service: String, _ provider: String) throws -> Any
     var result: CFTypeRef?
     let status = SecItemCopyMatching(q as CFDictionary, &result)
     if status == errSecItemNotFound { return NSNull() }
+    try checkAccess(status)
     guard status == errSecSuccess, let data = result as? Data else { throw Failure.storage }
     return try JSONSerialization.jsonObject(with: data)
 }
 private func writeCredential(_ service: String, _ provider: String, _ value: Any) throws {
     if value is NSNull {
         let status = SecItemDelete(query(service, provider) as CFDictionary)
+        try checkAccess(status)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.storage }
         return
     }
     guard let value = value as? [String: Any], let type = value["type"] as? String,
           type == "api_key" || type == "oauth" else { throw Failure.invalid }
     let data = try JSONSerialization.data(withJSONObject: value)
+    // Keep the existing attribute format readable by older local candidates.
     let attrs: [String: Any] = [kSecValueData as String: data, kSecAttrGeneric as String: Data(type.utf8)]
     let status = SecItemUpdate(query(service, provider) as CFDictionary, attrs as CFDictionary)
     if status == errSecItemNotFound {
@@ -46,8 +53,10 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
         add.merge(attrs) { _, new in new }
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         add[kSecAttrLabel as String] = "D Code · \(provider)"
-        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { throw Failure.storage }
-    } else if status != errSecSuccess { throw Failure.storage }
+        let added = SecItemAdd(add as CFDictionary, nil)
+        try checkAccess(added)
+        guard added == errSecSuccess else { throw Failure.storage }
+    } else { try checkAccess(status); if status != errSecSuccess { throw Failure.storage } }
 }
 @MainActor private func prompt(_ object: [String: Any]) throws -> String {
     _ = NSApplication.shared
@@ -94,6 +103,7 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
         parentWatch.resume()
         defer { parentWatch.cancel() }
         do {
+          while true {
             let object = try readObject()
             let operation = object["operation"] as? String ?? ""
             if operation == "prompt" { try reply(["value": try prompt(object)]); return }
@@ -116,6 +126,7 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
             }
             guard let service = object["service"] as? String,
                   service.range(of: "^com[.]dcode[.]model-auth[.][a-f0-9]{64}$", options: .regularExpression) != nil else { throw Failure.invalid }
+            try withKeychainInteraction(object["interactive"] as? Bool == true) {
             if operation == "list" {
                 var q = query(service)
                 q[kSecReturnAttributes as String] = true
@@ -123,11 +134,12 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
                 var result: CFTypeRef?
                 let status = SecItemCopyMatching(q as CFDictionary, &result)
                 if status == errSecItemNotFound { try reply(["items": []]); return }
+                try checkAccess(status)
                 guard status == errSecSuccess, let entries = result as? [[String: Any]] else { throw Failure.storage }
                 let items = entries.compactMap { item -> [String: String]? in
                     guard let id = item[kSecAttrAccount as String] as? String,
                           let typeData = item[kSecAttrGeneric as String] as? Data,
-                          let type = String(data: typeData, encoding: .utf8) else { return nil }
+                          let type = String(data: typeData, encoding: .utf8), type == "api_key" || type == "oauth" else { return nil }
                     return ["providerId": id, "type": type]
                 }
                 try reply(["items": items]); return
@@ -146,6 +158,12 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
             let next = try readObject()
             if next["write"] as? Bool == true { try writeCredential(service, provider, next["credential"] ?? NSNull()) }
             try reply(["ok": true])
+            }
+          }
+        } catch Failure.accessRequired {
+            try? reply(["error": "access_required"]); exit(3)
+        } catch Failure.accessDenied {
+            try? reply(["error": "access_denied"]); exit(4)
         } catch Failure.cancelled {
             try? reply(["error": "cancelled"])
             exit(2)

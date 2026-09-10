@@ -444,19 +444,19 @@ function Models({models,onProviders}: {models:ModelControls;onProviders:()=>void
   return <>
     <div className="settings-toolbar model-settings-toolbar"><p className="settings-intro">选择对话使用的模型，并管理已有连接。</p><button className="text-button" onClick={()=>void models.refresh()} disabled={models.refreshing}><RefreshCw size={14}/>{models.refreshing?"正在刷新…":"刷新目录"}</button></div>
     {models.error&&<p role="alert" className="inline-error">{models.error}</p>}
-    {data?.refresh.failedProviders.length ? <p role="status" className="secondary">部分供应商未能刷新，仍可使用已缓存的模型：{data.refresh.failedProviders.join("、")}</p> : null}
+    {data?.refresh.failedProviders.length ? <p role="status" className="secondary">部分模型目录未能更新：{data.refresh.failedProviders.map(id=>data.providers.find(provider=>provider.id===id)?.name??id).join("、")}。目录已保留，请检查对应连接状态。</p> : null}
     <Group>
-      <Row title="默认模型" detail={available.length?"用于新对话，可在输入区随时切换。":"尚无可用连接。配置供应商后，即可选择模型并开始对话。"}>
+      <Row title="默认模型" detail={available.length?"用于新对话，可在输入区随时切换。":"尚无可用连接。请在下方检查连接状态，再选择模型开始对话。"}>
         {available.length?<ModelPicker label="默认模型" models={data?.models??[]} value={data?.defaultKey??null} onChange={models.chooseDefault} onManage={showConnections} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy}/>:<button className="primary-button" onClick={showConnections}>连接模型</button>}
       </Row>
       <Row title="默认思考强度" detail="用于新对话。可选范围随模型变化。"><select aria-label="默认思考强度" disabled={models.busy||levels.length===1} value={levels.includes(data?.defaultThinking??"")?data?.defaultThinking:levels.includes("medium")?"medium":levels[0]} onChange={e=>void models.setDefaultThinking(e.target.value)}>{levels.map(level=><option key={level} value={level}>{thinkingLabels[level]??level}</option>)}</select></Row>
       <Row title="自动选择的剩余额度门槛" detail="剩余额度不高于此值时，沿原有回退顺序选择下一个模型。用于后续自动派发和回退，不中断正在执行的工作。"><select aria-label="自动选择的剩余额度门槛" disabled={models.busy||!data} value={data?.modelQuotaThresholdPercent??DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT} onChange={e=>void models.setQuotaThreshold(Number(e.target.value))}>{Array.from({length:MAX_MODEL_QUOTA_THRESHOLD_PERCENT-MIN_MODEL_QUOTA_THRESHOLD_PERCENT+1},(_,i)=>i+MIN_MODEL_QUOTA_THRESHOLD_PERCENT).map(value=><option key={value} value={value}>{value}%</option>)}</select></Row>
-      <Row title="模型连接" detail={`${data?.providers.filter(p=>p.connected).length??0} 个已配置供应商 · ${available.length} 个可选择模型`}><button className="text-button" onClick={onProviders}>管理自定义供应商</button></Row>
+      <Row title="模型连接" detail={`${data?.providers.filter(p=>p.connected).length??0} 个可用供应商 · ${available.length} 个可选择模型`}><button className="text-button" onClick={onProviders}>管理自定义供应商</button></Row>
     </Group>
     <div className="settings-toolbar" id="model-connection-list"><h2>模型连接与目录</h2><span className="secondary">{models.refreshing?"正在获取最新目录":data?.refresh.updatedAt?`更新于 ${new Date(data.refresh.updatedAt).toLocaleTimeString()}`:"已缓存的目录"}</span></div>
     <div className="settings-toolbar"><input className="model-search" aria-label="搜索模型目录" placeholder="搜索模型或供应商…" value={query} onChange={e=>setQuery(e.target.value)}/><label><input type="checkbox" checked={connectedOnly} onChange={e=>setConnectedOnly(e.target.checked)}/>仅看可用连接</label>{data?.models.some(m=>!m.enabled)&&<button className="text-button" disabled={models.busy} onClick={()=>void models.enableAll()}>启用全部模型</button>}</div>
     {data?.providers.filter(p=>shown.some(m=>m.providerId===p.id)).map(provider=><details className="model-provider" key={provider.id} open={connectedOnly||!!query||["openai","openai-codex"].includes(provider.id)}>
-      <summary><span>{provider.name}</span><span className="secondary">{provider.connected?"可用":"未连接"} · {shown.filter(m=>m.providerId===provider.id).length} 个模型</span></summary>
+      <summary><span>{provider.name}</span><span className="secondary">{provider.connected?"可用":models.connections?.providers.find(connection=>connection.providerId===provider.id)?.managed?"已保存，暂不可用":"未连接"} · {shown.filter(m=>m.providerId===provider.id).length} 个模型</span></summary>
       <ProviderConnection providerId={provider.id} models={models}/>
       <details className="model-provider-models"><summary>查看模型与启用范围</summary>
       <Group>{shown.filter(m=>m.providerId===provider.id).map(model=><Row key={model.key} title={model.name} detail={`${model.modelId}${model.contextWindow?` · 上下文 ${model.contextWindow.toLocaleString()}`:""}${model.reasoning?" · 支持思考":""}`}><input type="checkbox" aria-label={`启用模型 ${model.name}`} checked={model.enabled} disabled={models.busy} onChange={e=>void models.setEnabled(model.key,e.target.checked)}/></Row>)}</Group></details>

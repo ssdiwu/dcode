@@ -5,9 +5,10 @@ import type { ModelControls } from "../workbench/useModels";
 import { LoaderCircle } from "lucide-react";
 
 const labels:Record<Connection["state"],string>={
+  access_required:"需要钥匙串访问授权",awaiting_access:"等待系统钥匙串授权…",access_denied:"钥匙串访问未获允许",access_cancelled:"已取消本次钥匙串授权",access_timeout:"钥匙串授权已超时",
   refresh_pending:"登录待更新",timed_out:"登录已超时，请重试",sync_required:"连接已保存，目录更新失败",disconnected:"未连接",configured:"连接已保存",connected:"已连接",reconnect_required:"需要重新登录",awaiting_input:"请完成授权步骤",awaiting_browser:"等待浏览器授权",saving:"正在连接…",failed:"连接未完成",cancelled:"已取消连接",
 };
-const oauthFailures={interaction_unavailable:"授权窗口未能完成，请重新登录。",authorization_failed:"供应商授权未完成，请重新登录。",credential_save_failed:"授权已返回，但连接未能保存，请重新登录。",catalog_sync_failed:"连接已保存，请重试更新模型目录。"};
+const oauthFailures={keychain_unavailable:"钥匙串暂不可访问，可在此重新请求授权。",credential_missing:"钥匙串中未找到原有连接，请重新配置连接。",interaction_unavailable:"授权窗口未能完成，请重新登录。",authorization_failed:"供应商授权未完成，请重新登录。",credential_save_failed:"授权已返回，但连接未能保存，请重新登录。",catalog_sync_failed:"连接已保存，请重试更新模型目录。"};
 const failures:Record<Extract<ApiKeyConnectionResult,{ok:false}>["code"],string>={
   INVALID_INPUT:"请输入有效的 API Key。",BUSY:"另一项连接正在处理，请稍后重试。",UNAVAILABLE:"连接服务暂不可用，请稍后重试。",FAILED:"连接失败，请检查后重试。",SYNC_REQUIRED:"密钥已保存，模型目录更新失败。请重试更新。",OUTCOME_UNKNOWN:"连接结果尚未确认，请刷新连接状态后检查。",
 };
@@ -22,9 +23,9 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
   const connection=models.connections?.providers.find(p=>p.providerId===providerId);
   useEffect(()=>{const details=container.current?.closest("details");if(!details)return;const toggle=()=>{if(!details.open)clear();};details.addEventListener("toggle",toggle);return()=>details.removeEventListener("toggle",toggle);},[!!connection,clear]);
   if(!connection)return null;
-  const pending=["awaiting_input","awaiting_browser","saving"].includes(connection.state);
+  const pending=["awaiting_input","awaiting_browser","saving","awaiting_access"].includes(connection.state);
   const supportsApiKey=connection.methods.some(method=>method.type==="api_key");
-  const showInput=supportsApiKey&&(editing||!connection.managed||submitting)&&!(pending&&connection.activeMethod==="oauth");
+  const showInput=supportsApiKey&&(editing||!connection.managed||submitting)&&!(pending&&(connection.activeMethod==="oauth"||connection.state==="awaiting_access"));
   const submit=async(event:React.FormEvent)=>{
     event.preventDefault();
     if(flight.current||submitting||models.connecting||!input.current?.value.trim())return;
@@ -46,6 +47,8 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
       {connection.external&&<span className="secondary">当前使用已有的外部连接。</span>}
     </div>
     <div className="provider-connection-actions">
+      {connection.canAuthorizeAccess&&!pending&&<button className="primary-button" disabled={models.connecting} onClick={()=>void models.authorizeAccess(providerId)}>授权访问钥匙串</button>}
+
       {connection.canOpenBrowser&&<button className="text-button" aria-label="打开登录页面" disabled={connection.browserOpening} onClick={()=>void models.openLoginPage(connection.flowId!)}>{connection.browserOpening?"正在打开…":"打开登录页面"}</button>}
       {connection.canEnterCode&&<button className="text-button" disabled={connection.inputOpening} onClick={()=>void models.enterLoginCode(connection.flowId!)}>{connection.inputOpening?"等待输入授权结果…":"输入授权结果"}</button>}
       {showInput&&<form className="provider-api-form" onSubmit={event=>void submit(event)} onKeyDown={event=>{if(event.key==="Enter"&&(event.nativeEvent.isComposing||event.nativeEvent.keyCode===229)){event.preventDefault();return;}if(event.key==="Escape"&&!submitting&&!pending){event.preventDefault();event.stopPropagation();clear();}}}>
@@ -53,7 +56,7 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
         <button type="submit" className="primary-button" disabled={!hasKey||models.connecting||submitting}>{submitting?"连接中…":"连接"}</button>
         {(hasKey||editing)&&<button type="button" className="text-button" disabled={submitting||pending} onClick={clear}>取消</button>}
       </form>}
-      {pending&&!showInput?connection.state!=="saving"&&<button className="text-button" onClick={()=>void models.cancelConnection(connection.flowId!)}>取消连接</button>:!submitting&&!pending&&<>
+      {pending&&!showInput?connection.state!=="saving"&&<button className="text-button" onClick={()=>void models.cancelConnection(connection.flowId!)}>{connection.state==="awaiting_access"?"取消授权":"取消连接"}</button>:!submitting&&!pending&&<>
         {connection.state==="sync_required"&&<button className="text-button" onClick={()=>void models.refreshConnections()}>重试更新</button>}
         {supportsApiKey&&connection.managed&&!showInput&&<button className="text-button" disabled={models.connecting} onClick={()=>setEditing(true)}>更换密钥</button>}
         {connection.methods.filter(method=>method.type==="oauth").map(method=><button className="text-button" key={method.type} disabled={models.connecting} onClick={()=>{clear();void models.connect(providerId,method.type);}}>{connection.managed?"重新登录":method.label}</button>)}
@@ -63,7 +66,7 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
     </div>
     {connection.browserFailed&&connection.canOpenBrowser&&<p className="provider-connection-error" role="alert">登录页面未能自动打开，请点击“打开登录页面”重试。</p>}
     {connection.inputIssue&&connection.canEnterCode&&<p className="provider-connection-error" role={connection.inputIssue==="input_cancelled"?"status":"alert"}>{connection.inputIssue==="input_cancelled"?"已关闭输入窗口，仍可在浏览器完成登录。":"授权结果输入窗口未能打开，可继续浏览器登录或重试输入。"}</p>}
-    {connection.failureCode&&["failed","sync_required"].includes(connection.state)&&<p className="provider-connection-error" role="alert">{oauthFailures[connection.failureCode]}</p>}
+    {connection.failureCode&&["failed","sync_required","access_required"].includes(connection.state)&&<p className="provider-connection-error" role="alert">{oauthFailures[connection.failureCode]}</p>}
     {error&&<p className="provider-connection-error" role="alert">{error}</p>}
   </div>;
 }

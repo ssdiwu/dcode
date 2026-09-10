@@ -264,5 +264,5 @@ export async function registerCatalogProviders(
     });
     changed = true;
   }
-  if (changed) await runtime.refresh({ allowNetwork: false });
+  if (changed) await runtime.refresh({ allowNetwork: false, providers: runtime.getProviders().map(provider=>provider.id) });
 }

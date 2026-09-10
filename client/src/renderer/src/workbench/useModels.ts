@@ -18,7 +18,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
   const {data, error, mutate} = useSWR<DCodeModelsView>(key, () => api().request("dcodeModels.get",target), {revalidateOnFocus:false});
   const {data:connections,error:connectionError,mutate:mutateConnections}=useSWR<{providers:ProviderConnection[]}>("dcodeAuth",()=>api().request("dcodeAuth.get",{}),{revalidateOnFocus:false});
   const [connectionBusy,setConnectionBusy]=useState(false);
-  const connecting=connectionBusy||!!connections?.providers.some(p=>["awaiting_input","awaiting_browser","saving"].includes(p.state));
+  const connecting=connectionBusy||!!connections?.providers.some(p=>["awaiting_input","awaiting_browser","saving","awaiting_access"].includes(p.state));
   const connectionAction=async(method:HostMethod,params:Record<string,unknown>)=>{
     setConnectionBusy(true);setFailure(null);
     try{await api().request(method,params);await Promise.all([mutateConnections(),mutate()]);await onChanged();}
@@ -73,6 +73,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
   return {data,connections,connecting,connectApiKey,
     refreshConnections:()=>connectionAction("dcodeAuth.refresh",{}),
     connect:(providerId:string,authType:AuthType)=>connectionAction("dcodeAuth.start",{providerId,authType,flowId:crypto.randomUUID()}),
+    authorizeAccess:(providerId:string)=>connectionAction("dcodeAuth.authorizeAccess",{providerId,flowId:crypto.randomUUID()}),
     openLoginPage:(flowId:string)=>connectionAction("dcodeAuth.openBrowser",{flowId}),
     enterLoginCode:(flowId:string)=>connectionAction("dcodeAuth.enterCode",{flowId}),
     cancelConnection:(flowId:string)=>connectionAction("dcodeAuth.cancel",{flowId}),

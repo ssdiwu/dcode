@@ -111,8 +111,8 @@ test("OAuth stays in Host, expired refresh is serialized and external OAuth is n
   }finally{await f.close();}
 });
 test("public connection controls reject every credential-bearing or extra field",()=>{
-  for(const method of ["dcodeAuth.get","dcodeAuth.start","dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode","dcodeAuth.disconnect"] as const){
-    const params=method==="dcodeAuth.get"?{}:method==="dcodeAuth.start"?{providerId:"openai",authType:"api_key",flowId:"id"}:["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method)?{flowId:"id"}:{providerId:"openai"};
+  for(const method of ["dcodeAuth.get","dcodeAuth.start","dcodeAuth.authorizeAccess","dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode","dcodeAuth.disconnect"] as const){
+    const params=method==="dcodeAuth.get"?{}:method==="dcodeAuth.start"?{providerId:"openai",authType:"api_key",flowId:"id"}:method==="dcodeAuth.authorizeAccess"?{providerId:"openai",flowId:"id"}:["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method)?{flowId:"id"}:{providerId:"openai"};
     assert.doesNotThrow(()=>validateMethodParams(method,params));
     for(const key of ["value","apiKey","access","refresh","code","url","runtimeId"]){assert.throws(()=>validateMethodParams(method,{...params,[key]:"private-secret"}),/does not accept credential/);}
   }
@@ -131,7 +131,7 @@ test("native Keychain private adapter round-trip, serialized transactions and sc
     assert.deepEqual(await b.list(),[{providerId:"fixture",type:"api_key"}]);
     assert.ok(!JSON.stringify(await b.list()).includes("fake-native"));
   }finally{
-    await a.transaction("fixture",async()=>({value:undefined,write:null}));assert.deepEqual(await a.list(),[]);await rm(root,{recursive:true,force:true});
+    await a.transaction("fixture",async()=>({value:undefined,write:null}));assert.deepEqual(await a.list(),[]);a.close();b.close();await rm(root,{recursive:true,force:true});
   }
 });
 test("real Host API connection refreshes safe Product Store references and models, restores on restart and keeps old IPC disabled",async()=>{
