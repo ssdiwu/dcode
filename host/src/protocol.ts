@@ -1354,10 +1354,11 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "dcodeAuth.enterCode":
     case "dcodeAuth.cancel":
     case "dcodeAuth.disconnect": {
-      const allowed = (method === "dcodeAuth.get" || method === "dcodeAuth.refresh") ? [] : ["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method) ? ["flowId"] : method === "dcodeAuth.disconnect" ? ["providerId"] : method === "dcodeAuth.authorizeAccess" ? ["providerId","flowId"] : ["providerId", "authType", "flowId"];
+      const allowed = (method === "dcodeAuth.get" || method === "dcodeAuth.refresh") ? [] : ["dcodeAuth.cancel","dcodeAuth.openBrowser","dcodeAuth.enterCode"].includes(method) ? ["flowId"] : method === "dcodeAuth.disconnect" ? ["providerId"] : method === "dcodeAuth.authorizeAccess" ? ["providerId","flowId"] : ["providerId", "authType", "flowId", "oauthMode"];
       if (Object.keys(params).some(key => !allowed.includes(key))) throw new ProtocolValidationError("INVALID_PARAMS", "Connection control does not accept credential values");
       if (allowed.includes("providerId")) {const id = requireString(params,"providerId");if(!/^[a-z0-9][a-z0-9._-]{0,199}$/i.test(id))throw new ProtocolValidationError("INVALID_PARAMS","Invalid provider identifier");}
       if (allowed.includes("flowId") && !/^[a-z0-9-]{1,128}$/i.test(requireString(params,"flowId"))) throw new ProtocolValidationError("INVALID_PARAMS","Invalid connection identifier");
+      if(params.oauthMode!==undefined&&(params.providerId!=="openai-codex"||params.authType!=="oauth"||!["browser","device_code"].includes(params.oauthMode as string)))throw new ProtocolValidationError("INVALID_PARAMS","Invalid OAuth mode");
       if(method === "dcodeAuth.start" && params.authType !== "api_key" && params.authType !== "oauth")throw new ProtocolValidationError("INVALID_PARAMS","Invalid connection method");
       return;
     }

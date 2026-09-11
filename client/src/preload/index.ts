@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 contextBridge.exposeInMainWorld("dcode", {
+  readDeviceCode:(flowId:string)=>ipcRenderer.invoke("dcode:readDeviceCode",flowId),
   connectApiKey:(providerId:string,key:string)=>ipcRenderer.invoke("dcode:connectApiKey",providerId,key),
   htmlPreview: (input: Record<string,unknown>) => ipcRenderer.invoke("dcode:htmlPreview",input),
   request: (method: string, params?: Record<string, unknown>) =>

@@ -136,6 +136,13 @@ const trustedHandle = <Args extends unknown[]>(
   });
 const htmlPreview=new HTMLPreview(()=>window,()=>bridge,sendEvent);
 function setupIPC() {
+  ipcMain.handle("dcode:readDeviceCode",async(event,flowId:unknown)=>{
+    try{
+      assertSender(event);
+      if(typeof flowId!=="string"||!/^[a-z0-9-]{1,128}$/i.test(flowId)||!bridge)return null;
+      return await bridge.readDeviceCode(flowId);
+    }catch{return null;}
+  });
   // Dedicated confidential submission: never use the generic request logger.
   ipcMain.handle("dcode:connectApiKey",async(event,providerId:unknown,key:unknown)=>{
     try{

@@ -44,7 +44,7 @@
 - 为 D Code 发起的 Prompt 保留稳定 Prompt ID，并在 `session.event` 中附带对应 `runId` / 已持久 Path Entry ID；`sessionRunCorrelation` 能力供 App 对后续消息做顺序门禁，原生输入与协作队列由 Product Store 维护，Pi 内部队列不代替耐久消息；
 - 运行中可在 Host Run State 仍为 `running` 时使用 Pi 原生 steer 介入下一安全模型边界；它不替换 Run ID，也不伪装成立即中止工具；
 - `session.prompt` / `session.steer` 可选 `images` 图片附件（0.0.20）：≤8 张、`image/*` MIME、单张 base64 ≤ 7,000,000 字符，经 Pi `PromptOptions.images` / `steer(text, images)` 进入模型输入；非法形态由协议校验拒绝；
-- D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，API Key、OAuth 值和认证响应不经 D Code IPC；
+- D Code 以 Product Store 的 Model Catalog（模型目录）、Credential Reference（凭据安全引用）和 Runtime Model Selection（未来运行模型选择）作为产品权威；Pi 认证与配置只可作为只读发现 / 外部安全引用来源，已存 API Key、OAuth token 和认证响应不经通用 D Code IPC；显式 API 输入与当前设备码分别遵循 PRD 0030 的专用保密通道；
 - 投影 Pi `resourceLoader` 真实加载的 Extension、Skill、Prompt 与 Command，按 Pi `SettingsManager.setPackages` 修改扩展包启停并热重载；D Code 自有隐藏扩展不进入用户清单；
 - 在同一个 Pi Agent Loop 注册只读 `dcode_facts` facade：原生 `evidence`/`changes` 由 Host 绑定 D Code Task、Session、Agent Run 与当前 Session Run，从 Product Store 读取，不再回退到旧 `Library` 账本；证据标明是否本轮，`changes` 仅提供 write/edit 工具记录并单列已明确导入的历史文件变更，不伪称完整文件 diff 或生成缺失的行数/revision。旧 Pi 入口保留既有账本合同。`lineage` 与 `project` 仍沿既有适配入口；`project` 检查项目根目录的 `PRODUCT.md` / `DESIGN.md` 是否为普通文件，并列出根 `AGENTS.md`、根 `README.md` 与有界 `doc/**/*.md` 的分散依据路径。二者都缺失时明确说明“产品原则尚未独立沉淀”；只列路径，不读取内容、不从 Agent 总结生成假权威；
 - `modelProviders.save / remove`、`modelSettings.set*` 与 `modelAuth.*` 是保留给旧 Protocol 的显式拒绝入口；D Code 不再改写 Pi `models.json` / `settings.json`，也不接受任何凭据正文或 Pi 认证响应；
@@ -159,3 +159,7 @@ OAuth 的 `openBrowser` / `enterCode` 只接受 flowId，并立即返回是否�
 从仓库根运行 `node host/test/native/keychain-access.mjs` 验证隔离假项、跨代码身份非交互拒绝、属性查询不取secret、正常已授权读取及helper复用。该测试不修改用户项或ACL，不证明用户旧项单次允许的持续时间。`keychain-access.test.ts` 覆盖拒绝/取消/超时/重试/替换/元数据迟到/重启；实际旧连接跨候选授权仍待人工验收。
 
 原生认证辅助程序的父进程监控在显式非主执行域创建并执行，AppKit 保持主执行域；监控在标准输入阻塞或模态窗口等待时仍运行。`npm test` 包含完整生产辅助程序的空闲、实际模态等待和父进程退出回归；从仓库根运行 `node host/test/native/helper-lifecycle.mjs`，使用已授权的辅助功能访问，对本次隔离进程的真实“继续”“取消”按钮操作并核验窗口收尾。父进程退出测试使用外层持有的 FIFO，不以输入 EOF 冒充父进程监控成功；这些测试不访问账号或钥匙串，也不替代真实 OAuth 登录验收。
+
+OpenAI Codex 的公共连接方法投影为“浏览器登录”/“设备码登录”，`dcodeAuth.start` 可携带该供应商专属的 `oauthMode: browser | device_code`，直接回应固定 SDK 0.85.1 的实际方式选择；旧调用省略时直接走 browser。其他 Provider 不接受该字段，原有交互不变。只对完整匹配的 SDK 选择合同回填 id，不修改 SDK 源码或 OAuth 协议。
+
+`src/device-code-channel.ts` 只在平台壳继承的 fd4 上处理 `{id,flowId}`，环境标记启动即删除。Host 只投影当前 OpenAI Codex 设备码流程的 `{userCode,expiresAt}` 或 null，不提供通用方法、凭据读取、完整 notice 或授权 URL。两端限制帧、并发、字段和等待时长，错误不落公共日志；取消/失败/到期/保存/退出清除 Host 展示值。该通道与原 API fd3 独立，`dcodeAuth.get` 只暴露 `canReadDeviceCode` 布尔能力。实际源码边界与生命周期见 `oauth-device-flow.test.ts` 和 `device-code-channel.test.ts`。

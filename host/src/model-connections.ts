@@ -1,20 +1,24 @@
+import type {DeviceCodeDisplay} from './device-code-types.js';
 import { MAX_API_KEY_LENGTH, type ApiKeyConnectionResult } from "./api-key-connection.js";
 import { rememberAuthInput } from "./credential-material.js";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthType, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { DCodeCredentialStore, authCancelled, type ConfidentialInteraction } from "./secure-model-credentials.js";
 
+export type CodexOAuthMode = "browser" | "device_code";
 export type ConnectionState = "disconnected" | "configured" | "connected" | "reconnect_required" | "awaiting_input" | "awaiting_browser" | "saving" | "failed" | "cancelled" | "sync_required" | "timed_out" | "refresh_pending" | "access_required" | "awaiting_access" | "access_denied" | "access_cancelled" | "access_timeout";
 export type ConnectionFailureCode="interaction_unavailable"|"authorization_failed"|"credential_save_failed"|"catalog_sync_failed"|"keychain_unavailable"|"credential_missing";
 interface ManualInput {prompt:AuthPrompt;providerName:string;signal:AbortSignal;resolve:(value:string)=>void;opening:boolean;issue?:"input_unavailable"|"input_cancelled"}
 export interface ProviderConnection {
   providerId:string;
-  methods:{type:AuthType;label:string}[];
+  methods:{type:AuthType;label:string;oauthMode?:CodexOAuthMode}[];
   state:ConnectionState;
   managed:boolean;
   external:boolean;
   flowId?:string;
   activeMethod?:AuthType;
+  activeOAuthMode?:CodexOAuthMode;
+  canReadDeviceCode?:boolean;
   canAuthorizeAccess?:boolean;
   canOpenBrowser?:boolean;
   browserOpening?:boolean;
@@ -24,21 +28,24 @@ export interface ProviderConnection {
   inputIssue?:ManualInput["issue"];
   failureCode?:ConnectionFailureCode;
 }
-interface Flow {id:string;provider:string;type:AuthType|"keychain";controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>;authUrl?:string;browserOpening?:boolean;browserFailed?:boolean;browserController?:AbortController;manual?:ManualInput;failureCode?:ConnectionFailureCode}
+interface Flow {oauthMode?:CodexOAuthMode;deviceCode?:DeviceCodeDisplay;expiresAt?:number;id:string;provider:string;type:AuthType|"keychain";controller:AbortController;state:ConnectionState;done:Promise<void>;settled:boolean;timedOut:boolean;timer?:ReturnType<typeof setTimeout>;authUrl?:string;browserOpening?:boolean;browserFailed?:boolean;browserController?:AbortController;manual?:ManualInput;failureCode?:ConnectionFailureCode}
 const activeStates=new Set<ConnectionState>(["awaiting_input","awaiting_browser","saving","awaiting_access"]);
 export class ModelConnections {
   private flows=new Map<string,Flow>();
   private seen=new Set<string>();
   private mutationPending=false;
   constructor(private readonly credentials:DCodeCredentialStore,private readonly native:ConfidentialInteraction,private readonly runtime:()=>Promise<ModelRuntime>,private readonly changed:()=>Promise<void>,private readonly emit:(event:string,data:unknown)=>void,private readonly options:{timeoutMs?:number}={}){}
-  private emitState(flow:Flow,state:ConnectionState){flow.state=state;this.emit("dcodeAuth.changed",{providerId:flow.provider,flowId:flow.id,state});}
+  private emitState(flow:Flow,state:ConnectionState){if(state!=="awaiting_input"&&state!=="awaiting_browser")flow.deviceCode=undefined;flow.state=state;this.emit("dcodeAuth.changed",{providerId:flow.provider,flowId:flow.id,state});}
   async get():Promise<{providers:ProviderConnection[]}>{
     const runtime=await this.runtime();
     const managed=new Map((await this.credentials.managed()).map(item=>[item.providerId,item]));
     return {providers:await Promise.all(runtime.getProviders().map(async provider=>{
       const methods:ProviderConnection["methods"]=[];
       if(provider.auth.apiKey?.login)methods.push({type:"api_key",label:"连接 API 密钥"});
-      if(provider.auth.oauth?.login)methods.push({type:"oauth",label:provider.id==="openai-codex"?"登录 ChatGPT":"浏览器登录"});
+      if(provider.auth.oauth?.login){
+        if(provider.id==="openai-codex")methods.push({type:"oauth",label:"浏览器登录",oauthMode:"browser"},{type:"oauth",label:"设备码登录",oauthMode:"device_code"});
+        else methods.push({type:"oauth",label:"浏览器登录"});
+      }
       const flow=this.flows.get(provider.id);
       const configured=runtime.hasConfiguredAuth(provider.id);
       const owned=managed.has(provider.id);
@@ -56,18 +63,24 @@ export class ModelConnections {
       if(owned&&this.credentials.accessState(provider.id))state=this.credentials.accessState(provider.id)==="access_denied"?"access_denied":"access_required";
       if(flow&&[...activeStates,"failed","cancelled","sync_required","timed_out","access_required","access_denied","access_cancelled","access_timeout"].includes(flow.state))state=flow.state;
       return {providerId:provider.id,methods,state,managed:owned,external,canAuthorizeAccess:owned&&!!this.credentials.accessState(provider.id),...(flow?{flowId:flow.id,activeMethod:flow.type==="keychain"?undefined:flow.type,failureCode:flow.failureCode,
+        activeOAuthMode:flow.oauthMode,canReadDeviceCode:!!this.readDeviceCode(flow.id),
         canOpenBrowser:this.live(flow)&&!!flow.authUrl,browserOpening:!!flow.browserOpening,browserFailed:!!flow.browserFailed,
         canEnterCode:this.live(flow)&&!!flow.manual,inputOpening:!!flow.manual?.opening,inputIssue:flow.manual?.issue}: {})};
     }))};
   }
-  async start(provider:string,type:AuthType,id:string):Promise<{flowId:string;accepted:boolean}>{
+  async start(provider:string,type:AuthType,id:string,oauthMode?:CodexOAuthMode):Promise<{flowId:string;accepted:boolean}>{
+    if(oauthMode!==undefined&&(provider!=="openai-codex"||type!=="oauth"||!["browser","device_code"].includes(oauthMode)))throw new Error("不支持此登录方式。");
     if(type==="api_key")throw new Error("请在供应商旁输入 API Key 后连接。");
     if(this.seen.has(id))return {flowId:id,accepted:false};
     if(this.mutationPending||[...this.flows.values()].some(flow=>!flow.settled))throw new Error("请先完成或取消当前连接。");
     // Reserve before any await so simultaneous callers cannot both open a prompt.
     this.seen.add(id);if(this.seen.size>256)this.seen.delete(this.seen.values().next().value!);
     const flow:Flow={id,provider,type,controller:new AbortController(),state:"awaiting_input",done:Promise.resolve(),settled:false,timedOut:false};
-    flow.timer=setTimeout(()=>{flow.timedOut=true;flow.controller.abort();},this.options.timeoutMs??10*60_000);
+    // Fixed SDK 0.85.1 OpenAI Codex uses these exact select IDs. Older callers
+    // without the optional mode enter browser login directly as well.
+    flow.oauthMode=provider==="openai-codex"?oauthMode??"browser":undefined;
+    flow.expiresAt=Date.now()+(this.options.timeoutMs??10*60_000);
+    flow.timer=setTimeout(()=>{flow.timedOut=true;flow.deviceCode=undefined;flow.controller.abort();},this.options.timeoutMs??10*60_000);
     this.flows.set(provider,flow);
     this.emitState(flow,"awaiting_input");
     flow.done=(async()=>{
@@ -78,7 +91,7 @@ export class ModelConnections {
         if(!selected||(type==="oauth"?!selected.auth.oauth?.login:!selected.auth.apiKey?.login))throw new Error("Unsupported connection method");
         await this.login(flow,selected);
       }catch{if(!flow.controller.signal.aborted)flow.failureCode??="authorization_failed";this.emitState(flow,flow.timedOut?"timed_out":flow.controller.signal.aborted?"cancelled":"failed");}
-      finally{clearTimeout(flow.timer);flow.settled=true;flow.authUrl=undefined;flow.browserController?.abort();flow.manual=undefined;}
+      finally{clearTimeout(flow.timer);flow.settled=true;flow.deviceCode=undefined;flow.authUrl=undefined;flow.browserController?.abort();flow.manual=undefined;}
     })();
     return {flowId:id,accepted:true};
   }
@@ -126,6 +139,12 @@ export class ModelConnections {
     await flow.done;return result;
   }
   private live(flow:Flow){return this.flows.get(flow.provider)===flow&&!flow.settled&&!flow.controller.signal.aborted&&activeStates.has(flow.state)&&flow.state!=="saving";}
+  readDeviceCode(id:string):DeviceCodeDisplay|null {
+    const flow=[...this.flows.values()].find(f=>f.id===id);
+    if(!flow||flow.provider!=="openai-codex"||flow.oauthMode!=="device_code"||!this.live(flow))return null;
+    if(!flow.deviceCode||flow.deviceCode.expiresAt<=Date.now()){flow.deviceCode=undefined;return null;}
+    return {userCode:flow.deviceCode.userCode,expiresAt:flow.deviceCode.expiresAt};
+  }
   openBrowser(id:string):{accepted:boolean;reason?:"inactive"|"busy"}{
     const flow=[...this.flows.values()].find(f=>f.id===id);
     if(!flow||!this.live(flow)||!flow.authUrl)return {accepted:false,reason:"inactive"};
@@ -183,6 +202,10 @@ export class ModelConnections {
       const result=await runtime.login(provider.id,flow.type,{
         signal,
         prompt:async prompt=>{
+          if(provider.id==="openai-codex"&&flow.oauthMode&&prompt.type==="select"&&prompt.message==="Select OpenAI Codex login method:"){
+            if(prompt.options.length!==2||!prompt.options.some(o=>o.id==="browser")||!prompt.options.some(o=>o.id==="device_code"))throw Error("Unsupported SDK login choices");
+            return flow.oauthMode;
+          }
           if(prompt.type==="manual_code"&&flow.authUrl)return this.waitForManualInput(flow,provider.name,prompt);
           if(prompt.type!=="manual_code")this.emitState(flow,"awaiting_input");
           try{
@@ -198,8 +221,15 @@ export class ModelConnections {
           if(event.type==="auth_url"){
             this.publishAuthUrl(flow,event.url);
           }else if(event.type==="device_code"){
-            this.publishAuthUrl(flow,event.verificationUri);
-            operation=this.native.notice(`请在浏览器输入验证码：${event.userCode}`,signal);
+            if(provider.id==="openai-codex"&&flow.oauthMode==="device_code"){
+              if(typeof event.userCode!=="string"||!event.userCode.length||event.userCode.length>128||/[\x00-\x1f\x7f]/.test(event.userCode)
+                ||typeof event.expiresInSeconds!=="number"||!Number.isFinite(event.expiresInSeconds)||event.expiresInSeconds<=0){flow.failureCode="authorization_failed";flow.controller.abort();return;}
+              flow.deviceCode={userCode:event.userCode,expiresAt:Math.min(flow.expiresAt!,Date.now()+event.expiresInSeconds*1000)};
+              this.publishAuthUrl(flow,event.verificationUri);
+            }else{
+              this.publishAuthUrl(flow,event.verificationUri);
+              operation=this.native.notice(`请在浏览器输入验证码：${event.userCode}`,signal);
+            }
           }else if(event.type==="info"){
             operation=this.native.notice(event.message,signal);
           }
@@ -210,7 +240,7 @@ export class ModelConnections {
       signal.throwIfAborted();
       if(this.flows.get(flow.provider)!==flow)throw authCancelled();
       // No cancellation after this visible commit boundary. Login values stay in Host memory.
-      clearTimeout(flow.timer);flow.authUrl=undefined;flow.browserController?.abort();
+      clearTimeout(flow.timer);flow.deviceCode=undefined;flow.authUrl=undefined;flow.browserController?.abort();
       this.emitState(flow,"saving");flow.failureCode="credential_save_failed";
       await this.credentials.save(provider.id,result);
       saved=true;flow.failureCode="catalog_sync_failed";
@@ -226,7 +256,7 @@ export class ModelConnections {
   cancel(id:string):{cancelled:boolean}{
     const flow=[...this.flows.values()].find(f=>f.id===id);
     if(!flow||!activeStates.has(flow.state)||flow.state==="saving")return {cancelled:false};
-    flow.authUrl=undefined;flow.controller.abort();
+    flow.deviceCode=undefined;flow.authUrl=undefined;flow.controller.abort();
     this.emitState(flow,flow.type==="keychain"?"access_cancelled":"cancelled");
     return {cancelled:true};
   }
@@ -251,6 +281,6 @@ export class ModelConnections {
       return {refreshed:true};
     }finally{this.mutationPending=false;}
   }
-  async close(){for(const flow of this.flows.values())if(flow.state!=="saving")flow.controller.abort();await Promise.all([...this.flows.values()].map(flow=>flow.done));}
+  async close(){for(const flow of this.flows.values()){flow.deviceCode=undefined;if(flow.state!=="saving")flow.controller.abort();}await Promise.all([...this.flows.values()].map(flow=>flow.done));}
   async idle(){await Promise.all([...this.flows.values()].map(flow=>flow.done));}
 }

@@ -1745,3 +1745,8 @@ html.theme-changing, html.theme-changing * { transition:none !important; }
 .provider-api-form input{width:260px;max-width:100%;padding:9px 11px;border:1px solid var(--c-line);border-radius:8px;background:var(--c-raised);color:var(--c-ink);font:inherit;font-size:13px}
 .provider-api-form .primary-button{padding:8px 14px;white-space:nowrap}
 .provider-connection-error{flex-basis:100%;margin:0;color:var(--c-warn);font-size:12px;line-height:1.5}
+
+.provider-device-code{flex-basis:100%;padding:14px 16px;background:var(--c-raised);border:1px solid var(--c-line);border-radius:12px}
+.provider-device-code>div{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.provider-device-code code{font-size:22px;letter-spacing:.1em;font-variant-numeric:tabular-nums;user-select:all;overflow-wrap:anywhere}
+.provider-device-code p{margin:10px 0 0;font-size:12px;line-height:1.5}

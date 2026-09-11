@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {inheritedDeviceCodeChannel} from "./device-code-channel.js";
 import { resolve } from "node:path";
 import { inheritedApiKeyChannel } from "./api-key-channel.js";
 import { JsonlDecoder, JsonlWriter } from "./jsonl.js";
@@ -138,6 +139,7 @@ const host = new PiHost({
 
 let credentialInputReady=false;
 const closeApiKeyChannel=inheritedApiKeyChannel((providerId,key,id)=>credentialInputReady&&!exiting?host.connectApiKey(providerId,key,id):Promise.resolve({ok:false,code:"UNAVAILABLE"}));
+const closeDeviceCodeChannel=inheritedDeviceCodeChannel(flowId=>credentialInputReady&&!exiting?host.readDeviceCode(flowId):Promise.resolve(null));
 
 async function handleValue(value: unknown): Promise<void> {
   const correlation = rawCorrelation(value);
@@ -203,7 +205,7 @@ async function drainRequests(): Promise<void> {
 async function shutdown(exitCode: number): Promise<void> {
   if (exiting) return;
   exiting = true;
-  credentialInputReady=false;closeApiKeyChannel();
+  credentialInputReady=false;closeApiKeyChannel();closeDeviceCodeChannel();
   if (parentWatch) clearInterval(parentWatch);
   const forcedExitCode = exitCode === 0 ? 1 : exitCode;
   const forceExit = setTimeout(() => process.exit(forcedExitCode), 20_000);

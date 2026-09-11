@@ -44,6 +44,7 @@ export interface DCodeSessionPresentation {
   submissions?: {sourceEntryId?:string;text:string;effectiveText:string;attachments:import("../../../../host/src/attachment-files.js").ManagedAttachment[]}[];
 }
 export interface DcodeApi {
+  readDeviceCode:(flowId:string)=>Promise<import("../../../../host/src/device-code-types.js").DeviceCodeDisplay|null>;
   connectApiKey:(providerId:string,key:string)=>Promise<import("../../../../host/src/api-key-connection.js").ApiKeyConnectionResult>;
   htmlPreview:(input:Record<string,unknown>)=>Promise<unknown>;
   request: <T = unknown>(

@@ -1373,7 +1373,7 @@ export class PiHost {
     if(method === "dcodeAuth.refresh") return (await this.modelConnections()).refresh();
     if(method === "dcodeAuth.get") return (await this.modelConnections()).get();
     if(method === "dcodeAuth.authorizeAccess") return (await this.modelConnections()).authorizeAccess(params.providerId as string,params.flowId as string);
-    if(method === "dcodeAuth.start") return (await this.modelConnections()).start(params.providerId as string,params.authType as AuthType,params.flowId as string);
+    if(method === "dcodeAuth.start") return (await this.modelConnections()).start(params.providerId as string,params.authType as AuthType,params.flowId as string,params.oauthMode as import("./model-connections.js").CodexOAuthMode|undefined);
     if(method === "dcodeAuth.openBrowser") return (await this.modelConnections()).openBrowser(params.flowId as string);
     if(method === "dcodeAuth.enterCode") return (await this.modelConnections()).enterCode(params.flowId as string);
     if(method === "dcodeAuth.cancel") return (await this.modelConnections()).cancel(params.flowId as string);
@@ -5421,6 +5421,7 @@ export class PiHost {
 
   /** agentDir 固定，目录级 ModelRuntime 在 Host 生命周期内复用；cwd 只影响 settings 解析。 */
   /** Private inherited channel only; never a Protocol v1 method. */
+  async readDeviceCode(flowId:string){return (await this.connectionsPromise)?.readDeviceCode(flowId)??null;}
   async connectApiKey(providerId:string,key:string,id:string){
     return (await this.modelConnections()).connectApiKey(providerId,key,id);
   }

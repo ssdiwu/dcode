@@ -3,6 +3,7 @@ import type { ProviderConnection as Connection } from "../../../../../host/src/m
 import type { ApiKeyConnectionResult } from "../../../../../host/src/api-key-connection.js";
 import type { ModelControls } from "../workbench/useModels";
 import { LoaderCircle } from "lucide-react";
+import {api} from '../types';
 
 const labels:Record<Connection["state"],string>={
   access_required:"需要钥匙串访问授权",awaiting_access:"等待系统钥匙串授权…",access_denied:"钥匙串访问未获允许",access_cancelled:"已取消本次钥匙串授权",access_timeout:"钥匙串授权已超时",
@@ -41,7 +42,7 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
     finally{key="";flight.current=false;if(mounted.current)setSubmitting(false);}
   };
   return <div ref={container} className="provider-connection" aria-label={`${providerId} 连接`}>
-    <div className="provider-connection-status"><span role="status">{(pending||submitting)&&<LoaderCircle className="connection-spinner" size={14}/>} {submitting?"正在连接…":labels[connection.state]}</span>
+    <div className="provider-connection-status"><span role="status">{(pending||submitting)&&<LoaderCircle className="connection-spinner" size={14}/>} {submitting?"正在连接…":connection.state==="awaiting_browser"&&connection.activeOAuthMode==="device_code"?"等待设备码授权":labels[connection.state]}</span>
       {connection.state==="configured"&&<span className="secondary">首次使用时会验证模型访问权限。</span>}
       {connection.state==="refresh_pending"&&<span className="secondary">下次使用时自动更新授权。</span>}
       {connection.external&&<span className="secondary">当前使用已有的外部连接。</span>}
@@ -59,14 +60,48 @@ export function ProviderConnection({providerId,models}:{providerId:string;models
       {pending&&!showInput?connection.state!=="saving"&&<button className="text-button" onClick={()=>void models.cancelConnection(connection.flowId!)}>{connection.state==="awaiting_access"?"取消授权":"取消连接"}</button>:!submitting&&!pending&&<>
         {connection.state==="sync_required"&&<button className="text-button" onClick={()=>void models.refreshConnections()}>重试更新</button>}
         {supportsApiKey&&connection.managed&&!showInput&&<button className="text-button" disabled={models.connecting} onClick={()=>setEditing(true)}>更换密钥</button>}
-        {connection.methods.filter(method=>method.type==="oauth").map(method=><button className="text-button" key={method.type} disabled={models.connecting} onClick={()=>{clear();void models.connect(providerId,method.type);}}>{connection.managed?"重新登录":method.label}</button>)}
+        {connection.methods.filter(method=>method.type==="oauth").map(method=><button className="text-button" key={`${method.type}/${method.oauthMode??"default"}`} disabled={models.connecting} onClick={()=>{clear();void (method.oauthMode?models.connect(providerId,method.type,method.oauthMode):models.connect(providerId,method.type));}}>{method.oauthMode?method.label:connection.managed?"重新登录":method.label}</button>)}
         {connection.managed&&!showInput&&<button className="text-button" disabled={models.connecting} onClick={()=>void models.disconnect(providerId)}>断开 D Code 连接</button>}
         {!connection.methods.length&&!connection.managed&&<span className="secondary">使用系统环境或供应商配置连接。</span>}
       </>}
     </div>
+    {connection.canReadDeviceCode&&connection.flowId&&<DeviceCode key={connection.flowId} flowId={connection.flowId}/>}
     {connection.browserFailed&&connection.canOpenBrowser&&<p className="provider-connection-error" role="alert">登录页面未能自动打开，请点击“打开登录页面”重试。</p>}
     {connection.inputIssue&&connection.canEnterCode&&<p className="provider-connection-error" role={connection.inputIssue==="input_cancelled"?"status":"alert"}>{connection.inputIssue==="input_cancelled"?"已关闭输入窗口，仍可在浏览器完成登录。":"授权结果输入窗口未能打开，可继续浏览器登录或重试输入。"}</p>}
     {connection.failureCode&&["failed","sync_required","access_required"].includes(connection.state)&&<p className="provider-connection-error" role="alert">{oauthFailures[connection.failureCode]}</p>}
     {error&&<p className="provider-connection-error" role="alert">{error}</p>}
+  </div>;
+}
+
+function DeviceCode({flowId}:{flowId:string}){
+  const code=useRef<HTMLElement|null>(null),reload=useRef<()=>void>(()=>{});
+  const [loaded,setLoaded]=useState(false);
+  useEffect(()=>{
+    const node=code.current,details=node?.closest('details');
+    let generation=0,timer:ReturnType<typeof setTimeout>|undefined,disposed=false;
+    const clear=()=>{generation++;clearTimeout(timer);if(node)node.textContent='';if(!disposed)setLoaded(false);};
+    const load=()=>{
+      clear();
+      if(disposed||(details&&!details.open))return;
+      const current=generation;
+      void api().readDeviceCode(flowId).then(display=>{
+        if(disposed||current!==generation||!display||display.expiresAt<=Date.now())return;
+        if(node)node.textContent=display.userCode;
+        setLoaded(true);timer=setTimeout(clear,Math.min(display.expiresAt-Date.now(),600_000));
+      }).catch(()=>{});
+    };
+    reload.current=load;
+    const unsubscribe=api().subscribe(event=>{
+      const data=event.data as {flowId?:string;state?:string};
+      if(event.event==='host.exit'||(event.event==='dcodeAuth.changed'&&data?.flowId===flowId&&data.state!=='awaiting_browser'))clear();
+    });
+    details?.addEventListener('toggle',load);
+    load();
+    return()=>{disposed=true;clear();reload.current=()=>{};unsubscribe();details?.removeEventListener('toggle',load);};
+  },[flowId]);
+  return <div className="provider-device-code">
+    <div><span className="secondary">在登录页面输入此设备码</span><code ref={code} aria-label="设备码"/></div>
+    {!loaded&&<button className="text-button" onClick={()=>reload.current()}>重新显示设备码</button>}
+    <p className="secondary">在浏览器完成授权后，这里会自动更新连接状态。</p>
   </div>;
 }

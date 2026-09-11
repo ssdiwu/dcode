@@ -1,3 +1,4 @@
+import {DeviceCodeChannel} from "./device-code-channel.js";
 import { ApiKeyChannel } from "./api-key-channel.js";
 import type { Duplex } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -27,12 +28,14 @@ export class HostBridge {
     private readonly child: ChildProcess,
     private readonly client: ProtocolClient,
     private readonly apiKeys: ApiKeyChannel,
+    private readonly deviceCodes: DeviceCodeChannel,
   ) {
     this.child.on("exit", (code, signal) => {
       this.exitCode = code;
       this.exitSignal = signal;
       this.client.dispose();
       this.apiKeys.close();
+      this.deviceCodes.close();
       for (const handler of [...this.exitHandlers]) handler(code, signal);
     });
   }
@@ -46,8 +49,8 @@ export class HostBridge {
   static async start(options: HostBridgeOptions): Promise<HostBridge> {
     const plan = planHostLaunch(options);
     const child = spawn(plan.command, plan.args, {
-      env: {...plan.env,DCODE_CREDENTIAL_PIPE_FD:"3"},
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      env: {...plan.env,DCODE_CREDENTIAL_PIPE_FD:"3",DCODE_DEVICE_CODE_PIPE_FD:"4"},
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
     });
     const client = new ProtocolClient({
       sendLine: (line) => child.stdin.write(`${line}\n`),
@@ -61,7 +64,7 @@ export class HostBridge {
       options.onStderr?.(chunk.toString("utf8")),
     );
 
-    const bridge = new HostBridge(child, client, new ApiKeyChannel(child.stdio[3] as Duplex));
+    const bridge = new HostBridge(child, client, new ApiKeyChannel(child.stdio[3] as Duplex),new DeviceCodeChannel(child.stdio[4] as Duplex));
     try {
       await bridge.waitForReady(
         options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
@@ -84,6 +87,8 @@ export class HostBridge {
   ): Promise<T> {
     return this.client.request<T>(method, params, options);
   }
+
+  readDeviceCode(flowId:string){return this.deviceCodes.read(flowId);}
 
   connectApiKey(providerId:string,key:string){return this.apiKeys.submit(providerId,key);}
 

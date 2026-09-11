@@ -72,7 +72,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
   };
   return {data,connections,connecting,connectApiKey,
     refreshConnections:()=>connectionAction("dcodeAuth.refresh",{}),
-    connect:(providerId:string,authType:AuthType)=>connectionAction("dcodeAuth.start",{providerId,authType,flowId:crypto.randomUUID()}),
+    connect:(providerId:string,authType:AuthType,oauthMode?:ProviderConnection["activeOAuthMode"])=>connectionAction("dcodeAuth.start",{providerId,authType,flowId:crypto.randomUUID(),...(oauthMode?{oauthMode}:{})}),
     authorizeAccess:(providerId:string)=>connectionAction("dcodeAuth.authorizeAccess",{providerId,flowId:crypto.randomUUID()}),
     openLoginPage:(flowId:string)=>connectionAction("dcodeAuth.openBrowser",{flowId}),
     enterLoginCode:(flowId:string)=>connectionAction("dcodeAuth.enterCode",{flowId}),
