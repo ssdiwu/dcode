@@ -157,3 +157,5 @@ OAuth 的 `openBrowser` / `enterCode` 只接受 flowId，并立即返回是否�
 `native/KeychainInteraction.swift` 对现有file-based登录钥匙串在操作范围内关闭交互并恢复原值。`MacCredentialAdapter` 每provider复用一个私有进程、串行访问；每次新数据读取仍由OS判权，拒绝/取消/关闭后销毁，Host退出清理全部。没有新增后续认证使用的密钥正文缓存；只合并在途读取，内容/权限generation与metadata epoch防止旧结果覆盖更新。旧generic属性仍为原type字符串；有效期只从已允许读取的结果形成非敏感观测，未知不冒充验证。
 
 从仓库根运行 `node host/test/native/keychain-access.mjs` 验证隔离假项、跨代码身份非交互拒绝、属性查询不取secret、正常已授权读取及helper复用。该测试不修改用户项或ACL，不证明用户旧项单次允许的持续时间。`keychain-access.test.ts` 覆盖拒绝/取消/超时/重试/替换/元数据迟到/重启；实际旧连接跨候选授权仍待人工验收。
+
+原生认证辅助程序的父进程监控在显式非主执行域创建并执行，AppKit 保持主执行域；监控在标准输入阻塞或模态窗口等待时仍运行。`npm test` 包含完整生产辅助程序的空闲、实际模态等待和父进程退出回归；从仓库根运行 `node host/test/native/helper-lifecycle.mjs`，使用已授权的辅助功能访问，对本次隔离进程的真实“继续”“取消”按钮操作并核验窗口收尾。父进程退出测试使用外层持有的 FIFO，不以输入 EOF 冒充父进程监控成功；这些测试不访问账号或钥匙串，也不替代真实 OAuth 登录验收。

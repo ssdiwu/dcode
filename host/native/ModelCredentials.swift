@@ -94,13 +94,21 @@ private func writeCredential(_ service: String, _ provider: String, _ value: Any
     guard alert.runModal() == .alertFirstButtonReturn else { throw Failure.cancelled }
     return input.stringValue
 }
+// Both construction and handler formation must be outside MainActor. A handler
+// formed in main inherits its isolation and traps on the global queue while
+// NSAlert runs. The monitor must also work while main blocks on private stdin.
+private nonisolated func watchParent() -> DispatchSourceTimer {
+    let parent = getppid()
+    let watch = DispatchSource.makeTimerSource(queue: .global())
+    watch.schedule(deadline: .now() + 1, repeating: 1)
+    let check: @Sendable () -> Void = { if getppid() != parent { exit(143) } }
+    watch.setEventHandler(handler: check)
+    watch.resume()
+    return watch
+}
 @MainActor @main struct ModelCredentials {
     static func main() async {
-        let parent = getppid()
-        let parentWatch = DispatchSource.makeTimerSource(queue: .global())
-        parentWatch.schedule(deadline: .now() + 1, repeating: 1)
-        parentWatch.setEventHandler { if getppid() != parent { exit(143) } }
-        parentWatch.resume()
+        let parentWatch = watchParent()
         defer { parentWatch.cancel() }
         do {
           while true {
