@@ -283,7 +283,7 @@ _Avoid_: 已发送消息、后台任务、任务工作项
 _Avoid_: Steer、任务队列、跨会话收件箱
 
 **Navigation Sidebar（导航栏）**：
-D Code 工作台左侧以「项目」与「任务」为唯一工作对象分区的全局导航区域：每个 Project 行下显示其 Task；不属于 Project 的 Task 直接显示在「任务」分区。置顶、最近、活动、搜索、归档与设置只是功能入口或投影视图，不成为第三种工作对象分组。它负责选择、组织与活动发现，不拥有任务、会话或设置页面。
+D Code 工作台左侧以「项目」与「任务」为唯一工作对象分区的全局导航区域：每个 Project 行下显示其 Task；不属于 Project 的 Task 直接显示在「任务」分区。置顶、最近、活动、搜索、归档与设置只是功能入口或投影视图，不成为第三种工作对象分组。它负责选择、组织与活动发现；用户进入项目文件浏览时，同一左侧区域临时显示该项目的文件树，并提供返回任务导航的入口。文件浏览来源与当前对话归属分别保持，不拥有任务、会话或设置页面。
 _Avoid_: 任务数据库、项目页面、设置导航、用户作用域容器、未选项目分区
 
 **Session Sidebar（会话栏）**（当前实现术语）：
@@ -303,11 +303,11 @@ _Avoid_: User Attention、Session 更新时间、加载动画
 _Avoid_: Activity View、任务栏、输入区副本
 
 **Main Workspace（主工作区）**：
-D Code 工作台中央的主要内容区域。Conversation、Settings、Archived Sessions、Workspace Tab 与后续文件预览都在这里切换；切换页面不会创建第二个应用窗口，也不会把信息检查器变成主内容页。
+D Code 工作台中央的主要内容区域。Conversation、Settings 与 Archived Sessions 在这里切换；文件内容默认由右侧 Information Inspector 承载，用户主动展开内容时才临时借用主工作区取得更大阅读或编辑空间。收回后恢复原对话，切换不创建第二个应用窗口或第二份内容状态。
 _Avoid_: 主要页面、中央栏、弹窗容器
 
 **Information Inspector（信息检查器）**：
-D Code 在用户明确打开文件、Artifact、Diff 或其他需要连续检查的对象时出现的全高右侧详情区域。它显示所选对象的路径、来源、元数据、变更、引用和相关操作，不常驻承载 Task 进度、Agent Team 或交付物概览。源码中的 `WorkInspector` 是既有内部类型名；用户界面统一称“信息检查器”。
+D Code 在用户明确打开文件、Artifact、Diff 或其他需要连续检查的对象时出现的全高右侧详情区域。它承载所选对象的正文、预览或差异，以及路径、来源、元数据、引用和相关操作；文件默认在此打开，与中央对话并列。主动展开只改变同一内容的呈现空间，不常驻承载 Task 进度、Agent Team 或交付物概览。源码中的 `WorkInspector` 是既有内部类型名；用户界面统一称“信息检查器”。
 _Avoid_: Task HUD、常驻任务概览、第二主工作区、所有状态的统一右栏
 
 **Task HUD（任务浮层）**：
@@ -329,11 +329,11 @@ Settings 是工具型 Workbench Page：进入时可以临时使用完整工作�
 _Avoid_: 设置侧栏宽度、页面局部宽度、宽度副本、每页独立栏位
 
 **Workspace Tab（工作区标签页）**：
-Main Workspace 的 Workspace 页面中按需承载文件、Artifact、Preview 或 Editor 的可切换标签。Conversation（对话）是唯一会话主页面而不是标签；没有打开真实内容时不显示标签带，关闭最后一个内容标签后直接回到原会话主页面。各内容标签只保存自己的可恢复内容状态，不拥有或复制 Session / Path / Composer。
+按需承载真实文件、Artifact、Preview 或 Editor 的内容标签，默认位于 Information Inspector，主动展开时随同一内容进入 Main Workspace 的扩展视图。Conversation（对话）是会话主页面而不是标签；没有打开真实内容时不显示标签带。关闭最后一个内容标签后收起内容视图，原对话继续可用。标签保存各自的阅读、预览与编辑状态，不拥有或复制 Session / Path / Composer，也不因改变容器而创建第二份编辑缓冲区。
 _Avoid_: 对话标签、消息附件、独立会话、空能力占位页
 
 **File Preview（文件预览）**：
-从 Project 文件树打开、在 Workspace Tab 中呈现的文件只读视图；它不是消息、附件或 Context 条目，打开本身不修改文件或 Git 状态。
+从 Project 文件树或有效文件引用打开、默认在 Information Inspector 的 Workspace Tab 中呈现的文件只读视图；可主动展开以获得更大空间。它不是消息、附件或 Context 条目，打开本身不修改文件或 Git 状态。
 _Avoid_: Context 附件、文件编辑器
 
 **Live Preview（即时预览）**：

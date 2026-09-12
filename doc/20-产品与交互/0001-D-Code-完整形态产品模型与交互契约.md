@@ -83,7 +83,7 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 
 - 左侧导航默认展开，日常工作对象只分为「项目」与「任务」两组：Project 行下显示其 Task；未选择 Project 的 Task 直接显示在「任务」组。User Home 与 User Scope 是产品语义，不是可点击的导航容器或分区名称；Recent Sessions 是快速入口，不取代任务导航。导航栏不承载设置或归档管理内容。
 - 首次使用同时提供“新建任务”和“新建项目”：当前已选择 Project 时新任务进入该 Project；未选择 Project 时新任务直接进入「任务」组。创建 Project 后显示其 Task 及按需展开的 D Code Session。
-- Project 主行进入项目作用域；Task 主行直接进入任务当前状态、任务对话、Agent Run、计划、产物和证据。普通会话行只作为任务内入口，并能返回所属任务。
+- Project 主行展开或收起所属任务，右侧分别提供“更多”“查看文件”“新建任务”。更多承载已支持的项目管理；查看文件将同一左栏切换为所点项目的文件树并提供“返回任务”；新建任务进入该 Project 的草稿、恢复其文字与附件并聚焦输入，首次发送才创建 Task 及协调会话，不创建运行成员。点击这些动作不触发行展开，也不搬移其他归属的草稿。Task 主行直接进入任务当前状态、任务对话、Agent Run、计划、产物和证据。普通会话行只作为任务内入口，并能返回所属任务。
 - 完整会话谱系是所选 Session 的二级历史视图，不在日常导航中永久展开。
 - 置顶与归档只改变投影视图，不改变 Project、Task、Session 或文件关系；Hover 不能成为唯一可达操作。
 
@@ -91,11 +91,11 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 
 - 主工作区是窗口中央唯一的内容页面容器。Workspace（工作台）、Settings（设置）与 Archived Sessions（已归档会话）都是其中可切换的 Workbench Page（工作台页面），不会打开第二个 App 窗口或叠加 Sheet。
 - 齿轮与 `Command-,` 都在当前窗口进入 Settings 工具页面；该页面临时使用完整工作台画布，以页内设置导航组织模型、本机资源、智能体档案、自定义供应商、通知、外观、工作台、已归档会话、自进化、Host 诊断与“关于 D Code”，以受限宽度分组内容承载具体选项。智能体档案是可复用配置，不在日常导航中另占工作对象分区。“已归档会话”沿用同一设置外壳，不打开 Sheet 或第二窗口；“关于 D Code”显示应用图标、版本 / 构建号、作者 GitHub 和项目 GitHub。页内设置导航在语义上不是会话栏，但继承会话栏当前实际宽度；在 Settings 或 Workspace 调整后，另一页面立即同步。进入期间日常会话栏与信息检查器让出空间，但其显示偏好保持不变，返回 Workspace 后恢复。
-- Conversation 是 Workspace 中唯一的会话主页面，不建立或显示名为“对话”的标签。只有真实打开文件、Artifact、Preview 或 Editor 后才出现 Workspace Tab 标签栏，标签栏不预放空标签，也不拥有独立于主画布的整条背景。
+- Conversation 是 Workspace 中唯一的会话主页面，不建立或显示名为“对话”的标签。只有真实打开文件、Artifact、Preview 或 Editor 后才出现 Workspace Tab 标签栏，默认位于右侧 Information Inspector；用户主动展开后随同一内容进入中央扩展视图，不预放空标签或复制内容状态。
 - 从 User Home 开始新工作时建立 User Scope Task Draft，从 Project 开始时建立 Project Task Draft；首次提交非空正文时创建对应作用域的 Task 及其首个 D Code Session。空白草稿离开即消失，非空草稿可以恢复；创建已提交但运行失败时保留真实 Task、Session 与逐字草稿，不自动删除。
-- 打开内容标签时，当前会话的原生消息流、Active Plan 与 Composer 可以隐藏，但其 Session、Session Path、滚动位置、输入草稿和恢复状态不得被重建或清除；关闭最后一个内容标签或从会话栏重新进入 Session 后，主页面原位恢复。
+- 默认打开内容标签时保留中央消息流与 Composer。用户主动展开内容后可以临时让出中央阅读空间，但 Session、Session Path、滚动位置、输入草稿、附件和后台运行均保留；收回扩展视图后原位恢复。改变容器、返回任务导航或收起详情不得静默丢弃未保存编辑；主动关闭脏标签沿用保存、放弃或取消的既有保护。
 - 从项目文件树再次打开同一文件时聚焦已有标签，不创建重复标签；同名文件用 Project 或完整路径区分。关闭当前内容标签后切到相邻已打开标签，没有相邻内容时直接回到会话主页面。
-- Project 文件树和助手正文中的文件、目录与代码行引用使用同一打开合同：在 D Code 的 Workspace Tab 中打开并定位对应本机内容；目标不存在、超出已授权范围或行号失效时显示真实状态，不静默转交外部 IDE。
+- Project 文件树和助手正文中的文件、目录与代码行引用使用同一打开合同：目录定位左侧文件导航，文件在右侧 Information Inspector 的 Workspace Tab 中打开并定位对应内容；目标不存在、来源不可访问或行号失效时显示真实状态，不静默转交外部 IDE 或替换成当前任务目录。
 - Active Plan 以紧凑状态带出现在消息流与 Composer 之间，完成后让出空间。
 - Composer 控制行保留 `+`、当前模型名、独立推理强度、按模型能力出现的独立速度菜单和发送；已创建 Session 可按需显示上下文圆环。模型名是无 CPU 图标、无外露下拉 glyph 的可点击原生 Menu；只有 Host 证明支持 Fast Mode 的 OpenAI 模型显示“标准 / 极速”，不恢复旧组合控件。普通 Run 与工具执行期间仍可调整三项设置，选择从下一安全模型边界生效；模型设置继续属于 Settings，当前模型事实同时由会话运行信息拥有。
 - 当前 Session Run 正在执行且没有等待结构化用户输入时，Composer 仍接受普通文本作为绑定当前 D Code Session / Path 的 Queue Item。派发前可查看、编辑、调整顺序或撤回，且不会进入 transcript 或模型上下文；确认派发后形成新的 Raw Input 与 Effective Input 关系。
@@ -117,8 +117,8 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 - 当前 Task 存在时，进度、Agent Team、等待事项与交付物始终进入 Main Workspace 右上方的 Task HUD（任务浮层），而不是占据从上到下的常驻右栏。正常宽度下浮层持续可见，不提供整体关闭动作；各内容分区仍可独立折叠。
 - Task HUD 在任何宽度下都是与窗口边缘分离的独立浮窗，不进入普通文档流，也不保存为第三个结构栏位。正常宽度由 Main Workspace 为中央阅读画布与 Composer 预留左右安全宽度，使浮窗只落在安全区之外的留白上，不压缩、不移动也不遮挡正文；宽度不足时才允许浮窗覆盖阅读区域。
 - Task HUD 使用内容所需的紧凑尺寸，并允许进入 Child Agent Session 或所选交付物。
-- Information Inspector 只在用户明确打开文件、Artifact、Diff、Context 来源或其他需要连续检查的具体对象时出现为全高右栏，显示路径、来源、revision、元数据、变更、引用关系和适用操作。退出具体对象后关闭，不回退成任务概览栏。
-- Project Files / Changes 的入口可以来自导航、Workspace 或 Task HUD；选择文件会在主工作区打开或聚焦对应 Workspace Tab，选择“查看详情”才打开 Information Inspector。两者都不会自动加入模型 Context 或改变 Git 状态。
+- Information Inspector 只在用户明确打开文件、Artifact、Diff、Context 来源或其他需要连续检查的具体对象时出现为全高右栏，承载正文、预览或差异，并显示路径、来源、revision、元数据、引用关系和适用操作。退出具体对象后关闭，不回退成任务概览栏。
+- Project Files / Changes 的入口可以来自导航、Workspace 或 Task HUD；选择文件或差异默认打开或聚焦右侧 Information Inspector 的对应 Workspace Tab，不再要求先替换中央对话再点“查看详情”。左侧浏览另一个 Project 时，文件、差异与编辑始终绑定明确来源，当前对话、草稿及其任务归属不随之改变。查看本身不加入模型 Context、产生消息或改变 Git 状态。
 - 全高 Information Inspector 与会话可以同时操作；空间不足时按响应式规则临时覆盖。Task HUD 与全高 Inspector 不在同一位置叠加：打开 Inspector 时浮层暂时让出，关闭后自动恢复，而不是被用户永久关闭。
 - 会话栏、主工作区阅读画布、Task HUD、Information Inspector 与 Composer 以语义色阶和 shared elevation（共享层级）区分；Task HUD 是轻量悬浮表面，Information Inspector 是连续检查表面，不以同一种从上到下容器承载所有内容。
 - 窗口顶部只保留一条与 macOS 红黄绿按钮同排的控制带：导航栏开关、当前 Task / Session 名称、Task HUD 入口和具体对象的 Information Inspector 入口按所属区域排列，不再叠加独立工具栏。空白控制带双击遵循 macOS 标题栏偏好；名称写入 D Code Product Store，不建立只在单个视图可见的别名。
@@ -253,7 +253,7 @@ D Code 因而必须原生拥有产品数据、模型资源、能力配置和上�
 - [ ] 当前 Task 存在且宽度充足时，右上 Task HUD 始终显示进度、Agent Team、等待事项和交付物；显示或更新 HUD 不改变中央阅读画布的宽度、位置或滚动状态。只有打开文件、Artifact、Diff 或 Context 来源详情时才出现第三个全高栏位。
 - [ ] 打开具体对象的 Information Inspector 会让 Task HUD 暂时让出；关闭 Inspector 后 HUD 自动恢复。Task HUD 只有在宽度不足时才提供整体收起 / 再打开入口，宽屏不能被永久关闭。
 - [ ] 全新偏好下导航栏默认显示，顶部开关可往返隐藏与恢复；空会话提示在标题区与 Composer 之间的会话正文内水平、垂直居中。Task HUD 在标准字号下不截断状态身份，具体对象的完整路径可以在 Inspector 中换行或按需复制。
-- [ ] 点击 Project 无需先打开 Session 即可进入其唯一项目目录的 Files / Changes；选择对象不会改变主工作区当前会话、草稿、上下文或 Git 状态，只有明确查看详情才打开对应 Information Inspector。
+- [ ] 项目行“查看文件”无需先打开 Session 即可浏览所点项目的文件；左侧文件树、右侧正文与来源对应，中央保留原对话。返回任务导航、收起或主动展开内容均不迁移 Task、覆盖草稿、丢弃编辑、加入模型上下文或改变 Git 状态；项目内新任务恢复独立草稿，首次发送的实际归属正确。
 - [ ] 主工作区不显示“对话”标签；没有真实内容对象时不显示标签栏，文件、Artifact 或 Editor 按真实对象创建标签，同一对象不会重复打开，同名对象能凭 Project 或完整路径区分。
 - [ ] 在文件、Artifact 或 Editor 标签间切换并返回会话主页面后，原 Session、Session Path、transcript 滚动位置、Active Plan 与逐字输入草稿均保持；标签操作不新增消息、路径或 Context。
 - [ ] Composer 控制行保留 `+`、无图标且无外露箭头的模型名选择、推理强度、受支持 OpenAI 模型的标准 / 极速速度菜单与发送；普通 Run / 工具执行期间仍可调整，下一安全模型边界生效。`+` 使用原生 Menu，只提供文件、图片、Skill、命令、目标与计划，且不出现插件、扩展、本机资源、网页预览或浏览器控制。Context 默认蓝环表示剩余容量，白色覆盖按已用比例增长，展开后显示已用量、总容量与剩余比例。

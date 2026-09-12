@@ -14,7 +14,7 @@
 | 文档 | 状态 | 职责 |
 |---|---|---|
 | [D Code 完整形态产品模型与交互契约](0001-D-Code-完整形态产品模型与交互契约.md) | Confirmed Target（已确认目标态） | 规定 User Scope / Project Scope → Task → D Code Session / Agent Run 主干、`~/.dcode/` 数据根、一等项目文档、原生数据权威、全局创造模式、工作台、跨会话协作与长期产品行为。 |
-| [D Code 主页面 UI/UX 设计](0002-D-Code-主页面-UI-UX-设计.md) | Design Candidate（设计候选） | 汇集主页面三区、导航 / 工作区 / 信息区的对象落位、标签阅读模型、文件与变更管理、Git 页面及用户文案映射；待逐区原型确认后升级为跨版本 UI 合同。 |
+| [D Code 主页面 UI/UX 设计](0002-D-Code-主页面-UI-UX-设计.md) | Design Candidate（设计候选） | 拥有主页面区域分工与文案；项目行入口、左侧文件导航与右侧查看已确认并切入 0.0.32，其余候选不自动晋升。 |
 | [工作台交互原型说明](原型/README.md) | Reference（参考） | 说明原型覆盖范围、操作入口、证据边界与验证场景。 |
 | [支持：会话打不开时的恢复指引](支持-会话打不开时的恢复指引.md) | Pi Adapter / Import Support（适配与导入支持） | Pi JSONL 来源或 Runtime Adapter 私有会话损坏 / 连接失败时的恢复说明；不是 D Code Product Store 的恢复合同。 |
 
