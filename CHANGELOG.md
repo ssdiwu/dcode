@@ -1,8 +1,10 @@
 ## [Unreleased]
 
+以下按开发版本分别记录变化；Git 提交及远端同步不等于版本定版、安装包发布或人工验收。具体状态与验证记录由[版本实施方案](doc/40-版本实施方案/README.md)维护。
+
 ### 0.0.32 · 工作台 UI/UX（未发布候选）
 
-507 于 2026-09-08 确认本次 UI/UX 升级归属 `0.0.32`。三批实现已本地提交，自动验证与独立审查通过，尚未整体人工验收、合并或发布；完整范围与证据见 [PRD 0030](doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。原多目录项目改为后续待排期。
+507 于 2026-09-08 确认本次 UI/UX 升级归属 `0.0.32`。新任务与主题、共享交互、模型连接以及项目行和文件查看已分批验证并提交，文件主动展开与收回仍在实施；整体验收和定版发布尚未完成；完整范围与证据见 [PRD 0030](doc/40-版本实施方案/0030-工作台-UI-UX-并行候选.md)。原多目录项目改为后续待排期。
 
 - 新任务创造页使用正式 C-A 品牌与真实草稿流程，仅新任务加载原版 ThreeUI Structure Flow；深浅主题、按钮中心扩散、隐藏释放与减少动态效果/WebGL 失败降级保留输入可用性。对应 `18bf206`。
 - 整理真实技能/命令入口、项目归属与成员标记，补齐加载状态及系统剪贴板成功/失败反馈，保留既有模型、队列和成员提及语义。对应 `32d35b7`。
@@ -10,7 +12,7 @@
 
 - 技能/命令选择改为锚定输入卡的有界浮层，开关不挤动输入区；候选使用可读名称、单行说明与真实类型分组，保留完整列表和原始调用标识，补齐键盘滚动、Tab/Escape及输入法保护。
 
-- 模型供应商提供实际支持的 API/OAuth 连接入口，密钥在 Host 安全窗口输入并保存到钥匙串；补齐取消、失败重试、超时、独立断开及配置/验证状态。原有 Pi 认证只读，修复单个旧 OAuth 到期影响其他连接以及迟到响应污染新凭据的情况。
+- 模型供应商提供实际支持的 API/OAuth 连接入口，凭据由 Host 保存到钥匙串；API 使用下述行内输入，OAuth 使用供应商授权流程，补齐取消、失败重试、超时、独立断开及配置/验证状态。原有 Pi 认证只读，修复单个旧 OAuth 到期影响其他连接以及迟到响应污染新凭据的情况。
 
 - 设置→模型可调整自动选择的剩余额度门槛（整数 1–30%，默认 1%），由 Host 持久保存，并统一用于后续派发、等待重试、回退及配额评估；原有回退顺序和正在执行的工作保持原义。
 
@@ -32,28 +34,65 @@
 
 - 项目文件树切换到同一左侧导航，正文、预览和Git差异默认在右侧显示，中央对话及输入继续可用；跨项目浏览保留真实来源和保存目标，收起详情保留编辑缓冲，同名标签及关闭动作标明来源。
 
-### 0.0.28–0.0.31 · 既有待定版记录
+### 0.0.31 · 任务内协作与迁移收尾
+
+协作、文件、目录维护、SDK 升级和旧客户端退役分别交付；整体人工验收仍待完成。详细范围见 [PRD 0029](doc/40-版本实施方案/0029-任务内自适应协作产品需求.md)。
 
 #### Added
 
 - 项目可重命名、更换关联目录或移动文件；任务与对话保持原身份，目录交换有恢复记录，未确认状态跨任务和重启持续保护文件，原目录内容与编辑缓冲不会被静默覆盖。
-
 - 任务内按需协作：独立智能体进程与辅助进程占用、配额感知的有序模型回退、成员提及和耐久输入、独立验收及局部返工；结果保存与协调者回传原子完成，失败和重启不重复执行。
 - 原生对话路径续接、提交来源和上下文检查，智能体档案回退链、技能命令与结构化扩展交互接入 Web 工作台。
-
 - 文件与 Git 工作台接入任务和受管产物：目录树、多标签、Markdown/HTML 编辑及冲突恢复、隔离 HTML 预览、Git 状态与逐文件差异、精确行引用；文件保存与运行写入互斥，敏感路径和越界访问由 Host 统一拒绝。
 
-- 灵感工作台接入真实 Product Store：文字、图片、链接、视频节点，编辑草稿、搜索、连线分组和可逆归档；以不可变 Markdown 版本引用到任务，媒体副本长期保留。
+#### Fixed
 
+- 协调者处理后台结果或等待验收时，通知原文不再暂时显示成用户消息；运行中与落盘后的来源保持一致，同文真人输入不被隐藏。
+
+#### Changed
+
+- 已迁移的 Swift 客户端、桥接、SwiftPM 与旧打包入口退役；保留品牌和原生文件辅助程序，Electron 候选携带运行时及 Host/客户端生产依赖的许可证清单与正文。
+- 三个 Pi 核心 SDK 包精确升级为 0.85.1；保留本机 Host、独立智能体进程与 Product Store 权威，补齐工具顺序标记在进程间的传递。外部条目恢复和流式片段编码暂未替换现有会话或历史格式。
+
+### 0.0.30 · Web 客户端与灵感
+
+507 于 2026-09-07 确认基础功能验收通过；以下为该阶段变化，后续迁移遗留由 0.0.31 承接。见 [PRD 0028](doc/40-版本实施方案/0028-0.0.30-Web客户端初版产品需求.md)。
+
+#### Added
+
+- 灵感工作台接入真实 Product Store：文字、图片、链接、视频节点，编辑草稿、搜索、连线分组和可逆归档；以不可变 Markdown 版本引用到任务，媒体副本长期保留。
 - Web 工作台恢复独立任务、完整设置、真实模型选择与刷新、富消息、对话导航、单行执行进展、附件缩略图与快速查看；输入、阅读位置和附件草稿按任务恢复。
 - Electron 平台壳补齐可信 IPC、Host 优雅停机与重连、系统菜单、通知和本机候选打包、显式切换与回滚。
-
 - Web 客户端的核心接口补齐：原生模型目录刷新与选择、完整设置资源、任务管理、自进化候选检查与恢复回执；Pi SDK 对齐 0.84.4，原生配置不回写 Pi 设置。
 - 受管附件保存到 `.dcode/tmp/attachments/`，未发送保留 24 小时，提交后保留 30 天；草稿恢复、原文与生效引用分开、原子提交登记、配额及到期清理均由 Host 负责。
+
+#### Changed
+
+- 所有 Web 输入统一中性焦点反馈并去掉原生缩放手柄；图片节点按原图比例完整显示。画布工具提供名称、操作提示与真实结果，平移、框选、连线和双击编辑各自生效。
+- 任务概览关闭时正文、空态和输入区居中，打开后统一向左让位；同一布局内的状态刷新保持稳定。
+- 按 507 确认的 C-A 黑白变色龙方案统一 D Code 系统图标和 Web / Swift 品牌标志；保留唯一 SVG 母版和可复验导出脚本，避免资源分叉。
+
+### 0.0.29 · 任务工作台
+
+历史开发基线，界面布局随后由 0.0.30 重审。以下布局和原生客户端版本描述保留当时含义，不覆盖 0.0.32 的文件查看与模型连接。见 [PRD 0027](doc/40-版本实施方案/0027-0.0.29-任务工作台与协调者协作体验产品需求.md)。
+
+#### Added
 
 - `0.0.29` Task Workbench（任务工作台）：Project / Task 导航以 Task 主行直接进入协调者任务对话，展开后只列 Child Session；Project 内和当前 Project 语境的新建 Task 都有明确入口，Pi 导入显式选择加入项目或不归入项目。
 - Task HUD（任务浮层）与对象内容区：宽屏以 `304 pt` 独立圆角浮窗停在右上 gutter（留白区），中央对话与 Composer 预留安全区；中宽才覆盖、紧凑初始只保留入口。Artifact / Report 先在中央内容区打开，再按需进入 Information Inspector（信息检查器）；Inspector 打开时 HUD 让出并在关闭后恢复。
 - Task Workbench Presentation（任务工作台呈现状态）：当前 Task / Session、HUD 分区和 Inspector 目标以受类型、revision（修订号）和 idempotency（幂等）保护的 Product Store 记录持久化在 `~/.dcode/`，不再写入 `UserDefaults（应用偏好）`，不保存会话正文、Prompt 或 Artifact 内容；未提交的当前任务会话草稿则复用 Product Store Composer Draft（输入草稿）记录恢复，不随 UI 状态字段混写。
+
+#### Changed
+
+- App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.29`；`0.0.27` 起动候选与 `0.0.28` Product Store schema 明确不支持降级混用。
+- Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
+
+### 0.0.28 · 原生数据与运行基础
+
+历史开发基线：建立 D Code 自有数据与运行合同，由后续版本消费。以下 Foundation 操作面、Runtime 与旧 Pi 认证入口的行为属于该阶段；独立执行进程及 D Code 原生连接分别由 0.0.31、0.0.32 继续完成。见 [PRD 0026](doc/40-版本实施方案/0026-0.0.28-D-Code-原生产品数据与多会话运行基础设施产品需求.md)。
+
+#### Added
+
 - `0.0.28` Foundation Candidate（基础候选）：以当前用户 `~/.dcode/` 中的版本化 Product Store（产品数据库）原生持久化 User / Project Scope、Task、D Code Session / Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence；首次晋升使用单写入租约、原子迁移、schema fingerprint、revision 和 durable request ID，未知或损坏状态失败关闭。
 - Pi Session 单向导入：D Code 已管理的旧会话在首次晋升时自动转换为 Legacy Task；其他 Pi Session 只有经 Foundation Console（基础控制台）预览、选择 Scope 并确认后才原子导入，保留 source digest / provenance / unknown lineage，不修改或双写源 JSONL。
 - 多 Runtime Supervisor（运行时监督器）：同一 Task 可同时拥有 Coordinator 与多个独立 Pi AgentSession；Coordinator 先规划、两个只读成员 Provider 请求真实并行、成员 Report 落库后再由同一 Coordination Session 综合。Agent Request 可耐久等待和恢复，单成员 Stop 先写 Attempt 再执行，Provider / Tool / Stop 结果未知时禁止自动重放。
@@ -66,23 +105,8 @@
 - D Code Model Catalog / Credential Reference / Runtime Model Selection（模型目录 / 凭据安全引用 / 未来运行模型选择）：Product Store 投影非敏感 Provider / Model、认证引用和下一次 Runtime 选择；Coordinator 运行前依此验证并显式应用模型，不再写入 Pi `settings.json` / `models.json`。
 - D Code Session Presentation（D Code 会话呈现）：以 D Code Session ID 只读投影 Adapter binding、活动 Runtime 和会话快照，并为 Coordination Session 提供精确 Prompt 路由；首次提交创建持久化 Coordinator Agent Run，随后 Team 复用同一 Coordinator Run / Runtime，查看不抢占 Runtime，Child 仅在其自身 Run 活动时接收消息。
 
-#### Fixed
-
-- 协调者处理后台结果或等待验收时，通知原文不再暂时显示成用户消息；运行中与落盘后的来源保持一致，同文真人输入不被隐藏。
-
 #### Changed
 
-- 已迁移的 Swift 客户端、桥接、SwiftPM 与旧打包入口退役；保留品牌和原生文件辅助程序，Electron 候选携带运行时及 Host/客户端生产依赖的许可证清单与正文。
-
-- 三个 Pi 核心 SDK 包精确升级为 0.85.1；保留本机 Host、独立智能体进程与 Product Store 权威，补齐工具顺序标记在进程间的传递。外部条目恢复和流式片段编码暂未替换现有会话或历史格式。
-
-- 所有 Web 输入统一中性焦点反馈并去掉原生缩放手柄；图片节点按原图比例完整显示。画布工具提供名称、操作提示与真实结果，平移、框选、连线和双击编辑各自生效。
-- 任务概览关闭时正文、空态和输入区居中，打开后统一向左让位；同一布局内的状态刷新保持稳定。
-
-- 按 507 确认的 C-A 黑白变色龙方案统一 D Code 系统图标和 Web / Swift 品牌标志；保留唯一 SVG 母版和可复验导出脚本，避免资源分叉。
-
-- App、Host、Info.plist 与本地构建入口的开发版本统一提升为 `0.0.29`；`0.0.27` 起动候选与 `0.0.28` Product Store schema 明确不支持降级混用。
-- Product / Design / GLOSSARY / ADR / PRD 文档改以 Task 优先、D Code 原生产品权威、Pi Runtime Adapter、全局 Creation Mode 和 `0.0.28 → 0.0.29` 前后版本边界为当前合同；`0.0.29` 只消费 `0.0.28` 的正式 query / mutation，不从聊天文案猜产品状态。
 - Pi `models.json` / `settings.json` 的 D Code 写入口、Pi 认证启动与认证响应全部改为明确拒绝；Swift 不再将 Provider API Key 或认证值通过 Host IPC 发送，旧 Pi 模型接口只保留安全只读诊断 / 迁入来源。
 
 #### Security
