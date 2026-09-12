@@ -34,6 +34,8 @@ import {
   AlertCircle,
   FileText,
   Sparkles,
+  Ellipsis,
+  SquarePen,
 } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { Markdown } from "./components/Markdown";
@@ -140,6 +142,9 @@ export function App() {
   const [contextOpen,setContextOpen]=useState(false);
   const [commandMenuOpen,setCommandMenuOpen]=useState(false);
   const [projectEditingId,setProjectEditingId]=useState<string|null>(null);
+  const [projectMenuId,setProjectMenuId]=useState<string|null>(null);
+  const focusDraftAfterMenu=useRef(false);
+  useEffect(()=>{if(display.page==="settings"||!display.nav)setProjectMenuId(null);},[display.page,display.nav]);
   const [target, setTarget] = useState<
     TaskWorkbenchInspectorTarget | null | undefined
   >();
@@ -153,14 +158,18 @@ export function App() {
       overview: work.preferences?.overviewVisible ?? true,
     });
   };
-  const newTask = () => {
+  const projectDraft = (projectId:string|null) => {
+    focusDraftAfterMenu.current=true;setProjectMenuId(null);
     setTarget(null);
+    files.hideForDraft(projectId);
+    work.setNewProjectId(projectId);
     work.newTask();
     display.set({ page: "task", overview: false });
     requestAnimationFrame(() =>
       document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus(),
     );
   };
+  const newTask = () => projectDraft(work.newProjectId);
   const returnFromDraft = () => {
     const previous = previousTask.current;
     const task = work.snapshot?.tasks.find(task => task.id === previous?.taskId && task.state !== "archived");
@@ -180,6 +189,8 @@ export function App() {
           display.set({ page: "settings", settingsPage: "evolution" });
         if (event.event === "shell.newProject") {setProjectEditingId(null);display.set({ projectForm: true });}
         if (event.event === "shell.newTask") {
+          focusDraftAfterMenu.current=true;setProjectMenuId(null);
+          files.hideForDraft(work.newProjectId);
           display.set({ page: "task", overview: false });
           setTarget(null);
           requestAnimationFrame(() =>
@@ -189,7 +200,7 @@ export function App() {
           );
         }
       }),
-    [display.set],
+    [display.set,work.newProjectId],
   );
   useEffect(() => {
     if (!work.preferences) return;
@@ -319,7 +330,16 @@ export function App() {
                 <summary>
                   <ChevronRight size={13} />
                   <Folder size={14} />
-                  <span>{p.title}</span><button type="button" className="icon-button project-edit" aria-label={`编辑项目 ${p.title}`} onClick={event=>{event.preventDefault();event.stopPropagation();setProjectEditingId(p.id);display.set({projectForm:true});}}><Settings size={13}/></button>
+                  <span className="project-title" title={p.title}>{p.title}</span>
+                  <span className="project-row-actions" onClick={event=>{event.preventDefault();event.stopPropagation();}}>
+                    <Menu.Root open={projectMenuId===p.id} onOpenChange={open=>{if(open)focusDraftAfterMenu.current=false;setProjectMenuId(current=>open?p.id:current===p.id?null:current);}}>
+                      <Menu.Trigger asChild><button type="button" id={`project-actions-${p.id}`} className="icon-button" aria-label={`更多项目操作 ${p.title}`} title="更多"><Ellipsis size={15}/></button></Menu.Trigger>
+                      <Menu.Portal><Menu.Content className="menu" align="start" sideOffset={4} onCloseAutoFocus={event=>{if(useDisplay.getState().projectForm||focusDraftAfterMenu.current)event.preventDefault();}}>
+                        <Menu.Item className="menu-item" onSelect={()=>{setProjectEditingId(p.id);display.set({projectForm:true});}}>编辑项目</Menu.Item>
+                      </Menu.Content></Menu.Portal>
+                    </Menu.Root>
+                    <button type="button" className="icon-button" aria-label={`在 ${p.title} 中新建任务`} title="新建任务" onClick={()=>projectDraft(p.id)}><SquarePen size={14}/></button>
+                  </span>
                 </summary>
                 <div className="project-tasks">
                   {tasks
@@ -490,7 +510,7 @@ export function App() {
             <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
-              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||commandMenuOpen||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
                 <Composer
@@ -632,6 +652,7 @@ export function App() {
       {display.projectForm && (
         <Overlay
           label={projectEditingId?"编辑项目":"新建项目"}
+          returnFocus={projectEditingId?()=>document.getElementById(`project-actions-${projectEditingId}`):undefined}
           onClose={() => display.set({ projectForm: false })}
         >
           <ProjectForm
@@ -1092,16 +1113,18 @@ function Overlay({
   label,
   onClose,
   children,
+  returnFocus,
 }: {
   label: string;
   onClose: () => void;
   children: ReactNode;
+  returnFocus?:()=>HTMLElement|null;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     panel.current?.querySelector<HTMLElement>("input,button,textarea")?.focus();
-    return () => previous?.focus();
+    return () => (returnFocus?.()??previous)?.focus();
   }, []);
   return (
     <div

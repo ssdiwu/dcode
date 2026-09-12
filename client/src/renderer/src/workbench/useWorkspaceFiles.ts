@@ -80,7 +80,7 @@ export function useWorkspaceFiles(work:Workbench){
     setBrowserSources(previous=>Object.fromEntries(Object.entries(previous).filter(([,source])=>!sourceOwned(source))));
   };
   return {source,baseSource,scope,beforeProjectDirectoryChange,invalidateProject,browse,openArtifact,openRelative,artifacts:work.snapshot?.artifacts.filter(artifact=>artifact.taskId===work.task?.id&&artifact.kind!=="attachment"&&(artifact.managedPath||artifact.externalPath))??[],tabs:tabs.filter(tab=>tab.scope===scope),allTabs:tabs,active:tabs.find(tab=>tab.id===selected[scope])??null,visible:browser[scope]??false,closing:tabs.find(tab=>tab.id===closing)??null,
-    show:()=>setBrowser(values=>({...values,[scope]:true})),conversation:()=>setBrowser(values=>({...values,[scope]:false})),select:(id:string)=>{setBrowser(values=>({...values,[scope]:true}));setSelected(values=>({...values,[scope]:id}));},
+    show:()=>setBrowser(values=>({...values,[scope]:true})),conversation:()=>setBrowser(values=>({...values,[scope]:false})),hideForDraft:(projectId:string|null)=>setBrowser(values=>({...values,[projectId?sourceKey({projectId}):"none"]:false})),select:(id:string)=>{setBrowser(values=>({...values,[scope]:true}));setSelected(values=>({...values,[scope]:id}));},
     open,openReference,save,close,discard,keep:()=>setClosing(null),saveAndClose:async(id:string)=>{if(await save(id))discard(id);},reload:(tab:FileTab)=>load(tab.id,tab.source,tab.path),patch,quote};
 }
 export type WorkspaceFileModel=ReturnType<typeof useWorkspaceFiles>;
