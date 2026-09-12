@@ -85,3 +85,27 @@ test('legacy startup and shutdown continuously reserve the directory, including 
   const saved=save(p.project.id,'save owns first');await until(()=>saving);await assert.rejects(host.handle('session.open',{sessionId:id,mode:'writable',writeIntent:true}),/目录正在保存/);release();await saved;assert.equal(await readFile(join(project,'note.md'),'utf8'),'save owns first');
  }finally{release();await host.close();await rm(root,{recursive:true,force:true});}
 });
+
+test('file references keep an explicit project source and classify safe directories without a Task',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'dcode-reference-source-')),a=join(root,'a'),b=join(root,'b');await mkdir(a);await mkdir(b);await mkdir(join(b,'sub'));
+ await writeFile(join(a,'note.md'),'A');await writeFile(join(b,'note.md'),'B');await writeFile(join(b,'sub','child.md'),'child');await writeFile(join(b,'.env'),'synthetic only');await symlink(a,join(b,'escape'));
+ const snapshot={tasks:[{id:'task-a',scope:{kind:'project',projectId:'a'},cwd:a}],projects:[{id:'a',title:'A',directory:a},{id:'b',title:'B',directory:b}],managedWorkerWorktrees:[],artifacts:[],projectDirectoryChanges:[]} as unknown as FoundationSnapshot;
+ const access=new WorkspaceAccess(async()=>({snapshot:async()=>snapshot}) as unknown as ProductStore);
+ try{
+  assert.deepEqual(await access.handle('workspace.reference',{source:{projectId:'b'},reference:'note.md#L2'}),{source:{projectId:'b'},path:'note.md',kind:'file',line:2});
+  assert.deepEqual(await access.handle('workspace.reference',{source:{projectId:'b'},reference:b}),{source:{projectId:'b'},path:'',kind:'directory'});
+  assert.deepEqual(await access.handle('workspace.reference',{source:{projectId:'b'},reference:'sub/'}),{source:{projectId:'b'},path:'sub',kind:'directory'});
+  assert.deepEqual(await access.handle('workspace.reference',{taskId:'task-a',reference:'note.md'}),{source:{taskId:'task-a'},path:'note.md',kind:'file'});
+  await assert.rejects(access.handle('workspace.reference',{taskId:'task-a',reference:join(b,'note.md')}),/不在当前任务/);
+  for(const reference of ['.env','../a/note.md','escape','escape/note.md','missing.md'])await assert.rejects(access.handle('workspace.reference',{source:{projectId:'b'},reference}));
+  snapshot.projectDirectoryChanges!.push({projectId:'b',status:'unknown'} as NonNullable<typeof snapshot.projectDirectoryChanges>[number]);
+  await assert.rejects(access.handle('workspace.read',{source:{projectId:'b'},path:'note.md'}),/目录维护/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('reference classification of a single-file artifact does not expand its registered source',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'dcode-reference-artifact-'));await writeFile(join(root,'allowed.md'),'allowed');await writeFile(join(root,'other.md'),'other');
+ const snapshot={tasks:[],projects:[],managedWorkerWorktrees:[],artifacts:[{id:'one',taskId:'task',title:'One',externalPath:join(root,'allowed.md')}]} as unknown as FoundationSnapshot;
+ const access=new WorkspaceAccess(async()=>({snapshot:async()=>snapshot}) as unknown as ProductStore);
+ try{assert.equal((await access.handle('workspace.reference',{source:{artifactId:'one'},reference:'allowed.md'}) as {kind:string}).kind,'file');for(const reference of [root,'other.md'])await assert.rejects(access.handle('workspace.reference',{source:{artifactId:'one'},reference}),/不在当前任务/);}finally{await rm(root,{recursive:true,force:true});}
+});

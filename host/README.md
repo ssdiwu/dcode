@@ -163,3 +163,5 @@ OAuth 的 `openBrowser` / `enterCode` 只接受 flowId，并立即返回是否�
 OpenAI Codex 的公共连接方法投影为“浏览器登录”/“设备码登录”，`dcodeAuth.start` 可携带该供应商专属的 `oauthMode: browser | device_code`，直接回应固定 SDK 0.85.1 的实际方式选择；旧调用省略时直接走 browser。其他 Provider 不接受该字段，原有交互不变。只对完整匹配的 SDK 选择合同回填 id，不修改 SDK 源码或 OAuth 协议。
 
 `src/device-code-channel.ts` 只在平台壳继承的 fd4 上处理 `{id,flowId}`，环境标记启动即删除。Host 只投影当前 OpenAI Codex 设备码流程的 `{userCode,expiresAt}` 或 null，不提供通用方法、凭据读取、完整 notice 或授权 URL。两端限制帧、并发、字段和等待时长，错误不落公共日志；取消/失败/到期/保存/退出清除 Host 展示值。该通道与原 API fd3 独立，`dcodeAuth.get` 只暴露 `canReadDeviceCode` 布尔能力。实际源码边界与生命周期见 `oauth-device-flow.test.ts` 和 `device-code-channel.test.ts`。
+
+`workspace.reference` 保留原taskId入口，并可仅传显式source解析文件内部引用；两者互斥，显式来源不借用当前对话的其他目录。返回kind区分文件/目录（含登记根目录）。原生文件helper通过既有逐级O_NOFOLLOW目录描述符及fstatat无跟随检查完成kind识别，不扩单文件产物的父目录权限；目录维护prepared/unknown时拒绝普通项目文件访问。保存仍使用原Root重验、digest冲突和WorkspaceWriteGuard。对应workspace-access测试及客户端来源回归，不涉及OAuth或配额改变。

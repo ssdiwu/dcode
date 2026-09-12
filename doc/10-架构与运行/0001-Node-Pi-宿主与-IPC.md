@@ -261,3 +261,7 @@ helper私有进程按provider串行复用以避免逐次启动；没有新增操
 `dcodeAuth.start.oauthMode` 仅对 `providerId=openai-codex` 且 `authType=oauth` 接受 `browser` 或 `device_code`；匹配固定 SDK 的真实选择提示与选项后直接返回对应 id。省略时直接进入 browser，不新增选择窗口；其他供应商不可借此覆盖自身的选择。OAuth URL、PKCE、state、设备轮询和令牌交换仍由 SDK 拥有。
 
 设备码专用链路为可信主 frame → `dcode:readDeviceCode(flowId)` → 平台壳 fd4 → Host 当前流程，只返回短期 `userCode` 与 `expiresAt`，无有效流程返回 null。请求只接受关联 id 和 flowId，帧最多4096字节，平台壳只保留一个在途请求、等待最多2秒；不经过通用协议解析、诊断和日志。公开 `dcodeAuth.get` 只显示方式和可读取布尔能力。展示值不持久化，主窗口取消/完成/失败/到期/离开时清理，折叠清理页面副本；旧进程退出或迟到响应不得恢复。此通道不能查询已存凭据，不改变原 API fd3 的提交合同。
+
+### 文件引用的显式来源
+
+`workspace.reference` 接受原`taskId + reference`或新的`source + reference`，禁止混用。前者保持当前任务已授权目录/产物解析，后者只解析指定登记来源；返回`source/path/kind/line?`，目录（包括来源根）用于定位左栏，文件与行用于右侧内容。类型识别经原生无符号链接跟随的安全边界完成，不授予单文件产物的父目录权限。此扩展不改变文件保存、运行写入保护或模型上下文；打开引用本身不产生消息或引用提交。

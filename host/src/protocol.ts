@@ -826,7 +826,11 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     }
     case "workspace.reference":
-      requireBoundedString(params,"taskId",200);requireBoundedString(params,"reference",4096);return;
+      if(params.source!==undefined){
+        if(params.taskId!==undefined)throw new ProtocolValidationError("INVALID_PARAMS","Choose one reference source");
+        validateMethodParams("workspace.describe",{source:params.source});
+      }else requireBoundedString(params,"taskId",200);
+      requireBoundedString(params,"reference",4096);return;
     case "workspace.describe": case "workspace.tree": case "workspace.read": case "workspace.asset": case "workspace.preview": case "workspace.save": case "workspace.git": case "workspace.diff": {
       const source=params.source;
       if(!source||typeof source!=="object"||Array.isArray(source))throw new ProtocolValidationError("INVALID_PARAMS","Workspace source required");

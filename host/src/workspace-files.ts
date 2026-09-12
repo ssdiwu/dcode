@@ -22,7 +22,7 @@ export class WorkspaceFiles {
   private waiting:Array<()=>void>=[];
   constructor(private readonly helper=fileURLToPath(new URL("../bin/dcode-files",import.meta.url))){}
   private async call(root:string,relativePath:string,action:string,extra:Record<string,unknown>={}):Promise<Record<string,unknown>> {
-    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="tree"||action==="git"||action==="swap-directories");
+    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="kind"||action==="tree"||action==="git"||action==="swap-directories");
     const path=join(canonical,relativePath);
     if(relative(canonical,path).startsWith("..")||isAbsolute(relative(canonical,path)))throw new WorkspaceFileError("FILE_SCOPE","文件不在项目目录内");
     if(this.active>=4)await new Promise<void>(resolve=>this.waiting.push(resolve));
@@ -55,6 +55,11 @@ export class WorkspaceFiles {
   validatePreview(path:string,text:string):void {
     safeWorkspaceRelativePath(path);
     if(![".html",".htm"].includes(extname(path).toLowerCase())||typeof text!=="string"||Buffer.byteLength(text)>2*1024*1024||redactCredentialText(text).redacted)throw new WorkspaceFileError("HTML_CONTENT_REJECTED","HTML 预览内容不可用或包含凭据");
+  }
+  async kind(root:string,path:string):Promise<"file"|"directory">{
+    const result=await this.call(root,path,"kind");
+    if(result.kind!=="file"&&result.kind!=="directory")throw new WorkspaceFileError("FILE_UNAVAILABLE","文件或目录不可用");
+    return result.kind;
   }
   async tree(root:string,path=""):Promise<WorkspaceTree>{
     const result=await this.call(root,path,"tree");const entries=(result.entries as Array<{name:string;kind:WorkspaceTree["entries"][number]["kind"]}>).filter(entry=>{try{safeWorkspaceRelativePath(join(path,entry.name));return true;}catch{return false;}}).map(entry=>({...entry,relativePath:join(path,entry.name)})).sort((a,b)=>(a.kind==="directory"?0:1)-(b.kind==="directory"?0:1)||a.name.localeCompare(b.name));

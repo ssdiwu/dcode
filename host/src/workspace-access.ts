@@ -27,6 +27,7 @@ export class WorkspaceAccess {
     const projectId=source.projectId??(task?.scope.kind==="project"?task.scope.projectId:undefined);
     const project=projectId?snapshot.projects.find(project=>project.id===projectId):undefined;
     if(projectId&&!project)throw new WorkspaceFileError("WORKSPACE_NOT_FOUND","项目不存在");
+    if(projectId&&snapshot.projectDirectoryChanges?.some(change=>change.projectId===projectId&&["prepared","unknown"].includes(change.status)))throw new WorkspaceFileError("WORKSPACE_BUSY","项目目录维护尚未完成，请在编辑项目中先完成核对。");
     if(task&&project&&!(task.scope.kind==="project"&&task.scope.projectId===project.id))throw new WorkspaceFileError("WORKSPACE_MISMATCH","项目与任务不一致");
     const directory=project?.directory??task?.cwd;
     if(!directory)throw new WorkspaceFileError("WORKSPACE_NOT_FOUND","请选择项目或任务目录");
@@ -85,20 +86,29 @@ export class WorkspaceAccess {
     return {path,staged,diff:output,absolutePath:join(root,path),digest:`sha256:${createHash("sha256").update(output).digest("hex")}`};
   }
   private async reference(params:Record<string,unknown>):Promise<unknown>{
-    const snapshot=await (await this.store()).snapshot();const task=snapshot.tasks.find(task=>task.id===params.taskId);
-    if(!task)throw new WorkspaceFileError("WORKSPACE_NOT_FOUND","任务不存在");
+    const snapshot=await (await this.store()).snapshot();
+    const roots:Array<{source:WorkspaceSource;root:string;file?:string}>=[];
+    if(params.source){
+      const source=params.source as WorkspaceSource,root=await this.root(source);
+      roots.push({source,root:root.directory,...(root.file?{file:root.file}:{})});
+    }else{
+      const task=snapshot.tasks.find(task=>task.id===params.taskId);
+      if(!task)throw new WorkspaceFileError("WORKSPACE_NOT_FOUND","任务不存在");
+      const root=await this.root({taskId:task.id});roots.push({source:{taskId:task.id},root:root.directory});
+      for(const worktree of snapshot.managedWorkerWorktrees.filter(tree=>tree.taskId===task.id&&tree.state==="ready"))roots.push({source:{taskId:task.id,artifactId:worktree.artifactId},root:workspaceRootPath(worktree.workspaceCwd)});
+      for(const artifact of snapshot.artifacts.filter(item=>item.taskId===task.id&&item.kind!=="attachment"&&!snapshot.managedWorkerWorktrees.some(tree=>tree.artifactId===item.id))){
+        if(!artifact.managedPath&&!artifact.externalPath)continue;
+        try{const source={taskId:task.id,artifactId:artifact.id};const root=await this.root(source);roots.push({source,root:root.directory,...(root.file?{file:root.file}:{})});}catch{/* Unavailable artifacts do not enlarge the allowed roots. */}
+      }
+    }
     let reference=String(params.reference);let line:number|undefined;
     const match=reference.match(/(?::(\d+)|#L?(\d+))$/u);if(match){line=Number(match[1]??match[2]);reference=reference.slice(0,match.index);}
     if(reference.startsWith("file:")){const url=new URL(reference);if(url.hostname&&url.hostname!=="localhost")throw new WorkspaceFileError("FILE_SCOPE","不支持外部文件地址");reference=fileURLToPath(url);}else reference=decodeURIComponent(reference);
-    const roots:Array<{source:WorkspaceSource;root:string;file?:string}>=[{source:{taskId:task.id},root:workspaceRootPath(task.cwd)}];
-    for(const worktree of snapshot.managedWorkerWorktrees.filter(tree=>tree.taskId===task.id&&tree.state==="ready"))roots.push({source:{taskId:task.id,artifactId:worktree.artifactId},root:workspaceRootPath(worktree.workspaceCwd)});
-    for(const artifact of snapshot.artifacts.filter(item=>item.taskId===task.id&&item.kind!=="attachment"&&!snapshot.managedWorkerWorktrees.some(tree=>tree.artifactId===item.id))){
-      if(!artifact.managedPath&&!artifact.externalPath)continue;
-      try{const source={taskId:task.id,artifactId:artifact.id};const root=await this.root(source);roots.push({source,root:root.directory,...(root.file?{file:root.file}:{})});}catch{/* Unavailable artifacts do not enlarge the allowed roots. */}
-    }
     const absolute=isAbsolute(reference)?workspaceRootPath(reference):join(roots[0]!.root,reference);
-    const found=roots.sort((a,b)=>b.root.length-a.root.length).find(item=>{const path=relative(item.root,absolute);return path&&(!item.file||path===item.file)&&!path.startsWith("../")&&path!==".."&&!isAbsolute(path);});
+    const found=roots.sort((a,b)=>b.root.length-a.root.length).find(item=>{const path=relative(item.root,absolute);return (!item.file||path===item.file)&&!path.startsWith("../")&&path!==".."&&!isAbsolute(path);});
     if(!found)throw new WorkspaceFileError("FILE_SCOPE","引用不在当前任务可查看的目录内");
-    return {source:found.source,path:relative(found.root,absolute),...(Number.isSafeInteger(line)&&line!>0?{line}:{})};
+    const path=relative(found.root,absolute);
+    const kind=await this.files.kind(found.root,path);
+    return {source:found.source,path,kind,...(Number.isSafeInteger(line)&&line!>0?{line}:{})};
   }
 }

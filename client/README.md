@@ -90,7 +90,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 `npm run verify:threeui` 核对五个原文哈希；`npm run test:new-task` 在独立数据根与隐藏 Electron 窗口验证真实新草稿、已有任务/灵感排除、项目草稿文件、草稿返回、外观持久化、减少动态效果和 WebGL 降级，不操作正在运行的验收应用。
 
-候选的第二、三批已补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签仍使用原有文件工作区合同。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
+候选的第二、三批已补充真实技能列表读取、项目归属 chip、复制与加载反馈；`workbench/motion.ts` 为 React/CSS 的共享动效值，执行状态投影区分中断/未知与成功，历史内容不随当前流式回复重播。文件页签的编辑与安全合同保留，容器关系按下方项目文件查看批次修正。`test:new-task -- --without-webgl` 的底层检查入口 `node test/main/new-task-ui.mjs --without-webgl` 可在隔离 Chromium 模拟 WebGL 上下文被拒绝；该参数不改变产品配置。
 
 新任务归属选择在输入卡内部底部“＋”旁；“＋”菜单提供图片、文件和技能/命令，文本 `/` 入口保持。切换归属读取各自草稿，原文字和附件可在切回时恢复；已有任务不显示归属迁移入口。模型、思考和发送控件在同一工具栏内有界换行。
 
@@ -107,3 +107,5 @@ OAuth 等待期间在供应商行提供“打开登录页面”和可选“输�
 OpenAI Codex 在供应商区域直接显示“浏览器登录”“设备码登录”，不再弹出方式选择窗；等待期间可以重新打开系统登录页面或取消，浏览器手动结果仍为用户按需打开。设备码以可选中文字显示在同一区域，值经可信主 frame 的 `dcode:readDeviceCode` 和 Host 独立 fd4 私有通道读取，只保留于可见控件；没有复制到 SWR 缓存、页面配置或草稿。折叠、离开、取消、完成、到期和 Host 退出时清空，迟到回执不能恢复旧值；返回页面仅重新读取仍有效流程。`src/host/device-code-channel.ts` 负责有界保密投影。实际设置页/SDK受控回归覆盖两个直接入口、设备码生命周期、其他 frame 拒绝和公开输出/持久化不泄露，不代替真实账号验收。
 
 项目行第一批使用常显且固定占位的“更多”与新任务 SVG 按钮；主行独立展开/收起，更多只提供已接通的编辑项目。项目新任务复用 `new:project` 草稿与首次创建合同，`useWorkspaceFiles.hideForDraft` 只让目标草稿回到输入，不清标签或编辑缓冲。项目菜单按项目id控制，进入设置/隐藏导航时清理，系统新任务事件显式关闭菜单并保留输入焦点；关闭编辑表单回到稳定项目触发按钮。`node test/main/project-row.mjs` 使用独立Electron/Host和受控模型验证三份草稿、附件、文件编辑保留、首次发送、菜单/表单/设置焦点及深浅/三档字号/宽窄窗口；项目文件按钮和默认右侧内容由后续批次接入。
+
+项目文件查看默认使用同一左侧导航与右侧信息检查器。`WorkspaceFileNavigation` 负责目录/Git列表，`WorkspaceFiles` 负责真实内容标签；中央Transcript及Composer不因打开文件被卸载。`useWorkspaceFiles` 保存独立的浏览来源和按来源标识的标签/缓冲，任务与其Project目录归一为同源；保存、差异及相对链接始终使用标签自己的来源。返回任务只切左栏，收起详情不丢缓冲，关闭脏标签仍确认。读取序号保护迟到引用及旧重载；显式文件导航请求会恢复隐藏左栏。`test/main/file-inspector.mjs` 使用隔离目录和真实本地SSE响应验证A运行时浏览/保存B、A写保护、正文/差异/HTML及原对话输入并存。主动展开由后续批次实现。

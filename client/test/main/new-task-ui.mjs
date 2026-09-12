@@ -75,8 +75,8 @@ app.on('browser-window-created',(_event,win)=>{
      assert.equal(await run('document.querySelector(".file-attachment .file-name")?.textContent'),attachment);
    }
    await until('!!Array.from(document.querySelectorAll("button")).find(b=>b.getAttribute("aria-label")==="文件与 Git")','project file action before task');
-   await click('文件与 Git');await until('!!document.querySelector(".files-workspace")','project files before creation');
-   assert.equal(await run('!!document.querySelector(".new-task-ambient")'),false);
+   await click('文件与 Git');await until('!!document.querySelector(".file-navigation")','project files before creation');
+   assert.equal(await run('!!document.querySelector(".new-task-ambient")'),true,'File navigation preserves the central task draft');
    await until('Array.from(document.querySelectorAll(".file-tree-row")).some(b=>b.textContent.trim()==="a.md")','project file listing loaded');
    await click('a.md');await until('!!document.querySelector(".file-tab-highlight")','selected file highlight');
    await click('long-file-name.md');await until('document.querySelector(".file-tab-strip [aria-selected=true]")?.textContent.includes("long-file-name.md")','second file selected');await sleep(300);

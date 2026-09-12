@@ -86,6 +86,23 @@ struct FileHelper {
                 guard process.terminationStatus == 0, let text = String(data: bytes, encoding: .utf8) else { emit(["ok": false, "code": arguments == top ? "GIT_NOT_REPOSITORY" : "GIT_UNAVAILABLE", "message": "Git 未能完成当前读取，文件没有被修改。"]); return }
                 emit(["ok": true, "stdout": text]); return
             }
+            if request.action == "kind" {
+                let root = WorkspaceFileReader.standardizedAbsolutePath(request.root)
+                let path = WorkspaceFileReader.standardizedAbsolutePath(request.path)
+                let parts: [String]
+                if root == path { parts = [] }
+                else if let relative = WorkspaceFileReader.relativeComponents(of: path, inside: root) { parts = relative }
+                else { throw WorkspaceFileSecurePathError.outsideSourceFolder }
+                let parent = try WorkspaceFileSecurePath.openParentDirectory(rootPath: root, relativeComponents: Array(parts.dropLast()))
+                defer { Darwin.close(parent) }
+                var metadata = stat()
+                let status = parts.last.map { Darwin.fstatat(parent, $0, &metadata, AT_SYMLINK_NOFOLLOW) } ?? Darwin.fstat(parent, &metadata)
+                guard status == 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
+                let type = metadata.st_mode & S_IFMT
+                if type == S_IFLNK { throw WorkspaceFileSecurePathError.symbolicLink }
+                guard type == S_IFDIR || type == S_IFREG else { throw WorkspaceFileSecurePathError.notRegularFile }
+                emit(["ok": true, "kind": type == S_IFDIR ? "directory" : "file"]); return
+            }
             if request.action == "tree" {
                 let root = WorkspaceFileReader.standardizedAbsolutePath(request.root)
                 let path = WorkspaceFileReader.standardizedAbsolutePath(request.path)

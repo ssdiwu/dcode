@@ -4,7 +4,7 @@ import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
 import {TaskContext} from "./components/TaskContext";
 import {ExtensionRequests} from "./components/ExtensionRequests";
-import {WorkspaceFiles,FileCloseDialog} from "./components/WorkspaceFiles";
+import {WorkspaceFiles,WorkspaceFileNavigation,FileCloseDialog} from "./components/WorkspaceFiles";
 import {useWorkspaceFiles,FileReferenceContext} from "./workbench/useWorkspaceFiles";
 import { InspirationWorkspace } from "./components/InspirationWorkspace";
 import { useInspiration } from "./workbench/useInspiration";
@@ -112,9 +112,10 @@ export function App() {
   const work = useWorkbench();
   const files=useWorkspaceFiles(work);
   const display = useDisplay();
+  useEffect(()=>{if(files.navigationRequest)display.set({nav:true});},[files.navigationRequest,display.set]);
   const reduced = useMotionReduction();
   const newTaskDraft = !work.task && !work.session;
-  const showNewTask = newTaskDraft && !files.visible;
+  const showNewTask = newTaskDraft;
   const previousTask = useRef<{taskId:string;sessionId?:string}|null>(null);
   useEffect(() => {
     if (work.task) previousTask.current = {taskId:work.task.id,sessionId:work.session?.id};
@@ -150,6 +151,7 @@ export function App() {
   >();
   const remoteTarget = work.snapshot?.taskWorkbenchViewState.inspectorTarget;
   const inspector = target === undefined ? remoteTarget : target;
+  useEffect(()=>{if(files.visible)setTarget(null);},[files.visible]);
   const select = (task: TaskRecord, sessionId?: string) => {
     setTarget(null);
     work.select(task, sessionId);
@@ -161,7 +163,7 @@ export function App() {
   const projectDraft = (projectId:string|null) => {
     focusDraftAfterMenu.current=true;setProjectMenuId(null);
     setTarget(null);
-    files.hideForDraft(projectId);
+    files.hideForDraft();
     work.setNewProjectId(projectId);
     work.newTask();
     display.set({ page: "task", overview: false });
@@ -176,6 +178,7 @@ export function App() {
     if (task) select(task, previous?.sessionId);
   };
   const openDetail = (value: TaskWorkbenchInspectorTarget | null) => {
+    files.conversation();
     setTarget(value);
     void work.patchView({ inspectorTarget: value }).catch(work.fail);
   };
@@ -190,7 +193,7 @@ export function App() {
         if (event.event === "shell.newProject") {setProjectEditingId(null);display.set({ projectForm: true });}
         if (event.event === "shell.newTask") {
           focusDraftAfterMenu.current=true;setProjectMenuId(null);
-          files.hideForDraft(work.newProjectId);
+          files.hideForDraft();
           display.set({ page: "task", overview: false });
           setTarget(null);
           requestAnimationFrame(() =>
@@ -273,6 +276,7 @@ export function App() {
               <PanelLeft size={16} />
             </button>
           </div>
+          {files.navigationVisible?<WorkspaceFileNavigation model={files}/>:<>
           <div className="brand">
             <Logo />
             <span>D Code</span>
@@ -338,6 +342,7 @@ export function App() {
                         <Menu.Item className="menu-item" onSelect={()=>{setProjectEditingId(p.id);display.set({projectForm:true});}}>编辑项目</Menu.Item>
                       </Menu.Content></Menu.Portal>
                     </Menu.Root>
+                    <button type="button" className="icon-button" aria-label={`查看 ${p.title} 的文件`} title="查看文件" onClick={()=>{setProjectMenuId(null);files.browseProject(p.id);display.set({page:"task"});}}><Folder size={14}/></button>
                     <button type="button" className="icon-button" aria-label={`在 ${p.title} 中新建任务`} title="新建任务" onClick={()=>projectDraft(p.id)}><SquarePen size={14}/></button>
                   </span>
                 </summary>
@@ -371,6 +376,7 @@ export function App() {
               </>
             )}
           </div>
+          </>}
           <div className="navigation-footer">
             <button
               className="nav-row"
@@ -415,7 +421,8 @@ export function App() {
           {display.page === "task" && newTaskDraft && work.snapshot?.tasks.some(task => task.id === previousTask.current?.taskId && task.state !== "archived") && <button className="text-button" onClick={returnFromDraft}>返回任务</button>}
           {work.presentation?.nativePaths&&work.presentation.nativePaths.length>1&&display.page==="task"&&<Menu.Root><Menu.Trigger asChild><button className="text-button" aria-label="对话路径">{work.viewingHistory?"历史路径":"当前路径"}</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" sideOffset={5}>{work.presentation.nativePaths.map(path=><Menu.Item className="menu-item" key={path.id} onSelect={()=>{work.selectPath(path.isCurrent?undefined:path.id);files.conversation();}}>{path.title}{path.isCurrent?" · 当前":""}<small>{new Date(path.createdAt).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</small></Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
           {work.task&&display.page==="task"&&<button className="icon-button" aria-label="上下文与运行依据" onClick={()=>setContextOpen(true)}><FileText size={16}/></button>}
-          {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.visible} onClick={()=>files.visible?files.conversation():files.show()}><Folder size={16}/></button>}
+          {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.navigationVisible&&display.nav} onClick={()=>files.navigationVisible&&display.nav?files.returnToTasks():files.show(!display.nav&&files.navigationVisible)}><Folder size={16}/></button>}
+          {!!files.tabs.length&&!files.visible&&display.page==="task"&&<button className="icon-button" aria-label="打开文件详情" onClick={files.showInspector}><FileText size={16}/></button>}
           {work.task && display.page==="task" && (
             <Menu.Root>
               <Menu.Trigger asChild>
@@ -478,10 +485,10 @@ export function App() {
               <button
                 className="icon-button"
                 aria-label="任务概览"
-                aria-pressed={display.overview}
+                aria-pressed={display.overview&&!inspector&&!files.visible}
                 onClick={() => {
-                  if (inspector) openDetail(null);
-                  display.set({ overview: !display.overview });
+                  if (inspector||files.visible){openDetail(null);display.set({overview:true});}
+                  else display.set({ overview: !display.overview });
                 }}
               >
                 <PanelRight size={17} />
@@ -505,12 +512,12 @@ export function App() {
         ) : !work.snapshot ? (
           <LoadingPlaceholder label="正在读取工作台…"/>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
-          <div className={`work-area ${inspector ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""}`}>
+          <div className={`work-area ${inspector||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""}`}>
             {showNewTask && <NewTaskScene />}
             <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
-              {files.visible?<WorkspaceFiles key={`${files.scope}:${JSON.stringify(files.source)}:${work.task?.cwd??""}`} model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>:<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
                 <Composer
@@ -523,7 +530,7 @@ export function App() {
               </div>
             </section>
             <AnimatePresence>
-              {work.task && display.overview && !inspector && (
+              {work.task && display.overview && !inspector && !files.visible && (
                 <motion.aside
                   aria-label="任务概览"
                   className="overview"
@@ -541,12 +548,16 @@ export function App() {
                 </motion.aside>
               )}
             </AnimatePresence>
-            {inspector && (
+            {(files.tabs.length>0||files.notice)&&<aside className="inspector file-inspector" aria-label="文件详情" hidden={!files.visible}>
+              <div className="panel-heading"><strong>文件</strong><button className="icon-button" aria-label="收起文件详情" onClick={files.conversation}><X size={15}/></button></div>
+              <WorkspaceFiles model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>
+            </aside>}
+            {inspector && !files.visible && (
               <Inspector
                 target={inspector}
                 snapshot={work.snapshot}
                 taskId={work.task?.id ?? null}
-                onOpenArtifact={id=>{void files.openArtifact(id);openDetail(null);}}
+                onOpenArtifact={id=>{openDetail(null);void files.openArtifact(id);}}
                 onClose={() => openDetail(null)}
               />
             )}

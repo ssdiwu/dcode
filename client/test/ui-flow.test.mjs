@@ -48,6 +48,7 @@ window.matchMedia = () => ({
   addEventListener() {},
   removeEventListener() {},
 });
+window.HTMLElement.prototype.scrollIntoView = function () {};
 window.HTMLElement.prototype.scrollTo = function ({ top }) {
   this.scrollTop = top;
 };
@@ -410,7 +411,7 @@ test(
         assert.equal(presentation.runtime.state.isStreaming,false);
         assert.equal(presentation.runtime.state.runState.phase,"completed");
       },{timeout:10000});
-      fireEvent.click(screen.getByRole("button",{name:"文件与 Git"}));await waitFor(()=>assert.ok(screen.getByRole("tab",{name:"对话"})));fireEvent.click(screen.getByRole("tab",{name:"对话"}));
+      fireEvent.click(screen.getByRole("button",{name:"文件与 Git"}));await waitFor(()=>assert.ok(screen.getByRole("region",{name:"项目文件导航"})));assert.ok(screen.getByRole("textbox",{name:"任务消息"}));fireEvent.click(screen.getByRole("button",{name:"返回任务"}));
       fireEvent.pointerDown(screen.getByRole("button", { name: "选择模型" }), {
         button: 0,
         ctrlKey: false,
