@@ -1,10 +1,11 @@
-import {createContext,useEffect,useRef,useState} from "react";
+import {createContext,useEffect,useLayoutEffect,useRef,useState} from "react";
 import type {WorkspaceFile} from "../../../../../host/src/workspace-files.js";
 import type {WorkspaceSource} from "../../../../../host/src/workspace-access.js";
 import {api,errorText} from "../types";
 import type {Workbench} from "../useWorkbench";
 export const FileReferenceContext=createContext<((reference:string)=>void)|undefined>(undefined);
-export interface FileTab {id:string;source:WorkspaceSource;path:string;kind:"file"|"diff";staged?:boolean;diff?:{diff:string;digest:string;absolutePath:string};document?:WorkspaceFile&{absolutePath:string;root:string};draft?:string;mode:"preview"|"source"|"edit";line?:number;loading:boolean;saving:boolean;error?:string;conflict?:boolean}
+export interface FileViewState {anchor?:{path:number[];offset:number;delta:number};top:number;left:number;start?:number;end?:number;direction?:"forward"|"backward"|"none";lineRevision:number}
+export interface FileTab {lineRevision?:number;id:string;source:WorkspaceSource;path:string;kind:"file"|"diff";staged?:boolean;diff?:{diff:string;digest:string;absolutePath:string};document?:WorkspaceFile&{absolutePath:string;root:string};draft?:string;mode:"preview"|"source"|"edit";line?:number;loading:boolean;saving:boolean;error?:string;conflict?:boolean}
 const sourceKey=(source:WorkspaceSource)=>JSON.stringify([source.taskId??null,source.projectId??null,source.artifactId??null]);
 export const fileDirty=(tab:FileTab)=>tab.draft!==undefined&&tab.document?.text!==tab.draft;
 export function useWorkspaceFiles(work:Workbench){
@@ -22,14 +23,24 @@ export function useWorkspaceFiles(work:Workbench){
   const [navigationRequest,setNavigationRequest]=useState(0);
   const [navigationVisible,setNavigationVisible]=useState(false),[navigationPath,setNavigationPath]=useState("");
   const [navigationView,setNavigationView]=useState<"files"|"git">("files");
+  const [directories,setDirectories]=useState<Record<string,string[]>>({});
+  const [expanded,setExpanded]=useState(false);
   const [visible,setVisible]=useState(false),[notice,setNotice]=useState("");
   const [tabs,setTabs]=useState<FileTab[]>([]);const latest=useRef(tabs);latest.current=tabs;
   const [selected,setSelected]=useState<string|null>(null);const selectedRef=useRef(selected);selectedRef.current=selected;
   const [closing,setClosing]=useState<string|null>(null);
   const requests=useRef(new Map<string,number>()),selectionRequest=useRef(0),taskRef=useRef(work.task?.id);taskRef.current=work.task?.id;
+  const views=useRef(new Map<string,FileViewState>()),captures=useRef(new Map<string,()=>void>()),viewLocked=useRef(false);
+  useLayoutEffect(()=>{viewLocked.current=false;});
+  const captureViews=(freeze=false)=>{for(const capture of captures.current.values())capture();if(freeze)viewLocked.current=true;};
+  const viewKey=(id:string,surface:string)=>JSON.stringify([id,surface]);
+  const readView=(id:string,surface:string)=>views.current.get(viewKey(id,surface));
+  const writeView=(id:string,surface:string,state:FileViewState,restored=false)=>{if(!viewLocked.current||restored){views.current.set(viewKey(id,surface),state);return true;}return false;};
+  const registerView=(id:string,surface:string,capture:()=>void)=>{const key=viewKey(id,surface);captures.current.set(key,capture);return()=>{if(captures.current.get(key)===capture)captures.current.delete(key);};};
   const updateTabs=(fn:(tabs:FileTab[])=>FileTab[])=>{const value=fn(latest.current);latest.current=value;setTabs(value);};
-  const activate=(id:string)=>{selectedRef.current=id;setSelected(id);setVisible(true);setNotice("");};
+  const activate=(id:string)=>{captureViews(id!==selectedRef.current||!visible);selectedRef.current=id;setSelected(id);setVisible(true);setNotice("");};
   const patch=(id:string,value:Partial<FileTab>|((tab:FileTab)=>FileTab))=>updateTabs(tabs=>tabs.map(tab=>tab.id===id?typeof value==="function"?value(tab):{...tab,...value}:tab));
+  const locate=(id:string,line:number,mode?:FileTab["mode"])=>{captureViews(true);patch(id,current=>({...current,line,lineRevision:(current.lineRevision??0)+1,mode:mode??(current.mode==="edit"?"edit":"source")}));};
   const ticket=(id:string)=>{const next=(requests.current.get(id)??0)+1;requests.current.set(id,next);return next;};
   const load=async(tab:FileTab)=>{
     const request=ticket(tab.id);patch(tab.id,{loading:true,error:undefined});
@@ -43,7 +54,7 @@ export function useWorkspaceFiles(work:Workbench){
           const existing=latest.current.find(other=>other.id!==tab.id&&other.kind==="file"&&document.editable&&other.document?.editable&&other.document.absolutePath===document.absolutePath);
           if(existing){
             ticket(tab.id);updateTabs(values=>values.filter(value=>value.id!==tab.id));
-            if(selectedRef.current===tab.id){selectedRef.current=existing.id;setSelected(existing.id);if(tab.line!==undefined)patch(existing.id,current=>({...current,line:tab.line,mode:current.mode==="edit"?"edit":"source"}));}
+            if(selectedRef.current===tab.id){selectedRef.current=existing.id;setSelected(existing.id);if(tab.line!==undefined)locate(existing.id,tab.line);}
             return;
           }
         }
@@ -55,8 +66,8 @@ export function useWorkspaceFiles(work:Workbench){
     if(!target)return;selectionRequest.current++;
     const owner=canonical(target),id=JSON.stringify([sourceKey(owner),path,kind,kind==="diff"?staged:null]);
     activate(id);
-    if(latest.current.some(tab=>tab.id===id)){if(line!==undefined)patch(id,current=>({...current,line,mode:current.mode==="edit"?"edit":"source"}));return;}
-    const tab:FileTab={id,source:owner,path,kind,staged:kind==="diff"?staged:undefined,line,mode:"preview",loading:true,saving:false};
+    if(latest.current.some(tab=>tab.id===id)){if(line!==undefined)locate(id,line);return;}
+    const tab:FileTab={id,source:owner,path,kind,lineRevision:line===undefined?0:1,staged:kind==="diff"?staged:undefined,line,mode:"preview",loading:true,saving:false};
     updateTabs(values=>[...values,tab]);void load(tab);
   };
   const navigate=(target:WorkspaceSource,path="")=>{selectionRequest.current++;setNavigationRequest(value=>value+1);setBrowserSource(canonical(target));setNavigationPath(path);setNavigationView("files");setNavigationVisible(true);setNotice("");};
@@ -93,9 +104,10 @@ export function useWorkspaceFiles(work:Workbench){
     }catch(error){patch(id,{saving:false,error:errorText(error),conflict:/FILE_CONFLICT|编辑期间|冲突/u.test(errorText(error))});return false;}
   };
   const discard=(id:string)=>{
+    captureViews(true);for(const key of views.current.keys())if(JSON.parse(key)[0]===id)views.current.delete(key);
     ticket(id);const index=latest.current.findIndex(tab=>tab.id===id),remaining=latest.current.filter(tab=>tab.id!==id);
     updateTabs(()=>remaining);
-    if(selectedRef.current===id){const next=remaining[Math.min(Math.max(index,0),remaining.length-1)]?.id??null;selectedRef.current=next;setSelected(next);if(!next)setVisible(false);}
+    if(selectedRef.current===id){const next=remaining[Math.min(Math.max(index,0),remaining.length-1)]?.id??null;selectedRef.current=next;setSelected(next);if(!next){setVisible(false);setExpanded(false);}}
     setClosing(null);
   };
   const close=(id:string)=>{const tab=latest.current.find(tab=>tab.id===id);if(tab?.saving)return;if(tab&&fileDirty(tab))setClosing(id);else discard(id);};
@@ -126,15 +138,15 @@ export function useWorkspaceFiles(work:Workbench){
     if(target.projectId)return work.snapshot?.projects.find(item=>item.id===target.projectId)?.title??"项目不可用";
     return work.snapshot?.tasks.find(item=>item.id===target.taskId)?.title??"任务不可用";
   };
-  const hide=()=>{selectionRequest.current++;setVisible(false);setNotice("");};
-  return {source,baseSource,scope,navigationRequest,navigationVisible,navigationPath,navigationView,setNavigationView,sourceTitle,notice,
+  const hide=()=>{if(visible||expanded)captureViews(true);selectionRequest.current++;setExpanded(false);setVisible(false);setNotice("");};
+  return {source,baseSource,scope,treeExpanded:directories[scope]??[],toggleDirectory:(path:string)=>setDirectories(previous=>{const values=previous[scope]??[];return {...previous,[scope]:values.includes(path)?values.filter(value=>value!==path):[...values,path]};}),expanded,expand:()=>{if(visible&&!expanded){captureViews(true);setExpanded(true);}},collapse:()=>{if(expanded){captureViews(true);setExpanded(false);}},readView,writeView,registerView,navigationRequest,navigationVisible,navigationPath,navigationView,setNavigationView,sourceTitle,notice,
     beforeProjectDirectoryChange,invalidateProject,browse,openArtifact,openRelative,
     artifacts:work.snapshot?.artifacts.filter(artifact=>artifact.taskId===work.task?.id&&artifact.kind!=="attachment"&&(artifact.managedPath||artifact.externalPath))??[],
     tabs,allTabs:tabs,active:tabs.find(tab=>tab.id===selected)??null,visible,closing:tabs.find(tab=>tab.id===closing)??null,
     browseProject:(projectId:string)=>navigate({projectId}),returnToTasks:()=>{selectionRequest.current++;setNavigationVisible(false);},
-    show:(reopenNavigation=false)=>{const target=reopenNavigation?source:baseSource??source;if(target)navigate(target);},showInspector:()=>setVisible(true),conversation:hide,
+    show:(reopenNavigation=false)=>{const target=reopenNavigation?source:baseSource??source;if(target)navigate(target);},showInspector:()=>{if(!visible){captureViews(true);setVisible(true);}},conversation:hide,
     hideForDraft:()=>{hide();setNavigationVisible(false);},select:(id:string)=>{selectionRequest.current++;activate(id);},
     open,openReference,openDiff:(path:string,target=source,staged=false)=>open(path,target,undefined,"diff",staged),
-    save,close,discard,keep:()=>setClosing(null),saveAndClose:async(id:string)=>{if(await save(id))discard(id);},reload:load,patch,quote};
+    save,close,discard,keep:()=>setClosing(null),saveAndClose:async(id:string)=>{if(await save(id))discard(id);},reload:load,locate,patch:(id:string,value:Partial<FileTab>)=>{captureViews(true);patch(id,value);},quote};
 }
 export type WorkspaceFileModel=ReturnType<typeof useWorkspaceFiles>;

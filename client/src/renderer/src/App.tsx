@@ -36,6 +36,8 @@ import {
   Sparkles,
   Ellipsis,
   SquarePen,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { Markdown } from "./components/Markdown";
@@ -512,9 +514,9 @@ export function App() {
         ) : !work.snapshot ? (
           <LoadingPlaceholder label="正在读取工作台…"/>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
-          <div className={`work-area ${inspector||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""}`}>
-            {showNewTask && <NewTaskScene />}
-            <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} onKeyDown={event => {
+          <div className={`work-area ${inspector||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""} ${files.expanded ? "file-expanded" : ""}`}>
+            {showNewTask && !files.expanded && <NewTaskScene />}
+            <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} inert={files.expanded||undefined} aria-hidden={files.expanded||undefined} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
               {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
@@ -548,8 +550,8 @@ export function App() {
                 </motion.aside>
               )}
             </AnimatePresence>
-            {(files.tabs.length>0||files.notice)&&<aside className="inspector file-inspector" aria-label="文件详情" hidden={!files.visible}>
-              <div className="panel-heading"><strong>文件</strong><button className="icon-button" aria-label="收起文件详情" onClick={files.conversation}><X size={15}/></button></div>
+            {(files.tabs.length>0||files.notice)&&<aside className={`inspector file-inspector ${files.expanded?"is-expanded":""}`} aria-label="文件详情" hidden={!files.visible}>
+              <div className="panel-heading"><strong>文件</strong><span className="spacer"/>{files.active&&<button id="file-size-toggle" className={files.expanded?"text-button":"icon-button"} aria-label={files.expanded?"返回对话":"展开文件内容"} aria-expanded={files.expanded} title={files.expanded?"返回对话":"展开文件内容"} onClick={()=>{if(files.expanded){files.collapse();requestAnimationFrame(()=>document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus({preventScroll:true}));}else{files.expand();requestAnimationFrame(()=>document.getElementById("file-size-toggle")?.focus({preventScroll:true}));}}}>{files.expanded?<><Minimize2 size={15}/>返回对话</>:<Maximize2 size={15}/>}</button>}<button className="icon-button" aria-label="收起文件详情" onClick={files.conversation}><X size={15}/></button></div>
               <WorkspaceFiles model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>
             </aside>}
             {inspector && !files.visible && (
