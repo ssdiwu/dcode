@@ -1588,7 +1588,7 @@ details[open] > summary > svg:first-child {
 .file-tab-highlight {position:absolute;inset:0;z-index:-1;border-radius:inherit;background:color-mix(in srgb,var(--c-ink) 6%,transparent);pointer-events:none;}
 .file-tab {display:flex;align-items:center;}
 .file-workspace-body {display:flex;flex:1;min-height:0;}
-.file-navigation {flex:1;min-height:0;min-width:0;overflow:auto;padding:8px;}
+.file-navigation {display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden;padding:8px;}
 .file-navigation-toolbar,.file-toolbar,.preview-toolbar {display:flex;align-items:center;gap:8px;min-height:36px;font-size:12px;}
 .file-navigation-toolbar {position:sticky;top:0;background:var(--c-nav);}
 .file-tree {list-style:none;padding:0;margin:0;}
@@ -1761,4 +1761,13 @@ html.theme-changing, html.theme-changing * { transition:none !important; }
 .file-navigation-path,.file-origin{font-size:11px;color:var(--c-muted);overflow-wrap:anywhere;padding:8px 12px;border-bottom:1px solid var(--c-line)}
 .file-origin{flex-shrink:0}
 .file-inspector .file-markdown{padding:16px}
-.file-inspector .html-split{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(120px,1fr) minmax(150px,1fr)}
+.file-inspector:not(.is-expanded) .html-split{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(120px,1fr) minmax(150px,1fr)}
+
+/* Keep the conversation's docked geometry while the same content covers it. */
+.file-inspector.is-expanded{position:absolute;inset:0;width:100%;z-index:7;border-left:0}
+.file-expanded>.conversation-space{visibility:hidden;pointer-events:none}
+@container (min-width:901px){.file-expanded>.conversation-space{margin-right:min(var(--inspector-width),calc(100cqw - 600px));}}
+.file-inspector .panel-heading .text-button{display:inline-flex;align-items:center;gap:6px}
+
+.file-navigation-list{flex:1;min-height:0;overflow:auto}
+.file-navigation-heading,.file-navigation-toolbar{flex-shrink:0}
