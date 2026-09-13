@@ -1,6 +1,6 @@
 {
   "name": "@dcode/client",
-  "version": "0.0.30",
+  "version": "0.0.32",
   "private": true,
   "type": "module",
   "description": "D Code Web 客户端：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 host/。",

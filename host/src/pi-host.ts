@@ -155,7 +155,7 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
 function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.29";
+const HOST_VERSION = "0.0.32";
 
 const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "runtime.start",

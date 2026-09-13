@@ -1429,7 +1429,7 @@ function About() {
         />
         <div>
           <h2>D Code</h2>
-          <p>版本 {data?.version ?? "0.0.30"}</p>
+          <p>版本 {data?.version ?? "—"}</p>
         </div>
       </div>
       <Group>

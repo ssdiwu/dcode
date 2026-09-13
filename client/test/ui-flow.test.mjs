@@ -192,7 +192,7 @@ test(
       signalReady: async () => {},
       switchCandidate: async () => true,
       diagnostics: async () => ({
-        version: "0.0.30",
+        version: "0.0.32",
         hostReady: true,
         events: [],
       }),
