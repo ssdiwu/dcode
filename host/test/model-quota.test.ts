@@ -40,6 +40,25 @@ test("model-specific buckets require a real mapping and add to the general const
   assert.equal(assessModelQuota(data, "ordinary", now, 1).eligible, false);
 });
 
+test("unmapped reserve buckets permit a model only when every possibly applicable window is known and above threshold", () => {
+  const body = { rate_limit: { allowed: true, primary_window: { used_percent: 85, reset_at: (now + 100000) / 1000 } },
+    additional_rate_limits: [{ metered_feature: "base_model_inference", limit_name: "gpt-reserve", rate_limit: { allowed: true, primary_window: { used_percent: 0, reset_at: (now + 100000) / 1000 } } }] };
+  const data = { ...snapshot(80), groups: parseQuotaGroups("openai-codex", body) };
+  for (const model of ["gpt-6-sol", "gpt-6-luna"]) {
+    const result = assessModelQuota(data, model, now, 1);
+    assert.equal(result.eligible, true);
+    assert.equal(result.remainingPercent, 15, "the general window remains a binding constraint");
+  }
+  data.groups[1]!.windows[0]!.remainingPercent = 1;
+  assert.equal(assessModelQuota(data, "gpt-6-sol", now, 1).eligible, false);
+  data.groups[1]!.windows[0]!.remainingPercent = null;
+  assert.equal(assessModelQuota(data, "gpt-6-sol", now, 1).eligible, false);
+  data.groups[1]!.windows = [];
+  assert.equal(assessModelQuota(data, "gpt-6-sol", now, 1).eligible, false);
+  data.groups[1]!.windows = [{ id: "primary", label: "weekly", remainingPercent: 100, resetAt: now, capability: "text" }];
+  assert.equal(assessModelQuota(data, "gpt-6-sol", now, 1).eligible, false);
+});
+
 test("each member's fallback order survives quota filtering and a shared low pool is not retried per model", async () => {
   const models = ["disabled", "first", "same-pool", "next", "largest"].map((modelId) => ({ providerId: modelId === "next" || modelId === "largest" ? modelId : "shared-provider", modelId, enabled: modelId !== "disabled", available: true }));
   const calls: string[] = [];

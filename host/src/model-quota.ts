@@ -107,19 +107,21 @@ export function assessModelQuota(snapshot: ModelQuotaSnapshot, modelId: string, 
   if (now >= snapshot.validUntil) return { eligible: false, reason: "额度信息已过期" };
   const general = snapshot.groups.filter((group) => group.id === "general");
   const additional = snapshot.groups.filter((group) => group.id !== "general");
-  // An unnamed extra bucket is not proof that it applies (or does not apply)
-  // to this model. A verified model mapping is required before automatic selection.
-  if (additional.some((group) => !group.modelIds && group.windows.some((window) => window.capability === "text"))) return { eligible: false, reason: "模型专属额度范围尚未确认" };
-  const groups = [...general, ...additional.filter((group) => group.modelIds?.includes(modelId) || group.windows.some((window) => capabilities.includes(window.capability)))];
+  // Missing applicability does not justify ignoring a bucket. Conservatively
+  // constrain the model by every possibly applicable window; when all are
+  // known and above threshold, any actual subset also satisfies the threshold.
+  // Keep the mapping absent: this is not evidence of a model-to-bucket mapping.
+  const uncertain = additional.filter(group => !group.modelIds?.length && (!group.windows.length || group.windows.some(window => window.capability === "text" || capabilities.includes(window.capability))));
+  const groups = [...general, ...additional.filter((group) => uncertain.includes(group) || group.modelIds?.includes(modelId) || group.windows.some((window) => capabilities.includes(window.capability)))];
   const windows = groups.flatMap((group) => group.windows).filter((window) => window.capability === "text" || capabilities.includes(window.capability));
   if (!windows.length || groups.some((group) => !group.windows.length) || windows.some((window) => window.remainingPercent === null)) return { eligible: false, reason: "额度字段不完整" };
   const quotaCapabilities = capabilities.filter((capability) => ["search", "video_generation", "image_generation", "audio_generation"].includes(capability));
   if (quotaCapabilities.some((capability) => !windows.some((window) => window.capability === capability))) return { eligible: false, reason: "未返回所需功能的额度窗口" };
   if (windows.some((window) => window.resetAt !== null && now >= window.resetAt)) return { eligible: false, reason: "额度已到重置时间，需要重新查询" };
   const least = Math.min(...windows.map((window) => window.remainingPercent!));
-  if (least <= thresholdPercent) return { eligible: false, reason: least === 0 ? "额度已耗尽" : `剩余额度不高于 ${thresholdPercent}%`, remainingPercent: least,
+  if (least <= thresholdPercent) return { eligible: false, reason: uncertain.some(group => group.windows.some(window => window.remainingPercent !== null && window.remainingPercent <= thresholdPercent)) ? "模型专属额度范围尚未确认，可能适用的额度不足" : least === 0 ? "额度已耗尽" : `剩余额度不高于 ${thresholdPercent}%`, remainingPercent: least,
     retryAt: Math.max(...windows.filter((window) => window.remainingPercent! <= thresholdPercent).map((window) => window.resetAt ?? 0)) || undefined };
-  return { eligible: true, reason: "额度可用", remainingPercent: least };
+  return { eligible: true, reason: uncertain.length ? "所有可能适用的额度均高于门槛" : "额度可用", remainingPercent: least };
 }
 
 export class ModelQuotaService {
