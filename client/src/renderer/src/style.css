@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+.task-route-summary { display: grid; gap: 8px; padding-block: 10px; overflow-wrap: anywhere; }
+.task-route-summary p { margin: 0; }
+.task-route-summary details { margin-block: 8px; }
+.task-route-summary summary { cursor: pointer; display: list-item; list-style: disclosure-closed inside; }
+.task-route-summary details[open] > summary { list-style-type: disclosure-open; }
+.task-route-summary summary:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; border-radius: 3px; }
+.task-route-check { padding-block: 8px; }
+
 .model-route-editor { display: grid; gap: 12px; }
 .model-route-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .model-route-heading h3 { margin: 0; }

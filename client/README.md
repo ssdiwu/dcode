@@ -82,6 +82,8 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 ## 验收边界
 
+任务概览的进度区可读取当前 Task Plan 已保存的路线状态、采用依据、候选及检查历史，实际检查成员可返回其原对话；上下文适用性由 Host 投影，过期路线不呈现为当前已采用。`TaskRouteSummary` 不自行写计划或判断路线是否正确。`test/task-routes-ui.test.mjs` 覆盖来源导航、跨任务隔离与过期状态；构建后运行 `node test/main/task-routes.mjs`，用隔离 Product Store 与隐藏 Electron 验证双主题、窄窗口及 Chromium 键盘展开。该检查使用受控记录与焦点模拟，不证明真实模型选路收益或用户人工验收。
+
 507 已于 2026-09-07 确认当前基础工作台与灵感流程验收通过。正式验证记录、候选路径与迁移遗留由 PRD 0028 维护。源码提交、推送与正式发布分别成立；`npm run dist` 生成本机未签名候选。
 
 ## 0.0.32 UI/UX 候选

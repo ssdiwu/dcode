@@ -59,6 +59,8 @@
 
 Pi 0.87.1 的进程适配保留 Host 对会话与凭据的所有权：`prepareRequest` 使用 SessionManager 的当前投影，`finishTurn` 的继续/结束决定跨进程传回；系统提示词与工具声明随规范上下文进入请求。`pi-prompt-compat.ts` 集中处理固定 SDK 的完整提示词替换，历史分支变更使用 `refreshContext()`。复制校验保留系统消息、上下文编辑与压缩边界，原始消息仍保持原文；SDK 兼容与运行隐私回归覆盖这些行为。
 
+路线记录首批候选（PRD 0032）：`task-routes.ts` 约束有界候选、检查与采用/失效/停止，状态保存在既有 Task Plan 的受管 `routeExploration` 中；通用计划写入不能擦除或替换该记录。`dcode_route` 以真实运行身份调用，提供摘要和分页原文读取；候选版本、乐观并发、检查证据归属与新鲜度、累计投入和上下文适用性由 Product Store 校验。Prompt 只投影当前路线与未决项，不注入完整探索历史。自动派发联动、运行中用户变更、依赖失效后的停止与重查及真实模型对照仍由 PRD 验收记录跟进，本切片不等于完整路线选择交付。
+
 ```bash
 npm ci
 npm test

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { redactCredentialText } from "./credential-material.js";
+import type { TaskRouteContext } from "./task-routes.js";
 import {
   readDCodePromptSource,
   type DCodePromptSourceReceipt,
@@ -49,6 +50,7 @@ export interface DCodePromptEnvironment {
   roleRevision: string;
   roleContract: string;
   contextRevision: number;
+  taskRoute?: TaskRouteContext;
   taskAcceptanceFeedback?: ReadonlyArray<{
     requestId: string;
     feedback: string;
@@ -188,6 +190,14 @@ export function assembleDCodeSystemPrompt(input: {
 任务内协作：简单、可立即收口的工作直接处理；需要持续后台执行、可独立分工或独立验收时，用 dcode_team 查看档案后按需派发。成员运行期间继续承接用户，不等所有成员完成才回应。创建权属于你，不能让成员创建新成员。用户的定向要求要同步到对应工作，停止过期方向，不扩大范围。
 执行报告不是验收通过。收到成果后按需安排独立验收成员，使用 dcode_verification 查看真实验收证据并进行二次复核。产品问题用 rework 回到执行者，证据不足用 recheck 回到验收者；连续两次无新证据时改变方法或重新分工，不重复空转。复核通过后才进入用户任务验收。
 `:"";
+  const routeRules = tools.some(tool => tool.name === "dcode_route") ? `
+路线选择：目标、约束和可靠做法清楚时直接推进，不为小任务生成候选或额外调用。缺少事实先核查；存在影响结果的不同路线时，协调者用 dcode_route 开始有界探索，提出真正不同的候选、关键假设、失败条件与最小验证动作。需要独立方向或检查时按需派发，不固定成员数。
+检查候选时寻找具体反例、缺失前提和依赖冲突；实际核查后提交证据及未决异议，未发现缺陷不代表已经证明正确。成熟路线的核心做法有依据、剩余未知可交办、依赖和完成标准清楚。修订须保存为新候选并重新检查，反证随来源保留；所有候选不足时明确等待或停止，不强行选一个。
+采用后按依赖执行。局部失败仅返工受影响部分；核心前提失效时记录 invalidate、停止受影响成员与后续工作，重新核对下游成果，再 reopen。新要求影响路线时先核对与更新，迟到结果不能覆盖新决定。投入达到限制或连续两次没有新证据时停止重复并报告依据；不要通过重建计划清空历史或额度。路线成熟不等于成果验收。
+` : "";
+  const route = input.environment.taskRoute;
+  const selected = route?.contextCurrent ? route.route.candidates.find(candidate => candidate.id === route.route.selectedCandidateId) : undefined;
+  const routeState = route ? `\n当前任务路线记录（有来源的工作状态；contextCurrent=false 表示目标或上下文已变，必须重新核查。详细内容请用 dcode_route context 核对）：\n${JSON.stringify({ planId: route.planId, planRevision: route.planRevision, contextCurrent: route.contextCurrent, status: route.route.status, round: route.route.round, question: route.route.question, reason: route.route.reason, budget: route.route.budget, usedCandidates: route.route.candidates.length, usedChecks: route.route.checks.length, ...(selected ? { selected: { id: selected.id, title: selected.title, approach: selected.approach, remainingWork: selected.remainingWork, dependencies: selected.dependencies } } : {}) })}\n` : "";
   const text = `你是 D Code 的 ${input.environment.role} Agent（智能体），运行在 D Code ADE（智能体开发环境）中。
 
 D Code 是产品与编排主体；Pi SDK 只是本轮 Agent Runtime（智能体运行时），不定义你的身份、产品对象或界面。不要自称 Pi CLI，也不要把 Session（会话）等同于 Task（任务）。
@@ -207,6 +217,8 @@ D Code 是产品与编排主体；Pi SDK 只是本轮 Agent Runtime（智能体�
 角色合同（${input.environment.roleRevision}）：
 ${input.environment.roleContract}
 ${collaborationRules}
+${routeRules}
+${routeState}
 工作原则：
 - 用户提交的 Raw Input（提交原文）与模型使用的 Effective Input（生效输入）是不同事实；不得声称压缩摘要就是用户原话。
 - 只把真实工具结果、文件、测试、Artifact（产物）和 Evidence（证据）当成完成依据；不得用自己的文案冒充执行结果。

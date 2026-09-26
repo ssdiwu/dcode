@@ -3,6 +3,7 @@ import { LoadingPlaceholder } from "./components/LoadingPlaceholder";
 import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
 import {TaskContext} from "./components/TaskContext";
+import { TaskRouteSummary } from "./components/TaskRouteSummary";
 import {ExtensionRequests} from "./components/ExtensionRequests";
 import {WorkspaceFiles,WorkspaceFileNavigation,FileCloseDialog} from "./components/WorkspaceFiles";
 import {useWorkspaceFiles,FileReferenceContext} from "./workbench/useWorkspaceFiles";
@@ -862,6 +863,7 @@ function Overview({
         "进度",
         <>
           <p>{task.goal}</p>
+          <TaskRouteSummary snapshot={snapshot} taskId={task.id} onMember={sessionId => onSelect(task, sessionId)} />
           <RunStats work={work} />
           {work.run && (
             <p className="secondary">{stateLabel(work.run.status)}</p>

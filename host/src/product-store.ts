@@ -3,6 +3,7 @@ import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-pro
 import type {ProjectDirectoryChange} from "./project-directory-change.js";
 import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
 import type { VerificationRecord, CoordinatorReviewRecord } from "./collaboration-verification.js";
+import { parseRouteOperation, readTaskRoute, transitionTaskRoute, type RouteOperation, type TaskRouteContext } from "./task-routes.js";
 import type { CollaborationMessage, CollaborationMessageState } from "./collaboration-message.js";
 import { agentModelCandidates, type AgentModelCandidate } from "./model-route.js";
 import { INSPIRATION_KEY, emptyInspiration, changeInspiration, exportIdeaMarkdown, publishIdeaMedia, removeUnreferencedIdeaMedia, resolveIdeaMedia, inspirationRoot, assertIdeaSnapshotDigest, InspirationError, type InspirationDocument, type InspirationOperation, type InspirationView } from "./inspiration.js";
@@ -275,6 +276,8 @@ export interface TaskPlanRecord {
   taskId: string;
   state: TaskPlanState;
   document: unknown;
+  /** Derived at read time; not another persisted plan state. */
+  routeContextCurrent?: boolean;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -3124,7 +3127,10 @@ export class ProductStore {
       taskContextSets,
       taskPlans: (
         this.database.prepare("SELECT * FROM task_plans ORDER BY task_id, created_at, rowid").all() as SQLiteRow[]
-      ).map(taskPlan),
+      ).map(row => {
+        const plan = taskPlan(row), route = readTaskRoute(plan.document);
+        return { ...plan, ...(route ? { routeContextCurrent: route.contextKey === this.routeContextKey(plan.taskId) } : {}) };
+      }),
       taskWorkItems: (
         this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
       ).map(taskWorkItem),
@@ -3932,6 +3938,61 @@ export class ProductStore {
     );
   }
 
+  taskRouteContext(taskId: string): TaskRouteContext | undefined {
+    const row = this.database.prepare("SELECT * FROM task_plans WHERE task_id=? AND state='active'").get(taskId) as SQLiteRow | undefined;
+    if (!row) return undefined;
+    const plan = taskPlan(row), route = readTaskRoute(plan.document);
+    return route ? { planId: plan.id, planRevision: plan.revision, contextCurrent: route.contextKey === this.routeContextKey(taskId), route } : undefined;
+  }
+
+  private routeContextKey(taskId: string): string {
+    const row = this.database.prepare("SELECT goal,acceptance_json FROM tasks WHERE id=?").get(taskId) as SQLiteRow | undefined;
+    if (!row) throw new ProductStoreError("NOT_FOUND", "任务不存在");
+    const context = this.database.prepare("SELECT revision FROM task_context_sets WHERE task_id=?").get(taskId) as SQLiteRow | undefined;
+    return payloadHash({ goal: text(row, "goal"), acceptance: text(row, "acceptance_json"), contextRevision: context ? integer(context, "revision") : 0 });
+  }
+
+  async updateTaskRoute(input: {
+    requestId: string; taskId: string; agentRunId: string; sessionRunId: string;
+    expectedPlanRevision: number; operation: RouteOperation;
+  }): Promise<{ storeRevision: number; context: TaskRouteContext }> {
+    const operation = parseRouteOperation(input.operation);
+    requiredRevision(input.expectedPlanRevision, "expectedPlanRevision");
+    assertCredentialFreeValue(input, "taskRoute");
+    return this.mutate("taskRoute.update", input.requestId, undefined, input, (_revision, now) => {
+      const actor = this.database.prepare("SELECT a.* FROM agent_runs a JOIN session_runs r ON r.agent_run_id=a.id WHERE a.id=? AND a.task_id=? AND r.id=? AND r.status='running'")
+        .get(input.agentRunId, input.taskId, input.sessionRunId) as SQLiteRow | undefined;
+      if (!actor) throw new ProductStoreError("INVALID_ARGUMENT", "路线操作必须来自当前任务正在执行的智能体");
+      const row = this.database.prepare("SELECT * FROM task_plans WHERE task_id=? AND state='active'").get(input.taskId) as SQLiteRow | undefined;
+      const plan = row ? taskPlan(row) : undefined;
+      if ((plan?.revision ?? 0) !== input.expectedPlanRevision) throw new ProductStoreError("REVISION_CONFLICT", "计划已有新版本，请读取后再修改路线");
+      const previous = readTaskRoute(plan?.document);
+      const contextKey = this.routeContextKey(input.taskId);
+      const id = `route-${randomUUID()}`;
+      const route = transitionTaskRoute(previous, operation, { agentRunId: input.agentRunId, sessionRunId: input.sessionRunId, role: text(actor, "role"), contextKey, now, id });
+      const evidenceIds = operation.action === "propose" ? operation.candidate.evidenceIds : "evidenceIds" in operation ? operation.evidenceIds : [];
+      for (const evidenceId of evidenceIds) {
+        const item = this.database.prepare("SELECT * FROM evidence_records WHERE id=? AND task_id=?").get(evidenceId, input.taskId) as SQLiteRow | undefined;
+        if (!item) throw new ProductStoreError("INVALID_ARGUMENT", "证据不属于当前任务");
+        if (operation.action === "check") {
+          if (text(item, "agent_run_id") !== input.agentRunId || text(item, "command_redacted").startsWith("dcode_")) throw new ProductStoreError("INVALID_ARGUMENT", "检查证据必须来自本人实际核查，不能使用协调操作代替");
+          if (operation.outcome === "ready" && text(item, "exit_kind") !== "ok") throw new ProductStoreError("INVALID_ARGUMENT", "失败或未知检查不能作为路线成熟的证据");
+          const boundary = this.database.prepare("SELECT sequence FROM store_events WHERE kind='taskRoute.updated' AND json_extract(payload_json,'$.candidateId')=? AND json_extract(payload_json,'$.operation.action')='propose' ORDER BY sequence DESC LIMIT 1").get(operation.candidateId) as SQLiteRow | undefined;
+          const evidenceEvent = this.database.prepare("SELECT sequence FROM store_events WHERE kind='evidence.recorded' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(evidenceId) as SQLiteRow | undefined;
+          if (!boundary || !evidenceEvent || integer(evidenceEvent, "sequence") <= integer(boundary, "sequence")) throw new ProductStoreError("INVALID_ARGUMENT", "证据早于候选，请核查当前版本后再提交");
+        }
+      }
+      const planId = plan?.id ?? `task-plan-${randomUUID()}`;
+      const revision = (plan?.revision ?? 0) + 1;
+      const document = { ...(plan?.document as Record<string, unknown> ?? {}), routeExploration: route };
+      if (canonicalJSON(document).length > 200000) throw new ProductStoreError("INVALID_ARGUMENT", "路线记录已达大小限制，请精简本次候选并保留原始证据引用");
+      if (plan) this.database.prepare("UPDATE task_plans SET document_json=?,revision=?,updated_at=? WHERE id=?").run(canonicalJSON(document), revision, now, planId);
+      else this.database.prepare("INSERT INTO task_plans(id,task_id,state,document_json,revision,created_at,updated_at) VALUES (?,?,'active',?,1,?,?)").run(planId, input.taskId, canonicalJSON(document), now, now);
+      const context: TaskRouteContext = { planId, planRevision: revision, contextCurrent: route.contextKey === contextKey, route };
+      return { value: { context }, event: { kind: "taskRoute.updated", entityKind: "taskPlan", entityId: planId, taskId: input.taskId, payload: { context, operation, ...(operation.action === "propose" ? { candidateId: id } : {}) } } };
+    });
+  }
+
   async createTaskPlan(input: {
     requestId: string;
     expectedStoreRevision: number;
@@ -3944,6 +4005,7 @@ export class ProductStore {
     const scope = normalizedTaskScope(input.scope);
     const state = normalizedTaskPlanState(input.state ?? "active", "state");
     const document = normalizedPlanDocument(input.document, "document");
+    if ("routeExploration" in document) throw new ProductStoreError("INVALID_ARGUMENT", "路线记录只能通过任务路线操作维护");
     const params = { taskId, scope, state, document };
     return await this.mutate(
       "task.plan.create",
@@ -3952,6 +4014,7 @@ export class ProductStore {
       params,
       (_storeRevision, now) => {
         this.taskForScope(taskId, scope);
+        if (state === "active" && this.taskRouteContext(taskId)) throw new ProductStoreError("REVISION_CONFLICT", "请更新当前计划，保留已有路线与累计投入");
         if (state === "active") {
           this.database.prepare(`
             UPDATE task_plans
@@ -4015,6 +4078,13 @@ export class ProductStore {
         const row = this.database.prepare("SELECT * FROM task_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Task Plan does not belong to this Task", { taskId, planId });
         const current = taskPlan(row);
+        if (state === "active" && this.taskRouteContext(taskId)?.planId !== undefined && this.taskRouteContext(taskId)!.planId !== current.id) {
+          throw new ProductStoreError("REVISION_CONFLICT", "不能用另一计划替换当前路线与累计投入");
+        }
+        if (canonicalJSON(document.routeExploration ?? null) !== canonicalJSON((current.document as Record<string, unknown>).routeExploration ?? null)
+          || readTaskRoute(current.document) && state !== "active") {
+          throw new ProductStoreError("INVALID_ARGUMENT", "路线记录和阶段只能通过任务路线操作维护");
+        }
         if (current.revision !== expectedPlanRevision) {
           throw new ProductStoreError("REVISION_CONFLICT", "Task Plan changed before this update", {
             expectedPlanRevision,

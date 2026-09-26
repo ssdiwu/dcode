@@ -8,6 +8,8 @@ import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
 import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
+import { createTaskRouteExtension, DCODE_ROUTE_TOOL_NAME, type TaskRouteAction } from "./task-route-extension.js";
+import { summarizeTaskRoute } from "./task-routes.js";
 import { installDCodePrompt, replaceRequestPrompt } from "./pi-prompt-compat.js";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { CollaborationMessage } from "./collaboration-message.js";
@@ -152,6 +154,7 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
   DCODE_TASK_ACCEPTANCE_TOOL_NAME,
   DCODE_TEAM_TOOL_NAME,
   DCODE_VERIFICATION_TOOL_NAME,
+  DCODE_ROUTE_TOOL_NAME,
 ]);
 
 function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
@@ -1186,6 +1189,7 @@ export class PiHost {
         roleRevision: `${storedProfileId}:v${profileVersion}`,
         roleContract,
         contextRevision: taskContextSet.revision,
+        ...(this.productStore?.taskRouteContext(task.id) ? { taskRoute: this.productStore.taskRouteContext(task.id) } : {}),
         ...(taskAcceptanceFeedback.length > 0 ? { taskAcceptanceFeedback } : {}),
       },
       documents,
@@ -2560,6 +2564,26 @@ export class PiHost {
       if(otherId!==identity.runtimeId&&other.runtimeIdentity&&this.workspaceClaimKey(other.runtimeIdentity.workspace)===key&&!other.currentRun&&!other.session.isStreaming&&!other.auxiliary?.hasLive&&!this.collaborationDrains.has(other.runtimeIdentity.dcodeSessionId))await this.closeRuntime(otherId);
     }
     await this.setCoordinatorAccess(active,"exclusiveWrite");
+  }
+
+  private async handleTaskRoute(identity: RuntimePromptIdentity, callId: string, action: TaskRouteAction): Promise<unknown> {
+    const store = await this.getProductStore(), snapshot = await store.snapshot();
+    const actor = snapshot.agentRuns.find(run => run.id === identity.agentRunId && run.taskId === identity.taskId && run.sessionId === identity.dcodeSessionId);
+    if (!actor) throw new PiHostError("AGENT_REQUIRED", "当前任务缺少路线操作的执行身份");
+    if (action.action === "context" || action.action === "read") {
+      const context = store.taskRouteContext(identity.taskId);
+      if (!context) return { planRevision: snapshot.taskPlans.find(plan => plan.taskId === identity.taskId && plan.state === "active")?.revision ?? 0, route: null };
+      if (action.action === "context") return summarizeTaskRoute(context);
+      const body = JSON.stringify(context), offset = action.offset ?? 0, end = Math.min(body.length, offset + (action.limit ?? 12000));
+      return { planId: context.planId, planRevision: context.planRevision, content: body.slice(offset, end), totalLength: body.length, ...(end < body.length ? { nextOffset: end } : {}) };
+    }
+    const run = this.runtimes.get(identity.runtimeId)?.currentRun;
+    if (!action.operation || action.expectedPlanRevision === undefined) throw new PiHostError("INVALID_ARGUMENT", "修改路线需要计划版本和具体操作");
+    if (!run?.sessionRunId) throw new PiHostError("RUN_REQUIRED", "路线操作需要正在执行的会话运行");
+    const requestId = `route:${createHash("sha256").update(`${identity.taskId}\0${actor.id}\0${run.sessionRunId}\0${callId}`).digest("hex").slice(0, 48)}`;
+    const result = await store.updateTaskRoute({ requestId, taskId: identity.taskId, agentRunId: actor.id, sessionRunId: run.sessionRunId, expectedPlanRevision: action.expectedPlanRevision, operation: action.operation });
+    this.options.emit("foundation.changed", { kind: "taskRoute.updated", taskId: identity.taskId, storeRevision: result.storeRevision });
+    return { storeRevision: result.storeRevision, ...summarizeTaskRoute(result.context) };
   }
 
   private async handleVerification(identity:RuntimePromptIdentity,callId:string,input:VerificationAction):Promise<unknown> {
@@ -4040,6 +4064,7 @@ export class PiHost {
             ? [{name:"dcode-verification",hidden:true,factory:createVerificationExtension(promptContext!.environment.role,(callId,action)=>this.handleVerification(runtimeIdentity,callId,action))}] : []),
           ...(runtimeIdentity && promptContext?.environment.role === "coordinator"
             ? [{name:"dcode-collaboration",hidden:true,factory:createCollaborationExtension((callId,action)=>this.coordinateTeam(runtimeIdentity,callId,action))}] : []),
+          ...(runtimeIdentity ? [{ name: "dcode-route", hidden: true, factory: createTaskRouteExtension((callId, action) => this.handleTaskRoute(runtimeIdentity, callId, action)) }] : []),
           ...(agentRequestController
             ? [{
               name: "dcode-agent-request",
@@ -4068,6 +4093,7 @@ export class PiHost {
               "find",
               "ls",
               "dcode_facts",
+              DCODE_ROUTE_TOOL_NAME,
               DCODE_AGENT_REQUEST_TOOL_NAME,
               ...(["coordinator","verifier"].includes(promptContext.environment.role)?[DCODE_VERIFICATION_TOOL_NAME]:[]),
               ...(promptContext.environment.role === "coordinator" ? [DCODE_TASK_ACCEPTANCE_TOOL_NAME, DCODE_TEAM_TOOL_NAME] : []),
