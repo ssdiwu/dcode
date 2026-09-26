@@ -1,0 +1,2 @@
+# Preserve whitespace inside the generated HTML's upstream shader template literals.
+dcode-workbench-v2-prototype.html whitespace=-blank-at-eol

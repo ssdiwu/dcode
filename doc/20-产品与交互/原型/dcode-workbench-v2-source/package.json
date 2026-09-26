@@ -1,0 +1,14 @@
+{
+  "name": "dcode-workbench-prototype-threeui",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "@designcodeio/threeui": "1.2.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "three": "0.149.0",
+    "three128": "npm:three@0.128.0"
+  },
+  "devDependencies": { "esbuild": "0.25.12" }
+}

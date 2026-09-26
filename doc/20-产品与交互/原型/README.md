@@ -12,6 +12,8 @@
 
 [查看“项目优先主页与真实能力入口”原型](dcode-home-project-goal-prototype.html)（[验证结论与边界](dcode-home-project-goal-prototype-验证.md)；方向已确认，保留为人工走查参考）
 
+[查看“工作台 v2 / 新建任务粒子背景”原型](dcode-workbench-v2-prototype.html)（[原版源码与构建记录](dcode-workbench-v2-source/README.md)；仅供交互参考，正式客户端交付与验收见 [PRD 0030](../../40-版本实施方案/0030-工作台-UI-UX-并行候选.md)）
+
 [查看“Sol 自迭代候选闭环”原型](dcode-self-build-sol-prototype.html)（[验证问题与边界](dcode-self-build-sol-prototype-验证.md)；用于 `0.0.26` 隔离 eval）
 
 [查看“自进化运行回执与安全恢复”原型](dcode-self-evolution-receipt-prototype.html)（[验证问题与边界](dcode-self-evolution-receipt-prototype-验证.md)；用于 `0.0.27` 隔离 eval）
