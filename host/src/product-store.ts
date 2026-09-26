@@ -4101,6 +4101,16 @@ export class ProductStore {
     return Math.max(0, ...rows.filter(row => !current || text(row,"id") === current).map(row => readRouteWork(taskWorkItem(row).details)?.recheckAfterRevision ?? 0));
   }
 
+  private assertEvidenceCompletesUnknownCheck(taskId: string, candidateId: string, evidenceIds: string[]): void {
+    const unknown = this.database.prepare("SELECT sequence FROM store_events WHERE task_id=? AND kind='taskRoute.updated' AND json_extract(payload_json,'$.operation.action')='check' AND json_extract(payload_json,'$.operation.candidateId')=? AND json_extract(payload_json,'$.operation.outcome')='unknown' ORDER BY sequence DESC LIMIT 1").get(taskId, candidateId) as SQLiteRow | undefined;
+    if (!unknown) return;
+    const fresh = evidenceIds.length > 0 && evidenceIds.every(id => {
+      const event = this.database.prepare("SELECT sequence FROM store_events WHERE task_id=? AND kind='evidence.recorded' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(taskId, id) as SQLiteRow | undefined;
+      return event && integer(event, "sequence") > integer(unknown, "sequence");
+    });
+    if (!fresh) throw new ProductStoreError("INVALID_ARGUMENT", "补齐未知结论需要最近一次未知检查之后的新工具证据，不能重复使用旧证据");
+  }
+
   async updateTaskRoute(input: {
     requestId: string; taskId: string; agentRunId: string; sessionRunId: string;
     expectedPlanRevision: number; operation: RouteOperation;
@@ -4131,6 +4141,10 @@ export class ProductStore {
           if (!boundary || !evidenceEvent || integer(evidenceEvent, "sequence") <= integer(boundary, "sequence")) throw new ProductStoreError("INVALID_ARGUMENT", "证据早于候选，请核查当前版本后再提交");
         }
       }
+      if (operation.action === "check" && operation.outcome === "ready") this.assertEvidenceCompletesUnknownCheck(input.taskId, operation.candidateId, operation.evidenceIds);
+      // Recheck on adoption as well: a ready record written by an older build
+      // may predate the evidence-freshness rule for completing an unknown check.
+      if (operation.action === "adopt") this.assertEvidenceCompletesUnknownCheck(input.taskId, operation.candidateId, previous!.checks.filter(check => check.candidateId === operation.candidateId).at(-1)!.evidenceIds);
       if (operation.action === "check") {
         const evidence = evidenceIds.map(evidenceId => {
           const row = this.database.prepare("SELECT command_redacted,payload_json FROM evidence_records WHERE id=?").get(evidenceId) as SQLiteRow;
@@ -4149,10 +4163,19 @@ export class ProductStore {
       let workItem: TaskWorkItemRecord | undefined;
       if (operation.action === "work") {
         const items = this.routeWorkItems(input.taskId);
-        if (items.length >= 200 || operation.dependsOn.some(id => !items.some(item => item.id === id && !readRouteWork(item.details)?.invalidatedReason))) throw new ProductStoreError("INVALID_ARGUMENT", "工作项依赖必须来自本任务的有效工作项，且总量须有界");
+        if (items.length >= 200 || operation.dependsOn.some(id => !items.some(item => item.id === id && item.state !== "cancelled" && !readRouteWork(item.details)?.invalidatedReason))) throw new ProductStoreError("INVALID_ARGUMENT", "工作项依赖必须来自本任务的有效工作项，且总量须有界");
         const details = { routeWork: { planId, round: route.round, candidateId: route.selectedCandidateId!, completion: operation.completion, dependsOn: operation.dependsOn } satisfies RouteWork };
         workItem = { id: `work-item-${randomUUID()}`, taskId: input.taskId, ordinal: (items.at(-1)?.ordinal ?? -1) + 1, title: operation.title, state: "pending", details, revision: 1, createdAt: now, updatedAt: now };
         this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'pending',NULL,?,1,?,?)").run(workItem.id, input.taskId, workItem.ordinal, workItem.title, canonicalJSON(details), now, now);
+      }
+      if (operation.action === "cancel_work") {
+        const items = this.routeWorkItems(input.taskId), item = items.find(item => item.id === operation.workItemId), work = readRouteWork(item?.details);
+        if (!item || !work || work.planId !== planId || work.round !== route.round || work.candidateId !== route.selectedCandidateId) throw new ProductStoreError("INVALID_ARGUMENT", "只能收口本轮路线中尚未派发的工作项");
+        if (item.ownerAssignmentId || !["pending", "blocked"].includes(item.state)) throw new ProductStoreError("INVALID_ARGUMENT", "已派发或已结束的工作须保留原执行与验收流程，不能通过取消未派发安排跳过验收");
+        if (items.some(other => !["completed", "cancelled"].includes(other.state) && readRouteWork(other.details)?.dependsOn.includes(item.id))) throw new ProductStoreError("REVISION_CONFLICT", "尚有未完成的下游依赖，请先核对并收口下游安排");
+        const details = { ...(item.details as Record<string, unknown>), routeWork: { ...work, cancelledReason: operation.reason } };
+        this.database.prepare("UPDATE task_work_items SET state='cancelled',details_json=?,revision=revision+1,updated_at=? WHERE id=?").run(canonicalJSON(details), now, item.id);
+        workItem = { ...item, state: "cancelled", details, revision: item.revision + 1, updatedAt: now };
       }
       const affectedAgentRunIds = ["invalidate", "stop"].includes(operation.action) || operation.action === "acknowledge" && operation.impact === "changed" ? this.invalidateRouteWork(input.taskId, context, now) : [];
       if (operation.action === "adopt") {
@@ -5367,7 +5390,7 @@ export class ProductStore {
             SET status = 'running', revision = revision + 1,
               model_provider = ?, model_id = ?,
               completed_at = NULL, updated_at = ?
-            WHERE id = ? AND status IN ('prepared', 'completed')
+            WHERE id = ?
           `).run(input.modelProvider ?? null, input.modelId ?? null, now, agentRunId);
         }
         this.database.prepare(`

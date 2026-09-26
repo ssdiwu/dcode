@@ -2,7 +2,7 @@ import type { FoundationSnapshot } from "../types";
 import type { TaskRouteState } from "../../../../../host/src/task-routes.js";
 
 const statusLabels: Record<TaskRouteState["status"], string> = {
-  exploring: "正在检查路线", ready: "路线已采用，成果待验证", invalidated: "原路线已失效", stopped: "探索已停止",
+  exploring: "路线待核查", ready: "路线已采用", invalidated: "原路线已失效", stopped: "探索已停止",
 };
 const checkLabels = { ready: "可以实施", revise: "需要修订", reject: "发现关键缺陷", unknown: "依据不足" };
 
@@ -24,7 +24,6 @@ export function TaskRouteSummary({ snapshot, taskId, onMember }: {
     <p>{route.question}</p>
     {selected && <p>采用：{selected.title}</p>}
     <p className="secondary">{route.reason}</p>
-    {selected && selected.remainingWork.length > 0 && <p>尚待完成：{selected.remainingWork.join("；")}</p>}
     <small className="secondary">探索 {route.round}/{route.budget.rounds} 轮 · 候选 {route.candidates.length}/{route.budget.candidates} · 检查 {route.checks.length}/{route.budget.checks}</small>
     <details>
       <summary>查看候选与检查依据</summary>
@@ -37,6 +36,7 @@ export function TaskRouteSummary({ snapshot, taskId, onMember }: {
         <p>验证动作：{candidate.probe}</p>
         <p>预计投入：{candidate.expectedCost}</p>
         <p>依赖与完成路径：{candidate.dependencies}</p>
+        {candidate.remainingWork.length > 0 && <p>候选提出时列出的后续工作：{candidate.remainingWork.join("；")}</p>}
         {candidate.derivedFrom && <p>修订自：{route.candidates.find(item => item.id === candidate.derivedFrom)?.title ?? "来源暂不可读"}</p>}
         {route.checks.filter(check => check.candidateId === candidate.id).map(check => {
           const member = snapshot.agentRuns.find(item => item.id === check.actorAgentRunId && item.taskId === taskId);
@@ -53,7 +53,7 @@ export function TaskRouteSummary({ snapshot, taskId, onMember }: {
         })}
         {!route.checks.some(check => check.candidateId === candidate.id) && <p className="secondary">尚未检查</p>}
       </details>)}
-      <details><summary>查看路线变化</summary><ol>{route.history.filter(item => ["begin", "adopt", "invalidate", "reopen", "stop", "acknowledge", "extend"].includes(item.action)).map((item, index) => <li key={index}>{item.reason}{item.action === "extend" && item.budget && <small className="secondary"> · 上限调整为 {item.budget.rounds} 轮、{item.budget.candidates} 个候选、{item.budget.checks} 次检查</small>}</li>)}</ol></details>
+      <details><summary>查看路线变化</summary><ol>{route.history.filter(item => ["begin", "adopt", "invalidate", "reopen", "stop", "acknowledge", "extend", "cancel_work"].includes(item.action)).map((item, index) => <li key={index}>{item.reason}{item.action === "extend" && item.budget && <small className="secondary"> · 上限调整为 {item.budget.rounds} 轮、{item.budget.candidates} 个候选、{item.budget.checks} 次检查</small>}</li>)}</ol></details>
     </details>
   </section>;
 }

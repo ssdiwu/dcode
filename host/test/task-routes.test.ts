@@ -136,3 +136,19 @@ test("a successful observation submitted as an unresolved finding returns a repa
     assert.equal((await f.act({ action: "adopt", candidateId: id, reason: "证据充分且没有未决问题" })).context.route.status, "ready");
   } finally { await f.close(); }
 });
+
+test("an unknown check can be completed by new evidence on the same candidate while historical uncertainty remains visible", async () => {
+  const f = await routeFixture();
+  try {
+    await f.act({ action: "begin", question: "补齐运行证据", independentCheck: false, budget: { candidates: 1, checks: 4, rounds: 1 } });
+    const id = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!.id;
+    const old = await f.evidence(f.owner, f.ownerRun);
+    await f.act({ action: "check", candidateId: id, outcome: "unknown", findings: ["尚无运行证据"], summary: "只完成了静态读取", evidenceIds: [old] });
+    await assert.rejects(f.act({ action: "adopt", candidateId: id, reason: "仍然未知" }), /检查尚未/);
+    await assert.rejects(f.act({ action: "check", candidateId: id, outcome: "ready", findings: [], summary: "重复使用旧证据", evidenceIds: [old] }), /未知检查之后/);
+    await f.act({ action: "check", candidateId: id, outcome: "ready", findings: [], summary: "已实际运行并补齐前次缺证据的结论", evidenceIds: [await f.evidence(f.owner, f.ownerRun)] });
+    const result = await f.act({ action: "adopt", candidateId: id, reason: "同一方案的新运行证据已补齐未知项" });
+    assert.equal(result.context.route.status, "ready"); assert.equal(result.context.route.candidates.length, 1);
+    assert.deepEqual(result.context.route.checks.map(check => check.outcome), ["unknown", "ready"]);
+  } finally { await f.close(); }
+});

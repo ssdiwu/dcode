@@ -33,6 +33,7 @@ export const RouteOperationSchema = Type.Union([
   Type.Object({ action: Type.Literal("reopen"), reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("stop"), reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("work"), title: Type.String({ minLength: 1, maxLength: 500, pattern: "\\S" }), completion: Text, dependsOn: Type.Array(Id, { maxItems: 32, uniqueItems: true }) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("cancel_work"), workItemId: Id, reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("acknowledge"), inputId: Id, impact: Type.Union([Type.Literal("unchanged"), Type.Literal("changed")]), reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("extend"), inputId: Id, budget: Budget, reason: Text }, { additionalProperties: false }),
 ]);
@@ -59,7 +60,7 @@ export interface TaskRouteState {
   checks: RouteCheck[];
   selectedCandidateId?: string;
   reason: string;
-  history: Array<{ action: RouteOperation["action"]; actorAgentRunId: string; sessionRunId: string; createdAt: string; reason: string; candidateId?: string; inputId?: string; budget?: Static<typeof Budget> }>;
+  history: Array<{ action: RouteOperation["action"]; actorAgentRunId: string; sessionRunId: string; createdAt: string; reason: string; candidateId?: string; workItemId?: string; inputId?: string; budget?: Static<typeof Budget> }>;
 }
 export interface TaskRouteContext { planId: string; planRevision: number; contextCurrent: boolean; inputCurrent?: boolean; pendingInput?: { id: string; text: string; sessionId: string; complete: boolean }; route: TaskRouteState }
 
@@ -76,6 +77,7 @@ export interface RouteWork {
   invalidatedReason?: string;
   recheckAfterRevision?: number;
   recheckReason?: string;
+  cancelledReason?: string;
 }
 export const RouteDispatchSchema = Type.Object({
   purpose: Type.Union([Type.Literal("explore"), Type.Literal("check"), Type.Literal("execute"), Type.Literal("review"), Type.Literal("independent")]),
@@ -161,9 +163,10 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     action: operation.action, actorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId,
     createdAt: actor.now, reason, ...(candidateId ? { candidateId } : {}),
     ...("inputId" in operation ? { inputId: operation.inputId } : {}),
+    ...("workItemId" in operation ? { workItemId: operation.workItemId } : {}),
     ...(operation.action === "extend" ? { budget: operation.budget } : {}),
   });
-  if (["adopt", "work"].includes(operation.action) && next.acknowledgedInputId !== actor.latestInputId) fail("存在用户新输入，请先核对其对当前路线的影响");
+  if (["adopt", "work", "cancel_work"].includes(operation.action) && next.acknowledgedInputId !== actor.latestInputId) fail("存在用户新输入，请先核对其对当前路线的影响");
   if (operation.action === "acknowledge") {
     if (operation.inputId !== actor.latestInputId) fail("用户输入已更新，请读取最新原文后再判断");
     if (operation.impact === "unchanged" && next.contextKey !== actor.contextKey) fail("选定上下文已改变，需要重新检查路线");
@@ -177,6 +180,9 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     if (fields.some(field => operation.budget[field] < next.budget[field]) || !fields.some(field => operation.budget[field] > next.budget[field])) fail("新的投入上限必须明确增加，累计投入不会清空");
     next.budget = operation.budget; next.budgetInputId = operation.inputId; next.acknowledgedInputId = operation.inputId;
     next.reason = operation.reason; record(operation.reason);
+  } else if (operation.action === "cancel_work") {
+    if (next.status !== "ready") fail("只能在当前已采用路线中收口未派发安排");
+    record(operation.reason, next.selectedCandidateId);
   } else if (operation.action === "work") {
     if (next.status !== "ready" || !next.selectedCandidateId) fail("采用成熟路线后才能建立执行工作项");
     record(operation.title, next.selectedCandidateId);
@@ -201,7 +207,10 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     const candidate = next.candidates.find(c => c.id === operation.candidateId);
     const checks = next.checks.filter(c => c.candidateId === operation.candidateId);
     if (next.status !== "exploring" || !candidate || candidate.round !== next.round) fail("需要当前探索轮次的候选");
-    if (!checks.some(c => c.outcome === "ready") || checks.some(c => c.outcome !== "ready")) fail("检查尚未形成无未决异议的成熟路线；修订应提交新候选并重新检查");
+    // An inability to check is not a defect in the candidate. A later ready
+    // check (with fresh evidence enforced by Store) can complete that inquiry;
+    // actual objections still require a revised candidate and its own checks.
+    if (checks.at(-1)?.outcome !== "ready" || checks.some(c => c.outcome === "reject" || c.outcome === "revise")) fail("检查尚未形成无未决异议的成熟路线；unknown 须补充新证据并重新检查，reject/revise 须提交修订候选并重新检查");
     next.status = "ready"; next.selectedCandidateId = operation.candidateId; next.reason = operation.reason;
     record(operation.reason, operation.candidateId);
   } else if (operation.action === "reopen") {

@@ -4,6 +4,37 @@ import { routeFixture } from "./fixtures/task-route-fixture.js";
 
 const candidate = { title: "分段分析", approach: "先读取，再汇总", assumptions: [], basis: "有界验证材料", evidenceIds: [], failureConditions: ["前段结果无效"], probe: "读取检查", expectedCost: "两项工作", remainingWork: ["读取", "汇总"], dependencies: "汇总依赖读取" };
 
+test("continuing a stopped or failed agent reflects the new running execution and rejects a second concurrent start", async () => {
+  const f = await routeFixture(); let run = f.ownerRun;
+  try {
+    for (const outcome of ["aborted", "failed", "unknown"] as const) {
+      await f.store.finishSessionRun({ sessionRunId: run.sessionRunId, providerAttemptId: run.providerAttemptId, outcome });
+      run = await f.start(f.owner);
+      assert.equal((await f.store.snapshot()).agentRuns.find(item => item.id === f.owner.id)!.status, "running");
+      await assert.rejects(f.start(f.owner), /cannot start another Session Run/);
+    }
+  } finally { await f.close(); }
+});
+
+test("a coordinator can cancel an unassigned leaf while assigned work and unfinished dependents retain their gates", async () => {
+  const f = await routeFixture();
+  try {
+    await f.act({ action: "begin", question: "按证据安排工作", independentCheck: false, budget: { candidates: 1, checks: 1, rounds: 1 } });
+    const id = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!.id;
+    await f.act({ action: "check", candidateId: id, outcome: "ready", summary: "已核对", findings: [], evidenceIds: [await f.evidence(f.owner, f.ownerRun)] });
+    await f.act({ action: "adopt", candidateId: id, reason: "可以分工" });
+    const a = (await f.act({ action: "work", title: "实际实施", completion: "交付实现", dependsOn: [] })).workItem!;
+    const b = (await f.act({ action: "work", title: "重复安排", completion: "另有实际验收工作覆盖", dependsOn: [a.id] })).workItem!;
+    await assert.rejects(f.act({ action: "cancel_work", workItemId: a.id, reason: "仍有下游" }), /下游依赖/);
+    const cancelled = await f.act({ action: "cancel_work", workItemId: b.id, reason: "未派发的重复安排由实际验收覆盖" });
+    assert.equal(cancelled.workItem?.state, "cancelled"); assert.equal(cancelled.context.route.status, "ready");
+    assert.equal(cancelled.context.route.history.at(-1)?.workItemId, b.id);
+    await assert.rejects(f.act({ action: "work", title: "不能依赖已取消安排", completion: "无效", dependsOn: [b.id] }), /有效工作项/);
+    await f.store.createTeamRun({ requestId: "assigned", taskId: f.task.id, scope: f.scope, coordinatorAgentRunId: f.owner.id, members: [{ profileId: "builtin-worker", title: "执行", taskPacket: { route: { purpose: "execute", workItemId: a.id } } }] });
+    await assert.rejects(f.act({ action: "cancel_work", workItemId: a.id, reason: "不能跳过验收" }), /已派发/);
+  } finally { await f.close(); }
+});
+
 test("route-bound delegation enforces readiness and dependencies; invalidation cancels affected work without erasing independent results", async () => {
   const f = await routeFixture(); let serial = 0;
   const delegate = (route: unknown, title = "成员") => f.store.createTeamRun({ requestId: `delegate-${++serial}`, taskId: f.task.id, scope: f.scope, coordinatorAgentRunId: f.owner.id,

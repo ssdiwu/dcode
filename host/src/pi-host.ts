@@ -10,7 +10,7 @@ import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type Verificati
 import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
 import { createTaskRouteExtension, DCODE_ROUTE_TOOL_NAME, type TaskRouteAction } from "./task-route-extension.js";
 import { readRouteWork, summarizeTaskRoute } from "./task-routes.js";
-import { installDCodePrompt, replaceRequestPrompt } from "./pi-prompt-compat.js";
+import { installDCodePrompt, replaceRequestPrompt, requiredContextTokens } from "./pi-prompt-compat.js";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { CollaborationMessage } from "./collaboration-message.js";
 import { ModelQuotaService, assessModelQuota } from "./model-quota.js";
@@ -183,6 +183,7 @@ const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "session.setFastMode",
   "extension.respond",
   "agentRequest.answer",
+  "task.acceptance",
   "agentRun.stop",
 ]);
 
@@ -195,6 +196,7 @@ const RUNTIME_CONTROL_METHODS = new Set<HostMethod>([
   "session.abort",
   "extension.respond",
   "agentRequest.answer",
+  "task.acceptance",
   "agentRun.stop",
 ]);
 
@@ -5632,9 +5634,8 @@ export class PiHost {
         const candidates=this.memberModelCandidates(store,identity.dcodeSessionId,packet?.resolvedModelCandidates??profile?.modelCandidates??[{providerId:model.provider,modelId:model.id}]);
         const models=availableChoices.map(choice=>rejected.has(choice.providerId)?{...choice,available:false}:choice);
         const hasImages=context.messages.some(message=>Array.isArray(message.content)&&message.content.some(part=>part.type==="image"));
-        const usage=runtime.session.getContextUsage();let imageCount=0;
-        const textSize=Buffer.byteLength(JSON.stringify(context,(_key,value)=>{if(value&&typeof value==="object"&&value.type==="image"){imageCount++;return {type:"image"};}return value;}));
-        const minimumContext=Math.max(!auxiliary&&typeof usage?.tokens==="number"?usage.tokens+1024:0,Math.ceil(textSize/2)+imageCount*4096+2048);
+        const usage=runtime.session.getContextUsage();
+        const minimumContext=requiredContextTokens(context, auxiliary ? null : usage?.tokens);
         const decision=await chooseAgentModel({candidates,thresholdPercent,models,quotas:this.quotaService(),capabilities:hasImages?["image"]:[],minimumContext});
         if(!decision.selected)throw new PiHostError("MODEL_ROUTE_BLOCKED",`回退链暂无可调用模型（${[...new Set(decision.considered.map(item=>item.reason))].join("；")}），当前进度已保留`);
         if(decision.selected.providerId===model.provider&&decision.selected.modelId===model.id)return {model,context};

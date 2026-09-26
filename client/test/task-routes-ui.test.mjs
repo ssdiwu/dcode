@@ -22,7 +22,7 @@ test("route summary preserves objections and source navigation, and does not pre
   let opened;
   try {
     const view = render(React.createElement(TaskRouteSummary, { snapshot, taskId: "task", onMember: id => { opened = id; } }));
-    assert.ok(screen.getByText("路线已采用，成果待验证"));
+    assert.ok(screen.getByText("路线已采用"));
     assert.ok(screen.getByText("保留前一轮失败原因"));
     for (const details of document.querySelectorAll("details")) details.open = true;
     fireEvent.click(screen.getByRole("button", { name: "查看检查成员的对话" }));
