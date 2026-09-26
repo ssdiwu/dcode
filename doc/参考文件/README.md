@@ -2,11 +2,11 @@
 
 状态：Reference Index（参考索引）
 
-最后对齐：2026-08-15
+既有参考清单上次对齐：2026-08-15；REF-016–021 来源核对：2026-09-24；REF-022–024 论文原文核对及版本借鉴确认：2026-09-26。
 
 ## 权威边界
 
-本目录记录 507 明确提供的外部产品、界面和仓库参考，以及 D Code 已确认的借鉴边界。它帮助后续设计与实现理解“为什么这样做”，但不直接定义产品需求，也不能证明能力已经实现。
+本目录记录 507 明确提供的外部产品、界面、仓库和论文参考，以及 D Code 已确认的借鉴边界。它帮助后续设计与实现理解“为什么这样做”，但不直接定义产品需求，也不能证明能力已经实现。
 
 - 目标形态以 [`20-产品与交互/`](../20-产品与交互/README.md) 为准。
 - 版本范围与验收以 [`40-版本实施方案/`](../40-版本实施方案/README.md) 为准。
@@ -34,6 +34,15 @@
 | REF-013 | Macro Tasks | Unified Workspace Task（统一工作空间任务） | [Macro Tasks](https://macro.com/app/component/tasks) 与 [官方仓库](https://github.com/macro-inc/macro) | 富任务对象、双向引用与并排上下文参考 |
 | REF-014 | GitHub Projects | Project Planning View（项目规划视图） | [官方介绍](https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects)与[最佳实践](https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/best-practices-for-projects) | 同一任务多视图、字段、草稿、依赖与自动化参考 |
 | REF-015 | 507 现有 Pi 拓展族 | Pi Extension Sources（Pi 拓展来源） | [本机只读审计](现有-Pi-拓展能力归宿.md) | D Code 基础能力、可选拓展、提供方与不迁移边界 |
+| REF-016 | pi-agent-extensions | Pi Extension Collection（Pi 扩展集合） | [Pi 包页](https://pi.dev/packages/pi-agent-extensions) | 审查、有限迭代、会话与文件入口的机制参考 |
+| REF-017 | pi-agents-team | Pi Extension（Pi 扩展） | [Pi 包页](https://pi.dev/packages/pi-agents-team) | 协调者接收精简成果、按来源查看成员过程的机制参考 |
+| REF-018 | Remnic Pi 插件 | Pi Memory Extension（Pi 记忆扩展） | [npm 包页](https://www.npmjs.com/package/%40remnic/plugin-pi) | 按需召回与压缩前保存的参考；D Code 优先保留可点回原文的引用 |
+| REF-019 | Magic Context Pi 插件 | Pi Memory Extension（Pi 记忆扩展） | [npm 包页](https://www.npmjs.com/package/%40cortexkit/pi-magic-context) | 跨会话检索与上下文管理的参考 |
+| REF-020 | pi-agenticoding | Pi Extension（Pi 扩展） | [作者仓库](https://github.com/agenticoding/pi-agenticoding) | 任务摘要与主动交接的机制参考 |
+| REF-021 | pi-cc-plugins | Pi Extension（Pi 扩展） | [507 提供的仓库](https://github.com/ariesike/pi-cc-plugins) | 外部能力导入兼容性的后续参考 |
+| REF-022 | Stellar Colosseum | Research Paper（研究论文） | 507 提供标题截图；[论文 v2](https://arxiv.org/abs/2609.15983v2) | 候选路线、针对性反证、成熟判断与局部回退机制参考 |
+| REF-023 | RRSI | Research Paper（研究论文） | 同一截图；[论文 v2](https://arxiv.org/abs/2609.24972v2) | 有界修改、反证保留及未参与调试任务的评估纪律参考 |
+| REF-024 | Harness-Zero | Research Paper（研究论文） | 同一截图；[论文 v1](https://arxiv.org/abs/2609.24974v1) | 将 Harness 引导行为蒸馏进模型的训练方向参考，未进入版本实施范围 |
 
 ## REF-001 OpenAI Codex 桌面端
 
@@ -179,6 +188,26 @@
 **D Code 借鉴**：现有 `pi-*` 仓库是 507 已经验证过的工作方法、交互、安全和 Provider（提供方）机制来源。逐项归宿、分类判据和证据边界见[现有 Pi 拓展能力归宿](现有-Pi-拓展能力归宿.md)。
 
 **明确不借鉴**：不按仓库边界整体搬运，不继续暴露 `dgoal`、`dteam` 等来源名称，不加载它们作为 D Code 原生 Goal / Agent Team 的运行时依赖，不复制 Pi TUI、Pi 包市场、Pi 状态键或会话所有权。只有当前 D Code 产品需要的机制进入基础能力、可选一等拓展、Capability Provider 或 Skill。
+
+## REF-016–021 Pi 续接、记忆、协作与能力桥接
+
+2026-09-24 按上述包页和作者仓库核对来源；外部包版本与下载量会变化，不作为 D Code 需求或选型依据。[PRD 0031](../40-版本实施方案/0031-0.0.34-任务续接与可追溯审查产品需求.md) 拥有已经确认的产品行为与验收，目标版本于 2026-09-26 顺延至 `0.0.34`。
+
+- **pi-agent-extensions**：参考从当前会话、文件和差异进入审查与有限迭代的便捷动作；D Code 沿用任务、工作项、团队和自有界面，不复制整包命令、主题或通用 workflow（工作流）引擎。
+- **pi-agents-team**：参考协调者只消费有界成果、需要时回到成员来源；D Code 已有 Task 内成员、Child Agent Session、报告和独立验收，不移植固定角色表或 Pi worker 会话权威。
+- **Remnic 与 Magic Context**：参考相关内容召回、跨会话检索和上下文压力管理。D Code 的 Task、Project Knowledge 与全局 Inspiration 保留来源类型和版本，实际引用可回到原文；不让外部记忆数据库、Pi 会话日志或自动生成摘要成为产品权威。
+- **pi-agenticoding**：参考任务级摘要和主动交接；D Code 的摘要是可查看、可修订、有来源的 Task 投影，换会话或进程重启不能伪装恢复在途 Runtime。
+- **pi-cc-plugins**：保留外部 Skill、Agent 与 MCP 配置导入思路作为后续兼容性观察项；导入必须先适配 D Code 的能力、职责和安全合同，不进入 `0.0.34` 的任务续接范围。
+
+## REF-022–024 Harness 论文
+
+507 于 2026-09-26 提供上述三篇标题，并确认先以其适用机制完善协调者，再交付任务续接与可追溯审查。截图用于定位，机制与来源归属按论文原文核对。D Code 的本轮产品行为及验收由 [PRD 0032](../40-版本实施方案/0032-0.0.33-协调者按需探索与路线选择产品需求.md) 拥有。
+
+- **Stellar Colosseum**：Google Research 与 Carnegie Mellon University 合作，首次提交于 2026-09-14；本次核对 2026-09-15 的 v2。论文先探索策略，通过针对性反驳与路线成熟判断后拆为有依赖的子问题；局部失败保留无关成果，核心策略失效则重新探索；汇总保留候选对应的异议。D Code 借鉴按需探索、验证关键假设和分层回退，不复制大规模搜索树或固定智能体数。论文的数学证明与竞赛编程结果不能直接推断为 D Code 开发任务收益，见[原文第 4 节与评测](https://arxiv.org/html/2609.15983v2)。
+- **RRSI**：Google Cloud AI Research 与高校合作者，首次提交于 2026-09-21；本次核对 2026-09-23 的 v2。研究固定模型下的 Harness 自动演化：约束每轮改动量、保留先前证伪记录、筛除任务特定泄漏，并将收益、噪声、成本和冗余一起纳入候选接受。D Code 本版只借鉴有界比较、失败证据保留和未参与调试任务的验证纪律；不将 Harness 自动演化混同于单次用户任务的路线选择。见[原文方法与实验](https://arxiv.org/html/2609.24972v2)。
+- **Harness-Zero**：Peking University、Google 与 The Hong Kong University of Science and Technology 合作，首次提交于 2026-09-21；本次核对 v1。研究让独立智能体在训练轨迹收集时纠正学生模型的动作，再通过微调吸收部分 Harness 引导行为；仍保留基础运行机制。它属于模型训练参考，不授权 D Code 当前训练模型、移除产品控制或用推断替代验证；未进入 `0.0.33` 或 `0.0.34` 实施范围。见[原文与作者归属](https://arxiv.org/pdf/2609.24974v1)。
+
+这些是原文描述及本项目借鉴判断；本次没有复现论文实验，预印本结果不是 D Code 的实现或验收证据。后续若要引入 Harness 自演化或模型蒸馏，需形成独立目标与范围。
 
 ## 技术上游，不属于竞品参考
 
