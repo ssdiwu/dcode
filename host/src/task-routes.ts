@@ -27,7 +27,7 @@ export const RouteCandidateSchema = Type.Object({
 export const RouteOperationSchema = Type.Union([
   Type.Object({ action: Type.Literal("begin"), question: Text, budget: Budget, independentCheck: Type.Boolean() }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("propose"), candidate: RouteCandidateSchema, strategyChange: Type.Optional(Text) }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("check"), candidateId: Id, outcome: Type.Union([Type.Literal("ready"), Type.Literal("revise"), Type.Literal("reject"), Type.Literal("unknown")]), findings: Texts, summary: Text, evidenceIds: Evidence }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("check"), candidateId: Id, outcome: Type.Union([Type.Literal("ready"), Type.Literal("revise"), Type.Literal("reject"), Type.Literal("unknown")]), findings: Type.Array(Text, { maxItems: 16, description: "仅填写未解决的问题。outcome=ready 时必须是空数组 []；已验证事实和通过理由填写 summary，实际检查证据引用填写 evidenceIds。" }), summary: Text, evidenceIds: Evidence }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("adopt"), candidateId: Id, reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("invalidate"), reason: Text, evidenceIds: Evidence }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("reopen"), reason: Text }, { additionalProperties: false }),
@@ -192,7 +192,8 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     if (!candidate || candidate.round !== next.round || next.status !== "exploring") fail("只能检查当前探索轮次的候选");
     if (next.independentCheck && candidate!.authorAgentRunId === actor.agentRunId) fail("此轮要求独立检查，须由不同于候选提出者的智能体执行");
     if (next.checks.length >= next.budget.checks) throw new TaskRouteError("ROUTE_LIMIT", "检查投入已达上限，请报告结果与剩余问题");
-    if (operation.outcome === "ready" && (!operation.evidenceIds.length || operation.findings.length)) fail("可以实施的结论需要实际检查证据，且没有未解决的问题");
+    if (operation.outcome === "ready" && !operation.evidenceIds.length) fail("outcome=ready 必须在 evidenceIds 提供本人实际检查的证据 ID");
+    if (operation.outcome === "ready" && operation.findings.length) fail("outcome=ready 时 findings 必须为 []。findings 只填写未解决的问题；请将已验证事实和通过理由移入 summary，实际证据引用保留在 evidenceIds，再提交同一候选的检查");
     if (["reject", "revise"].includes(operation.outcome) && !operation.findings.length) fail("否定或修订结论需要指出具体问题");
     next.checks.push({ ...operation, id: actor.id, actorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId, createdAt: actor.now });
     record(operation.summary, operation.candidateId);

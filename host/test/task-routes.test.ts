@@ -123,3 +123,16 @@ test("repeated failed checks require a method change instead of new ids for the 
     assert.equal(f.store.taskRouteContext(f.task.id)!.route.candidates.length, 2);
   } finally { await f.close(); }
 });
+
+test("a successful observation submitted as an unresolved finding returns a repairable error without consuming the check budget", async () => {
+  const f = await routeFixture();
+  try {
+    await f.act({ action: "begin", question: "核查可实施依据", independentCheck: false, budget: { candidates: 1, checks: 1, rounds: 1 } });
+    const id = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!.id;
+    const evidenceIds = [await f.evidence(f.owner, f.ownerRun)];
+    await assert.rejects(f.act({ action: "check", candidateId: id, outcome: "ready", findings: ["边界检查通过"], summary: "可以实施", evidenceIds }), /findings 必须为 \[\].*移入 summary/);
+    assert.equal(f.store.taskRouteContext(f.task.id)!.route.checks.length, 0);
+    await f.act({ action: "check", candidateId: id, outcome: "ready", findings: [], summary: "边界检查通过", evidenceIds });
+    assert.equal((await f.act({ action: "adopt", candidateId: id, reason: "证据充分且没有未决问题" })).context.route.status, "ready");
+  } finally { await f.close(); }
+});
