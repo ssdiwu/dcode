@@ -15,10 +15,10 @@ There is no separately embedded Node.js 22.22.3 binary. Candidate assembly
 copies Electron's complete `LICENSE` and `LICENSES.chromium.html` into
 `Contents/Resources/Legal/`, preserving the runtime's bundled notices.
 
-### Pi 0.85.1
+### Pi 0.87.1
 
 D Code uses the following packages from the Pi Agent Harness. The three direct
-SDK packages are pinned to npm version `0.85.1`; transitive versions are recorded
+SDK packages are pinned to npm version `0.87.1`; transitive versions are recorded
 in `host/package-lock.json`:
 
 - `@earendil-works/pi-ai`
@@ -31,7 +31,7 @@ in `host/package-lock.json`:
 
 License: MIT. Copyright (c) 2025 Mario Zechner. The complete notice is in
 `legal/Pi-v0.84.1-MIT.txt` in the source repository. Its wording matches the
-upstream v0.85.1 license; the filename retains the original audit version.
+upstream v0.87.1 license; the filename retains the original audit version.
 
 ### grok-mermaid 0.2.2
 

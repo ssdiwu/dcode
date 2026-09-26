@@ -43,3 +43,12 @@ test('native migration makes a sanitized private copy and leaves the original ru
   const root=await mkdtemp(join(tmpdir(),'dcode-private-copy-')),home=join(root,'home'),sourceRoot=join(root,'legacy'),targetRoot=join(root,'.dcode','runtime','pi-sessions');await mkdir(home);const manager=SessionManager.create(home,sourceRoot);manager.appendMessage({role:'user',content:'original source',timestamp:Date.now()});manager.appendMessage(assistant(`API_KEY=${fake}`));manager.appendCustomEntry('source-extra',{refresh_token:other});const file=manager.getSessionFile()!;const before=await readFile(file);
   try{const summary=await new SessionReader(sourceRoot).resolve(manager.getSessionId());const copied=await new SessionCopier(targetRoot).copy({source:summary,targetCwd:home,sanitizeCredentials:true,assertSourceStable:async()=>assert.deepEqual(await readFile(file),before)});assert.equal(copied.verification.credentialsRedacted,true);await assertNoFixture(join(root,'.dcode'));assert.deepEqual(await readFile(file),before);}finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('append-only context edits and canonical projections retain the private credential boundary',()=>{
+  const manager=SessionManager.inMemory('/tmp');guardPrivateSessionPersistence(manager);
+  const id=manager.appendMessage({role:'user',content:'original context',timestamp:1});
+  manager.appendContextEdit(id,{content:`API_KEY=${fake}`});
+  assert.ok(!JSON.stringify(manager.getEntries()).includes(fake));
+  assert.ok(!JSON.stringify(manager.buildSessionProjection()).includes(fake));
+  assert.ok(JSON.stringify(manager.getEntry(id)).includes('original context'));
+});

@@ -8,6 +8,8 @@ import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
 import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
+import { installDCodePrompt, replaceRequestPrompt } from "./pi-prompt-compat.js";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { CollaborationMessage } from "./collaboration-message.js";
 import { ModelQuotaService, assessModelQuota } from "./model-quota.js";
 import { chooseAgentModel, type ModelRouteDecision, type AgentModelCandidate } from "./model-route.js";
@@ -1224,13 +1226,7 @@ export class PiHost {
       tools,
     });
     active.session.setActiveToolsByName(activeToolNames);
-    const internals = active.session as unknown as {
-      _baseSystemPrompt: string;
-      _systemPromptOverride?: string;
-    };
-    internals._baseSystemPrompt = assembled.text;
-    internals._systemPromptOverride = undefined;
-    active.session.agent.state.systemPrompt = assembled.text;
+    installDCodePrompt(active.session, assembled.text);
     active.assembledPrompt = assembled;
     active.promptEnvironment = context.environment;
     active.promptDocuments=context.documents;active.promptImportedHistory=context.importedHistory;
@@ -4157,16 +4153,7 @@ export class PiHost {
           tools: activePromptTools,
         });
         session.setActiveToolsByName(activeToolNames);
-        // Pi 0.84.1 resets every turn to _baseSystemPrompt during preflight.
-        // Install the D Code prompt as that base after the exact tool set is frozen;
-        // a private one-turn override would be cleared before the Provider request.
-        const internals = session as unknown as {
-          _baseSystemPrompt: string;
-          _systemPromptOverride?: string;
-        };
-        internals._baseSystemPrompt = assembledPrompt.text;
-        internals._systemPromptOverride = undefined;
-        session.agent.state.systemPrompt = assembledPrompt.text;
+        installDCodePrompt(session, assembledPrompt.text);
         if (session.systemPrompt !== assembledPrompt.text) {
           throw new PiHostError(
             "PROMPT_ASSEMBLY_FAILED",
@@ -4612,7 +4599,7 @@ export class PiHost {
       );
     }
     manager.branch(targetId);
-    active.session.agent.state.messages = manager.buildSessionContext().messages;
+    active.session.refreshContext();
     await active.session.extensionRunner.emit({
       type: "session_tree",
       newLeafId: manager.getLeafId(),
@@ -4626,7 +4613,7 @@ export class PiHost {
     const target = manager.getEntry(action.entryId);
     if (!target) {
       const native=active.runtimeIdentity&&action.fromPathId?(await (await this.getProductStore()).sessionPathEntries(active.runtimeIdentity.dcodeSessionId,action.fromPathId)).find(entry=>entry.sourceEntryId===action.entryId&&entry.sourceKind==="pi_import"):undefined;
-      if(native){const oldLeaf=manager.getLeafId();await this.withOwnedMutation(active,async()=>{manager.resetLeaf();active.session.agent.state.messages=manager.buildSessionContext().messages;await active.session.extensionRunner.emit({type:"session_tree",newLeafId:manager.getLeafId(),oldLeafId:oldLeaf});});await this.refreshWritablePathSnapshot(active);return oldLeaf;}
+      if(native){const oldLeaf=manager.getLeafId();await this.withOwnedMutation(active,async()=>{manager.resetLeaf();active.session.refreshContext();await active.session.extensionRunner.emit({type:"session_tree",newLeafId:manager.getLeafId(),oldLeafId:oldLeaf});});await this.refreshWritablePathSnapshot(active);return oldLeaf;}
       throw new PiHostError("SESSION_PATH_NOT_FOUND", `Session path entry not found: ${action.entryId}`);
     }
     if (action.kind === "editUser" && (
@@ -4686,7 +4673,7 @@ export class PiHost {
       if(oldLeafId!==rollbackLeafId)await this.withOwnedMutation(active, async () => {
         if (rollbackLeafId === null) manager.resetLeaf();
         else manager.branch(rollbackLeafId);
-        active.session.agent.state.messages = manager.buildSessionContext().messages;
+        active.session.refreshContext();
         await active.session.extensionRunner.emit({
           type: "session_tree",
           newLeafId: manager.getLeafId(),
@@ -5570,15 +5557,15 @@ export class PiHost {
         // member's main identity, chosen model or current prompt receipt.
         if(auxiliary)return {model:next as ProviderModel,context};
         if(!run?.sessionRunId)throw new PiHostError("RUN_REQUIRED","模型切换缺少当前运行");
-        const systemPrompt=(context.systemPrompt??"").replace(/^- Model: .*$/mu,`- Model: ${next.provider}/${next.id}`);
+        const systemPrompt=getCurrentSystemPrompt(context.messages).replace(/^- Model: .*$/mu,`- Model: ${next.provider}/${next.id}`);
         const digest=`sha256:${createHash("sha256").update(systemPrompt).digest("hex")}`;
         await this.withOwnedMutation(runtime,async()=>{await runtime.session.setModel(next);});
-        const internals=runtime.session as unknown as {_baseSystemPrompt:string;_systemPromptOverride?:string};internals._baseSystemPrompt=systemPrompt;internals._systemPromptOverride=undefined;runtime.session.agent.state.systemPrompt=systemPrompt;
+        installDCodePrompt(runtime.session,systemPrompt);
         if(runtime.assembledPrompt)runtime.assembledPrompt={...runtime.assembledPrompt,text:systemPrompt,digest};
         await store.recordRunningModelRoute({requestId:`reroute:${randomUUID()}`,sessionRunId:run.sessionRunId,agentRunId:identity.agentRunId!,decision,systemPromptDigest:digest});
 
         this.options.emit("foundation.changed",{kind:"agentModel.rerouted",taskId:identity.taskId});
-        return {model:next as ProviderModel,context:{...context,systemPrompt},reasoning:runtime.session.thinkingLevel==="off"?null:runtime.session.thinkingLevel};
+        return {model:next as ProviderModel,context:replaceRequestPrompt(context,systemPrompt),reasoning:runtime.session.thinkingLevel==="off"?null:runtime.session.thinkingLevel};
       },
       record:async(call)=>{
         const runtime=active(),run=runtime?.currentRun;const store=await this.getProductStore();

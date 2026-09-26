@@ -76,7 +76,7 @@ export class ModelConnections {
     // Reserve before any await so simultaneous callers cannot both open a prompt.
     this.seen.add(id);if(this.seen.size>256)this.seen.delete(this.seen.values().next().value!);
     const flow:Flow={id,provider,type,controller:new AbortController(),state:"awaiting_input",done:Promise.resolve(),settled:false,timedOut:false};
-    // Fixed SDK 0.85.1 OpenAI Codex uses these exact select IDs. Older callers
+    // Fixed SDK 0.87.1 OpenAI Codex uses these exact select IDs. Older callers
     // without the optional mode enter browser login directly as well.
     flow.oauthMode=provider==="openai-codex"?oauthMode??"browser":undefined;
     flow.expiresAt=Date.now()+(this.options.timeoutMs??10*60_000);

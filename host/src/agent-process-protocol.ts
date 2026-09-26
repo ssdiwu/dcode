@@ -9,7 +9,7 @@ export function processTools(tools: AgentTool[]): ProcessTool[] {
   return tools.map(({ name, label, description, parameters, executionMode }) => ({ name, label, description, parameters, ...(executionMode?{executionMode}:{}) }));
 }
 
-export type ProcessHook = "event" | "convert" | "transform" | "beforeTool" | "afterTool" | "shouldStop" | "prepare" | "tool" | "stream";
+export type ProcessHook = "event" | "convert" | "transform" | "beforeTool" | "afterTool" | "finishTurn" | "prepareRequest" | "prepare" | "tool" | "stream";
 export type ProcessPacket =
   | { kind: "ready"; pid: number }
   | { kind: "call"; id: number; method: ProcessHook; args: unknown }

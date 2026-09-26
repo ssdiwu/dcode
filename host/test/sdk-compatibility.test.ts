@@ -12,8 +12,16 @@ import {ProcessAgent} from '../src/process-agent.js';
 import {streamSimple as codexStream} from '@earendil-works/pi-ai/api/openai-codex-responses';
 import {Type} from 'typebox';
 import {createAssistantMessageEventStream,type AssistantMessage,type Model} from '@earendil-works/pi-ai';
+import {getBuiltinModels} from '@earendil-works/pi-ai/providers/all';
 const until=async(check:()=>boolean|Promise<boolean>,label:string)=>{const end=Date.now()+12000;while(!await check()){if(Date.now()>end)throw new Error(label);await new Promise(resolve=>setTimeout(resolve,10));}};
 const output=(value:{content:Array<{type:string;text?:string}>})=>value.content.filter(part=>part.type==='text').map(part=>part.text).join('\n');
+
+test('pinned SDK provides GPT-6 Sol and Luna offline for API and Codex connections',()=>{
+ for(const provider of ['openai','openai-codex'] as const){
+  const models=getBuiltinModels(provider);
+  for(const id of ['gpt-6-sol','gpt-6-luna'])assert.ok(models.some(model=>model.id===id&&model.provider===provider));
+ }
+});
 
 test('SDK built-in tools obey the current context cwd when it differs from their construction directory',async()=>{
  const root=await mkdtemp(join(tmpdir(),'dcode-sdk-cwd-')),a=join(root,'a'),b=join(root,'b');const oldAgentDir=process.env.PI_CODING_AGENT_DIR;process.env.PI_CODING_AGENT_DIR=join(root,'agent');await mkdir(a);await mkdir(b);await writeFile(join(a,'seed.txt'),'from A');await writeFile(join(b,'seed.txt'),'from B');const ctx={cwd:await realpath(b),sessionManager:SessionManager.inMemory(b)} as unknown as ExtensionContext;
@@ -88,6 +96,29 @@ test('a completed compaction survives D Code copy and later continuation without
   const copied=await f.host.handle('dcodeSession.copy',{requestId:'copy-after-compaction',expectedStoreRevision:(await f.snapshot()).storeRevision,dcodeSessionId:f.task.coordinationSession.id}) as TaskBundle;assert.notEqual(copied.coordinationSession.id,f.task.coordinationSession.id);assert.deepEqual(f.session.sessionManager.getEntries(),before);
   await f.host.handle('dcodeSession.prompt',{dcodeSessionId:copied.coordinationSession.id,promptId:'copied-next',message:'从副本继续，不重复原工作'});await until(async()=>(await f.snapshot()).sessionRuns.some(run=>run.sessionId===copied.coordinationSession.id&&run.status==='completed'),'copy continues');assert.ok(JSON.stringify(bodies.at(-1).messages).includes('SDK_SUMMARY_ANCHOR'));
   const binding=(await f.snapshot()).sessionRuntimeBindings.find(binding=>binding.sessionId===copied.coordinationSession.id)!;const copiedManager=SessionManager.open(binding.adapterSessionPath);const kept=copiedManager.getEntries().filter(entry=>entry.type==='compaction');assert.equal(kept.length,compactions.length);assert.equal(kept.at(-1)!.firstKeptEntryId,compactions.at(-1)!.firstKeptEntryId);assert.deepEqual(f.session.sessionManager.getEntries(),before);
+ }finally{await f.close();}
+});
+
+test('context edits change canonical provider input while raw history and copied edits stay intact',async()=>{
+ const bodies:any[]=[];const f=await fixture(async body=>{bodies.push(body);return completion('RECORDED_REPLY');});
+ try{
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'original',message:'ORIGINAL_CONTEXT_TEXT'});
+  await until(async()=>(await f.snapshot()).sessionRuns[0]?.status==='completed','original settles');
+  const manager=f.session.sessionManager;
+  const target=manager.getEntries().find(entry=>entry.type==='message'&&entry.message.role==='user'&&JSON.stringify(entry.message.content).includes('ORIGINAL_CONTEXT_TEXT'))!;
+  const hostInternals=f.host as unknown as {runtimes:Map<string,unknown>;withOwnedMutation<T>(runtime:unknown,body:()=>Promise<T>):Promise<T>};
+  await hostInternals.withOwnedMutation(hostInternals.runtimes.get(f.runtimeId),async()=>{manager.appendContextEdit(target.id,{content:'REPLACEMENT_CONTEXT_TEXT'});f.session.refreshContext();});
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'edited',message:'CONTINUE_AFTER_EDIT'});
+  await until(async()=>(await f.snapshot()).sessionRuns.filter(run=>run.status==='completed').length===2,'edited context settles');
+  assert.ok(JSON.stringify(bodies.at(-1).messages).includes('REPLACEMENT_CONTEXT_TEXT'));
+  assert.ok(!JSON.stringify(bodies.at(-1).messages).includes('ORIGINAL_CONTEXT_TEXT'));
+  assert.ok(JSON.stringify(manager.getEntry(target.id)).includes('ORIGINAL_CONTEXT_TEXT'));
+  const before=manager.getEntries();
+  const copied=await f.host.handle('dcodeSession.copy',{requestId:'copy-edits',expectedStoreRevision:(await f.snapshot()).storeRevision,dcodeSessionId:f.task.coordinationSession.id}) as TaskBundle;
+  const binding=(await f.snapshot()).sessionRuntimeBindings.find(item=>item.sessionId===copied.coordinationSession.id)!;
+  const copy=SessionManager.open(binding.adapterSessionPath);
+  assert.ok(copy.getEntries().some(entry=>entry.type==='context_edit'&&entry.targetId===target.id));
+  assert.deepEqual(manager.getEntries(),before);
  }finally{await f.close();}
 });
 

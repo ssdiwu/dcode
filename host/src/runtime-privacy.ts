@@ -19,7 +19,7 @@ const guarded=new WeakSet<SessionManager>();
 export function guardPrivateSessionPersistence(manager:SessionManager):void {
   if(guarded.has(manager))return;guarded.add(manager);
   const methods=manager as unknown as Record<string,(...args:unknown[])=>unknown>;
-  for(const name of ['appendMessage','appendCompaction','appendCustomEntry','appendCustomMessageEntry','appendSessionInfo','appendLabelChange','branchWithSummary']){
+  for(const name of ['appendMessage','appendContextEdit','appendCompaction','appendCustomEntry','appendCustomMessageEntry','appendSessionInfo','appendLabelChange','branchWithSummary']){
     const original=methods[name];if(typeof original!=='function')continue;
     methods[name]=(...args:unknown[])=>original.apply(manager,args.map(argument=>{
       const safe=sanitizeRuntimeValue(argument);
@@ -29,4 +29,5 @@ export function guardPrivateSessionPersistence(manager:SessionManager):void {
     }));
   }
   const build=manager.buildSessionContext.bind(manager);manager.buildSessionContext=()=>sanitizeRuntimeValue(build());
+  const projection=manager.buildSessionProjection.bind(manager);manager.buildSessionProjection=()=>sanitizeRuntimeValue(projection());
 }

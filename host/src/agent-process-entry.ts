@@ -40,12 +40,22 @@ async function run(packet: Extract<ProcessPacket, { kind: "run" }>): Promise<voi
     const has = (name: string) => packet.hooks.includes(name);
     agent = new Agent({
       ...packet.options,
-      initialState: { ...packet.state, tools: tools(packet.state.tools) },
+      // The Host transcript is canonical. Constructor-synthesized tool messages
+      // would never be emitted/persisted there and disappear on prepareRequest.
+      initialState: { messages: packet.state.messages, model: packet.state.model, thinkingLevel: packet.state.thinkingLevel, tools: [] },
       convertToLlm: async (messages) => await call("convert", messages) as Awaited<ReturnType<Agent["convertToLlm"]>>,
       transformContext: has("transform") ? async (messages) => await call("transform", messages) as AgentMessage[] : undefined,
       beforeToolCall: has("beforeTool") ? async (context) => await call("beforeTool", context) as Awaited<ReturnType<NonNullable<Agent["beforeToolCall"]>>> : undefined,
       afterToolCall: has("afterTool") ? async (context) => await call("afterTool", context) as Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>> : undefined,
-      shouldStopAfterTurn: has("shouldStop") ? async (context) => Boolean(await call("shouldStop", context)) : undefined,
+      finishTurn: has("finishTurn") ? async (context) => {
+        const decision = await call("finishTurn", context) as Awaited<ReturnType<NonNullable<Agent["finishTurn"]>>>;
+        return decision || undefined;
+      } : undefined,
+      prepareRequest: has("prepareRequest") ? async (context) => {
+        const next = await call("prepareRequest", context) as Awaited<ReturnType<NonNullable<Agent["prepareRequest"]>>>;
+        if (next?.context?.tools) next.context.tools = tools(next.context.tools);
+        return next || undefined;
+      } : undefined,
       prepareNextTurnWithContext: has("prepare") ? async (context) => {
         const next = await call("prepare", context) as Awaited<ReturnType<NonNullable<Agent["prepareNextTurnWithContext"]>>>;
         if (next?.context?.tools) next.context.tools = tools(next.context.tools);
@@ -56,10 +66,11 @@ async function run(packet: Extract<ProcessPacket, { kind: "run" }>): Promise<voi
         const stream = createAssistantMessageEventStream();
         streams.set(id, stream);
         const serializable = Object.fromEntries(Object.entries(options ?? {}).filter(([name, value]) => name !== "signal" && typeof value !== "function"));
-        send({ kind: "call", id, method: "stream", args: { model, context: { ...context, tools: context.tools?.map(({ name, description, parameters }) => ({ name, description, parameters })) }, options: serializable } });
+        send({ kind: "call", id, method: "stream", args: { model, context, options: serializable } });
         return stream;
       },
     });
+    agent.state.tools = tools(packet.state.tools);
     await new Promise<void>(resolve=>{startGate={id:packet.id,resolve};send({kind:"accepted",id:packet.id});});
     agent.subscribe(async (event) => { await call("event", { event, queued: agent!.hasQueuedMessages() }); });
     for (const message of packet.queues.steering) agent.steer(message);

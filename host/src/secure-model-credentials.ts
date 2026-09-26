@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AuthOperationOptions, AuthPrompt, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 
-// Fixed Pi 0.85.1 exports the read-only store internally; resolve relative to its
+// Fixed Pi 0.87.1 exports the read-only store internally; resolve relative to its
 // actual package entry, as with the existing ModelConfig adapter.
 const {ReadOnlyAuthStorage}=await import(new URL("./core/auth-storage.js",import.meta.resolve("@earendil-works/pi-coding-agent")).href) as {ReadOnlyAuthStorage:new(path:string)=>CredentialStore};
 

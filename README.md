@@ -32,7 +32,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 ## 目录
 
-- `host/`：固定 Pi 0.85.1 的 Node 运行宿主、Protocol v1 与测试。
+- `host/`：固定 Pi 0.87.1 的 Node 运行宿主、Protocol v1 与测试。
 - `client/`：当前 Web 客户端（Electron 平台壳 + React 呈现层），经 Protocol v1 消费 D Code Host；入口和结构见其 README。
 - `app/Resources/`：品牌 SVG 母版、系统图标及统一导出脚本；不含另一套客户端或打包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。

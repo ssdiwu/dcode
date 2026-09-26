@@ -57,6 +57,8 @@
 
 ## 命令
 
+Pi 0.87.1 的进程适配保留 Host 对会话与凭据的所有权：`prepareRequest` 使用 SessionManager 的当前投影，`finishTurn` 的继续/结束决定跨进程传回；系统提示词与工具声明随规范上下文进入请求。`pi-prompt-compat.ts` 集中处理固定 SDK 的完整提示词替换，历史分支变更使用 `refreshContext()`。复制校验保留系统消息、上下文编辑与压缩边界，原始消息仍保持原文；SDK 兼容与运行隐私回归覆盖这些行为。
+
 ```bash
 npm ci
 npm test
@@ -131,7 +133,7 @@ npm start -- --agent-dir ~/.pi/agent
 Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` 管理工作台偏好及旧界面偏好的单向继承；`dcodeModelProvider.save/remove` 管理原生供应商，显式接管只读旧来源的非敏感配置；`task.manage` 与会话复制入口保留产品历史。`maintenance.status/start` 和 `selfEvolution.*` 记录 Web 本机候选检查、构建和恢复回执，重启前检查所有运行活动。原生 SDK 会话使用内存 SettingsManager，模型与思考切换不回写 Pi 设置。核心凭据引用边界和资源安全策略不变。
 
 
-模型路径（Pi 0.85.1）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
+模型路径（Pi 0.87.1）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
 
 
 受管附件（0.0.30 修复候选）：`attachment.import/get/resolve` 由 Host 管理副本，`attachment-files.ts` 负责受控目录、原子文件、完整性校验与清理。草稿附件元数据使用现有 `composer_drafts.payload_json`；`taskDraft.set` / `dcodeSession.composerDraft.set` 可携带 `attachmentIds`，空文字但有附件时保留草稿。`dcodeSession.prompt` 只接收附件 ID，核心读取图片并生成文件引用，在 `prepareSessionRun` 同事务内写原文、引用、生效输入及附件 Artifact。Schema 仍为 2，附件输入不混入交付物列表。
@@ -160,7 +162,7 @@ OAuth 的 `openBrowser` / `enterCode` 只接受 flowId，并立即返回是否�
 
 原生认证辅助程序的父进程监控在显式非主执行域创建并执行，AppKit 保持主执行域；监控在标准输入阻塞或模态窗口等待时仍运行。`npm test` 包含完整生产辅助程序的空闲、实际模态等待和父进程退出回归；从仓库根运行 `node host/test/native/helper-lifecycle.mjs`，使用已授权的辅助功能访问，对本次隔离进程的真实“继续”“取消”按钮操作并核验窗口收尾。父进程退出测试使用外层持有的 FIFO，不以输入 EOF 冒充父进程监控成功；这些测试不访问账号或钥匙串，也不替代真实 OAuth 登录验收。
 
-OpenAI Codex 的公共连接方法投影为“浏览器登录”/“设备码登录”，`dcodeAuth.start` 可携带该供应商专属的 `oauthMode: browser | device_code`，直接回应固定 SDK 0.85.1 的实际方式选择；旧调用省略时直接走 browser。其他 Provider 不接受该字段，原有交互不变。只对完整匹配的 SDK 选择合同回填 id，不修改 SDK 源码或 OAuth 协议。
+OpenAI Codex 的公共连接方法投影为“浏览器登录”/“设备码登录”，`dcodeAuth.start` 可携带该供应商专属的 `oauthMode: browser | device_code`，直接回应固定 SDK 0.87.1 的实际方式选择；旧调用省略时直接走 browser。其他 Provider 不接受该字段，原有交互不变。只对完整匹配的 SDK 选择合同回填 id，不修改 SDK 源码或 OAuth 协议。
 
 `src/device-code-channel.ts` 只在平台壳继承的 fd4 上处理 `{id,flowId}`，环境标记启动即删除。Host 只投影当前 OpenAI Codex 设备码流程的 `{userCode,expiresAt}` 或 null，不提供通用方法、凭据读取、完整 notice 或授权 URL。两端限制帧、并发、字段和等待时长，错误不落公共日志；取消/失败/到期/保存/退出清除 Host 展示值。该通道与原 API fd3 独立，`dcodeAuth.get` 只暴露 `canReadDeviceCode` 布尔能力。实际源码边界与生命周期见 `oauth-device-flow.test.ts` 和 `device-code-channel.test.ts`。
 

@@ -1,6 +1,6 @@
 import {rememberRequestCredentials} from "./credential-material.js";
 import {randomUUID,createHash} from 'node:crypto';
-import {createAssistantMessageEventStream,type AssistantMessage,type AssistantMessageEvent} from '@earendil-works/pi-ai';
+import {createAssistantMessageEventStream,getCurrentSystemPrompt,getCurrentTools,type AssistantMessage,type AssistantMessageEvent} from '@earendil-works/pi-ai';
 import type {AgentOptions} from '@earendil-works/pi-agent-core';
 type Stream=NonNullable<AgentOptions['streamFn']>;
 export type ProviderModel=Parameters<Stream>[0];
@@ -23,8 +23,8 @@ export function routedProviderStream(base:Stream,control:ProviderRouteControl):S
           if(options?.signal?.aborted)throw new Error('本次执行已停止');
           const selected=await control.select(model,context,options?.signal,rejected);({model,context}=selected);
           const reasoning=selected.reasoning===null?undefined:selected.reasoning??options?.reasoning;
-          const id=randomUUID(),systemPromptDigest=`sha256:${createHash('sha256').update(context.systemPrompt??'').digest('hex')}`;
-          const toolNames=(context.tools??[]).map(tool=>tool.name),toolManifestDigest=`sha256:${createHash('sha256').update(JSON.stringify(context.tools??[])).digest('hex')}`;
+          const id=randomUUID(),systemPromptDigest=`sha256:${createHash('sha256').update(getCurrentSystemPrompt(context.messages)).digest('hex')}`;
+          const tools=getCurrentTools(context.messages),toolNames=tools.map(tool=>tool.name),toolManifestDigest=`sha256:${createHash('sha256').update(JSON.stringify(tools)).digest('hex')}`;
           await control.record({id,providerId:model.provider,modelId:model.id,state:'started',systemPromptDigest,toolNames,toolManifestDigest,...(reasoning?{reasoning}:{})});
           let httpStatus:number|undefined,notifiedStatus:number|undefined,visible=false;const buffered:AssistantMessageEvent[]=[];
           const observedFetch:NonNullable<NonNullable<Parameters<Stream>[2]>["fetch"]>=async(input,init)=>{

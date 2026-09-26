@@ -196,6 +196,15 @@ function validateStoredMessage(message: unknown, lineNumber: number, path: strin
   }
   const timestampIsValid = typeof message.timestamp === "number" && Number.isFinite(message.timestamp);
   switch (message.role) {
+    case "system":
+      if (!timestampIsValid
+        || !(typeof message.content === "string" || isContentArray(message.content, isTextContent))
+        || !(message.sections === undefined || isObject(message.sections) && Object.values(message.sections).every(value => value === null || typeof value === "string"))
+        || !(message.toolsAdded === undefined || Array.isArray(message.toolsAdded) && message.toolsAdded.every(tool => isObject(tool) && typeof tool.name === "string" && typeof tool.description === "string" && isObject(tool.parameters)))
+        || !(message.toolsRemoved === undefined || Array.isArray(message.toolsRemoved) && message.toolsRemoved.every(tool => isObject(tool) && typeof tool.name === "string"))) {
+        invalidEntry(lineNumber, path, "Invalid system message");
+      }
+      return;
     case "user":
       if (!timestampIsValid || !(
         message.content == null
@@ -284,10 +293,24 @@ function validateSessionEntry(
     case "compaction":
       if (typeof record.summary !== "string"
         || typeof record.firstKeptEntryId !== "string"
-        || !seenEntryIds.has(record.firstKeptEntryId)
+        || (!seenEntryIds.has(record.firstKeptEntryId) && record.firstKeptEntryId !== record.id)
         || typeof record.tokensBefore !== "number") {
         invalidEntry(lineNumber, path, "Invalid compaction entry");
       }
+      if (record.systemMessage !== undefined) {
+        if (!isObject(record.systemMessage) || record.systemMessage.role !== "system") invalidEntry(lineNumber, path, "Invalid compaction system state");
+        validateStoredMessage(record.systemMessage, lineNumber, path);
+      }
+      return;
+    case "context_edit":
+      if (typeof record.targetId !== "string" || !seenEntryIds.has(record.targetId) || record.targetId === record.id
+        || !(record.replacement === null || isObject(record.replacement)
+          && (typeof record.replacement.content === "string" || isContentArray(record.replacement.content, part => isTextContent(part) || isImageContent(part) || isThinkingContent(part) || isToolCall(part))))) {
+        invalidEntry(lineNumber, path, "Invalid context edit entry");
+      }
+      return;
+    case "usage":
+      if (typeof record.kind !== "string" || typeof record.provider !== "string" || typeof record.model !== "string" || !isObject(record.usage)) invalidEntry(lineNumber, path, "Invalid usage entry");
       return;
     case "branch_summary":
       if (typeof record.fromId !== "string"

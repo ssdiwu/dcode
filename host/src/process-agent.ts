@@ -55,7 +55,8 @@ export class ProcessAgent extends Agent {
 
   constructor(options: ProcessAgentOptions) {
     super(options);
-    this.localState = { ...super.state, pendingToolCalls: new Set(super.state.pendingToolCalls) };
+    // Preserve Pi's transcript-derived accessors and the state used by inherited methods.
+    this.localState = super.state as MutableProcessState;
     this.idleTimeoutMs = options.idleTimeoutMs ?? 120_000;
     this.runAcceptTimeoutMs=options.runAcceptTimeoutMs??15_000;
     this.processEntry=options.processEntry??new URL("./agent-process-entry.js",import.meta.url);
@@ -63,6 +64,14 @@ export class ProcessAgent extends Agent {
   }
 
   get processInfo(): AgentProcessInfo | undefined { return this.processInfoValue ? { ...this.processInfoValue } : undefined; }
+  private finalizedMessage<T extends AgentMessage>(message: T): T {
+    const identity = JSON.stringify(message);
+    for (let index = this.state.messages.length - 1; index >= 0; index--) {
+      const item = this.state.messages[index]!;
+      if (JSON.stringify(item) === identity) return item as T;
+    }
+    return message;
+  }
   override get signal(): AbortSignal | undefined { return this.runController?.signal; }
   override subscribe(listener: (event: AgentEvent, signal: AbortSignal) => void | Promise<void>): () => void {
     this.processListeners.add(listener);
@@ -180,7 +189,7 @@ export class ProcessAgent extends Agent {
       await this.changed();
       const accepted=new Promise<void>(resolve=>{this.acceptRun=resolve;});
       this.acceptanceTimer=setTimeout(()=>this.rejectRun?.(new Error("智能体进程已就绪，但未能接收这次工作；已停止该进程")),this.runAcceptTimeoutMs);
-      const hooks = [this.transformContext && "transform", this.beforeToolCall && "beforeTool", this.afterToolCall && "afterTool", this.shouldStopAfterTurn && "shouldStop", (this.prepareNextTurnWithContext || this.prepareNextTurn) && "prepare"].filter((x): x is string => typeof x === "string");
+      const hooks = [this.transformContext && "transform", this.beforeToolCall && "beforeTool", this.afterToolCall && "afterTool", this.finishTurn && "finishTurn", this.prepareRequest && "prepareRequest", (this.prepareNextTurnWithContext || this.prepareNextTurn) && "prepare"].filter((x): x is string => typeof x === "string");
       this.send({ kind: "run", id: this.runId, continuation, input, images, hooks, queues: { steering: this.steeringMessages.slice(), followUp: this.followUpMessages.slice() },
         state: { systemPrompt: this.state.systemPrompt, messages: this.state.messages, model: this.state.model, thinkingLevel: this.state.thinkingLevel, tools: processTools(this.state.tools) },
         options: { steeringMode: this.steeringMode, followUpMode: this.followUpMode, sessionId: this.sessionId, thinkingBudgets: this.thinkingBudgets, transport: this.transport, maxRetryDelayMs: this.maxRetryDelayMs, toolExecution: this.toolExecution },
@@ -228,6 +237,12 @@ export class ProcessAgent extends Agent {
       switch (packet.method) {
         case "event": {
           const { event } = sanitizeRuntimeValue(packet.args as ProcessLoopEvent);
+          // Pi's finishTurn/turn_end boundary de-duplication uses message identity.
+          // Reconnect the two wire copies to the Host's finalized transcript object.
+          if (event.type === "turn_end") {
+            event.message = this.finalizedMessage(event.message);
+            event.toolResults = event.toolResults.map(message => this.finalizedMessage(message));
+          }
           if (event.type === "message_start") {
             const key = JSON.stringify(event.message);
             const steeringIndex = this.steeringMessages.findIndex((message) => JSON.stringify(message) === key);
@@ -247,7 +262,17 @@ export class ProcessAgent extends Agent {
         case "transform": value = await this.transformContext?.(packet.args as AgentMessage[], signal) ?? packet.args; break;
         case "beforeTool": value = await this.beforeToolCall?.(packet.args as Parameters<NonNullable<Agent["beforeToolCall"]>>[0], signal); break;
         case "afterTool": value = await this.afterToolCall?.(packet.args as Parameters<NonNullable<Agent["afterToolCall"]>>[0], signal); break;
-        case "shouldStop": value = await this.shouldStopAfterTurn?.(packet.args as Parameters<NonNullable<Agent["shouldStopAfterTurn"]>>[0], signal) ?? false; break;
+        case "finishTurn": {
+          const turn = packet.args as Parameters<NonNullable<Agent["finishTurn"]>>[0];
+          value = await this.finishTurn?.({ ...turn, message: this.finalizedMessage(turn.message), toolResults: turn.toolResults.map(message => this.finalizedMessage(message)), context: { ...turn.context, tools: this.state.tools.slice() } }, signal);
+          break;
+        }
+        case "prepareRequest": {
+          const request = packet.args as Parameters<NonNullable<Agent["prepareRequest"]>>[0];
+          const update = await this.prepareRequest?.({ ...request, context: { ...request.context, tools: this.state.tools.slice() } }, signal);
+          value = update?.context ? { ...update, context: { ...update.context, ...(update.context.tools ? { tools: processTools(update.context.tools) } : {}) } } : update;
+          break;
+        }
         case "prepare": {
           const turn = packet.args as Parameters<NonNullable<Agent["prepareNextTurnWithContext"]>>[0];
           const currentTurn = { ...turn, context: { ...turn.context, messages: this.state.messages.slice(), tools: this.state.tools.slice(), systemPrompt: this.state.systemPrompt } };

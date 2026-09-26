@@ -50,6 +50,17 @@ test("private Pi loops use different OS processes and retain Host tool and event
   } finally { await Promise.all([a.disposeProcess(), b.disposeProcess()]); }
 });
 
+test("request projection and finishTurn decisions survive the process boundary", async () => {
+  let requests = 0, turns = 0, finished = 0;
+  const agent = new ProcessAgent({ initialState: { model }, idleTimeoutMs: -1,
+    streamFn: (_model, context) => { requests++; assert.ok(context.messages.some(item => item.role === "user" && item.content === "canonical input")); return response(message(`response ${requests}`)); } });
+  agent.prepareRequest = async request => ({ context: { ...request.context, messages: [{ role: "user", content: "canonical input", timestamp: 1 }] } });
+  agent.finishTurn = async () => (++finished === 1 ? { action: "continue" } : { action: "end" });
+  agent.subscribe(event => { if (event.type === "turn_end") turns++; });
+  try { await agent.prompt("source input"); assert.equal(requests, 2); assert.equal(finished, 2); assert.equal(turns, 2); }
+  finally { await agent.disposeProcess(); }
+});
+
 test("idle process retirement reopens a new process with the same conversation history", async () => {
   let seen = 0;
   const agent = new ProcessAgent({ initialState: { model }, idleTimeoutMs: 10, streamFn: (_model, context) => { seen = context.messages.length; return response(message("saved")); } });

@@ -10,21 +10,24 @@ Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 @aws-sdk/credential-provider-http 3.972.39
 @aws-sdk/credential-provider-http 3.972.72
+@aws-sdk/credential-provider-http 3.972.74
 @aws-sdk/credential-provider-login 3.972.41
 @aws-sdk/credential-provider-login 3.972.77
+@aws-sdk/credential-provider-login 3.972.79
 @aws-sdk/nested-clients 3.997.9
 @aws-sdk/nested-clients 3.997.44
+@aws-sdk/nested-clients 3.997.46
 
 MIT
 ---
 Copyright (c) 2025 Mario Zechner
 
-@earendil-works/pi-agent-core 0.85.1
-@earendil-works/pi-ai 0.85.1
-@earendil-works/pi-coding-agent 0.85.1
-@earendil-works/pi-telemetry 0.85.1
-@earendil-works/pi-tui 0.85.1
-@earendil-works/chord 0.85.1
+@earendil-works/pi-agent-core 0.87.1
+@earendil-works/pi-ai 0.87.1
+@earendil-works/pi-coding-agent 0.87.1
+@earendil-works/pi-telemetry 0.87.1
+@earendil-works/pi-tui 0.87.1
+@earendil-works/chord 0.87.1
 
 Copyright Mario Zechner and contributors.
 
@@ -53,6 +56,14 @@ Copyright (c) 2020 Evan Wallace
 
 @esbuild/darwin-arm64 0.28.1
 Source: https://github.com/evanw/esbuild/blob/v0.28.1/LICENSE.md
+
+@esbuild/darwin-arm64 0.28.2
+Source: https://github.com/evanw/esbuild/blob/v0.28.2/LICENSE.md
+
+proxy-agent-negotiate 1.1.0
+Author: Nathan Rajlich <nathan@tootallnate.net> (upstream package metadata)
+License: MIT (upstream package metadata; no separate license file is published)
+Source: https://github.com/TooTallNate/proxy-agents/blob/4813885d3f4e2ff837878ceffdba656a71dc31f0/packages/negotiate/package.json
 
 Copyright (c) 2025 Anton Korzunov <thekashey@gmail.com>
 
