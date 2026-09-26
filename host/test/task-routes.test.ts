@@ -1,10 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ProductStore, type AgentRunRecord } from "../src/product-store.js";
-import type { RouteOperation } from "../src/task-routes.js";
+import { routeFixture } from "./fixtures/task-route-fixture.js";
 
 const candidate = {
   title: "逐段读取", approach: "在读取接口分段处理，不保留整个文件", assumptions: ["各段可独立处理"],
@@ -12,40 +8,9 @@ const candidate = {
   probe: "检查跨段边界的结果", expectedCost: "一次边界检查", remainingWork: ["实现有界读取"], dependencies: "先确认接口允许分段",
 };
 
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "dcode-task-routes-")), home = join(root, "home");
-  await mkdir(home);
-  const options = { dataRoot: join(root, ".dcode"), userHome: home };
-  let store = await ProductStore.open(options), serial = 0;
-  const initial = await store.snapshot(), scope = { kind: "user" as const, userId: initial.currentUser.id };
-  const { task } = await store.createTask({ requestId: "task", expectedStoreRevision: initial.storeRevision, scope, title: "路线验证", goal: "降低内存并保持输出" });
-  const { agentRun: owner } = await store.ensureCoordinatorAgentRun({ requestId: "owner", taskId: task.id, scope });
-  const team = await store.createTeamRun({ requestId: "team", taskId: task.id, scope, coordinatorAgentRunId: owner.id,
-    members: [{ profileId: "builtin-explore", title: "独立检查", taskPacket: {} }] });
-  const reviewer = team.childAgentRuns[0]!;
-  async function start(agent: AgentRunRecord) {
-    const prepared = await store.prepareSessionRun({ requestId: `start-${++serial}`, taskId: task.id, scope, sessionId: agent.sessionId,
-      runtimeId: `runtime-${agent.id}`, agentRunId: agent.id, workspaceId: `workspace-${agent.id}`, cwd: home, workspaceAccess: "sharedReadOnly",
-      message: "核查当前路线", attachmentRefs: [], roleRevision: "route-test:v1", contextRevision: 1, profileSnapshot: { role: agent.role },
-      tools: [{ name: "read", description: "Read fixture", parameters: { type: "object" } }], toolsWritable: false,
-      systemPromptDigest: `sha256:${"f".repeat(64)}`, promptSources: [] });
-    await store.startSessionRun(prepared.sessionRunId); return prepared;
-  }
-  const ownerRun = await start(owner), reviewerRun = await start(reviewer);
-  const act = (operation: RouteOperation, actor = owner, run = ownerRun, expectedPlanRevision = store.taskRouteContext(task.id)?.planRevision ?? 0, requestId = `route-${++serial}`) =>
-    store.updateTaskRoute({ requestId, taskId: task.id, agentRunId: actor.id, sessionRunId: run.sessionRunId, expectedPlanRevision, operation });
-  async function evidence(agent = reviewer, run = reviewerRun, toolName = "read", outcome: "succeeded" | "failed" = "succeeded") {
-    const attempt = await store.prepareToolAttempt({ taskId: task.id, sessionId: agent.sessionId, sessionRunId: run.sessionRunId, toolCallId: `read-${++serial}`, toolName, parameterDigest: `sha256:${"1".repeat(64)}` });
-    await store.finishOperationAttempt({ attemptId: attempt.attemptId, outcome, resultDigest: `sha256:${"2".repeat(64)}` });
-    return (await store.recordToolEvidence({ requestId: `evidence-${++serial}`, attemptId: attempt.attemptId, toolName, outcome, resultDigest: `sha256:${"2".repeat(64)}` })).evidence.id;
-  }
-  return { get store() { return store; }, task, scope, owner, ownerRun, reviewer, reviewerRun, act, evidence,
-    async reopenStore() { await store.close(); store = await ProductStore.open(options); },
-    async close() { await store.close(); await rm(root, { recursive: true, force: true }); } };
-}
 
 test("task routes retain candidate objections, require fresh independent evidence, and survive restart", async () => {
-  const f = await fixture();
+  const f = await routeFixture();
   try {
     await f.act({ action: "begin", question: "文件读取能否逐段完成", budget: { candidates: 4, checks: 4, rounds: 2 }, independentCheck: true });
     const oldEvidence = await f.evidence();
@@ -76,7 +41,7 @@ test("task routes retain candidate objections, require fresh independent evidenc
 });
 
 test("route mutation is scoped, idempotent, revision checked, and cannot reset budget through a generic Plan", async () => {
-  const f = await fixture();
+  const f = await routeFixture();
   try {
     const begin = { action: "begin" as const, question: "选择路线", budget: { candidates: 2, checks: 2, rounds: 1 }, independentCheck: true };
     await assert.rejects(f.act(begin, f.reviewer, f.reviewerRun), /只有协调者/);
@@ -101,7 +66,7 @@ test("route mutation is scoped, idempotent, revision checked, and cannot reset b
 });
 
 test("small exploration can check its own tools, while changed context and reopened rounds cannot reuse an old decision", async () => {
-  const f = await fixture();
+  const f = await routeFixture();
   try {
     await f.act({ action: "begin", question: "验证一条可逆路线", independentCheck: false, budget: { candidates: 3, checks: 3, rounds: 2 } });
     const first = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!;
@@ -118,5 +83,43 @@ test("small exploration can check its own tools, while changed context and reope
     assert.equal(reopened.context.route.checks.length, 1);
     assert.equal(reopened.context.route.round, 2);
     await assert.rejects(f.act({ action: "adopt", candidateId: first.id, reason: "沿用旧结果" }), /当前探索轮次/);
+  } finally { await f.close(); }
+});
+
+test("new user input must be acknowledged and can extend a stopped exploration without resetting its history", async () => {
+  const f = await routeFixture();
+  try {
+    await f.act({ action: "begin", question: "有界探索", independentCheck: false, budget: { candidates: 1, checks: 1, rounds: 1 } });
+    const proposed = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!;
+    await f.act({ action: "check", candidateId: proposed.id, outcome: "ready", summary: "已核对前提", findings: [], evidenceIds: [await f.evidence(f.owner, f.ownerRun)] });
+    const firstInput = f.store.latestRouteInput(f.task.id)!.id;
+    const next = await f.store.queueCollaborationMessage({ requestId: "new-user", taskId: f.task.id, sourceSessionId: f.owner.sessionId, targetAgentRunId: f.owner.id, author: "user", text: "先告诉我进度，路线暂时不变" });
+    assert.equal(f.store.taskRouteContext(f.task.id)!.inputCurrent, false);
+    await assert.rejects(f.act({ action: "adopt", candidateId: proposed.id, reason: "用旧要求继续" }), /用户新输入/);
+    await assert.rejects(f.act({ action: "acknowledge", inputId: firstInput, impact: "unchanged", reason: "旧输入" }), /用户输入已更新/);
+    await f.act({ action: "acknowledge", inputId: next.message.originRawInputId, impact: "unchanged", reason: "用户只查询进度，约束保持有效" });
+    await f.act({ action: "adopt", candidateId: proposed.id, reason: "已核对新输入" });
+    assert.equal(f.store.taskRouteContext(f.task.id)!.route.candidates.length, 1);
+    await f.act({ action: "stop", reason: "达到本轮探索上限" });
+    await assert.rejects(f.act({ action: "extend", inputId: firstInput, budget: { candidates: 2, checks: 2, rounds: 2 }, reason: "重复用旧输入" }), /用户新输入/);
+    const decision = await f.store.queueCollaborationMessage({ requestId: "continue-user", taskId: f.task.id, sourceSessionId: f.owner.sessionId, targetAgentRunId: f.owner.id, author: "user", text: "再用一轮和一个候选继续验证" });
+    await f.act({ action: "extend", inputId: decision.message.originRawInputId, budget: { candidates: 2, checks: 2, rounds: 2 }, reason: "依据本次明确继续要求增加一次有界验证" });
+    const reopened = await f.act({ action: "reopen", reason: "检验剩余假设" });
+    assert.equal(reopened.context.route.candidates.length, 1); assert.equal(reopened.context.route.checks.length, 1); assert.equal(reopened.context.route.round, 2);
+    assert.equal(reopened.context.route.budgetInputId, decision.message.originRawInputId);
+    await f.act({ action: "stop", reason: "第二轮仍无足够依据" });
+    await assert.rejects(f.act({ action: "extend", inputId: decision.message.originRawInputId, budget: { candidates: 3, checks: 3, rounds: 3 }, reason: "同一个授权反复增加" }), /用户新输入/);
+  } finally { await f.close(); }
+});
+
+test("repeated failed checks require a method change instead of new ids for the same evidence", async () => {
+  const f = await routeFixture();
+  try {
+    await f.act({ action: "begin", question: "避免无效重复", independentCheck: false, budget: { candidates: 4, checks: 4, rounds: 2 } });
+    const id = (await f.act({ action: "propose", candidate })).context.route.candidates[0]!.id;
+    for (let i = 0; i < 2; i++) await f.act({ action: "check", candidateId: id, outcome: "revise", findings: ["同一个边界仍未解决"], summary: "重复核查没有新事实", evidenceIds: [await f.evidence(f.owner, f.ownerRun)] });
+    await assert.rejects(f.act({ action: "propose", candidate: { ...candidate, title: "换个标题再试" } }), /连续两次/);
+    await f.act({ action: "propose", candidate: { ...candidate, derivedFrom: id, approach: "先隔离边界状态再验证" }, strategyChange: "从完整读取改为专门核查跨段状态" });
+    assert.equal(f.store.taskRouteContext(f.task.id)!.route.candidates.length, 2);
   } finally { await f.close(); }
 });

@@ -3,7 +3,8 @@ import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-pro
 import type {ProjectDirectoryChange} from "./project-directory-change.js";
 import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
 import type { VerificationRecord, CoordinatorReviewRecord } from "./collaboration-verification.js";
-import { parseRouteOperation, readTaskRoute, transitionTaskRoute, type RouteOperation, type TaskRouteContext } from "./task-routes.js";
+import { parseRouteOperation, readTaskRoute, readRouteWork, bindingMatchesRoute, RouteDispatchSchema, transitionTaskRoute, type RouteBinding, type RouteDispatch, type RouteWork, type RouteOperation, type TaskRouteContext } from "./task-routes.js";
+import { Value } from "typebox/value";
 import type { CollaborationMessage, CollaborationMessageState } from "./collaboration-message.js";
 import { agentModelCandidates, type AgentModelCandidate } from "./model-route.js";
 import { INSPIRATION_KEY, emptyInspiration, changeInspiration, exportIdeaMarkdown, publishIdeaMedia, removeUnreferencedIdeaMedia, resolveIdeaMedia, inspirationRoot, assertIdeaSnapshotDigest, InspirationError, type InspirationDocument, type InspirationOperation, type InspirationView } from "./inspiration.js";
@@ -278,6 +279,7 @@ export interface TaskPlanRecord {
   document: unknown;
   /** Derived at read time; not another persisted plan state. */
   routeContextCurrent?: boolean;
+  routeInputCurrent?: boolean;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -3129,7 +3131,7 @@ export class ProductStore {
         this.database.prepare("SELECT * FROM task_plans ORDER BY task_id, created_at, rowid").all() as SQLiteRow[]
       ).map(row => {
         const plan = taskPlan(row), route = readTaskRoute(plan.document);
-        return { ...plan, ...(route ? { routeContextCurrent: route.contextKey === this.routeContextKey(plan.taskId) } : {}) };
+        return { ...plan, ...(route ? { routeContextCurrent: route.contextKey === this.routeContextKey(plan.taskId), routeInputCurrent: route.acknowledgedInputId === this.latestRouteInput(plan.taskId)?.id } : {}) };
       }),
       taskWorkItems: (
         this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
@@ -3942,7 +3944,13 @@ export class ProductStore {
     const row = this.database.prepare("SELECT * FROM task_plans WHERE task_id=? AND state='active'").get(taskId) as SQLiteRow | undefined;
     if (!row) return undefined;
     const plan = taskPlan(row), route = readTaskRoute(plan.document);
-    return route ? { planId: plan.id, planRevision: plan.revision, contextCurrent: route.contextKey === this.routeContextKey(taskId), route } : undefined;
+    const latest = this.latestRouteInput(taskId), inputCurrent = route?.acknowledgedInputId === latest?.id;
+    return route ? { planId: plan.id, planRevision: plan.revision, contextCurrent: route.contextKey === this.routeContextKey(taskId), inputCurrent, ...(!inputCurrent && latest ? { pendingInput: { ...latest, text: latest.text.slice(0, 4000), complete: latest.text.length <= 4000 } } : {}), route } : undefined;
+  }
+
+  latestRouteInput(taskId: string): { id: string; text: string; sessionId: string } | undefined {
+    const row = this.database.prepare("SELECT id,submitted_text,session_id FROM raw_inputs WHERE task_id=? AND source_kind IN ('user_submit','edit_and_rerun','continue_path') ORDER BY created_at DESC,rowid DESC LIMIT 1").get(taskId) as SQLiteRow | undefined;
+    return row ? { id: text(row,"id"), text: text(row,"submitted_text"), sessionId: text(row,"session_id") } : undefined;
   }
 
   private routeContextKey(taskId: string): string {
@@ -3952,10 +3960,151 @@ export class ProductStore {
     return payloadHash({ goal: text(row, "goal"), acceptance: text(row, "acceptance_json"), contextRevision: context ? integer(context, "revision") : 0 });
   }
 
+  private routeWorkItems(taskId: string): TaskWorkItemRecord[] {
+    return (this.database.prepare("SELECT * FROM task_work_items WHERE task_id=? ORDER BY ordinal,id").all(taskId) as SQLiteRow[]).map(taskWorkItem);
+  }
+
+  private resolveRouteBinding(taskId: string, directive: unknown): RouteBinding | undefined {
+    const context = this.taskRouteContext(taskId);
+    if (directive === undefined) {
+      if (context) throw new ProductStoreError("INVALID_ARGUMENT", "当前任务有路线记录，请声明派发用于探索、检查、执行或无关工作");
+      return undefined;
+    }
+    if (!Value.Check(RouteDispatchSchema, directive)) throw new ProductStoreError("INVALID_ARGUMENT", "派发的路线关系无效");
+    if (directive.purpose === "independent") {
+      if (!directive.reason?.trim() || directive.workItemId || directive.candidateId) throw new ProductStoreError("INVALID_ARGUMENT", "无关工作需要说明独立原因，不能同时绑定路线工作项");
+      return undefined;
+    }
+    if (!context?.contextCurrent || context.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "路线缺失、上下文或用户输入已变，请先核对");
+    const binding: RouteBinding = { planId: context.planId, round: context.route.round, purpose: directive.purpose };
+    if (directive.purpose === "execute" || directive.purpose === "review") {
+      const work = this.routeWorkItems(taskId).find(item => item.id === directive.workItemId), routeWork = readRouteWork(work?.details);
+      if (!work || !routeWork || routeWork.invalidatedReason || routeWork.planId !== context.planId || routeWork.round !== context.route.round || routeWork.candidateId !== context.route.selectedCandidateId) {
+        throw new ProductStoreError("INVALID_ARGUMENT", "执行需要本任务当前路线的有效工作项");
+      }
+      if (work.state === "cancelled" || directive.purpose === "execute" && work.state === "completed") throw new ProductStoreError("REVISION_CONFLICT", "工作项已收口，请先明确返工范围");
+      const items = this.routeWorkItems(taskId);
+      if (routeWork.dependsOn.some(id => !items.some(item => item.id === id && item.state === "completed" && !readRouteWork(item.details)?.invalidatedReason))) {
+        throw new ProductStoreError("REVISION_CONFLICT", "工作项的前置依赖尚未完成或已经失效");
+      }
+      if (directive.purpose === "execute" && work.ownerAssignmentId) {
+        const owner = this.database.prepare("SELECT g.status FROM agent_assignments a JOIN agent_runs g ON g.id=a.agent_run_id WHERE a.id=?").get(work.ownerAssignmentId) as SQLiteRow | undefined;
+        if (owner && ["prepared", "running", "waiting"].includes(text(owner, "status"))) throw new ProductStoreError("REVISION_CONFLICT", "工作项仍有活动成员，请先停止或向原成员交办");
+      }
+      binding.candidateId = routeWork.candidateId; binding.workItemId = work.id;
+    } else if (directive.candidateId) {
+      if (!context.route.candidates.some(candidate => candidate.id === directive.candidateId && candidate.round === context.route.round)) throw new ProductStoreError("INVALID_ARGUMENT", "检查对象不属于当前探索轮次");
+      binding.candidateId = directive.candidateId;
+    }
+    if (!bindingMatchesRoute(binding, context)) throw new ProductStoreError("REVISION_CONFLICT", "当前路线阶段不允许这项派发");
+    return binding;
+  }
+
+  assertAgentRouteCurrent(agentRunId: string, requireInputCurrent = false): void {
+    const assignment = this.database.prepare("SELECT * FROM agent_assignments WHERE agent_run_id=? AND assignment_kind='member' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(agentRunId) as SQLiteRow | undefined;
+    if (!assignment) return;
+    const packet = JSON.parse(text(assignment, "task_packet_json")) as { routeBinding?: RouteBinding };
+    if (!packet.routeBinding) return;
+    const taskId = text(assignment, "task_id");
+    const context = this.taskRouteContext(taskId);
+    if (!bindingMatchesRoute(packet.routeBinding, context)) throw new ProductStoreError("REVISION_CONFLICT", "成员所依据的路线已经改变或失效，原安排已暂停");
+    if (requireInputCurrent && context?.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "用户有新输入，待协调者核对路线后继续");
+    if (packet.routeBinding.workItemId) {
+      const work = this.routeWorkItems(taskId).find(item => item.id === packet.routeBinding!.workItemId), routeWork = readRouteWork(work?.details);
+      if (!work || packet.routeBinding.purpose === "execute" && work.ownerAssignmentId !== text(assignment, "id") || routeWork?.invalidatedReason) throw new ProductStoreError("REVISION_CONFLICT", "成员的工作项已失效或重新指派");
+      const items = this.routeWorkItems(taskId);
+      if (routeWork?.dependsOn.some(id => !items.some(item => item.id === id && item.state === "completed" && !readRouteWork(item.details)?.invalidatedReason))) throw new ProductStoreError("REVISION_CONFLICT", "成员依赖的成果尚未完成或需要复查");
+    }
+  }
+
+  private agentRouteIsCurrent(agentRunId: string): boolean {
+    try { this.assertAgentRouteCurrent(agentRunId); return true; }
+    catch (error) { if (error instanceof ProductStoreError && error.code === "REVISION_CONFLICT") return false; throw error; }
+  }
+
+  private memberWorkScope(agentRunId: string): { assignmentId: string; revision: number; workItemId?: string } | undefined {
+    const row = this.database.prepare("SELECT * FROM agent_assignments WHERE agent_run_id=? AND assignment_kind='member' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(agentRunId) as SQLiteRow | undefined;
+    if (!row) return undefined;
+    const packet = JSON.parse(text(row, "task_packet_json"));
+    return { assignmentId: text(row, "id"), revision: packet.currentWorkRevision ?? 1, ...(packet.currentWorkItemId ? { workItemId: packet.currentWorkItemId } : {}) };
+  }
+
+  private sessionWorkScope(sessionRunId: string): ReturnType<ProductStore["memberWorkScope"]> {
+    const row = this.database.prepare("SELECT e.context_projection_json FROM session_runs r JOIN effective_inputs e ON e.id=r.effective_input_id WHERE r.id=?").get(sessionRunId) as SQLiteRow | undefined;
+    return row ? JSON.parse(text(row, "context_projection_json")).workAssignment : undefined;
+  }
+
+  private assertReportWorkCurrent(report: SQLiteRow): void {
+    const current = this.memberWorkScope(text(report, "agent_run_id"));
+    if (current?.workItemId && canonicalJSON(JSON.parse(text(report, "body_json")).workAssignment ?? null) !== canonicalJSON(current)) {
+      throw new ProductStoreError("REVISION_CONFLICT", "报告属于成员之前的工作指派，请检查本次工作的新报告");
+    }
+  }
+
+  private setAssignedWorkState(agentRunId: string, state: TaskWorkItemRecord["state"], now: string): void {
+    const scope = this.memberWorkScope(agentRunId);
+    this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?) AND (? IS NULL OR id=?)")
+      .run(state, now, agentRunId, scope?.workItemId ?? null, scope?.workItemId ?? null);
+  }
+
+  private invalidateRouteWork(taskId: string, context: TaskRouteContext, now: string): string[] {
+    const items = this.routeWorkItems(taskId), affected = new Set<string>();
+    for (const item of items) {
+      const work = readRouteWork(item.details);
+      if (work && work.planId === context.planId && work.round === context.route.round && !work.invalidatedReason) affected.add(item.id);
+    }
+    let changed = true;
+    while (changed) { changed = false; for (const item of items) if (!affected.has(item.id) && readRouteWork(item.details)?.dependsOn.some(id => affected.has(id))) { affected.add(item.id); changed = true; } }
+    for (const item of items.filter(item => affected.has(item.id))) {
+      const details = { ...(item.details as Record<string, unknown>), routeWork: { ...readRouteWork(item.details), invalidatedReason: context.route.reason } };
+      this.database.prepare("UPDATE task_work_items SET state='cancelled',details_json=?,revision=revision+1,updated_at=? WHERE id=?").run(canonicalJSON(details), now, item.id);
+    }
+    return (this.database.prepare("SELECT * FROM agent_assignments WHERE task_id=? AND assignment_kind='member'").all(taskId) as SQLiteRow[]).flatMap(row => {
+      const binding = (JSON.parse(text(row, "task_packet_json")) as { routeBinding?: RouteBinding }).routeBinding;
+      if (!binding || binding.planId !== context.planId || binding.round !== context.route.round) return [];
+      this.setAssignedWorkState(text(row, "agent_run_id"), "cancelled", now);
+      this.database.prepare("UPDATE agent_runs SET status='aborted',revision=revision+1,updated_at=? WHERE id=? AND status='prepared' AND NOT EXISTS(SELECT 1 FROM session_runs WHERE agent_run_id=? AND status IN ('prepared','running'))").run(now, text(row, "agent_run_id"), text(row, "agent_run_id"));
+      return [text(row, "agent_run_id")];
+    });
+  }
+
+  private blockRouteDependents(taskId: string, agentRunId: string, reason: string, revision: number, now: string): string[] {
+    const items = this.routeWorkItems(taskId);
+    const sources = new Set((this.database.prepare("SELECT id FROM agent_assignments WHERE agent_run_id=?").all(agentRunId) as SQLiteRow[]).map(row => text(row, "id")));
+    const current = this.memberWorkScope(agentRunId)?.workItemId;
+    const affected = new Set(items.filter(item => item.ownerAssignmentId && sources.has(item.ownerAssignmentId) && (!current || item.id === current)).map(item => item.id));
+    const originals = new Set(affected);
+    let changed = true;
+    while (changed) { changed = false; for (const item of items) if (!affected.has(item.id) && !readRouteWork(item.details)?.invalidatedReason && readRouteWork(item.details)?.dependsOn.some(id => affected.has(id))) { affected.add(item.id); changed = true; } }
+    const members: string[] = [];
+    for (const item of items.filter(item => affected.has(item.id) && !originals.has(item.id))) {
+      const details = { ...(item.details as Record<string, unknown>), routeWork: { ...readRouteWork(item.details), recheckAfterRevision: revision, recheckReason: reason } };
+      this.database.prepare("UPDATE task_work_items SET state='blocked',details_json=?,revision=revision+1,updated_at=? WHERE id=?").run(canonicalJSON(details), now, item.id);
+      if (item.ownerAssignmentId) {
+        const assignment = this.database.prepare("SELECT agent_run_id FROM agent_assignments WHERE id=?").get(item.ownerAssignmentId) as SQLiteRow | undefined;
+        if (assignment) members.push(text(assignment, "agent_run_id"));
+      }
+    }
+    for (const assignment of this.database.prepare("SELECT * FROM agent_assignments WHERE task_id=? AND assignment_kind='member'").all(taskId) as SQLiteRow[]) {
+      const binding = (JSON.parse(text(assignment, "task_packet_json")) as { routeBinding?: RouteBinding }).routeBinding;
+      if (binding?.purpose === "review" && binding.workItemId && affected.has(binding.workItemId) && !originals.has(binding.workItemId)) {
+        members.push(text(assignment, "agent_run_id"));
+        this.setAssignedWorkState(text(assignment, "agent_run_id"), "cancelled", now);
+      }
+    }
+    return [...new Set(members)];
+  }
+
+  private routeRecheckRevision(agentRunId: string): number {
+    const rows = this.database.prepare("SELECT w.* FROM task_work_items w JOIN agent_assignments a ON a.id=w.owner_assignment_id WHERE a.agent_run_id=?").all(agentRunId) as SQLiteRow[];
+    const current = this.memberWorkScope(agentRunId)?.workItemId;
+    return Math.max(0, ...rows.filter(row => !current || text(row,"id") === current).map(row => readRouteWork(taskWorkItem(row).details)?.recheckAfterRevision ?? 0));
+  }
+
   async updateTaskRoute(input: {
     requestId: string; taskId: string; agentRunId: string; sessionRunId: string;
     expectedPlanRevision: number; operation: RouteOperation;
-  }): Promise<{ storeRevision: number; context: TaskRouteContext }> {
+  }): Promise<{ storeRevision: number; context: TaskRouteContext; workItem?: TaskWorkItemRecord; affectedAgentRunIds: string[] }> {
     const operation = parseRouteOperation(input.operation);
     requiredRevision(input.expectedPlanRevision, "expectedPlanRevision");
     assertCredentialFreeValue(input, "taskRoute");
@@ -3969,7 +4118,7 @@ export class ProductStore {
       const previous = readTaskRoute(plan?.document);
       const contextKey = this.routeContextKey(input.taskId);
       const id = `route-${randomUUID()}`;
-      const route = transitionTaskRoute(previous, operation, { agentRunId: input.agentRunId, sessionRunId: input.sessionRunId, role: text(actor, "role"), contextKey, now, id });
+      const route = transitionTaskRoute(previous, operation, { agentRunId: input.agentRunId, sessionRunId: input.sessionRunId, role: text(actor, "role"), contextKey, now, id, latestInputId: this.latestRouteInput(input.taskId)?.id });
       const evidenceIds = operation.action === "propose" ? operation.candidate.evidenceIds : "evidenceIds" in operation ? operation.evidenceIds : [];
       for (const evidenceId of evidenceIds) {
         const item = this.database.prepare("SELECT * FROM evidence_records WHERE id=? AND task_id=?").get(evidenceId, input.taskId) as SQLiteRow | undefined;
@@ -3982,14 +4131,41 @@ export class ProductStore {
           if (!boundary || !evidenceEvent || integer(evidenceEvent, "sequence") <= integer(boundary, "sequence")) throw new ProductStoreError("INVALID_ARGUMENT", "证据早于候选，请核查当前版本后再提交");
         }
       }
+      if (operation.action === "check") {
+        const evidence = evidenceIds.map(evidenceId => {
+          const row = this.database.prepare("SELECT command_redacted,payload_json FROM evidence_records WHERE id=?").get(evidenceId) as SQLiteRow;
+          return { tool: text(row,"command_redacted"), resultDigest: JSON.parse(text(row,"payload_json")).resultDigest };
+        });
+        route.checks[route.checks.length - 1]!.evidenceFingerprint = payloadHash({ outcome: operation.outcome, findings: operation.findings, evidence: evidence.sort((a,b) => canonicalJSON(a).localeCompare(canonicalJSON(b))) });
+      }
       const planId = plan?.id ?? `task-plan-${randomUUID()}`;
       const revision = (plan?.revision ?? 0) + 1;
       const document = { ...(plan?.document as Record<string, unknown> ?? {}), routeExploration: route };
       if (canonicalJSON(document).length > 200000) throw new ProductStoreError("INVALID_ARGUMENT", "路线记录已达大小限制，请精简本次候选并保留原始证据引用");
       if (plan) this.database.prepare("UPDATE task_plans SET document_json=?,revision=?,updated_at=? WHERE id=?").run(canonicalJSON(document), revision, now, planId);
       else this.database.prepare("INSERT INTO task_plans(id,task_id,state,document_json,revision,created_at,updated_at) VALUES (?,?,'active',?,1,?,?)").run(planId, input.taskId, canonicalJSON(document), now, now);
-      const context: TaskRouteContext = { planId, planRevision: revision, contextCurrent: route.contextKey === contextKey, route };
-      return { value: { context }, event: { kind: "taskRoute.updated", entityKind: "taskPlan", entityId: planId, taskId: input.taskId, payload: { context, operation, ...(operation.action === "propose" ? { candidateId: id } : {}) } } };
+      const context: TaskRouteContext = this.taskRouteContext(input.taskId)!;
+      delete context.pendingInput;
+      let workItem: TaskWorkItemRecord | undefined;
+      if (operation.action === "work") {
+        const items = this.routeWorkItems(input.taskId);
+        if (items.length >= 200 || operation.dependsOn.some(id => !items.some(item => item.id === id && !readRouteWork(item.details)?.invalidatedReason))) throw new ProductStoreError("INVALID_ARGUMENT", "工作项依赖必须来自本任务的有效工作项，且总量须有界");
+        const details = { routeWork: { planId, round: route.round, candidateId: route.selectedCandidateId!, completion: operation.completion, dependsOn: operation.dependsOn } satisfies RouteWork };
+        workItem = { id: `work-item-${randomUUID()}`, taskId: input.taskId, ordinal: (items.at(-1)?.ordinal ?? -1) + 1, title: operation.title, state: "pending", details, revision: 1, createdAt: now, updatedAt: now };
+        this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'pending',NULL,?,1,?,?)").run(workItem.id, input.taskId, workItem.ordinal, workItem.title, canonicalJSON(details), now, now);
+      }
+      const affectedAgentRunIds = ["invalidate", "stop"].includes(operation.action) || operation.action === "acknowledge" && operation.impact === "changed" ? this.invalidateRouteWork(input.taskId, context, now) : [];
+      if (operation.action === "adopt") {
+        for (const assignment of this.database.prepare("SELECT * FROM agent_assignments WHERE task_id=? AND assignment_kind='member'").all(input.taskId) as SQLiteRow[]) {
+          const binding = (JSON.parse(text(assignment, "task_packet_json")) as { routeBinding?: RouteBinding }).routeBinding;
+          if (binding?.planId === planId && binding.round === route.round && ["explore", "check"].includes(binding.purpose)) {
+            affectedAgentRunIds.push(text(assignment, "agent_run_id"));
+            const workId = this.memberWorkScope(text(assignment,"agent_run_id"))?.workItemId;
+            this.database.prepare("UPDATE task_work_items SET state='cancelled',revision=revision+1,updated_at=? WHERE owner_assignment_id=? AND state<>'completed' AND (? IS NULL OR id=?)").run(now, text(assignment, "id"), workId ?? null, workId ?? null);
+          }
+        }
+      }
+      return { value: { context, ...(workItem ? { workItem } : {}), affectedAgentRunIds }, event: { kind: "taskRoute.updated", entityKind: "taskPlan", entityId: planId, taskId: input.taskId, payload: { context, operation, affectedAgentRunIds, ...(workItem ? { workItem } : {}), ...(operation.action === "propose" ? { candidateId: id } : {}) } } };
     });
   }
 
@@ -4139,6 +4315,7 @@ export class ProductStore {
     const title = requiredCredentialFreeString(input.title, "title", 500).trim();
     const state = normalizedTaskWorkItemState(input.state ?? "pending", "state");
     const details = normalizedWorkItemDetails(input.details ?? {}, "details");
+    if (readRouteWork(details)) throw new ProductStoreError("INVALID_ARGUMENT", "路线工作项由协调者通过任务路线操作建立");
     const ownerAssignmentId = input.ownerAssignmentId === undefined
       ? undefined
       : input.ownerAssignmentId === null
@@ -4251,6 +4428,9 @@ export class ProductStore {
         `).get(workItemId, taskId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Task Work Item does not belong to this Task", { taskId, workItemId });
         const current = taskWorkItem(row);
+        if (readRouteWork(current.details) && (state !== undefined || ownerAssignmentId !== undefined || details !== undefined) || readRouteWork(details)) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "路线工作项的状态、依赖和归属由派发与验收流程维护");
+        }
         if (current.revision !== expectedWorkItemRevision) {
           throw new ProductStoreError("REVISION_CONFLICT", "Task Work Item changed before this update", {
             expectedWorkItemRevision,
@@ -5009,6 +5189,7 @@ export class ProductStore {
             WHERE g.id = ? AND g.task_id = ? AND g.session_id = ?
           `).get(agentRunId, taskId, sessionId) as SQLiteRow | undefined;
           if (!agentRun) throw new ProductStoreError("NOT_FOUND", "Agent Run does not match the Session Run target");
+          this.assertAgentRouteCurrent(agentRunId, true);
           const agentStatus = text(agentRun, "status");
           // A member persists beyond one turn and may be explicitly resumed after
           // completion/recovery. Only the new input runs; prior effects are not replayed.
@@ -5117,6 +5298,7 @@ export class ProductStore {
             ...(input.pathAction?{pathAction:input.pathAction}:{}),
             ...(collaboration?{collaborationSource:{messageId:collaboration.id,author:collaboration.author,sourceSessionId:collaboration.sourceSessionId}}:{}),
             taskContextRevision: contextRevision,
+            ...(agentRunId && this.memberWorkScope(agentRunId) ? { workAssignment: this.memberWorkScope(agentRunId) } : {}),
             promptSources,
             ...(importedHistoryReceipt ? { importedHistoryReceipt } : {}),
           }),
@@ -5405,6 +5587,7 @@ export class ProductStore {
       const title = requiredCredentialFreeString(member.title, `members[${index}].title`, 200).trim();
       stableValue(member.taskPacket);
       assertCredentialFreeValue(member.taskPacket, `members[${index}].taskPacket`);
+      if (["routeBinding", "currentWorkItemId", "currentWorkRevision"].some(key => key in member.taskPacket)) throw new ProductStoreError("INVALID_ARGUMENT", "成员路线和工作项绑定由 Host 根据实际计划生成");
       return { profileId, title, taskPacket: member.taskPacket };
     });
     return await this.mutate(
@@ -5449,6 +5632,9 @@ export class ProductStore {
           if (!owner) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以创建成员");
           if (memberProfiles.some(profile=>profile.role === "coordinator")) throw new ProductStoreError("INVALID_ARGUMENT", "成员不能创建另一个任务协调者");
         }
+        const routeBindings = members.map(member => this.resolveRouteBinding(taskId, member.taskPacket.route));
+        const assignedWork = routeBindings.flatMap(binding => binding?.purpose === "execute" && binding.workItemId ? [binding.workItemId] : []);
+        if (new Set(assignedWork).size !== assignedWork.length) throw new ProductStoreError("INVALID_ARGUMENT", "同一工作项不能在同批派发给多个执行成员");
         let activeTeam = this.database.prepare(`
           SELECT * FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
         `).get(taskId) as SQLiteRow|undefined;
@@ -5560,6 +5746,9 @@ export class ProductStore {
         `);
         for (const [index, member] of members.entries()) {
           const profile = memberProfiles[index]!;
+          const routeBinding = routeBindings[index];
+          const workItemId = routeBinding?.purpose === "execute" ? routeBinding.workItemId! : `work-item-${randomUUID()}`;
+          const taskPacket = { ...member.taskPacket, ...(member.taskPacket.route ? { currentWorkItemId: workItemId, currentWorkRevision: 1 } : {}), ...(routeBinding ? { routeBinding } : {}) };
           const childSession: DCodeSessionRecord = {
             id: `session-${randomUUID()}`,
             taskId,
@@ -5622,7 +5811,7 @@ export class ProductStore {
             agentRunId: childAgentRun.id,
             profileId: profile.id,
             assignmentKind: "member",
-            taskPacket: member.taskPacket,
+            taskPacket,
             revision: 1,
           };
           insertAssignment.run(
@@ -5632,13 +5821,15 @@ export class ProductStore {
             childAgentRun.id,
             profile.id,
             "member",
-            canonicalJSON(member.taskPacket),
+            canonicalJSON(taskPacket),
             now,
             now,
           );
-          if(input.coordinatorAgentRunId) {
+          if (routeBinding?.purpose === "execute" && routeBinding.workItemId) {
+            this.database.prepare("UPDATE task_work_items SET owner_assignment_id=?,state='in_progress',revision=revision+1,updated_at=? WHERE id=? AND task_id=?").run(assignment.id, now, routeBinding.workItemId, taskId);
+          } else if(input.coordinatorAgentRunId) {
             const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
-            this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)").run(`work-item-${randomUUID()}`,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON(member.taskPacket),now,now);
+            this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)").run(workItemId,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON(taskPacket),now,now);
           }
           childSessions.push(childSession);
           childAgentRuns.push(childAgentRun);
@@ -5659,6 +5850,43 @@ export class ProductStore {
         };
       },
     );
+  }
+
+  async continueRouteMember(input: {
+    requestId: string; taskId: string; coordinatorAgentRunId: string; agentRunId: string;
+    instruction: string; acceptance: string; route: RouteDispatch; sourceSessionId: string; originRawInputId: string;
+  }): Promise<{ storeRevision: number; assignmentRevision: number; workItemId: string }> {
+    requiredCredentialFreeString(input.instruction, "instruction", 20000);
+    requiredCredentialFreeString(input.acceptance, "acceptance", 10000);
+    assertCredentialFreeValue(input, "continueRouteMember");
+    return this.mutate("teamRun.continueMember", input.requestId, undefined, input, (_revision, now) => {
+      const owner = this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='coordinator'").get(input.coordinatorAgentRunId, input.taskId);
+      const assignment = this.database.prepare("SELECT a.* FROM agent_assignments a JOIN agent_runs g ON g.id=a.agent_run_id WHERE a.agent_run_id=? AND a.task_id=? AND a.assignment_kind='member' AND g.role<>'coordinator' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1").get(input.agentRunId, input.taskId) as SQLiteRow | undefined;
+      if (!owner || !assignment) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以续用已有成员");
+      if (!this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(input.originRawInputId,input.taskId)
+        || !this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND session_id=?").get(input.coordinatorAgentRunId,input.sourceSessionId)) throw new ProductStoreError("INVALID_ARGUMENT", "继续工作必须保留当前任务原文与协调会话来源");
+      if (this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status IN ('prepared','running') LIMIT 1").get(input.agentRunId)
+        || this.collaborationMessages(input.taskId).some(message => message.targetAgentRunId === input.agentRunId && message.state === "delivering")) throw new ProductStoreError("REVISION_CONFLICT", "成员仍在执行或接收消息，请等待停止完成后续用");
+      const previous = JSON.parse(text(assignment, "task_packet_json"));
+      const oldItems = this.routeWorkItems(input.taskId).filter(item => item.ownerAssignmentId === text(assignment,"id") && (!previous.currentWorkItemId || item.id === previous.currentWorkItemId));
+      if (oldItems.some(item => !["completed", "cancelled"].includes(item.state))) throw new ProductStoreError("REVISION_CONFLICT", "原工作尚未收口，请先完成验收、返工或停止对应路线");
+      if (this.collaborationMessages(input.taskId).some(message => message.targetAgentRunId === input.agentRunId && ["queued", "paused", "interrupted", "failed"].includes(message.state))) throw new ProductStoreError("REVISION_CONFLICT", "成员仍有未处理消息，请核对后继续原消息，或明确新安排已包含其要求并取消旧排队项");
+      if (this.taskRouteContext(input.taskId)?.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "请先核对最新用户输入再续用成员");
+      const binding = this.resolveRouteBinding(input.taskId, input.route);
+      const workItemId = binding?.purpose === "execute" ? binding.workItemId! : `work-item-${randomUUID()}`;
+      const { routeBinding: _oldBinding, ...retained } = previous;
+      const packet = { ...retained, instruction: input.instruction, acceptance: input.acceptance, sourceSessionId: input.sourceSessionId, originRawInputId: input.originRawInputId, route: input.route, currentWorkItemId: workItemId, currentWorkRevision: (previous.currentWorkRevision ?? 1) + 1, ...(binding ? { routeBinding: binding } : {}) };
+      const assignmentRevision = integer(assignment,"revision") + 1;
+      this.database.prepare("UPDATE agent_assignments SET task_packet_json=?,revision=?,updated_at=? WHERE id=?").run(canonicalJSON(packet), assignmentRevision, now, text(assignment,"id"));
+      if (binding?.purpose === "execute") this.database.prepare("UPDATE task_work_items SET owner_assignment_id=?,state='pending',revision=revision+1,updated_at=? WHERE id=?").run(text(assignment,"id"), now, workItemId);
+      else {
+        const items = this.routeWorkItems(input.taskId);
+        if (items.length >= 200) throw new ProductStoreError("INVALID_ARGUMENT", "任务工作项已达到上限");
+        this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'pending',?,?,1,?,?)")
+          .run(workItemId, input.taskId, (items.at(-1)?.ordinal ?? -1) + 1, input.instruction.slice(0,200), text(assignment,"id"), canonicalJSON(packet), now, now);
+      }
+      return { value: { assignmentRevision, workItemId }, event: { kind: "agentAssignment.continued", entityKind: "agentAssignment", entityId: text(assignment,"id"), taskId: input.taskId, payload: { agentRunId: input.agentRunId, previous, current: packet, assignmentRevision } } };
+    });
   }
 
   async claimTeamRunStart(input: {
@@ -6860,7 +7088,7 @@ export class ProductStore {
         }
         const member=this.database.prepare("SELECT g.id,g.role,g.team_run_id FROM agent_runs g JOIN session_runs r ON r.agent_run_id=g.id WHERE r.id=?").get(sessionRunId) as SQLiteRow|undefined;
         if(member&&text(member,"role")!=="coordinator") {
-          this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,text(member,"id"));
+          this.setAssignedWorkState(text(member,"id"), "in_progress", now);
           if(typeof member.team_run_id==="string"&&this.database.prepare("SELECT id FROM agent_assignments WHERE team_run_id=? AND assignment_kind='coordinator' AND json_extract(task_packet_json,'$.adaptive')=1 LIMIT 1").get(member.team_run_id))this.reopenAdaptiveTeam(member.team_run_id,now);
         }
         this.database.prepare(`
@@ -7003,9 +7231,14 @@ export class ProductStore {
       { taskId, sessionId, sessionRunId, toolCallId, toolName, parameterDigest: input.parameterDigest },
       (_storeRevision, now) => {
         const run = this.database.prepare(`
-          SELECT id FROM session_runs WHERE id = ? AND task_id = ? AND session_id = ?
-        `).get(sessionRunId, taskId, sessionId);
+          SELECT id,agent_run_id,status FROM session_runs WHERE id = ? AND task_id = ? AND session_id = ?
+        `).get(sessionRunId, taskId, sessionId) as SQLiteRow | undefined;
         if (!run) throw new ProductStoreError("NOT_FOUND", "Tool Attempt Session Run does not exist");
+        if (typeof run.agent_run_id === "string") {
+          this.assertAgentRouteCurrent(run.agent_run_id);
+          const current = this.memberWorkScope(run.agent_run_id);
+          if (current?.workItemId && (text(run,"status") !== "running" || canonicalJSON(this.sessionWorkScope(sessionRunId) ?? null) !== canonicalJSON(current))) throw new ProductStoreError("REVISION_CONFLICT", "本次运行的工作指派已结束，不能执行过期工具");
+        }
         const attemptId = `attempt-${randomUUID()}`;
         this.database.prepare(`
           INSERT INTO operation_attempts(
@@ -7347,7 +7580,7 @@ export class ProductStore {
           SET status = ?, revision = revision + 1, completed_at = ?, updated_at = ?
           WHERE id = ?
         `).run(runStatus, now, now, attempt.agent_run_id);
-        this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(runStatus==="completed"?(attempt.agent_role==="worker"||attempt.agent_role==="verifier"&&!this.verifications().some(record=>record.verifierSessionRunId===sessionRunId)?"in_progress":"completed"):"blocked",now,attempt.task_id,attempt.agent_run_id);
+        if (this.agentRouteIsCurrent(text(attempt, "agent_run_id"))) this.setAssignedWorkState(text(attempt,"agent_run_id"), runStatus==="completed"?(attempt.agent_role==="worker"||attempt.agent_role==="verifier"&&!this.verifications().some(record=>record.verifierSessionRunId===sessionRunId)?"in_progress":"completed"):"blocked", now);
         if (assistantEntryId && input.assistantText) {
           this.database.prepare(`
             INSERT INTO agent_reports(
@@ -7363,6 +7596,7 @@ export class ProductStore {
               sessionRunId,
               assistantEntryId,
               sourceEntryId: input.assistantSourceEntryId ?? null,
+              ...(this.sessionWorkScope(sessionRunId) ? { workAssignment: this.sessionWorkScope(sessionRunId) } : {}),
             }),
             now,
           );
@@ -7519,6 +7753,9 @@ export class ProductStore {
       const verifier=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='verifier'").get(input.verifierAgentRunId,input.taskId);
       const subject=this.database.prepare("SELECT * FROM agent_reports WHERE id=? AND task_id=?").get(input.subjectReportId,input.taskId) as SQLiteRow|undefined;
       if(!verifier||!subject||text(subject,"agent_run_id")===input.verifierAgentRunId) throw new ProductStoreError("INVALID_ARGUMENT","独立验收必须由同任务不同于执行者的验收成员承担");
+      this.assertReportWorkCurrent(subject);
+      this.assertAgentRouteCurrent(text(subject,"agent_run_id"));
+      this.assertAgentRouteCurrent(input.verifierAgentRunId);
       const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(text(subject,"agent_run_id")) as SQLiteRow|undefined;
       if(!latest||text(latest,"id")!==input.subjectReportId)throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，请重新读取当前报告");
       const reportRunId=JSON.parse(text(subject,"body_json")).sessionRunId;
@@ -7530,25 +7767,39 @@ export class ProductStore {
         const event=this.database.prepare("SELECT sequence FROM store_events WHERE kind='evidence.recorded' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(id) as SQLiteRow|undefined;
         return !event||integer(event,"sequence")<=integer(boundary,"sequence");
       }))throw new ProductStoreError("INVALID_ARGUMENT","验收证据早于当前报告，必须重新检查新版成果");
+      const recheckRevision = this.routeRecheckRevision(text(subject,"agent_run_id"));
+      if (recheckRevision && input.evidenceIds.some(id => {
+        const event = this.database.prepare("SELECT store_revision FROM store_events WHERE kind='evidence.recorded' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(id) as SQLiteRow | undefined;
+        return !event || integer(event,"store_revision") <= recheckRevision;
+      })) throw new ProductStoreError("INVALID_ARGUMENT", "上游成果已改变，验收必须使用依赖变更之后的新证据");
       if(input.verdict==="pass"&&evidence.some(item=>text(item!,"exit_kind")!=="ok")) throw new ProductStoreError("INVALID_ARGUMENT","失败的检查不能作为通过证据");
       const verifierRun=this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status='running' ORDER BY created_at DESC,id DESC LIMIT 1").get(input.verifierAgentRunId) as SQLiteRow|undefined;
       if(!verifierRun)throw new ProductStoreError("INVALID_ARGUMENT","验收报告必须来自正在执行的验收运行");
       const fingerprint=payloadHash({subjectAgentRunId:text(subject,"agent_run_id"),verdict:input.verdict,findings:input.findings,evidence:evidence.map(item=>({tool:text(item!,"command_redacted"),resultDigest:JSON.parse(text(item!,"payload_json")).resultDigest})).sort((a,b)=>canonicalJSON(a).localeCompare(canonicalJSON(b)))});
       const verification:VerificationRecord={id:`verification-${randomUUID()}`,taskId:input.taskId,verifierAgentRunId:input.verifierAgentRunId,verifierSessionRunId:text(verifierRun,"id"),subjectAgentRunId:text(subject,"agent_run_id"),subjectReportId:input.subjectReportId,verdict:input.verdict,evidenceIds:[...new Set(input.evidenceIds)],findings:input.findings,summary:input.summary,fingerprint,createdAt:now};
-      this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,verification.subjectAgentRunId);
+      this.setAssignedWorkState(verification.subjectAgentRunId, "in_progress", now);
       const subjectTeam=this.database.prepare("SELECT team_run_id FROM agent_runs WHERE id=?").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
       if(typeof subjectTeam?.team_run_id==="string")this.reopenAdaptiveTeam(subjectTeam.team_run_id,now);
       this.database.prepare("INSERT INTO agent_reports(id,task_id,agent_run_id,report_kind,body_json,created_at) VALUES (?,?,?,'verification',?,?)").run(verification.id,input.taskId,input.verifierAgentRunId,canonicalJSON(verification),now);
       return {value:{verification},event:{kind:"verification.submitted",entityKind:"verification",entityId:verification.id,taskId:input.taskId,payload:verification}};
     });
   }
-  async reviewVerification(input:{requestId:string;taskId:string;coordinatorAgentRunId:string;verificationId:string;outcome:CoordinatorReviewRecord["outcome"];reason:string;strategyChange?:string}):Promise<{storeRevision:number;review:CoordinatorReviewRecord;verification:VerificationRecord;workItemCompleted:boolean}> {
+  async reviewVerification(input:{requestId:string;taskId:string;coordinatorAgentRunId:string;verificationId:string;outcome:CoordinatorReviewRecord["outcome"];reason:string;strategyChange?:string}):Promise<{storeRevision:number;review:CoordinatorReviewRecord;verification:VerificationRecord;workItemCompleted:boolean;affectedAgentRunIds:string[]}> {
     assertCredentialFreeValue(input,"review");
     if(!["accepted","rework","recheck"].includes(input.outcome)||!input.reason?.trim()) throw new ProductStoreError("INVALID_ARGUMENT","需要明确复核结论与依据");
     return this.mutate("verification.review",input.requestId,undefined,input,(_revision,now)=>{
       const owner=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='coordinator'").get(input.coordinatorAgentRunId,input.taskId);
       const verification=this.verifications().find(item=>item.id===input.verificationId&&item.taskId===input.taskId);
       if(!owner||!verification) throw new ProductStoreError("INVALID_ARGUMENT","只有本任务协调者可以复核已有验收");
+      this.assertAgentRouteCurrent(verification.subjectAgentRunId);
+      this.assertReportWorkCurrent(this.database.prepare("SELECT * FROM agent_reports WHERE id=?").get(verification.subjectReportId) as SQLiteRow);
+      if (input.outcome === "accepted") {
+        const route = this.taskRouteContext(input.taskId);
+        if (route?.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "用户有新输入，请核对后再接受成果");
+        const recheckRevision = this.routeRecheckRevision(verification.subjectAgentRunId);
+        const event = this.database.prepare("SELECT store_revision FROM store_events WHERE kind='verification.submitted' AND entity_id=?").get(verification.id) as SQLiteRow | undefined;
+        if (recheckRevision && (!event || integer(event, "store_revision") <= recheckRevision)) throw new ProductStoreError("REVISION_CONFLICT", "上游已返工，请重新核查受影响成果后再接受");
+      }
       if(this.coordinatorReviews().some(review=>review.verificationId===verification.id)) throw new ProductStoreError("REVISION_CONFLICT","该验收已经复核，应复验后提交新记录");
       const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
       if(!latest||text(latest,"id")!==verification.subjectReportId) throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，需要对新报告验收");
@@ -7562,13 +7813,14 @@ export class ProductStore {
       for(const item of this.verifications().filter(item=>item.subjectReportId===verification.subjectReportId))latestByVerifier.set(item.verifierAgentRunId,item);
       const reviews=[...this.coordinatorReviews(),review];
       const workItemCompleted=input.outcome==="accepted"&&[...latestByVerifier.values()].every(item=>item.verdict==="pass"&&reviews.some(candidate=>candidate.verificationId===item.id&&candidate.outcome==="accepted"));
-      this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(workItemCompleted?"completed":"in_progress",now,input.taskId,verification.subjectAgentRunId);
-      if(input.outcome==="recheck")this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,verification.verifierAgentRunId);
+      this.setAssignedWorkState(verification.subjectAgentRunId, workItemCompleted ? "completed" : "in_progress", now);
+      if(input.outcome==="recheck") this.setAssignedWorkState(verification.verifierAgentRunId, "in_progress", now);
+      const affectedAgentRunIds = input.outcome !== "accepted" ? this.blockRouteDependents(input.taskId, verification.subjectAgentRunId, input.reason, _revision, now) : [];
       if(typeof subjectRun.team_run_id==="string") {
         if(workItemCompleted)this.reconcileAdaptiveTeam(subjectRun.team_run_id,now);
         else this.reopenAdaptiveTeam(subjectRun.team_run_id,now);
       }
-      return {value:{review,verification,workItemCompleted},event:{kind:"verification.reviewed",entityKind:"coordinatorReview",entityId:review.id,taskId:input.taskId,payload:review}};
+      return {value:{review,verification,workItemCompleted,affectedAgentRunIds},event:{kind:"verification.reviewed",entityKind:"coordinatorReview",entityId:review.id,taskId:input.taskId,payload:review}};
     });
   }
 
@@ -7592,7 +7844,8 @@ export class ProductStore {
   }
 
   initialCollaborationMessage(agentRunId:string):CollaborationMessage|undefined{
-    const receipt=this.database.prepare("SELECT result_json FROM mutation_receipts WHERE request_id=? AND method='collaboration.queue'").get(`delegate-initial:${agentRunId}`) as SQLiteRow|undefined;
+    const revision = this.memberWorkScope(agentRunId)?.revision ?? 1;
+    const receipt=this.database.prepare("SELECT result_json FROM mutation_receipts WHERE request_id=? AND method='collaboration.queue'").get(revision===1?`delegate-initial:${agentRunId}`:`member-work:${agentRunId}:${revision}`) as SQLiteRow|undefined;
     if(!receipt)return;const id=(JSON.parse(text(receipt,"result_json")) as {message?:{id?:string}}).message?.id;
     return this.collaborationMessages().find(message=>message.id===id&&message.targetAgentRunId===agentRunId);
   }
@@ -7606,8 +7859,9 @@ export class ProductStore {
       const source=this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(input.sourceSessionId,input.taskId);
       if(!target||!source) throw new ProductStoreError("NOT_FOUND","只能向本任务已创建的成员发送消息");
       if(input.attachmentIds?.some(id=>!this.attachmentCatalog().some(attachment=>attachment.id===id))) throw new ProductStoreError("NOT_FOUND","附件不存在");
-      if(text(target,"role")!=="coordinator") {
-        this.database.prepare("UPDATE task_work_items SET state='in_progress',revision=revision+1,updated_at=? WHERE task_id=? AND owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?)").run(now,input.taskId,input.targetAgentRunId);
+      if (input.author === "coordinator" && text(target,"role") !== "coordinator") this.assertAgentRouteCurrent(input.targetAgentRunId, true);
+      if(text(target,"role")!=="coordinator" && this.agentRouteIsCurrent(input.targetAgentRunId)) {
+        this.setAssignedWorkState(input.targetAgentRunId, "in_progress", now);
         if(typeof target.team_run_id==="string")this.reopenAdaptiveTeam(target.team_run_id,now);
       }
       if(input.author==="user")this.database.prepare("UPDATE tasks SET state='active',revision=revision+1,updated_at=? WHERE id=? AND state IN ('completed','rejected')").run(now,input.taskId);

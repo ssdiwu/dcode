@@ -9,7 +9,7 @@ import {WorkspaceAccess} from "./workspace-access.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
 import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
 import { createTaskRouteExtension, DCODE_ROUTE_TOOL_NAME, type TaskRouteAction } from "./task-route-extension.js";
-import { summarizeTaskRoute } from "./task-routes.js";
+import { readRouteWork, summarizeTaskRoute } from "./task-routes.js";
 import { installDCodePrompt, replaceRequestPrompt } from "./pi-prompt-compat.js";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { CollaborationMessage } from "./collaboration-message.js";
@@ -160,7 +160,7 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
 function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.32";
+const HOST_VERSION = "0.0.33";
 
 const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "runtime.start",
@@ -2570,10 +2570,18 @@ export class PiHost {
     const store = await this.getProductStore(), snapshot = await store.snapshot();
     const actor = snapshot.agentRuns.find(run => run.id === identity.agentRunId && run.taskId === identity.taskId && run.sessionId === identity.dcodeSessionId);
     if (!actor) throw new PiHostError("AGENT_REQUIRED", "当前任务缺少路线操作的执行身份");
+    if (action.action === "read_input") {
+      if (actor.role !== "coordinator") throw new PiHostError("COORDINATOR_REQUIRED", "最新用户输入由协调者核对后向相关成员定向传递");
+      const latest = store.latestRouteInput(identity.taskId);
+      if (!latest || latest.id !== action.inputId) throw new PiHostError("REVISION_CONFLICT", "用户输入已更新，请重新读取路线摘要");
+      const offset = action.offset ?? 0, end = Math.min(latest.text.length, offset + (action.limit ?? 12000));
+      return { inputId: latest.id, sourceSessionId: latest.sessionId, text: latest.text.slice(offset, end), totalLength: latest.text.length, ...(end < latest.text.length ? { nextOffset: end } : {}) };
+    }
     if (action.action === "context" || action.action === "read") {
       const context = store.taskRouteContext(identity.taskId);
       if (!context) return { planRevision: snapshot.taskPlans.find(plan => plan.taskId === identity.taskId && plan.state === "active")?.revision ?? 0, route: null };
-      if (action.action === "context") return summarizeTaskRoute(context);
+      if (actor.role !== "coordinator") delete context.pendingInput;
+      if (action.action === "context") return { ...summarizeTaskRoute(context), workItems: snapshot.taskWorkItems.filter(item => item.taskId === identity.taskId).map(item => ({ id: item.id, title: item.title, state: item.state, ownerAssignmentId: item.ownerAssignmentId, routeWork: readRouteWork(item.details) })) };
       const body = JSON.stringify(context), offset = action.offset ?? 0, end = Math.min(body.length, offset + (action.limit ?? 12000));
       return { planId: context.planId, planRevision: context.planRevision, content: body.slice(offset, end), totalLength: body.length, ...(end < body.length ? { nextOffset: end } : {}) };
     }
@@ -2582,8 +2590,29 @@ export class PiHost {
     if (!run?.sessionRunId) throw new PiHostError("RUN_REQUIRED", "路线操作需要正在执行的会话运行");
     const requestId = `route:${createHash("sha256").update(`${identity.taskId}\0${actor.id}\0${run.sessionRunId}\0${callId}`).digest("hex").slice(0, 48)}`;
     const result = await store.updateTaskRoute({ requestId, taskId: identity.taskId, agentRunId: actor.id, sessionRunId: run.sessionRunId, expectedPlanRevision: action.expectedPlanRevision, operation: action.operation });
+    const stopFailures = await this.stopAffectedRouteMembers(identity, requestId, result.affectedAgentRunIds ?? [], result.context.route.reason);
     this.options.emit("foundation.changed", { kind: "taskRoute.updated", taskId: identity.taskId, storeRevision: result.storeRevision });
-    return { storeRevision: result.storeRevision, ...summarizeTaskRoute(result.context) };
+    const currentContext = store.taskRouteContext(identity.taskId) ?? result.context;
+    if (actor.role !== "coordinator") delete currentContext.pendingInput;
+    return { storeRevision: result.storeRevision, ...summarizeTaskRoute(currentContext), operationPlanRevision: result.context.planRevision, ...(result.workItem ? { workItem: result.workItem } : {}), affectedMembers: result.affectedAgentRunIds, stopFailures };
+  }
+
+  private async stopAffectedRouteMembers(identity: RuntimePromptIdentity, requestId: string, members: string[], reason: string): Promise<string[]> {
+    const store = await this.getProductStore(), failures: string[] = [];
+    for (const agentRunId of members) {
+      try {
+        // A retried receipt may outlive the repair. Never stop newly valid work
+        // merely because an older mutation once listed this member as affected.
+        try { store.assertAgentRouteCurrent(agentRunId); continue; }
+        catch (error) { if (!(error instanceof ProductStoreError) || error.code !== "REVISION_CONFLICT") throw error; }
+        for (const message of store.collaborationMessages(identity.taskId).filter(message => message.targetAgentRunId === agentRunId && message.author === "coordinator" && ["queued", "paused"].includes(message.state))) {
+          const id = `route-cancel:${createHash("sha256").update(`${requestId}\0${message.id}`).digest("hex").slice(0, 48)}`;
+          await store.transitionCollaborationMessage({ requestId: id, id: message.id, expectedRevision: message.revision, state: "cancelled", error: `安排已改变：${reason}` });
+        }
+        await this.coordinateTeam(identity, `${requestId}:stop:${agentRunId}`, { action: "stop", agentRunId });
+      } catch { failures.push(agentRunId); }
+    }
+    return failures;
   }
 
   private async handleVerification(identity:RuntimePromptIdentity,callId:string,input:VerificationAction):Promise<unknown> {
@@ -2605,8 +2634,9 @@ export class PiHost {
     }
     if(actor.role!=="coordinator"||!input.verificationId||!input.outcome||!input.reason) throw new PiHostError("COORDINATOR_REQUIRED","需要协调者对已有验收做复核");
     const result=await store.reviewVerification({requestId,taskId,coordinatorAgentRunId:actor.id,verificationId:input.verificationId,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{})});
+    const stopFailures = await this.stopAffectedRouteMembers(identity, requestId, result.affectedAgentRunIds ?? [], input.reason);
     if(input.outcome!=="accepted")await this.enqueueCollaboration({requestId:`follow-${requestId}`,taskId,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:input.outcome==="rework"?result.verification.subjectAgentRunId:result.verification.verifierAgentRunId,author:"coordinator",originRawInputId:run?.rawInputId,text:`${input.outcome==="rework"?"请修复对应成果":"请重新独立核验"}：${input.reason}\n${input.strategyChange?`方法调整：${input.strategyChange}`:""}\n验收记录：${result.verification.id}。完成后提交具体结果与新证据，保留无关已通过工作。`});
-    this.options.emit("foundation.changed",{kind:"verification.reviewed",taskId,storeRevision:result.storeRevision});return result;
+    this.options.emit("foundation.changed",{kind:"verification.reviewed",taskId,storeRevision:result.storeRevision});return { ...result, stopFailures };
   }
 
   private async coordinateTeam(identity:RuntimePromptIdentity, callId:string, action:TeamAction):Promise<unknown> {
@@ -2632,6 +2662,22 @@ export class PiHost {
       if(action.action==="resume_input")void this.drainCollaboration(result.message.targetSessionId);
       this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id,storeRevision:result.storeRevision});return result;
     }
+    if (action.action === "continue_member") {
+      const target = snapshot.agentRuns.find(run => run.id === action.agentRunId && run.taskId === task.id && run.role !== "coordinator");
+      if (!target || !action.message?.trim() || !action.acceptance?.trim() || !action.route || !originRawInputId) throw new PiHostError("INVALID_ARGUMENT", "续用成员需要指定已有成员、新工作、验收要求和路线关系");
+      const runtimeId = this.runtimeByDCodeSessionId.get(target.sessionId), runtime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
+      if (runtime?.currentRun || runtime?.session.isStreaming || runtime?.auxiliary?.hasLive || this.collaborationDrains.has(target.sessionId)) throw new PiHostError("MEMBER_BUSY", "成员尚未完全停止，请在停止完成后继续安排");
+      const latest = store.latestAppliedUserMessage(target.id);
+      if (latest && !ownerRun?.knownUserUpdates?.has(latest.id)) return { continued: false, reason: "先用 read_message 核对该成员最新用户要求", messageId: latest.id };
+      const result = await store.continueRouteMember({ requestId: `team-continue:${callId}`, taskId: task.id, coordinatorAgentRunId: owner.id, agentRunId: target.id,
+        instruction: action.message, acceptance: action.acceptance, route: action.route, sourceSessionId: identity.dcodeSessionId, originRawInputId });
+      const current = (await store.snapshot()).agentAssignments.find(item => item.agentRunId === target.id);
+      if (current?.revision !== result.assignmentRevision) return { continued: true, scheduled: false, ...result, reason: "已存在更新的安排，本次重试不恢复旧工作" };
+      store.assertAgentRouteCurrent(target.id, true);
+      const message = await this.ensureAdaptiveInitialInput(store, target.id);
+      this.options.emit("foundation.changed", { kind: "agentAssignment.continued", taskId: task.id, storeRevision: result.storeRevision });
+      return { continued: true, scheduled: message?.state === "queued" || message?.state === "delivering", ...result, messageId: message?.id };
+    }
     if(action.action==="send"||action.action==="stop") {
       const target=snapshot.agentRuns.find(run=>run.id===action.agentRunId&&run.taskId===task.id&&run.role!=="coordinator");
       if(!target) throw new PiHostError("MEMBER_NOT_FOUND","只能选择本任务已创建的成员");
@@ -2651,8 +2697,13 @@ export class PiHost {
       return this.enqueueCollaboration({requestId:`team-send:${callId}`,taskId:task.id,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:target.id,author:"coordinator",originRawInputId,text:action.message});
     }
     if(!action.members?.length) throw new PiHostError("INVALID_ARGUMENT","需要有边界的成员工作说明");
-    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance}})));
-    if(original){for(const run of original.childAgentRuns)await this.ensureAdaptiveInitialInput(store,run.id);return {created:true,scheduled:true,replayed:true,teamRunId:original.teamRun.id,members:original.childAgentRuns};}
+    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{})}})));
+    if(original){
+      try { for (const run of original.childAgentRuns) store.assertAgentRouteCurrent(run.id, true); }
+      catch (error) { return { created: true, scheduled: false, replayed: true, teamRunId: original.teamRun.id, members: original.childAgentRuns, reason: errorRecord(error).message }; }
+      for(const run of original.childAgentRuns)await this.ensureAdaptiveInitialInput(store,run.id);
+      return {created:true,scheduled:true,replayed:true,teamRunId:original.teamRun.id,members:original.childAgentRuns};
+    }
     for(const [runtimeId,runtime] of this.runtimes) {
       if(this.runtimes.size+action.members.length<=MAX_ACTIVE_RUNTIMES) break;
       if(runtimeId!==identity.runtimeId&&!runtime.currentRun&&!runtime.session.isStreaming&&!runtime.auxiliary?.hasLive&&runtime.promptEnvironment?.role!=="coordinator") await this.closeRuntime(runtimeId);
@@ -2679,7 +2730,7 @@ export class PiHost {
     }
     const workspacePolicy=action.members.some(member=>snapshot.agentProfiles.find(profile=>profile.id===member.profileId)?.role==="worker")?await this.adaptiveWorkspacePolicy(task,snapshot):"managed_worktree";
     const workspaceRootDigest=createHash("sha256").update(await realpath(task.cwd)).digest("hex");
-    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
+    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
     const members=[];
     for(const [index,run] of created.childAgentRuns.entries()) {
       const queued=await this.ensureAdaptiveInitialInput(store,run.id);
@@ -2691,13 +2742,21 @@ export class PiHost {
 
   private async ensureAdaptiveInitialInput(store:ProductStore,agentRunId:string,recovery=false):Promise<CollaborationMessage|undefined>{
     const initial=store.initialCollaborationMessage(agentRunId);if(initial)return initial;
-    const snapshot=await store.snapshot(),assignment=snapshot.agentAssignments.find(item=>item.agentRunId===agentRunId),packet=assignment?.taskPacket as {instruction?:string;acceptance?:string;sourceSessionId?:string;originRawInputId?:string}|undefined;
+    const snapshot=await store.snapshot(),assignment=snapshot.agentAssignments.find(item=>item.agentRunId===agentRunId),packet=assignment?.taskPacket as {instruction?:string;acceptance?:string;sourceSessionId?:string;originRawInputId?:string;currentWorkRevision?:number}|undefined;
     if(!assignment||!packet?.instruction||!packet.sourceSessionId||!packet.originRawInputId)return;
     const body=`${packet.instruction}\n\n验收要求：${packet.acceptance??""}`;
-    const previous=store.collaborationMessages(assignment.taskId).find(message=>message.targetAgentRunId===agentRunId&&message.author==="coordinator"&&message.text===body&&message.originRawInputId===packet.originRawInputId);if(previous)return previous;
-    const result=await store.queueCollaborationMessage({requestId:`delegate-initial:${agentRunId}`,taskId:assignment.taskId,sourceSessionId:packet.sourceSessionId,targetAgentRunId:agentRunId,author:"coordinator",originRawInputId:packet.originRawInputId,text:body});
+    const workRevision = packet.currentWorkRevision ?? 1;
+    if (workRevision === 1) {
+      const previous=store.collaborationMessages(assignment.taskId).find(message=>message.targetAgentRunId===agentRunId&&message.author==="coordinator"&&message.text===body&&message.originRawInputId===packet.originRawInputId);if(previous)return previous;
+    }
+    if (recovery) {
+      try { store.assertAgentRouteCurrent(agentRunId, true); }
+      catch (error) { if (error instanceof ProductStoreError && error.code === "REVISION_CONFLICT") return undefined; throw error; }
+    }
+    const input=this.acknowledgedCoordinatorInput(store,{requestId:workRevision===1?`delegate-initial:${agentRunId}`:`member-work:${agentRunId}:${workRevision}`,taskId:assignment.taskId,sourceSessionId:packet.sourceSessionId,targetAgentRunId:agentRunId,author:"coordinator",originRawInputId:packet.originRawInputId,text:body});
+    const result=await store.queueCollaborationMessage(input);
     let message=result.message;
-    if(recovery)message=(await store.transitionCollaborationMessage({requestId:`recover-initial:${agentRunId}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"已恢复创建成员时尚未发出的工作说明，请核对后继续"})).message;
+    if(recovery)message=(await store.transitionCollaborationMessage({requestId:`recover-initial:${agentRunId}:${workRevision}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"已恢复尚未发出的工作说明，请核对后继续"})).message;
     else void this.drainCollaboration(message.targetSessionId);
     this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:assignment.taskId});return message;
   }
@@ -2834,6 +2893,7 @@ export class PiHost {
         this.collaborationDrains.delete(sessionId);this.wakeCollaboration();this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id});return;
       }
       if(target.role!=="coordinator") {
+        store.assertAgentRouteCurrent(target.id, true);
         const profile=target.profileSnapshot as {modelCandidates?:AgentModelCandidate[]};
         const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===target.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
         const candidates=this.memberModelCandidates(store,target.sessionId,packet?.resolvedModelCandidates??profile.modelCandidates??(target.modelProvider&&target.modelId?[{providerId:target.modelProvider,modelId:target.modelId}]:snapshot.runtimeModelSelection?[snapshot.runtimeModelSelection]:[]));
@@ -5561,6 +5621,7 @@ export class PiHost {
         if(signal?.aborted)throw new PiHostError("ABORTED","执行已停止");
         const store=await this.getProductStore(),snapshot=await store.snapshot();
         const agent=snapshot.agentRuns.find(agent=>agent.id===identity.agentRunId);
+        if (agent && !auxiliary) store.assertAgentRouteCurrent(agent.id);
         const packet=snapshot.agentAssignments.find(assignment=>assignment.agentRunId===agent?.id)?.taskPacket as {resolvedModelCandidates?:AgentModelCandidate[]}|undefined;
         const profile=agent?.profileSnapshot as {modelCandidates?:AgentModelCandidate[]}|undefined;
         const automatic=auxiliary||!!packet?.resolvedModelCandidates||!!profile?.modelCandidates||!!run?.id.startsWith("collab:");

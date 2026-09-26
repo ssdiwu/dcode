@@ -68,7 +68,8 @@ test("native coordinator uses the registered route tool through Pi and resumes p
     await host.handle("dcodeSession.prompt", { dcodeSessionId: task.coordinationSession.id, promptId: "second", message: "继续核对候选" });
     await settled();
     const after = await snapshot();
-    assert.deepEqual(after.taskPlans, before.taskPlans);
+    assert.deepEqual(after.taskPlans.map(({ routeInputCurrent, ...plan }) => plan), before.taskPlans.map(({ routeInputCurrent, ...plan }) => plan));
+    assert.equal(after.taskPlans[0]!.routeInputCurrent, false, "新输入等待协调者核对，持久路线原文保持不变");
     assert.equal(after.tasks[0]!.state, "active");
     assert.equal(calls, 6);
   } finally { await host.close(); globalThis.fetch = previousFetch; await rm(root, { recursive: true, force: true }); }

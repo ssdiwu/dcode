@@ -226,6 +226,14 @@ Swift 从当前路径 JSONL 与 live Host events 投影 `ConversationRound`：�
 
 `host.hello.capabilities` 中 `extensionDialogs=true`，`extensionCustomHeadless=false`，`extensionWidgets=false`。这表示原生结构化对话框可用，不表示提供任意 Pi 扩展界面的兼容层。
 
+## 任务路线与工作指派
+
+`dcode_route` 是由 Host 绑定任务和当前运行身份的原生工具。候选、检查、决定、累计投入与用户输入适用性保存在既有 Task Plan 中；执行依赖由既有 Work Item 的受管资料持有。通用计划/工作项接口不能替换这些运行事实；精确版本范围见 [PRD 0032](../40-版本实施方案/0032-0.0.33-协调者按需探索与路线选择产品需求.md)。
+
+协调者采用路线后按工作项派发；Host 在启动、工具调用和模型请求边界核对路线及依赖。失效与局部返工先更新产品事实，再停止受影响的真实运行；旧报告保留为历史，不能恢复失效成果。新用户输入由协调者判断是否改变前提，原文与判断分别保存。没有路线记录的小任务沿用原直接执行路径。
+
+`dcode_team continue_member` 在成员原工作收口且执行完全停止后复用成员与会话。每轮 Effective Input 和报告保存工作指派身份及版本；更新项目目录等配置不改变这份工作版本。指派更新及前后内容保存在 Product Store 事件中，后续输入沿用耐久消息与原文来源；重启仅恢复暂停的未发输入，不恢复在途进程或重放已完成操作。
+
 ## 当前验证
 
 在 `host/` 执行：

@@ -26,12 +26,15 @@ export const RouteCandidateSchema = Type.Object({
 
 export const RouteOperationSchema = Type.Union([
   Type.Object({ action: Type.Literal("begin"), question: Text, budget: Budget, independentCheck: Type.Boolean() }, { additionalProperties: false }),
-  Type.Object({ action: Type.Literal("propose"), candidate: RouteCandidateSchema }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("propose"), candidate: RouteCandidateSchema, strategyChange: Type.Optional(Text) }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("check"), candidateId: Id, outcome: Type.Union([Type.Literal("ready"), Type.Literal("revise"), Type.Literal("reject"), Type.Literal("unknown")]), findings: Texts, summary: Text, evidenceIds: Evidence }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("adopt"), candidateId: Id, reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("invalidate"), reason: Text, evidenceIds: Evidence }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("reopen"), reason: Text }, { additionalProperties: false }),
   Type.Object({ action: Type.Literal("stop"), reason: Text }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("work"), title: Type.String({ minLength: 1, maxLength: 500, pattern: "\\S" }), completion: Text, dependsOn: Type.Array(Id, { maxItems: 32, uniqueItems: true }) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("acknowledge"), inputId: Id, impact: Type.Union([Type.Literal("unchanged"), Type.Literal("changed")]), reason: Text }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("extend"), inputId: Id, budget: Budget, reason: Text }, { additionalProperties: false }),
 ]);
 export type RouteOperation = Static<typeof RouteOperationSchema>;
 export type RouteCandidate = Static<typeof RouteCandidateSchema> & {
@@ -40,6 +43,7 @@ export type RouteCandidate = Static<typeof RouteCandidateSchema> & {
 export interface RouteCheck {
   id: string; candidateId: string; actorAgentRunId: string; sessionRunId: string; createdAt: string;
   outcome: "ready" | "revise" | "reject" | "unknown"; findings: string[]; summary: string; evidenceIds: string[];
+  evidenceFingerprint?: string;
 }
 export interface TaskRouteState {
   version: 1;
@@ -49,13 +53,44 @@ export interface TaskRouteState {
   round: number;
   budget: Static<typeof Budget>;
   independentCheck: boolean;
+  acknowledgedInputId?: string;
+  budgetInputId?: string;
   candidates: RouteCandidate[];
   checks: RouteCheck[];
   selectedCandidateId?: string;
   reason: string;
-  history: Array<{ action: RouteOperation["action"]; actorAgentRunId: string; sessionRunId: string; createdAt: string; reason: string; candidateId?: string }>;
+  history: Array<{ action: RouteOperation["action"]; actorAgentRunId: string; sessionRunId: string; createdAt: string; reason: string; candidateId?: string; inputId?: string; budget?: Static<typeof Budget> }>;
 }
-export interface TaskRouteContext { planId: string; planRevision: number; contextCurrent: boolean; route: TaskRouteState }
+export interface TaskRouteContext { planId: string; planRevision: number; contextCurrent: boolean; inputCurrent?: boolean; pendingInput?: { id: string; text: string; sessionId: string; complete: boolean }; route: TaskRouteState }
+
+export interface RouteBinding {
+  planId: string;
+  round: number;
+  purpose: "explore" | "check" | "execute" | "review";
+  candidateId?: string;
+  workItemId?: string;
+}
+export interface RouteWork {
+  planId: string; round: number; candidateId: string;
+  completion: string; dependsOn: string[];
+  invalidatedReason?: string;
+  recheckAfterRevision?: number;
+  recheckReason?: string;
+}
+export const RouteDispatchSchema = Type.Object({
+  purpose: Type.Union([Type.Literal("explore"), Type.Literal("check"), Type.Literal("execute"), Type.Literal("review"), Type.Literal("independent")]),
+  candidateId: Type.Optional(Id), workItemId: Type.Optional(Id), reason: Type.Optional(Text),
+}, { additionalProperties: false });
+export type RouteDispatch = Static<typeof RouteDispatchSchema>;
+export function readRouteWork(details: unknown): RouteWork | undefined {
+  return details && typeof details === "object" ? (details as { routeWork?: RouteWork }).routeWork : undefined;
+}
+export function bindingMatchesRoute(binding: RouteBinding, context: TaskRouteContext | undefined): boolean {
+  if (!context || !context.contextCurrent || binding.planId !== context.planId || binding.round !== context.route.round) return false;
+  return binding.purpose === "execute" || binding.purpose === "review"
+    ? context.route.status === "ready" && binding.candidateId === context.route.selectedCandidateId
+    : context.route.status === "exploring";
+}
 
 export class TaskRouteError extends Error {
   constructor(readonly code: "INVALID_ARGUMENT" | "REVISION_CONFLICT" | "ROUTE_NOT_READY" | "ROUTE_LIMIT", message: string) {
@@ -84,8 +119,11 @@ export function summarizeTaskRoute(context: TaskRouteContext) {
   return {
     planId: context.planId, planRevision: context.planRevision,
     contextCurrent: context.contextCurrent,
+    inputCurrent: context.inputCurrent,
+    ...(context.pendingInput ? { pendingInput: context.pendingInput } : {}),
     question: route.question, status: route.status, reason: route.reason, round: route.round,
     independentCheck: route.independentCheck,
+    needsStrategyChange: needsRouteStrategyChange(route),
     budget: route.budget, used: { candidates: route.candidates.length, checks: route.checks.length, rounds: route.round },
     selectedCandidateId: route.selectedCandidateId ?? null,
     candidates: route.candidates.map(candidate => ({ id: candidate.id, title: candidate.title, round: candidate.round, authorAgentRunId: candidate.authorAgentRunId,
@@ -94,8 +132,13 @@ export function summarizeTaskRoute(context: TaskRouteContext) {
   };
 }
 
+export function needsRouteStrategyChange(route: TaskRouteState): boolean {
+  const last = route.checks.slice(-2);
+  return last.length === 2 && last.every(check => check.outcome !== "ready") && !!last[0]!.evidenceFingerprint && last[0]!.evidenceFingerprint === last[1]!.evidenceFingerprint;
+}
+
 export function transitionTaskRoute(previous: TaskRouteState | undefined, operation: RouteOperation, actor: {
-  agentRunId: string; sessionRunId: string; role: string; contextKey: string; now: string; id: string;
+  agentRunId: string; sessionRunId: string; role: string; contextKey: string; now: string; id: string; latestInputId?: string;
 }): TaskRouteState {
   const fail = (message: string): never => { throw new TaskRouteError("ROUTE_NOT_READY", message); };
   if (!["propose", "check"].includes(operation.action) && actor.role !== "coordinator") fail("只有协调者可以决定任务路线与探索范围");
@@ -104,25 +147,46 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     return {
       version: 1, question: operation.question, status: "exploring", contextKey: actor.contextKey,
       round: 1, budget: operation.budget, independentCheck: operation.independentCheck, candidates: [], checks: [], reason: operation.question,
-      history: [{ action: "begin", actorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId, createdAt: actor.now, reason: operation.question }],
+      acknowledgedInputId: actor.latestInputId, budgetInputId: actor.latestInputId,
+      history: [{ action: "begin", actorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId, createdAt: actor.now, reason: operation.question, inputId: actor.latestInputId, budget: operation.budget }],
     };
   }
   if (!previous) return fail("尚未开始路线探索；可靠做法明确的小任务可直接推进");
   const next = structuredClone(previous);
   if (next.history.length >= 160) throw new TaskRouteError("ROUTE_LIMIT", "本次探索记录已达上限，请交付现有结果与剩余问题");
-  if (!["stop", "invalidate", "reopen"].includes(operation.action) && next.contextKey !== actor.contextKey) {
+  if (!["stop", "invalidate", "reopen", "acknowledge", "extend"].includes(operation.action) && next.contextKey !== actor.contextKey) {
     throw new TaskRouteError("REVISION_CONFLICT", "任务目标或选定上下文已改变，请重新核对路线");
   }
   const record = (reason: string, candidateId?: string) => next.history.push({
     action: operation.action, actorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId,
     createdAt: actor.now, reason, ...(candidateId ? { candidateId } : {}),
+    ...("inputId" in operation ? { inputId: operation.inputId } : {}),
+    ...(operation.action === "extend" ? { budget: operation.budget } : {}),
   });
-  if (operation.action === "propose") {
+  if (["adopt", "work"].includes(operation.action) && next.acknowledgedInputId !== actor.latestInputId) fail("存在用户新输入，请先核对其对当前路线的影响");
+  if (operation.action === "acknowledge") {
+    if (operation.inputId !== actor.latestInputId) fail("用户输入已更新，请读取最新原文后再判断");
+    if (operation.impact === "unchanged" && next.contextKey !== actor.contextKey) fail("选定上下文已改变，需要重新检查路线");
+    next.acknowledgedInputId = operation.inputId;
+    if (operation.impact === "changed") { next.status = "invalidated"; delete next.selectedCandidateId; }
+    next.reason = operation.reason; record(operation.reason);
+  } else if (operation.action === "extend") {
+    if (!["stopped", "invalidated"].includes(next.status)) fail("先收口当前探索，再根据用户新决定调整投入");
+    if (operation.inputId !== actor.latestInputId || operation.inputId === next.budgetInputId) fail("调整投入需要尚未用于预算调整的用户新输入");
+    const fields = ["candidates", "checks", "rounds"] as const;
+    if (fields.some(field => operation.budget[field] < next.budget[field]) || !fields.some(field => operation.budget[field] > next.budget[field])) fail("新的投入上限必须明确增加，累计投入不会清空");
+    next.budget = operation.budget; next.budgetInputId = operation.inputId; next.acknowledgedInputId = operation.inputId;
+    next.reason = operation.reason; record(operation.reason);
+  } else if (operation.action === "work") {
+    if (next.status !== "ready" || !next.selectedCandidateId) fail("采用成熟路线后才能建立执行工作项");
+    record(operation.title, next.selectedCandidateId);
+  } else if (operation.action === "propose") {
     if (next.status !== "exploring") fail("当前未处于探索阶段");
+    if (needsRouteStrategyChange(next) && !operation.strategyChange?.trim()) fail("连续两次检查没有新证据，需要说明方法调整或停止重复");
     if (next.candidates.length >= next.budget.candidates) throw new TaskRouteError("ROUTE_LIMIT", "候选投入已达上限，请报告结果与剩余问题");
     if (operation.candidate.derivedFrom && !next.candidates.some(c => c.id === operation.candidate.derivedFrom)) fail("修订来源不属于本任务路线");
     next.candidates.push({ ...operation.candidate, id: actor.id, round: next.round, authorAgentRunId: actor.agentRunId, sessionRunId: actor.sessionRunId, createdAt: actor.now });
-    record(operation.candidate.title, actor.id);
+    record(operation.strategyChange ? `${operation.candidate.title}；方法调整：${operation.strategyChange}` : operation.candidate.title, actor.id);
   } else if (operation.action === "check") {
     const candidate = next.candidates.find(c => c.id === operation.candidateId);
     if (!candidate || candidate.round !== next.round || next.status !== "exploring") fail("只能检查当前探索轮次的候选");
@@ -143,6 +207,7 @@ export function transitionTaskRoute(previous: TaskRouteState | undefined, operat
     if (next.status === "exploring" || next.status === "ready") fail("先记录停止或路线失效依据，再重新探索");
     if (next.round >= next.budget.rounds || next.candidates.length >= next.budget.candidates || next.checks.length >= next.budget.checks) throw new TaskRouteError("ROUTE_LIMIT", "累计探索投入已达上限，不能通过重新开一轮绕过");
     next.round++; next.status = "exploring"; next.contextKey = actor.contextKey; delete next.selectedCandidateId;
+    next.acknowledgedInputId = actor.latestInputId;
     next.reason = operation.reason; record(operation.reason);
   } else {
     if (operation.action === "invalidate" && next.status !== "ready") fail("当前没有已采用路线可作废");

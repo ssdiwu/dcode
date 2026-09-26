@@ -44,7 +44,8 @@ let failed = false;
 try {
   const hello = await bridge.request("host.hello");
   if (process.env.DCODE_EXPECT_PI_VERSION && hello.piVersion !== process.env.DCODE_EXPECT_PI_VERSION) throw new Error(`Unexpected Pi version: ${hello.piVersion}`);
-  console.log(`host.hello piVersion=${hello.piVersion}`);
+  if (process.env.DCODE_EXPECT_HOST_VERSION && hello.hostVersion !== process.env.DCODE_EXPECT_HOST_VERSION) throw new Error(`Unexpected Host version: ${hello.hostVersion}`);
+  console.log(`host.hello hostVersion=${hello.hostVersion} piVersion=${hello.piVersion}`);
   if (candidateApp) {
     const versions = {};
     for (const name of ["pi-ai", "pi-agent-core", "pi-coding-agent"]) {

@@ -15,10 +15,12 @@ export function TaskRouteSummary({ snapshot, taskId, onMember }: {
   if (route.version !== 1 || !Array.isArray(route.candidates) || !Array.isArray(route.checks) || !Array.isArray(route.history)) {
     return <p role="status">路线记录暂不可读，请保留记录并检查来源。</p>;
   }
-  const current = plan?.routeContextCurrent !== false;
+  const current = plan?.routeContextCurrent !== false && plan?.routeInputCurrent !== false;
   const selected = current ? route.candidates.find(candidate => candidate.id === route.selectedCandidateId) : undefined;
+  const paused = route.status === "invalidated" || route.status === "stopped";
   return <section className="task-route-summary" aria-label="任务路线">
-    <strong>{current ? statusLabels[route.status] ?? "路线状态待核对" : "任务要求已变更，路线待复核"}</strong>
+    <strong>{current || paused ? statusLabels[route.status] ?? "路线状态待核对" : plan?.routeInputCurrent === false ? "有新输入，路线待核对" : "任务要求已变更，路线待复核"}</strong>
+    {paused && plan?.routeInputCurrent === false && <p className="secondary">还有用户新输入待协调者核对。</p>}
     <p>{route.question}</p>
     {selected && <p>采用：{selected.title}</p>}
     <p className="secondary">{route.reason}</p>
@@ -51,7 +53,7 @@ export function TaskRouteSummary({ snapshot, taskId, onMember }: {
         })}
         {!route.checks.some(check => check.candidateId === candidate.id) && <p className="secondary">尚未检查</p>}
       </details>)}
-      <details><summary>查看路线变化</summary><ol>{route.history.filter(item => ["begin", "adopt", "invalidate", "reopen", "stop"].includes(item.action)).map((item, index) => <li key={index}>{item.reason}</li>)}</ol></details>
+      <details><summary>查看路线变化</summary><ol>{route.history.filter(item => ["begin", "adopt", "invalidate", "reopen", "stop", "acknowledge", "extend"].includes(item.action)).map((item, index) => <li key={index}>{item.reason}{item.action === "extend" && item.budget && <small className="secondary"> · 上限调整为 {item.budget.rounds} 轮、{item.budget.candidates} 个候选、{item.budget.checks} 次检查</small>}</li>)}</ol></details>
     </details>
   </section>;
 }

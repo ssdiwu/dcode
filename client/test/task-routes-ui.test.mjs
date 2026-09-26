@@ -32,6 +32,16 @@ test("route summary preserves objections and source navigation, and does not pre
     assert.ok(screen.getByText("任务要求已变更，路线待复核"));
     assert.equal(screen.queryByText("采用：流式读取"), null);
     assert.ok(screen.getByText("保留前一轮失败原因"));
+    snapshot.taskPlans[0].routeContextCurrent = true;
+    snapshot.taskPlans[0].routeInputCurrent = false;
+    view.rerender(React.createElement(TaskRouteSummary, { snapshot, taskId: "task", onMember: () => {} }));
+    assert.ok(screen.getByText("有新输入，路线待核对"));
+    assert.equal(screen.queryByText("采用：流式读取"), null);
+    route.status = "invalidated";
+    delete route.selectedCandidateId;
+    view.rerender(React.createElement(TaskRouteSummary, { snapshot, taskId: "task", onMember: () => {} }));
+    assert.ok(screen.getByText("原路线已失效"));
+    assert.ok(screen.getByText("还有用户新输入待协调者核对。"));
     view.rerender(React.createElement(TaskRouteSummary, { snapshot, taskId: "other-task", onMember: () => assert.fail("cross-task") }));
     assert.equal(document.querySelector(".task-route-summary"), null);
   } finally { cleanup(); }
