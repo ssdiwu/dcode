@@ -24,6 +24,8 @@ npm run dist        # 本地未签名候选；不是正式发布
 
 `npm test` 的 UI 回归在 jsdom 中运行真实 React 控制器与 App，接入真实 PiHost / Product Store，只有模型网络响应被隔离替换。覆盖创建、流式消息、停止、草稿隔离与重启恢复、搜索连续输入、创建入口和中文输入法确认。不接触真实账户、真实 `~/.dcode` 或供应商额度。候选摘要另有真实 Electron 子进程回归；字体、窗口行为与视觉验收仍另行成立。
 
+包内 Host 冒烟可用 `DCODE_SMOKE_APP="/绝对路径/D Code.app" DCODE_EXPECT_PI_VERSION=0.87.1 node scripts/smoke-host.mjs`。脚本显式使用 Electron 的 Node 模式，并同时隔离 Agent、Product Store 与 Electron 用户目录；核对握手、三项内置 SDK 版本及对应模型目录，不向真实模型发请求。
+
 隔离窗口和截图：
 
 ```bash

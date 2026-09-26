@@ -4,7 +4,7 @@
  * 查询 → host.shutdown 优雅退出。全程使用隔离的临时 data-root 与空 agent
  * 目录，不触碰真实 ~/.dcode 或 ~/.pi/agent。
  */
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,9 @@ import { fileURLToPath } from "node:url";
 import { HostBridge } from "../dist/src/host/bridge.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const hostEntry = join(repoRoot, "host", "dist", "src", "index.js");
+const candidateApp = process.env.DCODE_SMOKE_APP;
+const hostRoot = candidateApp ? join(candidateApp, "Contents/Resources/host") : join(repoRoot, "host");
+const hostEntry = join(hostRoot, "dist", "src", "index.js");
 
 try {
   await access(hostEntry, constants.F_OK);
@@ -28,16 +30,33 @@ await mkdir(join(agentDir, "sessions"), { recursive: true });
 await writeFile(join(agentDir, "settings.json"), "{}\n");
 
 const bridge = await HostBridge.start({
-  executablePath: process.execPath,
+  executablePath: candidateApp ? join(candidateApp, "Contents/MacOS/D Code") : process.execPath,
+  executableIsElectron: !!candidateApp,
   hostEntryPath: hostEntry,
   agentDirPath: agentDir,
   dataRootPath: join(root, ".dcode"),
+  baseEnv: { ...process.env, DCODE_DATA_ROOT: join(root, ".dcode"), DCODE_AGENT_DIR: agentDir, DCODE_USER_DATA: join(root, "profile"), PI_OFFLINE: "1" },
+  readyTimeoutMs: 15000,
   onStderr: text => process.stderr.write(`[host] ${text}`),
 });
 
 let failed = false;
 try {
   const hello = await bridge.request("host.hello");
+  if (process.env.DCODE_EXPECT_PI_VERSION && hello.piVersion !== process.env.DCODE_EXPECT_PI_VERSION) throw new Error(`Unexpected Pi version: ${hello.piVersion}`);
+  console.log(`host.hello piVersion=${hello.piVersion}`);
+  if (candidateApp) {
+    const versions = {};
+    for (const name of ["pi-ai", "pi-agent-core", "pi-coding-agent"]) {
+      const manifest = JSON.parse(await readFile(join(hostRoot, "node_modules/@earendil-works", name, "package.json"), "utf8"));
+      if (manifest.version !== hello.piVersion) throw new Error(`Embedded SDK mismatch: ${name}`);
+      versions[name] = manifest.version;
+    }
+    const catalog = await bridge.request("dcodeModels.get", {});
+    const found = catalog.models.filter(model => ["openai", "openai-codex"].includes(model.providerId) && ["gpt-6-sol", "gpt-6-luna"].includes(model.modelId)).map(model => `${model.providerId}::${model.modelId}`);
+    console.log(JSON.stringify({ embeddedVersions: versions, currentCatalogModels: found, realModelRequests: false }));
+    if (hello.piVersion === "0.87.1" && found.length !== 4) throw new Error("Expected built-in model entries are missing");
+  }
   const capabilities = hello.capabilities ?? {};
   console.log(`host.hello ok · productStore=${String(capabilities.productStore)} nativeTasks=${String(capabilities.nativeTasks)} foundationSnapshot=${String(capabilities.foundationSnapshot)}`);
   if (capabilities.productStore !== true || capabilities.foundationSnapshot !== true) {
