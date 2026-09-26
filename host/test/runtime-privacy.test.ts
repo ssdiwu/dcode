@@ -8,7 +8,7 @@ import {PiHost} from '../src/pi-host.js';
 import {SessionReader} from '../src/session-reader.js';
 import {SessionCopier} from '../src/session-copy.js';
 import {sanitizeRuntimeValue,guardPrivateSessionPersistence} from '../src/runtime-privacy.js';
-import {redactCredentialText} from '../src/credential-material.js';
+import {redactCredentialText,rememberCredentialSecret} from '../src/credential-material.js';
 import type {FoundationSnapshot,TaskBundle} from '../src/product-store.js';
 const fake='FictionalCredentialForPrivacyOnly987654321';
 const other='AnotherFictionalPasswordForTests7654321';
@@ -22,6 +22,24 @@ test('quoted credentials and runtime metadata are hidden while image bytes and s
   const path='/Users/Fixture/Workspace/Project20260907VeryLongDirectoryName/readme.md';assert.equal(redactCredentialText(path).text,path);
   const image={type:'image',mimeType:'image/png',data:'Base64ImageDataPreserved1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ'};
   assert.deepEqual(sanitizeRuntimeValue(image),image);assert.deepEqual(sanitizeRuntimeValue({cwd:path,details:{access_token:fake}}),{cwd:path,details:{access_token:'[REDACTED]'}});
+});
+
+test('provider encrypted reasoning survives tool rounds and private persistence without exempting credentials',()=>{
+  const encrypted='gAAAAABFixtureCiphertextOnly987654321ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789==';
+  const signature=JSON.stringify({id:'rs_fixture_1',type:'reasoning',summary:[],encrypted_content:encrypted});
+  const message={...assistant(''),api:'openai-codex-responses',provider:'openai-codex',model:'gpt-6-sol',content:[{type:'thinking' as const,thinking:'',thinkingSignature:signature}]};
+  assert.equal(sanitizeRuntimeValue(message).content[0]!.thinkingSignature,signature);
+  const manager=SessionManager.inMemory('/tmp');guardPrivateSessionPersistence(manager);
+  manager.appendMessage({role:'user',content:'read fixture',timestamp:1});manager.appendMessage(message);
+  const restored=manager.buildSessionContext().messages.find(m=>m.role==='assistant');
+  assert.equal((restored?.content as typeof message.content)[0]!.thinkingSignature,signature);
+  assert.equal(sanitizeRuntimeValue({untrusted:encrypted}).untrusted,'[REDACTED]==');
+  const known='KnownSecretInFakeCiphertextForPrivacy987654321';rememberCredentialSecret(known);
+  const malicious={type:'thinking',thinking:'',thinkingSignature:JSON.stringify({type:'reasoning',id:'rs_fixture_2',summary:[],encrypted_content:known})};
+  assert.ok(!JSON.stringify(sanitizeRuntimeValue(malicious)).includes(known));
+  assert.ok(!JSON.stringify(sanitizeRuntimeValue({type:'thinking',thinkingSignature:`api_key=${fake}`})).includes(fake));
+  const damaged={...message.content[0]!,thinkingSignature:signature.replace(encrypted,'[REDACTED]==')};
+  assert.equal(sanitizeRuntimeValue(damaged).thinkingSignature,undefined,'old damaged provider state is not replayed');
 });
 
 test('native model/tool messages and custom metadata are sanitized before any private JSONL or Product Store persistence',async()=>{
