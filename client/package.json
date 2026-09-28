@@ -1,6 +1,6 @@
 {
   "name": "@dcode/client",
-  "version": "0.0.33",
+  "version": "0.0.34",
   "private": true,
   "type": "module",
   "description": "D Code Web 客户端：Electron 平台壳 + React 呈现层，经 Protocol v1 消费既有 host/。",
@@ -27,6 +27,9 @@
     "test:preview": "npm run build:main && node node_modules/electron/cli.js test/main/html-preview.mjs",
     "verify:threeui": "node scripts/verify-threeui.mjs",
     "test:new-task": "npm run build && node test/main/new-task-ui.mjs",
+    "test:source-detail": "npm run build && node test/main/source-detail.mjs",
+    "test:task-continuation": "npm run build && node test/main/task-continuation.mjs",
+    "test:review-diff": "npm run build && node test/main/review-diff.mjs",
     "test:command-menu": "node test/main/command-menu.mjs"
   },
   "devDependencies": {

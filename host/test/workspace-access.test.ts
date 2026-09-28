@@ -18,6 +18,8 @@ test('Git filters tracked sensitive paths and rejects both staged and working di
   await git(root,'init');for(const name of ['.env','.ENV.local','AUTH.JSON','note.md'])await writeFile(join(root,name),'ordinary fixture before\n');await git(root,'add','.');await git(root,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture');
   for(const name of ['.env','.ENV.local','AUTH.JSON','note.md'])await writeFile(join(root,name),'ordinary fixture after\n');await git(root,'add','.ENV.local');
   const status=await access.gitStatus(root);assert.deepEqual(status.files.map(file=>file.path),['note.md']);assert.equal(status.hiddenCount,3);
+  assert.match((await access.files.git(root,['rev-parse','HEAD'])).trim(),/^[a-f0-9]{40,64}$/);
+  await assert.rejects(access.files.git(root,['rev-parse','--git-dir']),/文件请求格式无效/);
   for(const name of ['.env','.ENV.local','AUTH.JSON'])for(const staged of [false,true])await assert.rejects(access.diff(root,name,staged),error=>(error as {code:string}).code==='FILE_SCOPE');
   assert.match((await access.diff(root,'note.md',false)).diff,/ordinary fixture after/);
   const alias=root+'-link';await symlink(root,alias);try{await assert.rejects(access.gitStatus(alias),/链接|目录/);}finally{await rm(alias);}
@@ -108,4 +110,26 @@ test('reference classification of a single-file artifact does not expand its reg
  const snapshot={tasks:[],projects:[],managedWorkerWorktrees:[],artifacts:[{id:'one',taskId:'task',title:'One',externalPath:join(root,'allowed.md')}]} as unknown as FoundationSnapshot;
  const access=new WorkspaceAccess(async()=>({snapshot:async()=>snapshot}) as unknown as ProductStore);
  try{assert.equal((await access.handle('workspace.reference',{source:{artifactId:'one'},reference:'allowed.md'}) as {kind:string}).kind,'file');for(const reference of [root,'other.md'])await assert.rejects(access.handle('workspace.reference',{source:{artifactId:'one'},reference}),/不在当前任务/);}finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('a new repository can freeze an untracked diff for Task review before its first commit',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'dcode-unborn-review-')),agent=join(root,'agent'),projectDirectory=join(root,'project');
+ await mkdir(agent);await mkdir(projectDirectory);await writeFile(join(agent,'settings.json'),'{}');await git(projectDirectory,'init');await writeFile(join(projectDirectory,'new.md'),'first version\n');
+ const host=new PiHost({agentDir:agent,sessionsDirectory:join(agent,'sessions'),dataRoot:join(root,'.dcode'),userHome:root,emit:()=>{}});
+ try{
+  await host.start();let snapshot=await host.handle('foundation.snapshot',{}) as FoundationSnapshot;
+  const project=await host.handle('project.create',{requestId:'unborn-project',expectedStoreRevision:snapshot.storeRevision,title:'New project',directory:projectDirectory}) as {project:{id:string}};
+  snapshot=await host.handle('foundation.snapshot',{}) as FoundationSnapshot;
+  const task=await host.handle('task.create',{requestId:'unborn-task',expectedStoreRevision:snapshot.storeRevision,scope:{kind:'project',projectId:project.project.id},title:'Review new file',goal:'Check new work'}) as {task:{id:string}};
+  const diff=await host.handle('workspace.diff',{source:{taskId:task.task.id},path:'new.md',staged:false}) as {diff:string;digest:string};
+  snapshot=await host.handle('foundation.snapshot',{}) as FoundationSnapshot;
+  const requested=await host.handle('task.review.request',{requestId:'unborn-review',expectedStoreRevision:snapshot.storeRevision,taskId:task.task.id,path:'new.md',staged:false,digest:diff.digest}) as {review:{id:string;baseHead:string;workItemId:string}};
+  assert.equal(requested.review.baseHead,'unborn');
+  assert.equal((await host.handle('task.review.read',{taskId:task.task.id,reviewId:requested.review.id}) as {diff:string}).diff,diff.diff);
+  await writeFile(join(projectDirectory,'new.md'),'later version\n');
+  const replayed=await host.handle('task.review.request',{requestId:'unborn-review',expectedStoreRevision:snapshot.storeRevision,taskId:task.task.id,path:'new.md',staged:false,digest:diff.digest}) as {review:{id:string}};
+  assert.equal(replayed.review.id,requested.review.id);
+  await assert.rejects(host.handle('task.review.request',{requestId:'unborn-review',expectedStoreRevision:snapshot.storeRevision,taskId:task.task.id,path:'new.md',staged:false,digest:diff.digest,workItemId:requested.review.workItemId}),/对应不同范围/);
+  await assert.rejects(host.handle('task.review.request',{requestId:'unborn-review',expectedStoreRevision:snapshot.storeRevision,taskId:task.task.id,path:'new.md',staged:false,digest:`sha256:${'a'.repeat(64)}`}),/对应不同范围/);
+ }finally{await host.close();await rm(root,{recursive:true,force:true});}
 });

@@ -12,6 +12,8 @@ export interface CollaborationMessage {
   targetSessionId: string;
   targetAgentRunId: string;
   author: "user" | "coordinator" | "member";
+  /** Explicit user interface action; submittedText is the visible action label, text is its effective instruction. */
+  uiAction?: { kind: "task.review.request"; reviewId: string };
   text: string;
   attachmentIds?: string[];
   state: CollaborationMessageState;

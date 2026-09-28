@@ -576,6 +576,7 @@ export function useWorkbench() {
     cancelPath:()=>updateDraft(draftKey,restoredPathDraft(draft)),
     draftKey,
     updateDraft,
+    flushDrafts,
     addAttachment,
     trackAttachmentImport:(operation:Promise<void>)=>{pendingAttachments.current.add(operation);void operation.then(()=>pendingAttachments.current.delete(operation),()=>pendingAttachments.current.delete(operation));},
     registerQuitFlush,

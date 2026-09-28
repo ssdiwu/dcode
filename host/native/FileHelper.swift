@@ -65,7 +65,7 @@ struct FileHelper {
                 let diffPrefix = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=3"]
                 let diffTail = Array(arguments.dropFirst(diffPrefix.count))
                 let validDiff = arguments.starts(with: diffPrefix) && ((diffTail.count == 2 && diffTail[0] == "--") || (diffTail.count == 3 && diffTail[0] == "--cached" && diffTail[1] == "--"))
-                guard arguments == top || arguments == ["rev-parse", "--abbrev-ref", "HEAD"] || arguments == ["status", "--porcelain=v1", "-z", "--untracked-files=normal"] || validDiff else { throw InvalidRequest() }
+                guard arguments == top || arguments == ["rev-parse", "HEAD"] || arguments == ["rev-parse", "--abbrev-ref", "HEAD"] || arguments == ["status", "--porcelain=v1", "-z", "--untracked-files=normal"] || validDiff else { throw InvalidRequest() }
                 let fd = try WorkspaceFileSecurePath.openParentDirectory(rootPath: request.root, relativeComponents: [])
                 defer { Darwin.close(fd) }
                 guard Darwin.fchdir(fd) == 0 else { throw InvalidRequest() }

@@ -18,11 +18,14 @@ npm run test:layout # 构建后，用隔离 Chromium 检查真实布局几何
 npm run test:inputs # 扫描所有输入控件，检查深浅色焦点、只读、禁用与禁止手动缩放
 npm run test:canvas # 检查不同图片比例下的完整显示与节点自适应尺寸
 npm run test:preview # 隔离 Electron 中验证 HTML 脚本、资源和网络边界
+npm run test:source-detail # 隔离 Electron 中核对旧灵感版本、深浅主题与窄窗口来源面板
 npm run smoke:host  # 不开窗口的 Host 启动、握手、查询、停机
 npm run dist        # 本地未签名候选；不是正式发布
 ```
 
 `npm test` 的 UI 回归在 jsdom 中运行真实 React 控制器与 App，接入真实 PiHost / Product Store，只有模型网络响应被隔离替换。覆盖创建、流式消息、停止、草稿隔离与重启恢复、搜索连续输入、创建入口和中文输入法确认。不接触真实账户、真实 `~/.dcode` 或供应商额度。候选摘要另有真实 Electron 子进程回归；字体、窗口行为与视觉验收仍另行成立。
+
+`npm run test:source-detail`、`npm run test:task-continuation` 和 `npm run test:review-diff` 使用独立数据根启动真实 Electron 窗口，分别核对旧灵感版本、同任务续接与摘要修订、Project Git 差异审查；输出临时截图和结果，不修改当前用户任务。三者仍不代替 507 本人验收。
 
 包内 Host 冒烟可用 `DCODE_SMOKE_APP="/绝对路径/D Code.app" DCODE_EXPECT_PI_VERSION=0.87.1 node scripts/smoke-host.mjs`。脚本显式使用 Electron 的 Node 模式，并同时隔离 Agent、Product Store 与 Electron 用户目录；核对握手、三项内置 SDK 版本及对应模型目录，不向真实模型发请求。
 
@@ -50,6 +53,9 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 - 真实 `message_update.assistantMessageEvent` 增量、运行失败、停止和实际模型选择接入；用户提交、执行过程与最终回答按轮次区分；过程默认一行实时预览，展开显示非空思考、中途说明和成对工具记录。复制、引用、图片与文件预览可用。
 - 搜索等待索引就绪后重查，通过 Runtime 绑定返回 D Code Task；Pi 导入只走单向导入合同。
 - 左侧“灵感”进入持久画布：文字、图片、链接、视频节点，搜索、拖动、连线、成组、归档恢复与编辑草稿。选定内容版本可引用到已有任务或新建独立任务；任务标题下方显示所引用的版本。
+- 任务灵感版本标签和运行依据中的文档来源可只读回查保存时的版本；由 Host 核对原来源和内容摘要，旧正文不可恢复时显示原因。查看来源不会切换 Task 或覆盖消息、资料选择与文件编辑草稿。
+- 任务菜单可在同一 Task 开始新一段主对话，历史对话仍可进入阅读；普通草稿随新段继续，定向成员及历史续写草稿须先处理。新段顶部显示可修订的任务工作摘要、来源和版本历史，运行依据分别标明本轮采用的摘要及按需实际读取的来源。
+- 已读来源引用可从消息或报告回到当时的任务消息、工作项、成员报告、检查证据、项目文件或灵感版本；文件变化时显示不可恢复状态。项目任务的 Git 差异可直接发起审查、选择相关工作项，并在任务概览查看固定差异与复核状态。
 - 信息概览按需打开；成员、工作清单、等待事项、产物与报告消费 Store。对象详情展示已有记录，文件与 Git 工作台可查看任务目录及已登记产物，支持多标签、行定位、Markdown/HTML 编辑、冲突保存、图片查看和差异引用。HTML 预览独立隔离，默认不联网，本次放行在切换文件时重置。
 - 系统菜单、目录选择、外链限制、退出前保存、Host 重启和打包资源路径接入。
 

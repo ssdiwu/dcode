@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,writeFile,rm,symlink,chmod} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {PiHost} from '../src/pi-host.js';
@@ -13,16 +14,38 @@ test('context selection changes apply to later runs while current documents stay
   await writeFile(join(agent,'settings.json'),JSON.stringify({defaultProvider:'zai-coding-cn',defaultModel:'fixture'}));await writeFile(join(agent,'models.json'),JSON.stringify({providers:{'zai-coding-cn':{baseUrl:'https://open.bigmodel.cn/api/paas/v4',api:'openai-completions',apiKey:'fixture-only',models:[{id:'fixture',name:'Fixture',reasoning:false,input:['text'],contextWindow:100000,maxTokens:4096}]}}}));
   const previous=globalThis.fetch;let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let mainCalls=0;const mainPrompts:string[]=[];
   globalThis.fetch=(async(url,init)=>{if(String(url).includes('quota/limit'))return Response.json({success:true,code:200,data:{limits:[{type:'TOKENS_LIMIT',percentage:10,nextResetTime:Date.now()+3600000}]}});const body=JSON.parse(String(init?.body)),system=body.messages.find((message:any)=>message.role==='system').content;if(system.includes('coordinator Agent')){mainCalls++;mainPrompts.push(system);if(mainCalls===1){await held;return answer('',{action:'delegate',members:[{profileId:'builtin-explore',title:'独立检查',instruction:'读取新运行的选定资料',acceptance:'明确来源'}]});}return answer('本轮按开始时的资料处理，后续运行使用新选择');}assert.ok(system.includes('SECOND_SELECTED_SOURCE'));assert.ok(!system.includes('FIRST_SELECTED_SOURCE'));return answer('新成员使用新选择');}) as typeof fetch;
-  const host=new PiHost({agentDir:agent,sessionsDirectory:join(agent,'sessions'),dataRoot:join(root,'.dcode'),userHome:home,emit:()=>{}}),snapshot=()=>host.handle('foundation.snapshot',{}) as Promise<FoundationSnapshot>;
+  const host=new PiHost({agentDir:agent,sessionsDirectory:join(agent,'sessions'),dataRoot:join(home,'.dcode'),userHome:home,emit:()=>{}}),snapshot=()=>host.handle('foundation.snapshot',{}) as Promise<FoundationSnapshot>;
   try{
     await host.start();let snap=await snapshot();const task=await host.handle('task.create',{requestId:'task',expectedStoreRevision:snap.storeRevision,scope:{kind:'user',userId:snap.currentUser.id},title:'资料版本检查',goal:'下一次运行生效'}) as TaskBundle;
     const inspected=await host.handle('task.context.inspectFiles',{taskId:task.task.id,paths:[join(home,'AGENTS.md'),join(home,'first.md'),join(home,'first.md')]}) as {sources:TaskContextSourceInput[];requiredAgents:boolean};assert.ok(inspected.requiredAgents);assert.equal(inspected.sources.length,1);
     for(const file of [join(root,'outside.md'),join(home,'large.md'),join(home,'.env')])await assert.rejects(host.handle('task.context.inspectFiles',{taskId:task.task.id,paths:[file]}));
     snap=await snapshot();await host.handle('task.context.replace',{requestId:'first-context',expectedStoreRevision:snap.storeRevision,taskId:task.task.id,scope:task.task.scope,expectedContextRevision:snap.taskContextSets[0]!.revision,sources:inspected.sources});
+    const ideaId=`idea-${randomUUID()}`;
+    snap=await snapshot();await host.handle('inspiration.mutate',{requestId:'idea-v1',expectedStoreRevision:snap.storeRevision,operation:{kind:'save',node:{id:ideaId,kind:'text',title:'旧版灵感',markdown:'IDEA_VERSION_ONE'},expectedNodeRevision:0}});
+    snap=await snapshot();await host.handle('inspiration.reference',{requestId:'idea-reference-v1',expectedStoreRevision:snap.storeRevision,nodeId:ideaId,nodeRevision:1,taskId:task.task.id});
+    snap=await snapshot();const ideaSource=snap.taskContextSets.find(set=>set.taskId===task.task.id)!.sources.find(source=>source.relativePath.startsWith(`${ideaId}/`))!;
+    const selected=await host.handle('task.source.read',{taskId:task.task.id,contextSourceId:ideaSource.id}) as {state:string;content?:string;version?:number};
+    assert.equal(selected.state,'current_match');assert.match(selected.content!,/IDEA_VERSION_ONE/);assert.equal(selected.version,1);
     await host.handle('dcodeSession.prompt',{dcodeSessionId:task.coordinationSession.id,promptId:'initial',message:'从已选资料开始检查'});await until(async()=>mainCalls===1,'initial provider call is active');snap=await snapshot();const firstRun=snap.sessionRuns[0]!,receipt=snap.promptReceipts.find(receipt=>receipt.sessionRunId===firstRun.id)!;
+    const documentIndex=receipt.sourceReceipts.findIndex(source=>source.path.endsWith('/first.md')),ideaIndex=receipt.sourceReceipts.findIndex(source=>source.path.includes(`${ideaId}/`));assert.ok(documentIndex>=0&&ideaIndex>=0);
+    const original=await host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:documentIndex}) as {state:string;content?:string};assert.equal(original.state,'current_match');assert.equal(original.content,'FIRST_SELECTED_SOURCE');
     await writeFile(join(home,'first.md'),'CHANGED_ON_DISK');const second=await host.handle('task.context.inspectFiles',{taskId:task.task.id,paths:[join(home,'second.md')]}) as {sources:TaskContextSourceInput[]};snap=await snapshot();await host.handle('task.context.replace',{requestId:'next-context',expectedStoreRevision:snap.storeRevision,taskId:task.task.id,scope:task.task.scope,expectedContextRevision:snap.taskContextSets[0]!.revision,sources:second.sources});
     release();await until(async()=>(await snapshot()).collaborationMessages?.some(message=>message.author==='member'&&message.state==='completed')??false,'new member and coordinator follow-up settle');snap=await snapshot();assert.ok(mainPrompts[0]!.includes('FIRST_SELECTED_SOURCE'));assert.ok(mainPrompts[1]!.includes('FIRST_SELECTED_SOURCE'));assert.ok(!mainPrompts[1]!.includes('CHANGED_ON_DISK'));assert.ok(!mainPrompts[1]!.includes('SECOND_SELECTED_SOURCE'));assert.ok(mainPrompts.slice(2).some(prompt=>prompt.includes('SECOND_SELECTED_SOURCE')));
     assert.deepEqual(snap.promptReceipts.find(item=>item.id===receipt.id)!.sourceReceipts,receipt.sourceReceipts,'the original source receipts are immutable');const calls=snap.providerCalls!.filter(call=>call.sessionRunId===firstRun.id);assert.equal(calls.length,2);assert.ok(calls[0]!.toolNames?.includes('write'));assert.ok(!calls[1]!.toolNames?.includes('write'));assert.notEqual(calls[0]!.toolManifestDigest,calls[1]!.toolManifestDigest);
+    const changed=await host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:documentIndex}) as {state:string;content?:string};assert.equal(changed.state,'hash_mismatch');assert.equal(changed.content,undefined);
+    snap=await snapshot();await host.handle('inspiration.mutate',{requestId:'idea-v2',expectedStoreRevision:snap.storeRevision,operation:{kind:'save',node:{id:ideaId,kind:'text',title:'旧版灵感',markdown:'IDEA_VERSION_TWO'},expectedNodeRevision:1}});
+    snap=await snapshot();await host.handle('inspiration.reference',{requestId:'idea-reference-v2',expectedStoreRevision:snap.storeRevision,nodeId:ideaId,nodeRevision:2,taskId:task.task.id});
+    const oldIdea=await host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:ideaIndex}) as {state:string;content?:string;version?:number;currentVersion?:number};
+    assert.equal(oldIdea.state,'current_match');assert.match(oldIdea.content!,/IDEA_VERSION_ONE/);assert.doesNotMatch(oldIdea.content!,/IDEA_VERSION_TWO/);assert.equal(oldIdea.version,1);assert.equal(oldIdea.currentVersion,2);
+    await assert.rejects(host.handle('task.source.read',{taskId:'other-task',promptReceiptId:receipt.id,sourceIndex:ideaIndex}),/任务不存在|没有对应运行来源/);
+    await assert.rejects(host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:ideaIndex,path:join(home,'second.md')}),/来源读取只接受已保存的身份/);
+    await chmod(receipt.sourceReceipts[ideaIndex]!.path,0o600);await writeFile(receipt.sourceReceipts[ideaIndex]!.path,'改坏的快照');
+    const tampered=await host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:ideaIndex}) as {state:string;content?:string};assert.equal(tampered.state,'hash_mismatch');assert.equal(tampered.content,undefined);
+    await rm(receipt.sourceReceipts[ideaIndex]!.path);await symlink(join(home,'second.md'),receipt.sourceReceipts[ideaIndex]!.path);
+    const linked=await host.handle('task.source.read',{taskId:task.task.id,promptReceiptId:receipt.id,sourceIndex:ideaIndex}) as {state:string;unavailableReason?:string};assert.equal(linked.state,'historical_unavailable');assert.equal(linked.unavailableReason,'symbolic_link');
+    snap=await snapshot();const otherTask=await host.handle('task.create',{requestId:'other-task',expectedStoreRevision:snap.storeRevision,scope:task.task.scope,title:'另一个任务',goal:'核对来源隔离'}) as TaskBundle;
+    await assert.rejects(host.handle('task.source.read',{taskId:otherTask.task.id,promptReceiptId:receipt.id,sourceIndex:ideaIndex}),/没有对应运行来源/);
+    await assert.rejects(host.handle('task.source.read',{taskId:otherTask.task.id,contextSourceId:ideaSource.id}),/来源已不在当前选择/);
     const inputs=await host.handle('sessionRun.inputs',{taskId:task.task.id,sessionRunId:firstRun.id}) as {rawText:string};assert.equal(inputs.rawText,'从已选资料开始检查');
   }finally{release();await host.close();globalThis.fetch=previous;await rm(root,{recursive:true,force:true});}
 });

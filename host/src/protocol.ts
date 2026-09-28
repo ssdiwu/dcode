@@ -51,8 +51,17 @@ export const HOST_METHODS = [
   "workspace.describe",
   "task.create",
   "task.manage",
+  "task.session.continue",
+  "task.summary.history",
+  "task.summary.source",
+  "task.summary.correct",
+  "task.review.request",
+  "task.review.read",
   "task.context.replace",
   "task.context.inspectFiles",
+  "task.source.read",
+  "task.source.used.read",
+  "task.source.used.list",
   "sessionRun.inputs",
   "task.plan.create",
   "task.plan.update",
@@ -871,7 +880,72 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "goal", 4_000);
       requireStringArray(params, "acceptance", 100, true);
       return;
+    case "task.session.continue":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "taskId", 200);
+      return;
+    case "task.summary.history":
+      requireBoundedString(params, "taskId", 200);
+      return;
+    case "task.summary.source": {
+      requireBoundedString(params, "taskId", 200);
+      if (!isRecord(params.source) || !["task", "task_route", "work_item", "agent_report", "raw_input", "summary_revision", "user_correction"].includes(params.source.kind as string)) {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Invalid summary source");
+      }
+      requireBoundedString(params.source, "id", 200);
+      if (params.source.revision !== undefined) requireInteger(params.source, "revision", 1, Number.MAX_SAFE_INTEGER);
+      if (Object.keys(params.source).some(key => !["kind", "id", "revision"].includes(key))) throw new ProtocolValidationError("INVALID_PARAMS", "Unexpected summary source field");
+      return;
+    }
+    case "task.summary.correct": {
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "taskId", 200);
+      requireInteger(params, "expectedRevision", 1, Number.MAX_SAFE_INTEGER);
+      if (!isRecord(params.sections) || Object.keys(params.sections).sort().join(",") !== "blocked,confirmed,next,pending") {
+        throw new ProtocolValidationError("INVALID_PARAMS", "Expected four summary sections");
+      }
+      for (const key of ["confirmed", "pending", "blocked", "next"]) {
+        const entries = params.sections[key];
+        if (!Array.isArray(entries) || entries.length > 8 || entries.some(entry => typeof entry !== "string" || entry.length > 500)) {
+          throw new ProtocolValidationError("INVALID_PARAMS", `Invalid summary ${key} entries`);
+        }
+      }
+      return;
+    }
+    case "task.review.request":
+      requireBoundedString(params, "requestId", 128);
+      requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "path", 4096);
+      requireBoundedString(params, "digest", 71);
+      if (typeof params.staged !== "boolean") throw new ProtocolValidationError("INVALID_PARAMS", "Expected staged state");
+      if (params.workItemId !== undefined) requireBoundedString(params, "workItemId", 200);
+      return;
+    case "task.review.read":
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "reviewId", 200);
+      return;
     case "task.context.inspectFiles":requireBoundedString(params,"taskId",200);requireStringArray(params,"paths",31);return;
+    case "task.source.read": {
+      requireBoundedString(params,"taskId",200);
+      const context=params.contextSourceId!==undefined,receipt=params.promptReceiptId!==undefined;
+      if(context===receipt||Object.keys(params).some(key=>!["taskId","contextSourceId","promptReceiptId","sourceIndex"].includes(key)))throw new ProtocolValidationError("INVALID_PARAMS","Expected one recorded task source");
+      if(context){requireBoundedString(params,"contextSourceId",200);if(params.sourceIndex!==undefined)throw new ProtocolValidationError("INVALID_PARAMS","Source index belongs to a Prompt Receipt");}
+      else {requireBoundedString(params,"promptReceiptId",200);requireInteger(params,"sourceIndex",0,31);}
+      return;
+    }
+    case "task.source.used.read":
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "sourceUseId", 200);
+      return;
+    case "task.source.used.list":
+      requireBoundedString(params, "taskId", 200);
+      requireBoundedString(params, "sessionRunId", 200);
+      requireInteger(params, "offset", 0, 1_000_000);
+      requireInteger(params, "limit", 1, 100);
+      return;
     case "sessionRun.inputs":requireBoundedString(params,"taskId",200);requireBoundedString(params,"sessionRunId",200);return;
     case "task.context.replace":
       requireBoundedString(params, "requestId", 128);

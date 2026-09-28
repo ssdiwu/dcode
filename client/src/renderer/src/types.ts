@@ -13,6 +13,8 @@ import type {
 export type {
   FoundationSnapshot,
   TaskRecord,
+  TaskSummaryRecord,
+  TaskSummarySourceRef,
   TaskScope,
   TaskBundle,
   TaskWorkbenchViewStatePatch,

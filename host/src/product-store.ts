@@ -11,6 +11,7 @@ import { INSPIRATION_KEY, emptyInspiration, changeInspiration, exportIdeaMarkdow
 import { stageAttachment, readAttachment, sweepAttachmentFiles, stagedAttachmentBytes, discardStagedAttachment, attachmentPath, attachmentPrompt, ATTACHMENT_DAY, ATTACHMENT_RETENTION_DAYS, type ManagedAttachment, type AttachmentSource } from "./attachment-files.js";
 import type { MaintenanceState } from "./maintenance.js";
 import { createHash, randomUUID } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { chmod, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, parse, relative, resolve } from "node:path";
@@ -34,7 +35,10 @@ import { redactCredentialText } from "./credential-material.js";
 import {
   DCodePromptSourceReceiptError,
   normalizeDCodePromptSourceReceipts,
+  readDCodePromptSource,
   type DCodePromptSourceReceipt,
+  type DCodePromptSourceState,
+  type DCodePromptSourceUnavailableReason,
 } from "./prompt-source-status.js";
 import {
   importedHistoryWasRedactedAtImport,
@@ -258,6 +262,7 @@ export interface TaskContextSourceRecord {
   title: string;
   ordinal: number;
   rootPath?: string;
+  inspirationVersion?: { nodeId: string; revision: number; digest: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -299,6 +304,69 @@ export interface TaskWorkItemRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+export type TaskSummarySection = "confirmed" | "pending" | "blocked" | "next";
+export interface TaskSummarySourceRef {
+  kind: "task" | "task_route" | "work_item" | "agent_report" | "raw_input" | "summary_revision" | "user_correction";
+  id: string;
+  revision?: number;
+}
+export interface TaskSummaryClaim {
+  text: string;
+  sources: TaskSummarySourceRef[];
+}
+export interface TaskSummaryRecord {
+  id: string;
+  taskId: string;
+  revision: number;
+  trigger: "new_session" | "compaction" | "member_restart" | "user_correction";
+  factsDigest: string;
+  digest: string;
+  sections: Record<TaskSummarySection, TaskSummaryClaim[]>;
+  basedOnRevision: number;
+  previousRevision?: number;
+  createdAt: string;
+  /** Derived from current Task facts when read, never used to rewrite an old run. */
+  current?: boolean;
+}
+export interface TaskSummaryFailureRecord { taskId: string; sessionId: string; trigger: string; reasonCode: string; createdAt: string }
+export interface TaskReviewRequestRecord {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  evidenceId: string;
+  path: string;
+  staged: boolean;
+  digest: string;
+  baseHead: string;
+  rootDigest: string;
+  workItemId?: string;
+  workItemExplicit: boolean;
+  createdAt: string;
+}
+export interface TaskRecallEntryCandidate {
+  sessionId: string;
+  entryId: string;
+  role: string;
+  title: string;
+  digest: string;
+  createdAt: string;
+}
+export interface TaskSourceUseRecord {
+  id: string;
+  taskId: string;
+  sessionRunId: string;
+  agentRunId?: string;
+  kind: "task_message" | "work_item" | "agent_report" | "evidence" | "project_file" | "inspiration";
+  sourceId: string;
+  digest: string;
+  bytes: number;
+  version?: number;
+  projectId?: string;
+  rootDigest?: string;
+  createdAt: string;
+}
+export type TaskSummaryReceipt = Pick<TaskSummaryRecord, "id" | "taskId" | "revision" | "digest" | "trigger" | "createdAt">;
 
 export interface DCodeSessionRecord {
   id: string;
@@ -532,6 +600,7 @@ export interface ActiveToolSetRecord {
 
 export interface PromptReceiptRecord {
   inputSources?:InputSourceReceipt[];
+  taskSummary?: TaskSummaryReceipt;
   id: string;
   taskId: string;
   sessionId: string;
@@ -545,6 +614,24 @@ export interface PromptReceiptRecord {
   sourceReceipts: DCodePromptSourceReceipt[];
   importedHistoryReceipt?: ImportedSessionHistoryReceipt;
   createdAt: string;
+}
+
+export type TaskSourceSelector =
+  | { taskId: string; contextSourceId: string }
+  | { taskId: string; promptReceiptId: string; sourceIndex: number };
+
+export interface TaskSourceReadResult {
+  title: string;
+  path: string;
+  kind: DCodePromptSourceReceipt["kind"];
+  digest: string;
+  state: DCodePromptSourceState["state"];
+  contentStored: false;
+  content?: string;
+  version?: number;
+  currentVersion?: number;
+  currentDigest?: string;
+  unavailableReason?: DCodePromptSourceUnavailableReason | "credential_material" | "invalid_utf8" | "snapshot_identity_mismatch";
 }
 
 export interface AgentAssignmentRecord {
@@ -715,6 +802,10 @@ export interface FoundationSnapshot {
   taskContextSets: TaskContextSetRecord[];
   taskPlans: TaskPlanRecord[];
   taskWorkItems: TaskWorkItemRecord[];
+  taskSummaries: TaskSummaryRecord[];
+  taskSummaryFailures: TaskSummaryFailureRecord[];
+  taskReviewRequests: TaskReviewRequestRecord[];
+  taskSourceUses: TaskSourceUseRecord[];
   composerDrafts: ComposerDraftRecord[];
   sessions: DCodeSessionRecord[];
   sessionPaths: SessionPathRecord[];
@@ -1355,6 +1446,12 @@ function taskContextSource(row: SQLiteRow): TaskContextSourceRecord {
   };
 }
 
+function managedInspirationVersion(source:Pick<TaskContextSourceRecord,"kind"|"rootPath"|"relativePath">,managedRoot:string|undefined):TaskContextSourceRecord["inspirationVersion"] {
+  if(source.kind!=="global_knowledge"||!managedRoot||!source.rootPath||resolve(source.rootPath)!==resolve(managedRoot))return undefined;
+  const match=/^(idea-[a-f0-9-]{36})\/r([1-9]\d*)-([a-f0-9]{64})\.md$/.exec(source.relativePath);
+  return match?{nodeId:match[1]!,revision:Number(match[2]),digest:`sha256:${match[3]}`}:undefined;
+}
+
 function taskContextSet(row: SQLiteRow, sources: TaskContextSourceRecord[]): TaskContextSetRecord {
   return {
     taskId: text(row, "task_id"),
@@ -1658,6 +1755,7 @@ function promptReceiptSources(value: unknown): {
   sourceReceipts: DCodePromptSourceReceipt[];
   importedHistoryReceipt?: ImportedSessionHistoryReceipt;
   inputSources?:InputSourceReceipt[];
+  taskSummary?: TaskSummaryReceipt;
 } {
   if (Array.isArray(value)) {
     return { sourceReceipts: normalizeDCodePromptSourceReceipts(value) };
@@ -1670,6 +1768,7 @@ function promptReceiptSources(value: unknown): {
     documentSources?: unknown;
     importedHistory?: unknown;
     inputSources?:unknown;
+    taskSummary?:unknown;
   };
   if (payload.version !== 2) {
     throw new DCodePromptSourceReceiptError("Prompt Receipt sources have an unsupported version");
@@ -1677,10 +1776,25 @@ function promptReceiptSources(value: unknown): {
   return {
     sourceReceipts: normalizeDCodePromptSourceReceipts(payload.documentSources),
     ...(payload.inputSources!==undefined?{inputSources:inputSourceReceipts(payload.inputSources)}:{}),
+    ...(payload.taskSummary === undefined ? {} : { taskSummary: normalizedTaskSummaryReceipt(payload.taskSummary) }),
     ...(payload.importedHistory === undefined
       ? {}
       : { importedHistoryReceipt: normalizeImportedSessionHistoryReceipt(payload.importedHistory) }),
   };
+}
+
+function normalizedTaskSummaryReceipt(value: unknown): TaskSummaryReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ProductStoreError("INVALID_ARGUMENT", "任务摘要回执无效");
+  const item = value as Record<string, unknown>;
+  if (Object.keys(item).some(key => !["id", "taskId", "revision", "digest", "trigger", "createdAt"].includes(key))
+    || typeof item.id !== "string" || item.id.length > 240 || typeof item.taskId !== "string" || item.taskId.length > 200
+    || !Number.isSafeInteger(item.revision) || (item.revision as number) < 1
+    || typeof item.digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(item.digest)
+    || !["new_session", "compaction", "member_restart", "user_correction"].includes(item.trigger as string)
+    || typeof item.createdAt !== "string" || !Number.isFinite(Date.parse(item.createdAt))) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "任务摘要回执无效");
+  }
+  return item as unknown as TaskSummaryReceipt;
 }
 
 function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
@@ -1688,6 +1802,7 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
     sourceReceipts: DCodePromptSourceReceipt[];
     importedHistoryReceipt?: ImportedSessionHistoryReceipt;
     inputSources?:InputSourceReceipt[];
+    taskSummary?: TaskSummaryReceipt;
   };
   try {
     sources = promptReceiptSources(JSON.parse(text(row, "source_receipts_json")));
@@ -1710,6 +1825,7 @@ function promptReceipt(row: SQLiteRow): PromptReceiptRecord {
     roleRevision: text(row, "role_revision"),
     sourceReceipts: sources.sourceReceipts,
     ...(sources.inputSources?{inputSources:sources.inputSources}:{}),
+    ...(sources.taskSummary ? { taskSummary: sources.taskSummary } : {}),
     ...(sources.importedHistoryReceipt ? { importedHistoryReceipt: sources.importedHistoryReceipt } : {}),
     createdAt: text(row, "created_at"),
   };
@@ -2491,8 +2607,8 @@ export class ProductStore {
     return await this.serializeMutation(async()=>{await this.lease.assertOwned();const node=this.inspirationView().nodes.find(node=>node.id===nodeId);if(!node?.media)throw new InspirationError("IDEA_MEDIA_NOT_FOUND","这条灵感没有本地媒体。");return await resolveIdeaMedia(this.layout,node.media);});
   }
 
-  async inspirationMarkdown(nodeId:string):Promise<Awaited<ReturnType<typeof exportIdeaMarkdown>>> {
-    return await this.serializeMutation(async()=>{await this.lease.assertOwned();const node=this.inspirationView().nodes.find(node=>node.id===nodeId);if(!node)throw new InspirationError("IDEA_NOT_FOUND","灵感不存在。");return await exportIdeaMarkdown(this.layout,node);});
+  async inspirationMarkdown(nodeId:string,expectedRevision?:number):Promise<Awaited<ReturnType<typeof exportIdeaMarkdown>>> {
+    return await this.serializeMutation(async()=>{await this.lease.assertOwned();const node=this.inspirationView().nodes.find(node=>node.id===nodeId);if(!node)throw new InspirationError("IDEA_NOT_FOUND","灵感不存在。");if(expectedRevision!==undefined&&node.revision!==expectedRevision)throw new InspirationError("IDEA_REVISION_CONFLICT","灵感已更新，请重新检索后读取当前版本。");return await exportIdeaMarkdown(this.layout,node);});
   }
 
   async referenceInspiration(input:{requestId:string;expectedStoreRevision:number;nodeId:string;nodeRevision:number;taskId:string}):Promise<{storeRevision:number;contextRevision:number}> {
@@ -2522,6 +2638,59 @@ export class ProductStore {
         return {value:{contextRevision:revision},event:{kind:"task.context.replaced",entityKind:"taskContext",entityId:input.taskId,taskId:input.taskId,payload:{nodeId:node.id,nodeRevision:node.revision}}};
       });
     });
+  }
+
+  async readTaskSource(input:TaskSourceSelector):Promise<TaskSourceReadResult> {
+    this.assertOpen();
+    if(!input||typeof input!=="object")throw new ProductStoreError("INVALID_ARGUMENT","来源读取只接受已保存的身份");
+    const context="contextSourceId" in input;
+    if(typeof input.taskId!=="string"||!input.taskId||Object.keys(input).some(key=>!(context?["taskId","contextSourceId"]:["taskId","promptReceiptId","sourceIndex"]).includes(key))||context&&typeof input.contextSourceId!=="string"||!context&&typeof input.promptReceiptId!=="string")throw new ProductStoreError("INVALID_ARGUMENT","来源读取只接受已保存的身份");
+    if(!this.database.prepare("SELECT id FROM tasks WHERE id=?").get(input.taskId))throw new ProductStoreError("NOT_FOUND","任务不存在");
+    const ideaRoot=await realpath(inspirationRoot(this.layout)).catch(()=>inspirationRoot(this.layout));
+    let source:DCodePromptSourceReceipt;
+    let runtimeCwd:string|undefined;
+    if("contextSourceId" in input){
+      const row=this.database.prepare("SELECT * FROM task_context_sources WHERE id=? AND task_id=?").get(input.contextSourceId,input.taskId) as SQLiteRow|undefined;
+      if(!row)throw new ProductStoreError("NOT_FOUND","任务来源已不在当前选择中");
+      const selected=taskContextSource(row),root=ideaRoot,version=managedInspirationVersion(selected,root);
+      if(!version)throw new ProductStoreError("INVALID_ARGUMENT","此入口只打开任务引用的灵感版本");
+      source={path:resolve(root,selected.relativePath),rootPath:root,kind:"global_knowledge",title:selected.title,digest:version.digest,bytes:0};
+    }else{
+      const row=this.database.prepare("SELECT * FROM prompt_receipts WHERE id=? AND task_id=?").get(input.promptReceiptId,input.taskId) as SQLiteRow|undefined;
+      if(!row)throw new ProductStoreError("NOT_FOUND","这项任务没有对应运行来源");
+      const receipt=promptReceipt(row);
+      if(!Number.isSafeInteger(input.sourceIndex)||input.sourceIndex<0||input.sourceIndex>=receipt.sourceReceipts.length)throw new ProductStoreError("INVALID_ARGUMENT","运行来源序号无效");
+      source=receipt.sourceReceipts[input.sourceIndex]!;
+      const environment=this.database.prepare("SELECT cwd FROM runtime_environments WHERE id=? AND task_id=? AND session_id=?").get(receipt.runtimeEnvironmentId,input.taskId,receipt.sessionId) as SQLiteRow|undefined;
+      runtimeCwd=environment?text(environment,"cwd"):undefined;
+    }
+    const root=source.rootPath??runtimeCwd;
+    const ideaVersion=managedInspirationVersion({kind:source.kind==="global_knowledge"?"global_knowledge":"scope_document",rootPath:source.rootPath,relativePath:relative(ideaRoot,source.path)},ideaRoot);
+    const version=ideaVersion?.revision;
+    const currentVersion=ideaVersion?this.inspirationView().nodes.find(node=>node.id===ideaVersion.nodeId)?.revision:undefined;
+    const result:TaskSourceReadResult={title:source.title??basename(source.path),path:source.path,kind:source.kind,digest:source.digest,state:"historical_unavailable",contentStored:false,...(version?{version}:{}),...(currentVersion?{currentVersion}:{})};
+    if(ideaVersion&&source.digest!==ideaVersion.digest)return {...result,unavailableReason:"snapshot_identity_mismatch"};
+    if(!root)return {...result,unavailableReason:"runtime_cwd_unavailable"};
+    if(source.rootPath&&source.kind!=="global_knowledge"){
+      if(!runtimeCwd)return {...result,unavailableReason:"runtime_cwd_unavailable"};
+      let originalRoot:string,recordedRoot:string;
+      try{[originalRoot,recordedRoot]=await Promise.all([realpath(runtimeCwd),realpath(root)]);}catch{return {...result,unavailableReason:"runtime_cwd_unavailable"};}
+      if(originalRoot!==recordedRoot)return {...result,unavailableReason:"outside_runtime_cwd"};
+    }
+    if(source.kind==="global_knowledge"){
+      if(!source.rootPath)return {...result,unavailableReason:"source_root_unavailable"};
+      let home:string,canonicalRoot:string;
+      try{[home,canonicalRoot]=await Promise.all([realpath(this.currentUser().homeDirectory),realpath(root)]);}catch{return {...result,unavailableReason:"source_root_unavailable"};}
+      if(!strictlyInside(home,canonicalRoot))return {...result,unavailableReason:"outside_source_root"};
+    }
+    const current=await readDCodePromptSource(root,source.path,source.kind==="global_knowledge");
+    if(current.kind==="unavailable")return {...result,state:current.reason==="too_large"&&source.bytes>0&&current.currentBytes!==source.bytes?"hash_mismatch":"historical_unavailable",unavailableReason:current.reason};
+    const digest=`sha256:${createHash("sha256").update(current.bytes).digest("hex")}`;
+    if(digest!==source.digest||source.bytes>0&&current.bytes.length!==source.bytes)return {...result,state:"hash_mismatch",currentDigest:digest};
+    if(!isUtf8(current.bytes))return {...result,unavailableReason:"invalid_utf8"};
+    const content=current.bytes.toString("utf8");
+    if(redactCredentialText(content).redacted)return {...result,unavailableReason:"credential_material"};
+    return {...result,state:"current_match",content};
   }
 
   private attachmentDraftTarget(key: string): {id:string;scope?:TaskScope;taskId?:string;sessionId?:string} {
@@ -3093,9 +3262,10 @@ export class ProductStore {
         ORDER BY sequence
       `).all() as SQLiteRow[]
     ).map(event));
+    const managedIdeaRoot=await realpath(inspirationRoot(this.layout)).catch(()=>undefined);
     const taskContextSources = (
       this.database.prepare("SELECT * FROM task_context_sources ORDER BY task_id, ordinal").all() as SQLiteRow[]
-    ).map(taskContextSource);
+    ).map(taskContextSource).map(source=>{const version=managedInspirationVersion(source,managedIdeaRoot);return version?{...source,inspirationVersion:version}:source;});
     const taskContextSourcesByTask = new Map<string, TaskContextSourceRecord[]>();
     for (const source of taskContextSources) {
       const sources = taskContextSourcesByTask.get(source.taskId) ?? [];
@@ -3136,6 +3306,14 @@ export class ProductStore {
       taskWorkItems: (
         this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
       ).map(taskWorkItem),
+      taskSummaries: (this.database.prepare("SELECT id FROM tasks ORDER BY created_at,id").all() as SQLiteRow[])
+        .flatMap(row => this.taskSummaryHistory(text(row, "id")).slice(-1)),
+      taskSummaryFailures: (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='taskSummary.failed' ORDER BY sequence DESC LIMIT 200").all() as SQLiteRow[])
+        .map(row => JSON.parse(text(row, "payload_json")) as TaskSummaryFailureRecord),
+      taskReviewRequests: (this.database.prepare("SELECT payload_json FROM evidence_records WHERE evidence_kind='review_diff_snapshot' ORDER BY created_at,id").all() as SQLiteRow[])
+        .map(row => { const { diff: _diff, ...review } = JSON.parse(text(row, "payload_json")) as TaskReviewRequestRecord & { diff: string }; return review; }),
+      taskSourceUses: (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='taskSource.used' ORDER BY sequence DESC LIMIT 1000").all() as SQLiteRow[])
+        .map(row => JSON.parse(text(row, "payload_json")) as TaskSourceUseRecord),
       composerDrafts: (
         this.database.prepare("SELECT * FROM composer_drafts ORDER BY updated_at, id").all() as SQLiteRow[]
       ).map(composerDraft),
@@ -3193,7 +3371,11 @@ export class ProductStore {
       managedWorkerWorktrees,
       evidence: (
         this.database.prepare("SELECT * FROM evidence_records ORDER BY created_at, id").all() as SQLiteRow[]
-      ).map(evidenceRecord),
+      ).map(evidenceRecord).map(item => {
+        if (item.evidenceKind !== "review_diff_snapshot") return item;
+        const { diff: _diff, ...payload } = item.payload as Record<string, unknown>;
+        return { ...item, payload };
+      }),
       verifications: this.verifications(),
       coordinatorReviews: this.coordinatorReviews(),
       agentProcesses: this.agentProcessExecutions(),
@@ -3829,6 +4011,196 @@ export class ProductStore {
     );
   }
 
+  async continueTaskSession(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+  }): Promise<TaskBundle & { previousSessionId: string }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    return await this.mutate(
+      "task.session.continue",
+      input.requestId,
+      input.expectedStoreRevision,
+      { taskId },
+      (_storeRevision, now) => {
+        const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id=?").get(taskId) as SQLiteRow | undefined;
+        if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Task does not exist");
+        const currentTask = task(taskRow);
+        if (currentTask.state === "archived") throw new ProductStoreError("REVISION_CONFLICT", "归档任务不能开始新会话");
+        const previous = this.database.prepare("SELECT * FROM sessions WHERE task_id=? AND kind='coordination'").get(taskId) as SQLiteRow | undefined;
+        const assignment = this.database.prepare("SELECT * FROM coordinator_assignments WHERE task_id=?").get(taskId) as SQLiteRow | undefined;
+        if (!previous || !assignment || text(assignment, "session_id") !== text(previous, "id")) {
+          throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "当前协调会话与指派不一致");
+        }
+        // In-flight work still routes reports and requests to the old coordinator.
+        // A fresh segment is safe only after those obligations have settled.
+        const busy = this.database.prepare(`
+          SELECT id FROM session_runs WHERE task_id=? AND status IN ('prepared','running','waiting')
+          UNION SELECT id FROM team_runs WHERE task_id=? AND status IN ('prepared','active','waiting')
+          UNION SELECT id FROM agent_requests WHERE task_id=? AND status='open'
+          LIMIT 1
+        `).get(taskId, taskId, taskId);
+        if (busy || this.collaborationMessages(taskId).some(message => ["queued", "paused", "delivering"].includes(message.state))) {
+          throw new ProductStoreError("REVISION_CONFLICT", "任务仍有运行、待答请求或待发送消息，请先完成或停止后再开始新会话");
+        }
+        const previousSessionId = text(previous, "id");
+        this.database.prepare("UPDATE sessions SET kind='standard',state='completed',revision=revision+1,updated_at=? WHERE id=?")
+          .run(now, previousSessionId);
+        const ordinalRow = this.database.prepare("SELECT COUNT(*) AS total FROM sessions WHERE task_id=? AND kind='standard'").get(taskId) as SQLiteRow;
+        const coordinationSession: DCodeSessionRecord = {
+          id: `session-${randomUUID()}`,
+          taskId,
+          kind: "coordination",
+          title: `${currentTask.title.slice(0, 175)} · 第 ${integer(ordinalRow, "total") + 1} 段`,
+          runtimeAdapter: "pi",
+          lineageStatus: "native",
+          state: "idle",
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.database.prepare(`INSERT INTO sessions(id,task_id,kind,title,runtime_adapter,lineage_status,state,revision,created_at,updated_at)
+          VALUES (?,?, 'coordination',?, 'pi','native','idle',1,?,?)`)
+          .run(coordinationSession.id, taskId, coordinationSession.title, now, now);
+        this.database.prepare(`INSERT INTO session_paths(id,session_id,parent_path_id,source_path_id,source_leaf_entry_id,title,is_current,revision,created_at,updated_at)
+          VALUES (?,?,NULL,NULL,NULL,'主路径',1,1,?,?)`)
+          .run(`path-${randomUUID()}`, coordinationSession.id, now, now);
+        this.database.prepare(`INSERT INTO session_provenance(id,task_id,session_id,source_kind,source_session_id,source_path,source_digest,historical_cwd,lineage_status,details_json,created_at)
+          VALUES (?,?,?,'native',?,NULL,NULL,?,'native',?,?)`)
+          .run(`provenance-${randomUUID()}`, taskId, coordinationSession.id, previousSessionId, currentTask.cwd, canonicalJSON({ continuedFromSessionId: previousSessionId }), now);
+        const oldDraft = this.database.prepare("SELECT * FROM composer_drafts WHERE session_id=? AND draft_kind='session_path'").get(previousSessionId) as SQLiteRow | undefined;
+        if (oldDraft) {
+          const draft = composerDraft(oldDraft);
+          if (draft.targetAgentRunId || draft.pathAction || draft.pathDraftBackup) throw new ProductStoreError("REVISION_CONFLICT", "请先处理定向成员或历史续写草稿，再开始新对话");
+          const payload = JSON.parse(text(oldDraft, "payload_json")) as Record<string, unknown>;
+          const { targetAgentRunId: _target, pathAction: _path, pathDraftBackup: _backup, ...portable } = payload;
+          this.database.prepare(`INSERT INTO composer_drafts(id,task_id,session_id,draft_kind,text,payload_json,source_ordinal,revision,created_at,updated_at)
+            VALUES (?,?,?,'session_path',?,?,NULL,1,?,?)`)
+            .run(`composer-draft:${coordinationSession.id}`, taskId, coordinationSession.id, text(oldDraft, "text"), canonicalJSON(portable), now, now);
+          this.database.prepare("DELETE FROM composer_drafts WHERE id=?").run(text(oldDraft, "id"));
+        }
+        const oldModel = this.database.prepare("SELECT value_json FROM product_settings WHERE key=?").get(`session.modelSelection:${previousSessionId}`) as SQLiteRow | undefined;
+        if (oldModel) {
+          const selection = JSON.parse(text(oldModel, "value_json")) as { providerId?: string; modelId?: string };
+          if (selection.providerId && selection.modelId && this.database.prepare("SELECT id FROM model_catalog_entries WHERE provider_id=? AND model_id=?").get(selection.providerId, selection.modelId)) {
+            this.database.prepare("INSERT INTO product_settings(key,value_json,source_kind,revision,created_at,updated_at) VALUES (?,?,'user',1,?,?)")
+              .run(`session.modelSelection:${coordinationSession.id}`, text(oldModel, "value_json"), now, now);
+          }
+        }
+        this.database.prepare("UPDATE coordinator_assignments SET session_id=?,revision=revision+1,updated_at=? WHERE id=?")
+          .run(coordinationSession.id, now, text(assignment, "id"));
+        const updatedAssignment = coordinatorAssignment(this.database.prepare("SELECT * FROM coordinator_assignments WHERE id=?").get(text(assignment, "id")) as SQLiteRow);
+        return {
+          value: { task: currentTask, coordinationSession, coordinatorAssignment: updatedAssignment, previousSessionId },
+          event: { kind: "task.sessionContinued", entityKind: "session", entityId: coordinationSession.id, taskId,
+            payload: { previousSessionId, coordinationSession, coordinatorAssignment: updatedAssignment } },
+        };
+      },
+    );
+  }
+
+  async replayTaskSessionContinuation(requestId: string, taskId: string): Promise<(TaskBundle & { previousSessionId: string }) | undefined> {
+    return await this.replayReceipt("task.session.continue", requestId, { taskId });
+  }
+
+  async requestTaskReview(input: {
+    requestId: string; expectedStoreRevision: number; taskId: string;
+    path: string; staged: boolean; diff: string; digest: string; baseHead: string; rootDigest: string; workItemId?: string;
+  }): Promise<{ storeRevision: number; review: TaskReviewRequestRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const path = normalizedContextRelativePath(input.path, "review path");
+    const diff = requiredCredentialFreeString(input.diff, "review diff", 32_768);
+    const digest = requiredString(input.digest, "review digest", 71);
+    const baseHead = requiredString(input.baseHead, "review base HEAD", 64);
+    const rootDigest = requiredString(input.rootDigest, "review root identity", 71);
+    if (!/^sha256:[a-f0-9]{64}$/.test(digest) || `sha256:${createHash("sha256").update(diff).digest("hex")}` !== digest
+      || !(baseHead === "unborn" || /^[a-f0-9]{40,64}$/.test(baseHead)) || !/^sha256:[a-f0-9]{64}$/.test(rootDigest)
+      || typeof input.staged !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "审查差异身份无效");
+    const workItemId = input.workItemId === undefined ? undefined : requiredString(input.workItemId, "workItemId", 200);
+    return await this.mutate("task.review.request", input.requestId, input.expectedStoreRevision,
+      { taskId, path, staged: input.staged, digest, baseHead, rootDigest, workItemId }, (_storeRevision, now) => {
+        const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id=?").get(taskId) as SQLiteRow | undefined;
+        const currentSession = this.database.prepare("SELECT id FROM sessions WHERE task_id=? AND kind='coordination'").get(taskId) as SQLiteRow | undefined;
+        if (!taskRow || !currentSession || task(taskRow).state === "archived") throw new ProductStoreError("NOT_FOUND", "审查任务不可用");
+        if (workItemId && !this.database.prepare("SELECT id FROM task_work_items WHERE id=? AND task_id=? AND state<>'cancelled'").get(workItemId, taskId)) {
+          throw new ProductStoreError("NOT_FOUND", "工作项不属于当前任务或已取消");
+        }
+        if (workItemId) {
+          const priorRow = this.database.prepare(`SELECT payload_json FROM evidence_records WHERE task_id=? AND evidence_kind='review_diff_snapshot'
+            AND json_extract(payload_json,'$.workItemId')=? ORDER BY created_at DESC,id DESC LIMIT 1`).get(taskId, workItemId) as SQLiteRow | undefined;
+          if (priorRow) {
+            const prior = JSON.parse(text(priorRow, "payload_json")) as TaskReviewRequestRecord;
+            if (prior.digest === digest) throw new ProductStoreError("REVISION_CONFLICT", "该工作项的差异版本未变化；请继续原审查并提供新证据，或先产生新变更");
+          }
+        }
+        const resolvedWorkItemId = workItemId ?? `work-${randomUUID()}`;
+        if (!workItemId) {
+          const ordinal = this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS next FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
+          this.database.prepare(`INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at)
+            VALUES (?,?,?,?,'pending',NULL,?,1,?,?)`)
+            .run(resolvedWorkItemId, taskId, integer(ordinal, "next"), `审查 ${path}`.slice(0, 500), canonicalJSON({ reviewScope: { path, digest } }), now, now);
+        }
+        const review: TaskReviewRequestRecord = {
+          id: `review-${randomUUID()}`, taskId, sessionId: text(currentSession, "id"),
+          evidenceId: `evidence-${randomUUID()}`, path, staged: input.staged, digest,
+          baseHead, rootDigest,
+          workItemId: resolvedWorkItemId, createdAt: now,
+          workItemExplicit: workItemId !== undefined,
+        };
+        const evidence: EvidenceRecord = {
+          id: review.evidenceId, taskId, sessionId: review.sessionId,
+          evidenceKind: "review_diff_snapshot", payload: { ...review, diff }, createdAt: now,
+        };
+        this.database.prepare(`INSERT INTO evidence_records(id,task_id,session_id,legacy_run_id,agent_run_id,source_record_id,evidence_kind,command_redacted,exit_kind,exit_code,started_at,ended_at,cwd,payload_json,created_at)
+          VALUES (?,?,?,NULL,NULL,?,'review_diff_snapshot',NULL,NULL,NULL,NULL,NULL,?,?,?)`)
+          .run(evidence.id, taskId, review.sessionId, review.id, task(taskRow).cwd, canonicalJSON(evidence.payload), now);
+        return { value: { review }, event: { kind: "evidence.recorded", entityKind: "evidence", entityId: evidence.id, taskId, payload: evidence } };
+      });
+  }
+
+  async replayTaskReviewRequest(input: { requestId: string; taskId: string; path: string; staged: boolean; digest: string; workItemId?: string }): Promise<{ storeRevision: number; review: TaskReviewRequestRecord } | undefined> {
+    this.assertOpen();
+    await this.lease.assertOwned();
+    const row = this.database.prepare("SELECT method,result_json FROM mutation_receipts WHERE request_id=?").get(input.requestId) as SQLiteRow | undefined;
+    if (!row) return undefined;
+    if (text(row, "method") !== "task.review.request") throw new ProductStoreError("IDEMPOTENCY_KEY_REUSED", "审查请求标识已用于其他操作");
+    const result = JSON.parse(text(row, "result_json")) as { storeRevision: number; review: TaskReviewRequestRecord };
+    const review = result.review;
+    if (review.taskId !== input.taskId || review.path !== input.path || review.staged !== input.staged || review.digest !== input.digest
+      || review.workItemExplicit !== (input.workItemId !== undefined) || input.workItemId !== undefined && review.workItemId !== input.workItemId) throw new ProductStoreError("IDEMPOTENCY_KEY_REUSED", "审查请求标识对应不同范围");
+    return result;
+  }
+
+  readTaskReview(taskId: string, reviewId: string): { review: TaskReviewRequestRecord; diff: string } {
+    this.assertOpen();
+    const evidence = this.database.prepare("SELECT payload_json FROM evidence_records WHERE source_record_id=? AND task_id=? AND evidence_kind='review_diff_snapshot'").get(reviewId, taskId) as SQLiteRow | undefined;
+    if (!evidence) throw new ProductStoreError("NOT_FOUND", "审查请求不属于当前任务");
+    const payload = JSON.parse(text(evidence, "payload_json")) as { diff?: string };
+    const { diff: _diff, ...record } = payload as TaskReviewRequestRecord & { diff: string };
+    if (typeof payload.diff !== "string" || `sha256:${createHash("sha256").update(payload.diff).digest("hex")}` !== record.digest) {
+      throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "审查差异证据已改变");
+    }
+    return { review: record, diff: payload.diff };
+  }
+
+  async inspectTaskReview(input: { requestId: string; taskId: string; reviewId: string; verifierAgentRunId: string; sessionRunId: string }): Promise<{ storeRevision: number; evidenceId: string }> {
+    return await this.mutate("task.review.inspect", input.requestId, undefined, input, (_revision, now) => {
+      const { review } = this.readTaskReview(input.taskId, input.reviewId);
+      const run = this.database.prepare(`SELECT r.session_id FROM session_runs r JOIN agent_runs g ON g.id=r.agent_run_id
+        WHERE r.id=? AND r.task_id=? AND r.agent_run_id=? AND r.status='running' AND g.role='verifier'`)
+        .get(input.sessionRunId, input.taskId, input.verifierAgentRunId) as SQLiteRow | undefined;
+      if (!run) throw new ProductStoreError("REVISION_CONFLICT", "只有正在运行的独立验收成员可检查固定差异");
+      const evidenceId = `evidence-${randomUUID()}`;
+      const evidence: EvidenceRecord = { id: evidenceId, taskId: input.taskId, sessionId: text(run, "session_id"), agentRunId: input.verifierAgentRunId,
+        evidenceKind: "review_diff_inspection", commandRedacted: "dcode_verification.read_review", exitKind: "ok",
+        payload: { reviewId: review.id, digest: review.digest, resultDigest: review.digest, sessionRunId: input.sessionRunId }, createdAt: now };
+      this.database.prepare(`INSERT INTO evidence_records(id,task_id,session_id,legacy_run_id,agent_run_id,source_record_id,evidence_kind,command_redacted,exit_kind,exit_code,started_at,ended_at,cwd,payload_json,created_at)
+        VALUES (?,?,?,NULL,?,?,'review_diff_inspection','dcode_verification.read_review','ok',0,?,?,NULL,?,?)`)
+        .run(evidenceId, input.taskId, evidence.sessionId, input.verifierAgentRunId, review.id, now, now, canonicalJSON(evidence.payload), now);
+      return { value: { evidenceId }, event: { kind: "evidence.recorded", entityKind: "evidence", entityId: evidenceId, taskId: input.taskId, payload: evidence } };
+    });
+  }
+
   async replaceTaskContext(input: {
     requestId: string;
     expectedStoreRevision: number;
@@ -3948,8 +4320,326 @@ export class ProductStore {
     return route ? { planId: plan.id, planRevision: plan.revision, contextCurrent: route.contextKey === this.routeContextKey(taskId), inputCurrent, ...(!inputCurrent && latest ? { pendingInput: { ...latest, text: latest.text.slice(0, 4000), complete: latest.text.length <= 4000 } } : {}), route } : undefined;
   }
 
+  private taskSummaryFacts(taskId: string): { digest: string; sections: TaskSummaryRecord["sections"] } {
+    const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id=?").get(taskId) as SQLiteRow | undefined;
+    if (!taskRow) throw new ProductStoreError("NOT_FOUND", "任务不存在");
+    const currentTask = task(taskRow);
+    const route = this.taskRouteContext(taskId);
+    const items = this.routeWorkItems(taskId);
+    const reports = (this.database.prepare("SELECT * FROM agent_reports WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 3").all(taskId) as SQLiteRow[]).map(agentReport);
+    const inputs = (this.database.prepare(`SELECT r.id,r.submitted_text,r.session_id FROM raw_inputs r WHERE r.task_id=?
+      AND r.source_kind IN ('user_submit','edit_and_rerun','continue_path') AND NOT EXISTS (
+        SELECT 1 FROM store_events e WHERE e.task_id=r.task_id AND e.kind='collaboration.messageChanged'
+        AND json_extract(e.payload_json,'$.originRawInputId')=r.id AND json_extract(e.payload_json,'$.uiAction.kind')='task.review.request'
+      ) ORDER BY r.created_at DESC,r.rowid DESC LIMIT 12`).all(taskId) as SQLiteRow[])
+      .map(row => ({ id: text(row, "id"), text: text(row, "submitted_text"), sessionId: text(row, "session_id") }));
+    const latestInput = inputs[0];
+    const facts = {
+      task: { id: currentTask.id, goal: currentTask.goal, acceptance: currentTask.acceptance, revision: currentTask.revision },
+      route: route ? { planId: route.planId, planRevision: route.planRevision, contextCurrent: route.contextCurrent, inputCurrent: route.inputCurrent, status: route.route.status, selectedCandidateId: route.route.selectedCandidateId, reason: route.route.reason } : null,
+      items: items.map(item => ({ id: item.id, title: item.title, state: item.state, revision: item.revision })),
+      reports: reports.map(report => ({ id: report.id, createdAt: report.createdAt, agentRunId: report.agentRunId })),
+      inputs: inputs.map(item => ({ id: item.id, digest: payloadHash(item.text) })),
+    };
+    const sections: TaskSummaryRecord["sections"] = { confirmed: [], pending: [], blocked: [], next: [] };
+    const add = (section: TaskSummarySection, value: string, source: TaskSummarySourceRef) => {
+      if (sections[section].length >= 8) return;
+      const concise = value.trim().slice(0, 500);
+      if (!concise || redactCredentialText(concise).redacted) return;
+      sections[section].push({ text: concise, sources: [source] });
+    };
+    add("confirmed", `任务目标：${currentTask.goal}`, { kind: "task", id: taskId, revision: currentTask.revision });
+    if (route) {
+      const source: TaskSummarySourceRef = { kind: "task_route", id: route.planId, revision: route.planRevision };
+      if (route.route.status === "ready" && route.contextCurrent && route.inputCurrent !== false) {
+        const selected = route.route.candidates.find(candidate => candidate.id === route.route.selectedCandidateId);
+        if (selected) add("confirmed", `当前采用路线：${selected.title}。${selected.approach}`, source);
+      } else if (route.route.status === "invalidated" || !route.contextCurrent || route.inputCurrent === false) {
+        add("blocked", `既有路线需要重新核对：${route.route.reason || "目标、资料或最新输入已变化"}`, source);
+      } else if (route.route.status === "exploring") {
+        add("pending", `路线仍在探索：${route.route.question}`, source);
+      }
+    }
+    const explicitDecision = inputs.find(item => /(?:^|[。！\n])\s*(?:我(?:们)?(?:确认|决定|选择|采用)|确认(?:采用|选择|按)|决定|选择|采用)/u.test(item.text));
+    if (explicitDecision) {
+      add("blocked", `历史用户表述，当前适用性待核对：${explicitDecision.text}`, { kind: "raw_input", id: explicitDecision.id });
+    }
+    if (latestInput) add("pending", `最近用户输入（需核对是否改变既有结论）：${latestInput.text}`, { kind: "raw_input", id: latestInput.id });
+    for (const report of reports) {
+      const body = report.body && typeof report.body === "object" && !Array.isArray(report.body) ? report.body as { text?: unknown } : undefined;
+      const excerpt = typeof body?.text === "string" ? body.text.slice(0, 220) : "";
+      add("confirmed", `已收到${report.reportKind === "verification" ? "验收" : "成员"}报告${excerpt ? `，报告称：${excerpt}` : ""}（仍需独立核对）`, { kind: "agent_report", id: report.id });
+    }
+    const completedCount = items.filter(item => item.state === "completed").length;
+    if (completedCount > 4) add("confirmed", `共有 ${completedCount} 项工作记录为已完成；下方仅列部分，请回工作清单核对其余项。`, { kind: "task", id: taskId, revision: currentTask.revision });
+    const openCount = items.filter(item => item.state === "pending" || item.state === "in_progress").length;
+    if (openCount > 6) add("pending", `还有 ${openCount} 项待处理或进行中工作；下方仅列部分，请回工作清单核对。`, { kind: "task", id: taskId, revision: currentTask.revision });
+    for (const item of items) {
+      const source: TaskSummarySourceRef = { kind: "work_item", id: item.id, revision: item.revision };
+      if (item.state === "completed") add("confirmed", `工作项已记录完成（仍需单独验收）：${item.title}`, source);
+      else if (item.state === "blocked") add("blocked", `工作项受阻：${item.title}`, source);
+      else if (item.state !== "cancelled") add("pending", `${item.state === "in_progress" ? "进行中" : "待处理"}：${item.title}`, source);
+    }
+    const next = items.find(item => item.state === "pending" || item.state === "in_progress" || item.state === "blocked");
+    if (next) add("next", `核对并推进工作项：${next.title}`, { kind: "work_item", id: next.id, revision: next.revision });
+    else add("next", "核对任务验收条件与尚缺证据。", { kind: "task", id: taskId, revision: currentTask.revision });
+    return { digest: payloadHash(facts), sections };
+  }
+
+  taskSummaryHistory(taskId: string): TaskSummaryRecord[] {
+    this.assertOpen();
+    const currentFacts = this.taskSummaryFacts(taskId).digest;
+    return (this.database.prepare("SELECT payload_json FROM store_events WHERE task_id=? AND kind='taskSummary.revised' ORDER BY sequence").all(taskId) as SQLiteRow[])
+      .map(row => JSON.parse(text(row, "payload_json")) as TaskSummaryRecord)
+      .map(record => ({ ...record, current: record.factsDigest === currentFacts }));
+  }
+
+  readTaskSummarySource(taskId: string, source: TaskSummarySourceRef): { state: "available" | "historical_unavailable"; title: string; content?: string } {
+    this.assertOpen();
+    requiredString(taskId, "taskId", 200);
+    if (!source || !["task", "task_route", "work_item", "agent_report", "raw_input", "summary_revision", "user_correction"].includes(source.kind)
+      || typeof source.id !== "string" || source.id.length > 200 || !source.id
+      || source.revision !== undefined && (!Number.isSafeInteger(source.revision) || source.revision < 1)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "摘要来源身份无效");
+    }
+    if (!this.database.prepare("SELECT id FROM tasks WHERE id=?").get(taskId)) throw new ProductStoreError("NOT_FOUND", "任务不存在");
+    let title = "来源";
+    let content: string | undefined;
+    if (source.kind === "summary_revision" || source.kind === "user_correction") {
+      if (source.id !== `task-summary-${taskId}` || !source.revision) throw new ProductStoreError("NOT_FOUND", "摘要来源不属于当前任务");
+      const old = this.taskSummaryHistory(taskId).find(item => item.revision === source.revision);
+      title = `任务摘要 · 第 ${source.revision} 版`;
+      if (old) content = (["confirmed", "pending", "blocked", "next"] as TaskSummarySection[])
+        .map(key => `${({ confirmed: "已确认", pending: "未完成", blocked: "阻塞与待核对", next: "下一步" })[key]}\n${old.sections[key].map(claim => `• ${claim.text}`).join("\n") || "暂无记录"}`)
+        .join("\n\n");
+    } else {
+      const table = source.kind === "task" ? "tasks" : source.kind === "task_route" ? "task_plans" : source.kind === "work_item" ? "task_work_items" : source.kind === "raw_input" ? "raw_inputs" : "agent_reports";
+      const row = this.database.prepare(`SELECT * FROM ${table} WHERE id=? ${table === "tasks" ? "" : "AND task_id=?"}`)
+        .get(...(table === "tasks" ? [source.id] : [source.id, taskId])) as SQLiteRow | undefined;
+      if (!row || source.kind === "task" && source.id !== taskId) throw new ProductStoreError("NOT_FOUND", "摘要来源不属于当前任务");
+      const revision = typeof row.revision === "number" ? row.revision : undefined;
+      title = source.kind === "task" ? text(row, "title") : source.kind === "work_item" ? text(row, "title") : source.kind === "task_route" ? "任务路线" : source.kind === "raw_input" ? "用户提交原文" : "成员报告";
+      if (source.revision === undefined || source.revision === revision) {
+        content = source.kind === "task"
+          ? `任务目标：${text(row, "goal")}\n验收要求：${(JSON.parse(text(row, "acceptance_json")) as string[]).join("；") || "未单独列出"}`
+          : source.kind === "work_item"
+            ? `工作项：${text(row, "title")}\n当前状态：${text(row, "state")}`
+            : source.kind === "task_route" ? JSON.stringify(JSON.parse(text(row, "document_json")), null, 2)
+              : source.kind === "raw_input" ? text(row, "submitted_text")
+              : (() => { const body = JSON.parse(text(row, "body_json")) as { text?: unknown }; return typeof body.text === "string" ? body.text : JSON.stringify(body, null, 2); })();
+      }
+    }
+    if (!content || content.length > 65_536 || redactCredentialText(content).redacted) return { state: "historical_unavailable", title };
+    return { state: "available", title, content };
+  }
+
+  private recallEntryText(row: SQLiteRow): string | undefined {
+    const value = JSON.parse(text(row, "content_json")) as unknown;
+    const content = typeof value === "string" ? value
+      : value && typeof value === "object" && !Array.isArray(value) && typeof (value as { text?: unknown }).text === "string"
+        ? (value as { text: string }).text
+        : value && typeof value === "object" && !Array.isArray(value) && Array.isArray((value as { content?: unknown }).content)
+          ? ((value as { content: Array<{ type?: string; text?: string }> }).content).filter(part => part.type === "text").map(part => part.text ?? "").join("\n")
+          : undefined;
+    if (!content || Buffer.byteLength(content) > 32_768 || redactCredentialText(content).redacted) return undefined;
+    return content;
+  }
+
+  taskRecallEntryCount(taskId: string, excludeEntryId?: string): number {
+    this.assertOpen();
+    const row=this.database.prepare(`SELECT COUNT(*) AS total FROM session_entries e JOIN sessions s ON s.id=e.session_id
+      JOIN session_path_entries pe ON pe.entry_id=e.id JOIN session_paths p ON p.id=pe.path_id AND p.session_id=s.id AND p.is_current=1
+      WHERE s.task_id=? AND e.message_role IN ('user','assistant') AND (? IS NULL OR e.id<>?)`).get(taskId,excludeEntryId??null,excludeEntryId??null) as SQLiteRow;
+    return integer(row,"total");
+  }
+
+  searchTaskEntries(taskId: string, query: string, limit = 12, excludeEntryId?: string, offset = 0): TaskRecallEntryCandidate[] {
+    return this.searchTaskEntriesPage(taskId,query,limit,excludeEntryId,offset).items;
+  }
+
+  searchTaskEntriesPage(taskId: string, query: string, limit = 12, excludeEntryId?: string, offset = 0): {items:TaskRecallEntryCandidate[];scanned:number;total:number} {
+    this.assertOpen();
+    requiredString(taskId, "taskId", 200);
+    const needle = requiredString(query.trim(), "query", 200).toLocaleLowerCase();
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 12 || !Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) throw new ProductStoreError("INVALID_ARGUMENT", "召回数量无效");
+    const rows = this.database.prepare(`SELECT e.*,s.title AS session_title FROM session_entries e
+      JOIN sessions s ON s.id=e.session_id
+      JOIN session_path_entries pe ON pe.entry_id=e.id
+      JOIN session_paths p ON p.id=pe.path_id AND p.session_id=s.id AND p.is_current=1
+      WHERE s.task_id=? AND e.message_role IN ('user','assistant')
+      AND (? IS NULL OR e.id<>?) ORDER BY e.created_at DESC,e.id DESC LIMIT 600 OFFSET ?`).all(taskId,excludeEntryId??null,excludeEntryId??null,offset) as SQLiteRow[];
+    const matches: TaskRecallEntryCandidate[] = [];
+    let scanned=0;
+    for (const row of rows) {
+      scanned++;
+      const content = this.recallEntryText(row);
+      if (!content || !content.toLocaleLowerCase().includes(needle)) continue;
+      matches.push({ sessionId: text(row, "session_id"), entryId: text(row, "id"), role: text(row, "message_role"),
+        title: `${text(row, "session_title")} · ${text(row, "message_role") === "user" ? "用户" : "助手"}消息`,
+        digest: `sha256:${createHash("sha256").update(content).digest("hex")}`, createdAt: text(row, "created_at") });
+      if (matches.length >= limit) break;
+    }
+    return {items:matches,scanned,total:this.taskRecallEntryCount(taskId,excludeEntryId)};
+  }
+
+  readTaskEntry(taskId: string, entryId: string, requireCurrentPath = false): { sessionId: string; entryId: string; role: string; content: string; digest: string; currentPath: boolean } {
+    this.assertOpen();
+    const row = this.database.prepare(`SELECT e.* FROM session_entries e JOIN sessions s ON s.id=e.session_id
+      WHERE s.task_id=? AND e.id=? AND e.message_role IN ('user','assistant')`).get(taskId, entryId) as SQLiteRow | undefined;
+    if (!row) throw new ProductStoreError("NOT_FOUND", "消息不属于当前任务");
+    const currentPath = !!this.database.prepare(`SELECT pe.entry_id FROM session_path_entries pe JOIN session_paths p ON p.id=pe.path_id
+      WHERE pe.entry_id=? AND p.session_id=? AND p.is_current=1`).get(entryId,text(row,"session_id"));
+    if (requireCurrentPath && !currentPath) throw new ProductStoreError("REVISION_CONFLICT", "候选已退出当前对话路径，请重新检索");
+    const content = this.recallEntryText(row);
+    if (!content) throw new ProductStoreError("NOT_FOUND", "消息正文不可安全读取");
+    return { sessionId: text(row, "session_id"), entryId, role: text(row, "message_role"), content, currentPath,
+      digest: `sha256:${createHash("sha256").update(content).digest("hex")}` };
+  }
+
+  async recordTaskSourceUse(input: Omit<TaskSourceUseRecord, "id" | "createdAt"> & { requestId: string }): Promise<{ storeRevision: number; use: TaskSourceUseRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    if (!["task_message", "work_item", "agent_report", "evidence", "project_file", "inspiration"].includes(input.kind)
+      || !/^sha256:[a-f0-9]{64}$/.test(input.digest) || !Number.isSafeInteger(input.bytes) || input.bytes < 0 || input.bytes > 65_536) {
+      throw new ProductStoreError("INVALID_ARGUMENT", "召回来源记录无效");
+    }
+    const sourceId = requiredString(input.sourceId, "sourceId", 4096);
+    return await this.mutate("task.source.use", input.requestId, undefined,
+      { taskId, sessionRunId: input.sessionRunId, agentRunId: input.agentRunId ?? null, kind: input.kind, sourceId,
+        digest: input.digest, bytes: input.bytes, version: input.version ?? null, projectId: input.projectId ?? null, rootDigest: input.rootDigest ?? null }, (_revision, now) => {
+        const run = this.database.prepare("SELECT agent_run_id,status FROM session_runs WHERE id=? AND task_id=?").get(input.sessionRunId, taskId) as SQLiteRow | undefined;
+        if (!run || !["prepared", "running", "waiting"].includes(text(run, "status")) || (input.agentRunId ?? null) !== (run.agent_run_id ?? null)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "召回读取不属于当前运行");
+        }
+        if (input.kind === "task_message" && !this.database.prepare("SELECT e.id FROM session_entries e JOIN sessions s ON s.id=e.session_id WHERE e.id=? AND s.task_id=?").get(sourceId, taskId)) throw new ProductStoreError("NOT_FOUND", "消息不属于当前任务");
+        if (["work_item", "agent_report", "evidence"].includes(input.kind)) {
+          const table = input.kind === "work_item" ? "task_work_items" : input.kind === "agent_report" ? "agent_reports" : "evidence_records";
+          if (!this.database.prepare(`SELECT id FROM ${table} WHERE id=? AND task_id=?`).get(sourceId, taskId)) throw new ProductStoreError("NOT_FOUND", "事实不属于当前任务");
+        }
+        if (input.kind === "project_file") {
+          const taskRow = this.database.prepare("SELECT project_id FROM tasks WHERE id=? AND scope_kind='project'").get(taskId) as SQLiteRow | undefined;
+          if (!taskRow || input.projectId !== taskRow.project_id || !input.rootDigest || !/^sha256:[a-f0-9]{64}$/.test(input.rootDigest)) throw new ProductStoreError("NOT_FOUND", "文件不属于任务项目");
+          normalizedContextRelativePath(sourceId, "project source");
+        }
+        if (input.kind === "inspiration" && (!input.version || !Number.isSafeInteger(input.version))) throw new ProductStoreError("INVALID_ARGUMENT", "灵感来源版本无效");
+        const use: TaskSourceUseRecord = {
+          id: `source-use-${randomUUID()}`, taskId, sessionRunId: input.sessionRunId,
+          ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
+          kind: input.kind, sourceId, digest: input.digest, bytes: input.bytes,
+          ...(input.version ? { version: input.version } : {}),
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+          ...(input.rootDigest ? { rootDigest: input.rootDigest } : {}), createdAt: now,
+        };
+        return { value: { use }, event: { kind: "taskSource.used", entityKind: "taskSourceUse", entityId: use.id, taskId, payload: use } };
+      });
+  }
+
+  taskSourceUse(taskId: string, useId: string): TaskSourceUseRecord {
+    this.assertOpen();
+    const row = this.database.prepare("SELECT payload_json FROM store_events WHERE kind='taskSource.used' AND task_id=? AND entity_id=?").get(taskId, useId) as SQLiteRow | undefined;
+    if (!row) throw new ProductStoreError("NOT_FOUND", "来源读取不属于当前任务");
+    return JSON.parse(text(row, "payload_json")) as TaskSourceUseRecord;
+  }
+
+  taskSourceUsesForRun(taskId: string, sessionRunId: string, offset = 0, limit = 100): { items: TaskSourceUseRecord[]; total: number; hasMore: boolean } {
+    this.assertOpen();
+    if (!this.database.prepare("SELECT id FROM session_runs WHERE id=? AND task_id=?").get(sessionRunId, taskId)) throw new ProductStoreError("NOT_FOUND", "运行不属于当前任务");
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProductStoreError("INVALID_ARGUMENT", "来源分页范围无效");
+    const total = this.database.prepare("SELECT COUNT(*) AS total FROM store_events WHERE kind='taskSource.used' AND task_id=? AND json_extract(payload_json,'$.sessionRunId')=?").get(taskId, sessionRunId) as SQLiteRow;
+    const items = (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='taskSource.used' AND task_id=? AND json_extract(payload_json,'$.sessionRunId')=? ORDER BY sequence LIMIT ? OFFSET ?").all(taskId, sessionRunId, limit, offset) as SQLiteRow[])
+      .map(row => JSON.parse(text(row, "payload_json")) as TaskSourceUseRecord);
+    return { items, total: integer(total, "total"), hasMore: offset + items.length < integer(total, "total") };
+  }
+
+  async prepareTaskSummary(input: { requestId: string; taskId: string; trigger: "new_session" | "compaction" | "member_restart" }): Promise<{ storeRevision: number; summary: TaskSummaryRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    return await this.mutate("task.summary.prepare", input.requestId, undefined, input, (storeRevision, now) => {
+      const facts = this.taskSummaryFacts(taskId);
+      const previous = this.taskSummaryHistory(taskId).at(-1);
+      const revision = (previous?.revision ?? 0) + 1;
+      // A user's correction remains effective while the underlying Task facts
+      // are unchanged. Changed facts require a fresh projection and review.
+      const sections = previous?.trigger === "user_correction" && previous.factsDigest === facts.digest
+        ? previous.sections : facts.sections;
+      if (previous?.trigger === "user_correction" && previous.factsDigest !== facts.digest) {
+        sections.blocked.push({ text: "上次用户修订的摘要基于旧任务事实，请重新核对。", sources: [{ kind: "summary_revision", id: previous.id, revision: previous.revision }] });
+      }
+      const summary: TaskSummaryRecord = {
+        id: `task-summary-${taskId}`,
+        taskId, revision, trigger: input.trigger, factsDigest: facts.digest,
+        digest: `sha256:${payloadHash({ taskId, revision, sections, factsDigest: facts.digest })}`,
+        sections, basedOnRevision: storeRevision - 1,
+        ...(previous ? { previousRevision: previous.revision } : {}),
+        createdAt: now,
+      };
+      return { value: { summary }, event: { kind: "taskSummary.revised", entityKind: "taskSummary", entityId: summary.id, taskId, payload: summary } };
+    });
+  }
+
+  async markTaskSummaryResume(input: { requestId: string; taskId: string; sessionId: string; trigger: "compaction" }): Promise<{ storeRevision: number }> {
+    return await this.mutate("task.summary.resumeRequired", input.requestId, undefined, input, (_revision, now) => {
+      if (!this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(input.sessionId, input.taskId)) throw new ProductStoreError("NOT_FOUND", "续接会话不属于当前任务");
+      return { value: {}, event: { kind: "taskSummary.resumeRequired", entityKind: "session", entityId: input.sessionId, taskId: input.taskId,
+        payload: { sessionId: input.sessionId, trigger: input.trigger, createdAt: now } } };
+    });
+  }
+
+  async recordTaskSummaryFailure(input: { requestId: string; taskId: string; sessionId: string; trigger: string; reasonCode: string }): Promise<{ storeRevision: number }> {
+    if (!/^[A-Z0-9_]{1,80}$/.test(input.reasonCode)) throw new ProductStoreError("INVALID_ARGUMENT", "摘要失败代码无效");
+    return await this.mutate("task.summary.failed", input.requestId, undefined, input, (_revision, now) => {
+      if (!this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(input.sessionId, input.taskId)) throw new ProductStoreError("NOT_FOUND", "摘要会话不属于当前任务");
+      const failure: TaskSummaryFailureRecord = { taskId: input.taskId, sessionId: input.sessionId, trigger: input.trigger.slice(0, 40), reasonCode: input.reasonCode, createdAt: now };
+      return { value: {}, event: { kind: "taskSummary.failed", entityKind: "session", entityId: input.sessionId, taskId: input.taskId, payload: failure } };
+    });
+  }
+
+  pendingTaskSummaryTrigger(taskId: string, sessionId: string): "compaction" | undefined {
+    this.assertOpen();
+    const marked = this.database.prepare("SELECT sequence FROM store_events WHERE kind='taskSummary.resumeRequired' AND task_id=? AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(taskId, sessionId) as SQLiteRow | undefined;
+    if (!marked) return undefined;
+    const consumed = this.database.prepare(`SELECT sequence FROM store_events WHERE sequence>? AND kind='sessionRun.prepared' AND task_id=?
+      AND json_extract(payload_json,'$.sessionId')=? AND json_extract(payload_json,'$.taskSummary.trigger')='compaction' LIMIT 1`)
+      .get(integer(marked, "sequence"), taskId, sessionId);
+    return consumed ? undefined : "compaction";
+  }
+
+  async correctTaskSummary(input: { requestId: string; taskId: string; expectedRevision: number; sections: Record<TaskSummarySection, string[]> }): Promise<{ storeRevision: number; summary: TaskSummaryRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const expectedRevision = requiredRevision(input.expectedRevision, "expectedRevision");
+    const keys: TaskSummarySection[] = ["confirmed", "pending", "blocked", "next"];
+    if (!input.sections || Object.keys(input.sections).sort().join(",") !== [...keys].sort().join(",")) throw new ProductStoreError("INVALID_ARGUMENT", "摘要必须提供四个部分");
+    const content = Object.fromEntries(keys.map(key => {
+      const values = input.sections[key];
+      if (!Array.isArray(values) || values.length > 8) throw new ProductStoreError("INVALID_ARGUMENT", "每个摘要部分最多八条");
+      return [key, values.map((value, index) => requiredCredentialFreeString(value, `${key}[${index}]`, 500).trim()).filter(Boolean)];
+    })) as Record<TaskSummarySection, string[]>;
+    if (Object.values(content).flat().join("\n").length > 8_000) throw new ProductStoreError("INVALID_ARGUMENT", "摘要过长");
+    return await this.mutate("task.summary.correct", input.requestId, undefined, { taskId, expectedRevision, content }, (storeRevision, now) => {
+      const previous = this.taskSummaryHistory(taskId).at(-1);
+      if (!previous || previous.revision !== expectedRevision || !previous.current) throw new ProductStoreError("REVISION_CONFLICT", "摘要已变化，请重新查看后修订");
+      const revision = previous.revision + 1;
+      const sections = Object.fromEntries(keys.map(key => [key, content[key].map(value => {
+        const matches = previous.sections[key].filter(claim => claim.text === value);
+        const unchanged = matches.length === 1 ? matches[0] : undefined;
+        return { text: value, sources: unchanged?.sources ?? [
+          { kind: "summary_revision", id: previous.id, revision: previous.revision },
+          { kind: "user_correction", id: `task-summary-${taskId}`, revision },
+        ] };
+      })])) as TaskSummaryRecord["sections"];
+      const summary: TaskSummaryRecord = {
+        id: previous.id, taskId, revision, trigger: "user_correction", factsDigest: previous.factsDigest,
+        digest: `sha256:${payloadHash({ taskId, revision, sections, factsDigest: previous.factsDigest })}`,
+        sections, basedOnRevision: storeRevision - 1, previousRevision: previous.revision, createdAt: now,
+      };
+      return { value: { summary }, event: { kind: "taskSummary.revised", entityKind: "taskSummary", entityId: summary.id, taskId, payload: summary } };
+    });
+  }
+
   latestRouteInput(taskId: string): { id: string; text: string; sessionId: string } | undefined {
-    const row = this.database.prepare("SELECT id,submitted_text,session_id FROM raw_inputs WHERE task_id=? AND source_kind IN ('user_submit','edit_and_rerun','continue_path') ORDER BY created_at DESC,rowid DESC LIMIT 1").get(taskId) as SQLiteRow | undefined;
+    const row = this.database.prepare(`SELECT r.id,r.submitted_text,r.session_id FROM raw_inputs r WHERE r.task_id=?
+      AND r.source_kind IN ('user_submit','edit_and_rerun','continue_path') AND NOT EXISTS (
+        SELECT 1 FROM store_events e WHERE e.task_id=r.task_id AND e.kind='collaboration.messageChanged'
+        AND json_extract(e.payload_json,'$.originRawInputId')=r.id AND json_extract(e.payload_json,'$.uiAction.kind')='task.review.request'
+      ) ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1`).get(taskId) as SQLiteRow | undefined;
     return row ? { id: text(row,"id"), text: text(row,"submitted_text"), sessionId: text(row,"session_id") } : undefined;
   }
 
@@ -5033,6 +5723,7 @@ export class ProductStore {
     preparedPathId?:string;
     effectiveMessage?:string;
     inputSources?:InputSourceReceipt[];
+    taskSummary?: TaskSummaryReceipt;
     taskId: string;
     scope: TaskScope;
     sessionId: string;
@@ -5070,6 +5761,7 @@ export class ProductStore {
     const message = input.message.trim().length === 0 && input.managedAttachmentIds?.length ? input.message : requiredCredentialFreeString(input.message, "message", 200_000);
     const effectiveMessage=input.effectiveMessage??attachmentPrompt(message,this.attachmentsForIds(input.managedAttachmentIds??[]),this.layout);
     const inputSources=inputSourceReceipts(input.inputSources);
+    const summaryReceipt = input.taskSummary === undefined ? undefined : normalizedTaskSummaryReceipt(input.taskSummary);
     if(typeof effectiveMessage!=="string")throw new ProductStoreError("INVALID_ARGUMENT","生效输入无效");
     if(effectiveMessage.length>200_000)throw new ProductStoreError("INVALID_ARGUMENT","本次提交加附件引用超过长度限制。");
     let attachmentRefs=[...input.attachmentRefs];
@@ -5157,6 +5849,7 @@ export class ProductStore {
       attachmentRefs: input.attachmentRefs,
       managedAttachmentIds:input.managedAttachmentIds??[],
       effectiveMessage,inputSources,
+      ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}),
       contextRevision,
       systemPromptDigest: input.systemPromptDigest,
       toolNames: input.tools.map((tool) => tool.name),
@@ -5176,6 +5869,12 @@ export class ProductStore {
         }
         if (JSON.stringify(task(taskRow).scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Session Run Task Scope changed before preparation");
+        }
+        if (summaryReceipt) {
+          const saved = this.taskSummaryHistory(taskId).find(item => item.revision === summaryReceipt.revision);
+          if (!saved || !saved.current || saved.id !== summaryReceipt.id || saved.digest !== summaryReceipt.digest || saved.taskId !== summaryReceipt.taskId) {
+            throw new ProductStoreError("REVISION_CONFLICT", "任务摘要版本已变化，请重新准备本轮输入");
+          }
         }
         for(const id of input.managedAttachmentIds??[]){
           const item=this.attachmentCatalog().find(item=>item.id===id);
@@ -5323,6 +6022,7 @@ export class ProductStore {
             taskContextRevision: contextRevision,
             ...(agentRunId && this.memberWorkScope(agentRunId) ? { workAssignment: this.memberWorkScope(agentRunId) } : {}),
             promptSources,
+            ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}),
             ...(importedHistoryReceipt ? { importedHistoryReceipt } : {}),
           }),
           now,
@@ -5412,6 +6112,7 @@ export class ProductStore {
           canonicalJSON({
             version: 2,
             documentSources: promptSources,
+            ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}),
             ...(inputSources.length?{inputSources}:{}),
             ...(importedHistoryReceipt ? { importedHistory: importedHistoryReceipt } : {}),
           }),
@@ -5452,7 +6153,7 @@ export class ProductStore {
             entityKind: "sessionRun",
             entityId: sessionRunId,
             taskId,
-            payload: value,
+            payload: { ...value, sessionId, ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}) },
           },
         };
       },
@@ -5655,8 +6356,27 @@ export class ProductStore {
           if (!owner) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以创建成员");
           if (memberProfiles.some(profile=>profile.role === "coordinator")) throw new ProductStoreError("INVALID_ARGUMENT", "成员不能创建另一个任务协调者");
         }
-        const routeBindings = members.map(member => this.resolveRouteBinding(taskId, member.taskPacket.route));
-        const assignedWork = routeBindings.flatMap(binding => binding?.purpose === "execute" && binding.workItemId ? [binding.workItemId] : []);
+        const reviewWorkIds = members.map((member,index) => {
+          const value = member.taskPacket.reviewWorkItemId;
+          if (value === undefined) return undefined;
+          const id = requiredString(value, `members[${index}].reviewWorkItemId`, 200);
+          if (!input.coordinatorAgentRunId || memberProfiles[index]?.role !== "worker" || member.taskPacket.route !== undefined) {
+            throw new ProductStoreError("INVALID_ARGUMENT", "审查返工工作项只能由协调者派给执行成员，不能同时绑定路线");
+          }
+          const row = this.database.prepare("SELECT * FROM task_work_items WHERE id=? AND task_id=? AND state IN ('pending','blocked','in_progress')").get(id, taskId) as SQLiteRow | undefined;
+          const details = row ? JSON.parse(text(row, "details_json")) as { reviewScope?: unknown } : undefined;
+          const reworked = new Set(this.coordinatorReviews().filter(item => item.outcome === "rework").map(item => item.verificationId));
+          if (!row || !details?.reviewScope || !this.verifications().some(item => item.workItemId === id && reworked.has(item.id))) {
+            throw new ProductStoreError("REVISION_CONFLICT", "工作项没有可派发的审查返工");
+          }
+          if (typeof row.owner_assignment_id === "string") {
+            const owner = this.database.prepare("SELECT g.status FROM agent_assignments a JOIN agent_runs g ON g.id=a.agent_run_id WHERE a.id=?").get(row.owner_assignment_id) as SQLiteRow | undefined;
+            if (owner && ["prepared", "running", "waiting"].includes(text(owner, "status"))) throw new ProductStoreError("REVISION_CONFLICT", "原执行者仍在处理该工作项");
+          }
+          return id;
+        });
+        const routeBindings = members.map((member,index) => reviewWorkIds[index] ? undefined : this.resolveRouteBinding(taskId, member.taskPacket.route));
+        const assignedWork = routeBindings.flatMap(binding => binding?.purpose === "execute" && binding.workItemId ? [binding.workItemId] : []).concat(reviewWorkIds.filter((id): id is string => !!id));
         if (new Set(assignedWork).size !== assignedWork.length) throw new ProductStoreError("INVALID_ARGUMENT", "同一工作项不能在同批派发给多个执行成员");
         let activeTeam = this.database.prepare(`
           SELECT * FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
@@ -5770,8 +6490,9 @@ export class ProductStore {
         for (const [index, member] of members.entries()) {
           const profile = memberProfiles[index]!;
           const routeBinding = routeBindings[index];
-          const workItemId = routeBinding?.purpose === "execute" ? routeBinding.workItemId! : `work-item-${randomUUID()}`;
-          const taskPacket = { ...member.taskPacket, ...(member.taskPacket.route ? { currentWorkItemId: workItemId, currentWorkRevision: 1 } : {}), ...(routeBinding ? { routeBinding } : {}) };
+          const reviewWorkItemId = reviewWorkIds[index];
+          const workItemId = reviewWorkItemId ?? (routeBinding?.purpose === "execute" ? routeBinding.workItemId! : `work-item-${randomUUID()}`);
+          const taskPacket = { ...member.taskPacket, ...(member.taskPacket.route || reviewWorkItemId ? { currentWorkItemId: workItemId, currentWorkRevision: 1 } : {}), ...(routeBinding ? { routeBinding } : {}) };
           const childSession: DCodeSessionRecord = {
             id: `session-${randomUUID()}`,
             taskId,
@@ -5848,8 +6569,8 @@ export class ProductStore {
             now,
             now,
           );
-          if (routeBinding?.purpose === "execute" && routeBinding.workItemId) {
-            this.database.prepare("UPDATE task_work_items SET owner_assignment_id=?,state='in_progress',revision=revision+1,updated_at=? WHERE id=? AND task_id=?").run(assignment.id, now, routeBinding.workItemId, taskId);
+          if (routeBinding?.purpose === "execute" && routeBinding.workItemId || reviewWorkItemId) {
+            this.database.prepare("UPDATE task_work_items SET owner_assignment_id=?,state='in_progress',revision=revision+1,updated_at=? WHERE id=? AND task_id=?").run(assignment.id, now, workItemId, taskId);
           } else if(input.coordinatorAgentRunId) {
             const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
             this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)").run(workItemId,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON(taskPacket),now,now);
@@ -7767,20 +8488,23 @@ export class ProductStore {
   coordinatorReviews():CoordinatorReviewRecord[] {
     return (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='verification.reviewed' ORDER BY sequence").all() as SQLiteRow[]).map(row=>JSON.parse(text(row,"payload_json")));
   }
-  async submitVerification(input:{requestId:string;taskId:string;verifierAgentRunId:string;subjectReportId:string;verdict:"pass"|"fail";evidenceIds:string[];findings:VerificationRecord["findings"];summary:string}):Promise<{storeRevision:number;verification:VerificationRecord}> {
+  async submitVerification(input:{requestId:string;taskId:string;verifierAgentRunId:string;subjectReportId?:string;subjectReviewId?:string;verdict:"pass"|"fail";evidenceIds:string[];findings:VerificationRecord["findings"];summary:string}):Promise<{storeRevision:number;verification:VerificationRecord}> {
     assertCredentialFreeValue(input,"verification");
     if(!["pass","fail"].includes(input.verdict)||!input.summary?.trim()||input.evidenceIds.length>64||input.findings.length>32) throw new ProductStoreError("INVALID_ARGUMENT","验收报告格式无效");
     if(input.verdict==="pass"&&(!input.evidenceIds.length||input.findings.length)) throw new ProductStoreError("INVALID_ARGUMENT","通过验收需要独立证据且没有未解决问题");
     if(input.verdict==="fail"&&!input.findings.length) throw new ProductStoreError("INVALID_ARGUMENT","未通过时需要说明问题");
+    if (!!input.subjectReportId === !!input.subjectReviewId) throw new ProductStoreError("INVALID_ARGUMENT", "请选择一份执行报告或一项固定差异");
+    if (input.subjectReviewId) return this.submitReviewRequestVerification({ ...input, subjectReviewId: input.subjectReviewId });
+    const subjectReportId = input.subjectReportId!;
     return this.mutate("verification.submit",input.requestId,undefined,input,(_revision,now)=>{
       const verifier=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='verifier'").get(input.verifierAgentRunId,input.taskId);
-      const subject=this.database.prepare("SELECT * FROM agent_reports WHERE id=? AND task_id=?").get(input.subjectReportId,input.taskId) as SQLiteRow|undefined;
+      const subject=this.database.prepare("SELECT * FROM agent_reports WHERE id=? AND task_id=?").get(subjectReportId,input.taskId) as SQLiteRow|undefined;
       if(!verifier||!subject||text(subject,"agent_run_id")===input.verifierAgentRunId) throw new ProductStoreError("INVALID_ARGUMENT","独立验收必须由同任务不同于执行者的验收成员承担");
       this.assertReportWorkCurrent(subject);
       this.assertAgentRouteCurrent(text(subject,"agent_run_id"));
       this.assertAgentRouteCurrent(input.verifierAgentRunId);
       const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(text(subject,"agent_run_id")) as SQLiteRow|undefined;
-      if(!latest||text(latest,"id")!==input.subjectReportId)throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，请重新读取当前报告");
+      if(!latest||text(latest,"id")!==subjectReportId)throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，请重新读取当前报告");
       const reportRunId=JSON.parse(text(subject,"body_json")).sessionRunId;
       const boundary=typeof reportRunId==="string"?this.database.prepare("SELECT sequence FROM store_events WHERE kind='sessionRun.finished' AND entity_id=? ORDER BY sequence DESC LIMIT 1").get(reportRunId) as SQLiteRow|undefined:undefined;
       if(input.verdict==="pass"&&!boundary)throw new ProductStoreError("INVALID_ARGUMENT","报告没有可验证的提交边界");
@@ -7799,46 +8523,130 @@ export class ProductStore {
       const verifierRun=this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status='running' ORDER BY created_at DESC,id DESC LIMIT 1").get(input.verifierAgentRunId) as SQLiteRow|undefined;
       if(!verifierRun)throw new ProductStoreError("INVALID_ARGUMENT","验收报告必须来自正在执行的验收运行");
       const fingerprint=payloadHash({subjectAgentRunId:text(subject,"agent_run_id"),verdict:input.verdict,findings:input.findings,evidence:evidence.map(item=>({tool:text(item!,"command_redacted"),resultDigest:JSON.parse(text(item!,"payload_json")).resultDigest})).sort((a,b)=>canonicalJSON(a).localeCompare(canonicalJSON(b)))});
-      const verification:VerificationRecord={id:`verification-${randomUUID()}`,taskId:input.taskId,verifierAgentRunId:input.verifierAgentRunId,verifierSessionRunId:text(verifierRun,"id"),subjectAgentRunId:text(subject,"agent_run_id"),subjectReportId:input.subjectReportId,verdict:input.verdict,evidenceIds:[...new Set(input.evidenceIds)],findings:input.findings,summary:input.summary,fingerprint,createdAt:now};
-      this.setAssignedWorkState(verification.subjectAgentRunId, "in_progress", now);
-      const subjectTeam=this.database.prepare("SELECT team_run_id FROM agent_runs WHERE id=?").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
+      const verification:VerificationRecord={id:`verification-${randomUUID()}`,taskId:input.taskId,verifierAgentRunId:input.verifierAgentRunId,verifierSessionRunId:text(verifierRun,"id"),subjectAgentRunId:text(subject,"agent_run_id"),subjectReportId,verdict:input.verdict,evidenceIds:[...new Set(input.evidenceIds)],findings:input.findings,summary:input.summary,fingerprint,createdAt:now};
+      this.setAssignedWorkState(text(subject,"agent_run_id"), "in_progress", now);
+      const subjectTeam=this.database.prepare("SELECT team_run_id FROM agent_runs WHERE id=?").get(text(subject,"agent_run_id")) as SQLiteRow|undefined;
       if(typeof subjectTeam?.team_run_id==="string")this.reopenAdaptiveTeam(subjectTeam.team_run_id,now);
       this.database.prepare("INSERT INTO agent_reports(id,task_id,agent_run_id,report_kind,body_json,created_at) VALUES (?,?,?,'verification',?,?)").run(verification.id,input.taskId,input.verifierAgentRunId,canonicalJSON(verification),now);
       return {value:{verification},event:{kind:"verification.submitted",entityKind:"verification",entityId:verification.id,taskId:input.taskId,payload:verification}};
     });
   }
-  async reviewVerification(input:{requestId:string;taskId:string;coordinatorAgentRunId:string;verificationId:string;outcome:CoordinatorReviewRecord["outcome"];reason:string;strategyChange?:string}):Promise<{storeRevision:number;review:CoordinatorReviewRecord;verification:VerificationRecord;workItemCompleted:boolean;affectedAgentRunIds:string[]}> {
+  private async submitReviewRequestVerification(input:{requestId:string;taskId:string;verifierAgentRunId:string;subjectReviewId:string;verdict:"pass"|"fail";evidenceIds:string[];findings:VerificationRecord["findings"];summary:string}):Promise<{storeRevision:number;verification:VerificationRecord}> {
+    return this.mutate("verification.submit",input.requestId,undefined,input,(_revision,now)=>{
+      const { review } = this.readTaskReview(input.taskId,input.subjectReviewId);
+      if (!review.workItemId) throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "审查请求缺少受影响工作项");
+      const reworked = new Set(this.coordinatorReviews().filter(item => item.outcome === "rework").map(item => item.verificationId));
+      if (this.verifications().some(item => item.subjectReviewId === review.id && reworked.has(item.id))) {
+        throw new ProductStoreError("REVISION_CONFLICT", "成果已安排修改，请从新的差异发起复查并关联原工作项");
+      }
+      const verifier=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='verifier'").get(input.verifierAgentRunId,input.taskId);
+      const verifierRun=this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status='running' ORDER BY created_at DESC,id DESC LIMIT 1").get(input.verifierAgentRunId) as SQLiteRow|undefined;
+      const work=this.database.prepare("SELECT * FROM task_work_items WHERE id=? AND task_id=? AND state<>'cancelled'").get(review.workItemId,input.taskId) as SQLiteRow|undefined;
+      if(!verifier||!verifierRun||!work)throw new ProductStoreError("INVALID_ARGUMENT","审查必须由本任务正在运行的独立验收成员承担");
+      this.assertAgentRouteCurrent(input.verifierAgentRunId);
+      const owner=typeof work.owner_assignment_id==="string"?this.database.prepare("SELECT agent_run_id FROM agent_assignments WHERE id=?").get(work.owner_assignment_id) as SQLiteRow|undefined:undefined;
+      const subjectAgentRunId=typeof owner?.agent_run_id==="string"?owner.agent_run_id as string:undefined;
+      if(subjectAgentRunId===input.verifierAgentRunId)throw new ProductStoreError("INVALID_ARGUMENT","不能独立验收自己的工作项");
+      if(input.verdict==="pass"&&subjectAgentRunId){
+        const subject=this.database.prepare("SELECT status FROM agent_runs WHERE id=?").get(subjectAgentRunId) as SQLiteRow|undefined;
+        if(!subject||text(subject,"status")!=="completed")throw new ProductStoreError("REVISION_CONFLICT","执行者仍在修改，不能通过当前差异审查");
+      }
+      const boundary=this.database.prepare("SELECT sequence FROM store_events WHERE kind='evidence.recorded' AND entity_id=?").get(review.evidenceId) as SQLiteRow|undefined;
+      if(!boundary)throw new ProductStoreError("PRODUCT_STORE_CORRUPT","固定差异缺少来源事件");
+      const sameReviewVerifications = new Set(this.verifications().filter(item => item.subjectReviewId === review.id).map(item => item.id));
+      const rechecks = this.coordinatorReviews().filter(item => item.outcome === "recheck" && sameReviewVerifications.has(item.verificationId));
+      const recheckBoundary = rechecks.map(item => this.database.prepare("SELECT sequence FROM store_events WHERE kind='verification.reviewed' AND entity_id=?").get(item.id) as SQLiteRow | undefined)
+        .reduce((latest, row) => row ? Math.max(latest, integer(row, "sequence")) : latest, 0);
+      const minimumSequence = Math.max(integer(boundary, "sequence"), recheckBoundary);
+      const subjectFinish=subjectAgentRunId?this.database.prepare(`SELECT MAX(e.sequence) AS sequence FROM store_events e WHERE e.kind='sessionRun.finished'
+        AND e.entity_id IN (SELECT id FROM session_runs WHERE agent_run_id=?)`).get(subjectAgentRunId) as SQLiteRow|undefined:undefined;
+      const minimumFreshSequence=Math.max(minimumSequence,typeof subjectFinish?.sequence==="number"?subjectFinish.sequence:0);
+      const evidence=input.evidenceIds.map(id=>this.database.prepare("SELECT * FROM evidence_records WHERE id=? AND task_id=? AND agent_run_id=?").get(id,input.taskId,input.verifierAgentRunId) as SQLiteRow|undefined);
+      if(evidence.some(item=>!item||text(item,"command_redacted").startsWith("dcode_")&&text(item,"evidence_kind")!=="review_diff_inspection"))throw new ProductStoreError("INVALID_ARGUMENT","需要验收成员本人产生的实际检查证据");
+      if(input.evidenceIds.some(id=>{const event=this.database.prepare("SELECT sequence FROM store_events WHERE kind='evidence.recorded' AND entity_id=?").get(id) as SQLiteRow|undefined;return !event||integer(event,"sequence")<=minimumFreshSequence;}))throw new ProductStoreError("INVALID_ARGUMENT","检查证据必须晚于本次差异、执行者最后完成及最近复查要求");
+      if(evidence.some(item=>{
+        if(!item)return true;
+        if(text(item,"evidence_kind")==="review_diff_inspection")return JSON.parse(text(item,"payload_json")).sessionRunId!==text(verifierRun,"id");
+        const attempt=this.database.prepare("SELECT session_run_id FROM operation_attempts WHERE id=? AND operation_kind='tool_invocation'").get(text(item,"source_record_id")) as SQLiteRow|undefined;
+        return !attempt||attempt.session_run_id!==text(verifierRun,"id");
+      }))throw new ProductStoreError("INVALID_ARGUMENT","复查证据必须来自当前验收运行");
+      const inspected=evidence.some(item=>item&&text(item,"evidence_kind")==="review_diff_inspection"&&JSON.parse(text(item,"payload_json")).reviewId===review.id&&JSON.parse(text(item,"payload_json")).digest===review.digest);
+      if(!inspected)throw new ProductStoreError("INVALID_ARGUMENT","请先读取并检查本次固定差异");
+      if(input.verdict==="pass"&&(!evidence.some(item=>item&&text(item,"evidence_kind")!=="review_diff_inspection")||evidence.some(item=>item&&text(item,"exit_kind")!=="ok")))throw new ProductStoreError("INVALID_ARGUMENT","通过审查还需要实际验证且不能使用失败的检查");
+      const fingerprint=payloadHash({subjectReviewId:review.id,digest:review.digest,verdict:input.verdict,findings:input.findings,evidence:evidence.map(item=>({kind:text(item!,"evidence_kind"),resultDigest:JSON.parse(text(item!,"payload_json")).resultDigest})).sort((a,b)=>canonicalJSON(a).localeCompare(canonicalJSON(b)))});
+      const verification:VerificationRecord={id:`verification-${randomUUID()}`,taskId:input.taskId,verifierAgentRunId:input.verifierAgentRunId,verifierSessionRunId:text(verifierRun,"id"),subjectKind:"review_request",subjectReviewId:review.id,workItemId:review.workItemId,...(subjectAgentRunId?{subjectAgentRunId}:{}),verdict:input.verdict,evidenceIds:[...new Set(input.evidenceIds)],findings:input.findings,summary:input.summary,fingerprint,createdAt:now};
+      this.database.prepare("INSERT INTO agent_reports(id,task_id,agent_run_id,report_kind,body_json,created_at) VALUES (?,?,?,'verification',?,?)").run(verification.id,input.taskId,input.verifierAgentRunId,canonicalJSON(verification),now);
+      return {value:{verification},event:{kind:"verification.submitted",entityKind:"verification",entityId:verification.id,taskId:input.taskId,payload:verification}};
+    });
+  }
+  async reviewVerification(input:{requestId:string;taskId:string;coordinatorAgentRunId:string;verificationId:string;outcome:CoordinatorReviewRecord["outcome"];reason:string;strategyChange?:string;acknowledgedInputId?:string}):Promise<{storeRevision:number;review:CoordinatorReviewRecord;verification:VerificationRecord;workItemCompleted:boolean;affectedAgentRunIds:string[]}> {
     assertCredentialFreeValue(input,"review");
     if(!["accepted","rework","recheck"].includes(input.outcome)||!input.reason?.trim()) throw new ProductStoreError("INVALID_ARGUMENT","需要明确复核结论与依据");
     return this.mutate("verification.review",input.requestId,undefined,input,(_revision,now)=>{
       const owner=this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='coordinator'").get(input.coordinatorAgentRunId,input.taskId);
       const verification=this.verifications().find(item=>item.id===input.verificationId&&item.taskId===input.taskId);
       if(!owner||!verification) throw new ProductStoreError("INVALID_ARGUMENT","只有本任务协调者可以复核已有验收");
-      this.assertAgentRouteCurrent(verification.subjectAgentRunId);
-      this.assertReportWorkCurrent(this.database.prepare("SELECT * FROM agent_reports WHERE id=?").get(verification.subjectReportId) as SQLiteRow);
+      if(verification.subjectKind==="review_request") {
+        if(!verification.subjectReviewId||!verification.workItemId)throw new ProductStoreError("PRODUCT_STORE_CORRUPT","审查验收缺少固定范围");
+        const {review:request}=this.readTaskReview(input.taskId,verification.subjectReviewId);
+        if(request.workItemId!==verification.workItemId)throw new ProductStoreError("REVISION_CONFLICT","审查工作项已变化");
+        const work=this.database.prepare("SELECT * FROM task_work_items WHERE id=? AND task_id=? AND state<>'cancelled'").get(verification.workItemId,input.taskId) as SQLiteRow|undefined;
+        if(!work)throw new ProductStoreError("REVISION_CONFLICT","受影响工作项已不可用");
+        if(this.coordinatorReviews().some(item=>item.verificationId===verification.id))throw new ProductStoreError("REVISION_CONFLICT","该次验收已经复核");
+        if(input.outcome==="accepted"&&verification.verdict!=="pass")throw new ProductStoreError("INVALID_ARGUMENT","不能把未通过的审查标为通过");
+        if(input.outcome==="accepted"&&verification.subjectAgentRunId){
+          const subject=this.database.prepare("SELECT status FROM agent_runs WHERE id=? AND task_id=?").get(verification.subjectAgentRunId,input.taskId) as SQLiteRow|undefined;
+          if(!subject||text(subject,"status")!=="completed"||this.collaborationMessages(input.taskId).some(message=>message.targetAgentRunId===verification.subjectAgentRunId&&["queued","delivering","paused","interrupted","failed"].includes(message.state)))throw new ProductStoreError("REVISION_CONFLICT","执行者仍有待处理工作，请核对新版结果");
+          const verified=this.database.prepare("SELECT sequence FROM store_events WHERE kind='verification.submitted' AND entity_id=?").get(verification.id) as SQLiteRow|undefined;
+          const later=this.database.prepare(`SELECT e.sequence FROM store_events e WHERE e.kind='sessionRun.finished' AND e.sequence>?
+            AND e.entity_id IN (SELECT id FROM session_runs WHERE agent_run_id=?) LIMIT 1`).get(verified?integer(verified,"sequence"):0,verification.subjectAgentRunId);
+          if(later)throw new ProductStoreError("REVISION_CONFLICT","验收后执行者又提交了修改，请对新成果重新检查");
+        }
+        if(input.outcome==="accepted"&&this.taskRouteContext(input.taskId)?.inputCurrent===false)throw new ProductStoreError("REVISION_CONFLICT","用户有新输入，请先核对再接受成果");
+        if(input.outcome==="accepted"){
+          const verified=this.database.prepare("SELECT sequence FROM store_events WHERE kind='verification.submitted' AND entity_id=?").get(verification.id) as SQLiteRow|undefined;
+          const latest=this.latestRouteInput(input.taskId);
+          if(latest&&this.rawInputSequence(latest.id)>(verified?integer(verified,"sequence"):0)&&input.acknowledgedInputId!==latest.id){
+            throw new ProductStoreError("REVISION_CONFLICT","验收后有新用户输入；请核对适用性并明确引用最新输入，或重新检查");
+          }
+        }
+        const recent=this.verifications().filter(item=>item.taskId===input.taskId&&item.subjectReviewId===request.id).slice(-2);
+        if(input.outcome!=="accepted"&&recent.length===2&&recent[0]!.fingerprint===recent[1]!.fingerprint&&!input.strategyChange?.trim())throw new ProductStoreError("INVALID_ARGUMENT","连续两次没有新证据，需要调整方法或重新分工");
+        const review:CoordinatorReviewRecord={id:`review-${randomUUID()}`,taskId:input.taskId,coordinatorAgentRunId:input.coordinatorAgentRunId,verificationId:verification.id,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{}),...(input.acknowledgedInputId?{acknowledgedInputId:input.acknowledgedInputId}:{}),createdAt:now};
+        const state=input.outcome==="accepted"?"completed":input.outcome==="rework"?(work.owner_assignment_id?"in_progress":"pending"):text(work,"state");
+        this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE id=?").run(state,now,verification.workItemId);
+        if(input.outcome==="recheck")this.setAssignedWorkState(verification.verifierAgentRunId,"in_progress",now);
+        const affectedAgentRunIds=input.outcome==="rework"&&verification.subjectAgentRunId?this.blockRouteDependents(input.taskId,verification.subjectAgentRunId,input.reason,_revision,now):[];
+        return {value:{review,verification,workItemCompleted:input.outcome==="accepted",affectedAgentRunIds},event:{kind:"verification.reviewed",entityKind:"coordinatorReview",entityId:review.id,taskId:input.taskId,payload:review}};
+      }
+      const subjectAgentRunId=verification.subjectAgentRunId;
+      const subjectReportId=verification.subjectReportId;
+      if(!subjectAgentRunId||!subjectReportId)throw new ProductStoreError("PRODUCT_STORE_CORRUPT","报告验收缺少执行者来源");
+      this.assertAgentRouteCurrent(subjectAgentRunId);
+      this.assertReportWorkCurrent(this.database.prepare("SELECT * FROM agent_reports WHERE id=?").get(subjectReportId) as SQLiteRow);
       if (input.outcome === "accepted") {
         const route = this.taskRouteContext(input.taskId);
         if (route?.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "用户有新输入，请核对后再接受成果");
-        const recheckRevision = this.routeRecheckRevision(verification.subjectAgentRunId);
+        const recheckRevision = this.routeRecheckRevision(subjectAgentRunId);
         const event = this.database.prepare("SELECT store_revision FROM store_events WHERE kind='verification.submitted' AND entity_id=?").get(verification.id) as SQLiteRow | undefined;
         if (recheckRevision && (!event || integer(event, "store_revision") <= recheckRevision)) throw new ProductStoreError("REVISION_CONFLICT", "上游已返工，请重新核查受影响成果后再接受");
       }
       if(this.coordinatorReviews().some(review=>review.verificationId===verification.id)) throw new ProductStoreError("REVISION_CONFLICT","该验收已经复核，应复验后提交新记录");
-      const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(verification.subjectAgentRunId) as SQLiteRow|undefined;
-      if(!latest||text(latest,"id")!==verification.subjectReportId) throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，需要对新报告验收");
+      const latest=this.database.prepare("SELECT id FROM agent_reports WHERE agent_run_id=? AND report_kind<>'verification' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(subjectAgentRunId) as SQLiteRow|undefined;
+      if(!latest||text(latest,"id")!==subjectReportId) throw new ProductStoreError("REVISION_CONFLICT","执行成果已有新版，需要对新报告验收");
       if(input.outcome==="accepted"&&verification.verdict!=="pass") throw new ProductStoreError("INVALID_ARGUMENT","不能把未通过验收的成果标为复核通过");
-      const recent=this.verifications().filter(item=>item.taskId===input.taskId&&item.subjectAgentRunId===verification.subjectAgentRunId).slice(-2);
+      const recent=this.verifications().filter(item=>item.taskId===input.taskId&&item.subjectAgentRunId===subjectAgentRunId).slice(-2);
       if(input.outcome!=="accepted"&&recent.length===2&&recent[0]!.fingerprint===recent[1]!.fingerprint&&!input.strategyChange?.trim()) throw new ProductStoreError("INVALID_ARGUMENT","连续两次没有新证据，需要调整方法或重新分工后再返工");
       const review:CoordinatorReviewRecord={id:`review-${randomUUID()}`,taskId:input.taskId,coordinatorAgentRunId:input.coordinatorAgentRunId,verificationId:verification.id,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{}),createdAt:now};
-      const subjectRun=this.database.prepare("SELECT status,team_run_id FROM agent_runs WHERE id=?").get(verification.subjectAgentRunId) as SQLiteRow;
-      if(input.outcome==="accepted"&&(text(subjectRun,"status")!=="completed"||this.collaborationMessages(input.taskId).some(message=>message.targetAgentRunId===verification.subjectAgentRunId&&["queued","delivering","paused","interrupted","failed"].includes(message.state)))) throw new ProductStoreError("REVISION_CONFLICT","执行者还有新工作待处理，需要核对新版结果");
+      const subjectRun=this.database.prepare("SELECT status,team_run_id FROM agent_runs WHERE id=?").get(subjectAgentRunId) as SQLiteRow;
+      if(input.outcome==="accepted"&&(text(subjectRun,"status")!=="completed"||this.collaborationMessages(input.taskId).some(message=>message.targetAgentRunId===subjectAgentRunId&&["queued","delivering","paused","interrupted","failed"].includes(message.state)))) throw new ProductStoreError("REVISION_CONFLICT","执行者还有新工作待处理，需要核对新版结果");
       const latestByVerifier=new Map<string,VerificationRecord>();
-      for(const item of this.verifications().filter(item=>item.subjectReportId===verification.subjectReportId))latestByVerifier.set(item.verifierAgentRunId,item);
+      for(const item of this.verifications().filter(item=>item.subjectReportId===subjectReportId))latestByVerifier.set(item.verifierAgentRunId,item);
       const reviews=[...this.coordinatorReviews(),review];
       const workItemCompleted=input.outcome==="accepted"&&[...latestByVerifier.values()].every(item=>item.verdict==="pass"&&reviews.some(candidate=>candidate.verificationId===item.id&&candidate.outcome==="accepted"));
-      this.setAssignedWorkState(verification.subjectAgentRunId, workItemCompleted ? "completed" : "in_progress", now);
+      this.setAssignedWorkState(subjectAgentRunId, workItemCompleted ? "completed" : "in_progress", now);
       if(input.outcome==="recheck") this.setAssignedWorkState(verification.verifierAgentRunId, "in_progress", now);
-      const affectedAgentRunIds = input.outcome !== "accepted" ? this.blockRouteDependents(input.taskId, verification.subjectAgentRunId, input.reason, _revision, now) : [];
+      const affectedAgentRunIds = input.outcome !== "accepted" ? this.blockRouteDependents(input.taskId, subjectAgentRunId, input.reason, _revision, now) : [];
       if(typeof subjectRun.team_run_id==="string") {
         if(workItemCompleted)this.reconcileAdaptiveTeam(subjectRun.team_run_id,now);
         else this.reopenAdaptiveTeam(subjectRun.team_run_id,now);
@@ -7873,9 +8681,13 @@ export class ProductStore {
     return this.collaborationMessages().find(message=>message.id===id&&message.targetAgentRunId===agentRunId);
   }
 
-  async queueCollaborationMessage(input:{requestId:string;taskId:string;sourceSessionId:string;targetAgentRunId:string;author:CollaborationMessage["author"];text:string;attachmentIds?:string[];originRawInputId?:string;pathAction?:NativeSessionPathAction;deliveryMode?:"steer";targetSessionRunId?:string;acknowledgedUserMessageId?:string}):Promise<{storeRevision:number;message:CollaborationMessage}> {
+  async queueCollaborationMessage(input:{requestId:string;taskId:string;sourceSessionId:string;targetAgentRunId:string;author:CollaborationMessage["author"];text:string;submittedText?:string;uiAction?:CollaborationMessage["uiAction"];attachmentIds?:string[];originRawInputId?:string;pathAction?:NativeSessionPathAction;deliveryMode?:"steer";targetSessionRunId?:string;acknowledgedUserMessageId?:string}):Promise<{storeRevision:number;message:CollaborationMessage}> {
     if(typeof input.text!=="string"||input.text.length>200000||!input.text.trim()&&!input.attachmentIds?.length)throw new ProductStoreError("INVALID_ARGUMENT","需要消息或附件，正文不能超过 200000 字符");
     if(redactCredentialText(input.text).redacted)throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED","消息包含凭据内容");
+    if(input.uiAction){
+      if(input.author!=="user"||input.uiAction.kind!=="task.review.request"||!input.submittedText)throw new ProductStoreError("INVALID_ARGUMENT","界面动作来源无效");
+      requiredCredentialFreeString(input.submittedText,"submittedText",500);
+    }else if(input.submittedText!==undefined)throw new ProductStoreError("INVALID_ARGUMENT","普通消息不能另给提交原文");
     const body=input.text;
     return this.mutate("collaboration.queue",input.requestId,undefined,{...input,text:body},(_revision,now)=>{
       const target=this.database.prepare("SELECT * FROM agent_runs WHERE id=? AND task_id=?").get(input.targetAgentRunId,input.taskId) as SQLiteRow|undefined;
@@ -7890,12 +8702,13 @@ export class ProductStore {
       if(input.author==="user")this.database.prepare("UPDATE tasks SET state='active',revision=revision+1,updated_at=? WHERE id=? AND state IN ('completed','rejected')").run(now,input.taskId);
       let originRawInputId=input.originRawInputId;
       if(input.author==="user") {
+        if(input.uiAction)this.readTaskReview(input.taskId,input.uiAction.reviewId);
         originRawInputId=`raw-${randomUUID()}`;
         const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM raw_inputs WHERE session_id=?").get(input.sourceSessionId) as SQLiteRow;
         const attachments=(input.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
-        this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(originRawInputId,input.taskId,input.sourceSessionId,integer(ordinal,"ordinal"),body,canonicalJSON(attachments),now);
+        this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(originRawInputId,input.taskId,input.sourceSessionId,integer(ordinal,"ordinal"),input.submittedText??body,canonicalJSON(attachments),now);
       } else if(!originRawInputId||!this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(originRawInputId,input.taskId)) throw new ProductStoreError("INVALID_ARGUMENT","协作消息必须保留发起原文的固定引用");
-      const message:CollaborationMessage={id:`collaboration-${randomUUID()}`,taskId:input.taskId,originRawInputId:originRawInputId!,sourceSessionId:input.sourceSessionId,targetSessionId:text(target,"session_id"),targetAgentRunId:input.targetAgentRunId,author:input.author,text:body,...(input.acknowledgedUserMessageId?{acknowledgedUserMessageId:input.acknowledgedUserMessageId}:{}),...(input.deliveryMode?{deliveryMode:input.deliveryMode,targetSessionRunId:input.targetSessionRunId}:{}),...(input.pathAction?{pathAction:input.pathAction}:{}),...(input.attachmentIds?.length?{attachmentIds:input.attachmentIds}:{}),state:"queued",revision:1,createdAt:now,updatedAt:now};
+      const message:CollaborationMessage={id:`collaboration-${randomUUID()}`,taskId:input.taskId,originRawInputId:originRawInputId!,sourceSessionId:input.sourceSessionId,targetSessionId:text(target,"session_id"),targetAgentRunId:input.targetAgentRunId,author:input.author,text:body,...(input.uiAction?{uiAction:input.uiAction}:{}),...(input.acknowledgedUserMessageId?{acknowledgedUserMessageId:input.acknowledgedUserMessageId}:{}),...(input.deliveryMode?{deliveryMode:input.deliveryMode,targetSessionRunId:input.targetSessionRunId}:{}),...(input.pathAction?{pathAction:input.pathAction}:{}),...(input.attachmentIds?.length?{attachmentIds:input.attachmentIds}:{}),state:"queued",revision:1,createdAt:now,updatedAt:now};
       return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
     });
   }
@@ -7939,7 +8752,7 @@ export class ProductStore {
       const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM raw_inputs WHERE session_id=?").get(previous.sourceSessionId) as SQLiteRow;
       const attachments=(previous.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
       this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(rawId,previous.taskId,previous.sourceSessionId,integer(ordinal,"ordinal"),body,canonicalJSON(attachments),now);
-      const message:CollaborationMessage={...previous,previousRawInputId:previous.originRawInputId,originRawInputId:rawId,author:"user",text:body,revision:previous.revision+1,updatedAt:now};delete message.error;
+      const message:CollaborationMessage={...previous,previousRawInputId:previous.originRawInputId,originRawInputId:rawId,author:"user",text:body,revision:previous.revision+1,updatedAt:now};delete message.error;delete message.uiAction;
       return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
     });
   }

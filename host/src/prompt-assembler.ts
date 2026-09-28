@@ -195,6 +195,9 @@ export function assembleDCodeSystemPrompt(input: {
 检查候选时寻找具体反例、缺失前提和依赖冲突；实际核查后提交证据及未决异议，未发现缺陷不代表已经证明正确。成熟路线的核心做法有依据、剩余未知可交办、依赖和完成标准清楚。修订须保存为新候选并重新检查，反证随来源保留；所有候选不足时明确等待或停止，不强行选一个。
 采用后按依赖执行。局部失败仅返工受影响部分；核心前提失效时记录 invalidate、停止受影响成员与后续工作，重新核对下游成果，再 reopen。新要求影响路线时先核对与更新，迟到结果不能覆盖新决定。投入达到限制或连续两次没有新证据时停止重复并报告依据；不要通过重建计划清空历史或额度。路线成熟不等于成果验收。有新用户输入时先用 acknowledge 记录适用性判断；改变路线则停止受影响工作，查询进度等不改变路线的输入不重新生成候选。用尽预算后的继续须有明确的新用户决定，extend 只能提高有界上限并保留累计投入。
 ` : "";
+  const recallRules = tools.some(tool => tool.name === "dcode_recall") ? `
+按需召回：眼前问题需要旧材料时使用 dcode_recall search 查候选，再 read 真正需要的原文。候选不算本轮使用；只引用 read 返回的 dcode-source 链接。当前 Task 历史、所属 Project 文件和全局灵感有范围边界，查无材料就说明不足。旧版本无法恢复时不要以新正文替代。
+` : "";
   const route = input.environment.taskRoute;
   const selected = route?.contextCurrent && route.inputCurrent !== false ? route.route.candidates.find(candidate => candidate.id === route.route.selectedCandidateId) : undefined;
   const routeState = route ? `\n当前任务路线记录（有来源的工作状态；contextCurrent=false 表示目标或上下文已变，必须重新核查。详细内容请用 dcode_route context 核对）：\n${JSON.stringify({ planId: route.planId, planRevision: route.planRevision, contextCurrent: route.contextCurrent, inputCurrent: route.inputCurrent, status: route.route.status, round: route.route.round, question: route.route.question, reason: route.route.reason, budget: route.route.budget, usedCandidates: route.route.candidates.length, usedChecks: route.route.checks.length, ...(selected ? { selected: { id: selected.id, title: selected.title, approach: selected.approach, remainingWork: selected.remainingWork, dependencies: selected.dependencies } } : {}) })}\n` : "";
@@ -218,6 +221,7 @@ D Code 是产品与编排主体；Pi SDK 只是本轮 Agent Runtime（智能体�
 ${input.environment.roleContract}
 ${collaborationRules}
 ${routeRules}
+${recallRules}
 ${routeState}
 工作原则：
 - 用户提交的 Raw Input（提交原文）与模型使用的 Effective Input（生效输入）是不同事实；不得声称压缩摘要就是用户原话。

@@ -31,7 +31,6 @@ test("D Code Session presentation reads its own binding and Coordinator prompts 
   const root = await mkdtemp(join(tmpdir(), "dcode-session-presentation-"));
   const agentDir = join(root, "agent");
   const sessionsDirectory = join(agentDir, "sessions");
-  const dataRoot = join(root, ".dcode");
   const userHome = join(root, "home");
   const settingsPath = join(agentDir, "settings.json");
   const modelsPath = join(agentDir, "models.json");
@@ -68,7 +67,6 @@ test("D Code Session presentation reads its own binding and Coordinator prompts 
   const host = new PiHost({
     agentDir,
     sessionsDirectory,
-    dataRoot,
     userHome,
     leaseQuietWindowMs: 1,
     emit: () => {},

@@ -88,6 +88,26 @@ async function writeTargetSession(f: Fixture, sessionId = "search-target"): Prom
   return path;
 }
 
+test("an explicit data root does not silently import legacy projects from the user home", async () => {
+  const f = await fixture();
+  const project = join(f.root, "legacy-project");
+  const legacyDirectory = join(f.root, "Library", "Application Support", "D Code");
+  await mkdir(project);
+  await mkdir(legacyDirectory, { recursive: true });
+  await writeFile(join(legacyDirectory, "projects-v1.json"), `${JSON.stringify({
+    version: 2,
+    projects: [{ id: "legacy-project", name: "Legacy project", directory: { path: project } }],
+  })}\n`);
+  const host = new PiHost({ agentDir: f.agentDir, dataRoot: join(f.root, ".dcode"), userHome: f.root, emit: () => {} });
+  try {
+    const snapshot = await host.handle("foundation.snapshot", {}) as { projects: Array<{ id: string }> };
+    assert.deepEqual(snapshot.projects, []);
+  } finally {
+    await host.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("host lists, inspects, and opens with immediate takeover", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
@@ -112,7 +132,7 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.33");
+    assert.equal(hello.hostVersion, "0.0.34");
     assert.equal(hello.piVersion, "0.87.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);

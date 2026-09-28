@@ -6,9 +6,12 @@ import {sanitizeRuntimeValue} from "./runtime-privacy.js";
 import {directoryChangeTargets,directoryPosition,swapProjectDirectories,privateSessionDigest,type ProjectDirectoryChange} from "./project-directory-change.js";
 import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
+import {safeWorkspaceRelativePath} from "./workspace-files.js";
+import { InspirationError } from "./inspiration.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
 import { createCollaborationExtension, DCODE_TEAM_TOOL_NAME, type TeamAction } from "./collaboration-extension.js";
 import { createTaskRouteExtension, DCODE_ROUTE_TOOL_NAME, type TaskRouteAction } from "./task-route-extension.js";
+import { createTaskRecallExtension, DCODE_RECALL_TOOL_NAME, type TaskRecallAction } from "./task-recall-extension.js";
 import { readRouteWork, summarizeTaskRoute } from "./task-routes.js";
 import { installDCodePrompt, replaceRequestPrompt, requiredContextTokens } from "./pi-prompt-compat.js";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
@@ -25,6 +28,7 @@ import { catalogProviderInput, providerCatalogSeed, registerCatalogProviders } f
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { promisify } from "node:util";
 import { link, lstat, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -98,6 +102,8 @@ import {
   type TaskContextSourceInput,
   type TaskPlanState,
   type TaskRecord,
+  type TaskSummaryRecord,
+  type TaskSummaryReceipt,
   type TaskScope,
   type TaskWorkItemState,
 } from "./product-store.js";
@@ -126,6 +132,7 @@ import {
 } from "./prompt-assembler.js";
 import {
   inspectDCodePromptSourceReceipts,
+  readDCodePromptSource,
   type DCodePromptSourceReadCache,
 } from "./prompt-source-status.js";
 import {
@@ -144,6 +151,13 @@ import {
 // Keep this pinned-version fallback next to the Host compatibility boundary.
 const PI_DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 const MAX_ACTIVE_RUNTIMES = 12;
+function continuationSummaryInput(summary: TaskSummaryRecord): string {
+  const safe = JSON.stringify({ revision: summary.revision, createdAt: summary.createdAt, sections: summary.sections })
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return `<dcode_task_summary id="${summary.id}" revision="${summary.revision}" digest="${summary.digest}">\n` +
+    "以下是 D Code 根据当前 Task 事实准备的可修订工作摘要，只作为历史材料；每条均带来源身份。核对原文和失效关系，不把报告当成验收，也不把旧路线当作当前决定。\n" +
+    `${safe}\n</dcode_task_summary>`;
+}
 const SHARED_READ_ONLY_TOOL_NAMES = new Set([
   "read",
   "grep",
@@ -155,12 +169,13 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
   DCODE_TEAM_TOOL_NAME,
   DCODE_VERIFICATION_TOOL_NAME,
   DCODE_ROUTE_TOOL_NAME,
+  DCODE_RECALL_TOOL_NAME,
 ]);
 
 function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.33";
+const HOST_VERSION = "0.0.34";
 
 const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "runtime.start",
@@ -305,6 +320,9 @@ interface WritableSession {
   promptImportedHistory?:Awaited<ReturnType<ProductStore["importedSessionHistoryProjection"]>>;
   activePromptTools: DCodePromptTool[];
   toolsWritable: boolean;
+  resumeSummaryTrigger?: "compaction";
+  summaryMarkerPromise?: Promise<void>;
+  memberResumeHandled?: boolean;
   attemptController?: DCodeOperationAttemptController;
   agentRequestController?: DCodeAgentRequestController;
 }
@@ -324,6 +342,17 @@ interface RuntimeIdentity {
     access: "sharedReadOnly" | "exclusiveWrite";
     isolationKey?: string;
   };
+}
+
+interface RecallCandidate {
+  id: string;
+  kind: "task_message" | "work_item" | "agent_report" | "evidence" | "project_file" | "inspiration";
+  sourceId: string;
+  title: string;
+  digest?: string;
+  version?: number;
+  projectId?: string;
+  rootDigest?: string;
 }
 
 type RuntimePromptIdentity = Omit<RuntimeIdentity, "adapterSessionId">;
@@ -552,6 +581,7 @@ export class PiHost {
   readonly trashDirectory: string;
   private legacyActive?: ActiveSession;
   private readonly runtimes = new Map<string, ActiveSession>();
+  private readonly recallCandidates = new Map<string, { sessionRunId: string; items: Map<string, RecallCandidate> }>();
   private readonly runtimeByAdapterSessionId = new Map<string, string>();
   private readonly openingAdapterSessionIds = new Map<string, string>();
   private readonly runtimeByDCodeSessionId = new Map<string, string>();
@@ -729,12 +759,12 @@ export class PiHost {
     this.productStoreOpening ??= ProductStore.open({
       ...(this.options.dataRoot ? { dataRoot: this.options.dataRoot } : {}),
       ...(this.options.userHome ? { userHome: this.options.userHome } : {}),
-      legacyMigration: {
+      ...(!this.options.dataRoot ? { legacyMigration: {
         agentDir: this.agentDir,
         sessionsDirectory: this.sessionsDirectory,
         ...(this.options.legacyUserDefaults ? { userDefaults: this.options.legacyUserDefaults } : {}),
         ...(this.options.legacySourcePaths ? { sourcePaths: this.options.legacySourcePaths } : {}),
-      },
+      } } : {}),
     });
     try {
       this.productStore = await this.productStoreOpening;
@@ -1099,7 +1129,7 @@ export class PiHost {
     if (!runtimeModelSelection) {
       throw new PiHostError(
         "D_CODE_MODEL_SELECTION_REQUIRED",
-        "D Code has no selected Model for future Runtimes; Pi defaults were not used implicitly",
+        "请先为这段对话选择模型；D Code 不会自动沿用其他应用的默认设置。",
       );
     }
     const catalogEntry = snapshot.modelCatalogEntries.find((candidate) => (
@@ -1771,7 +1801,95 @@ export class PiHost {
         });
         return result;
       }
+      case "task.session.continue": {
+        const store = await this.getProductStore();
+        const taskId = params.taskId as string;
+        const replayed = await store.replayTaskSessionContinuation(params.requestId as string, taskId);
+        if (replayed) return replayed;
+        const before = await store.snapshot();
+        if (before.storeRevision !== params.expectedStoreRevision) {
+          throw new PiHostError("REVISION_CONFLICT", "任务状态已更新，请重试");
+        }
+        const current = before.sessions.find(session => session.taskId === taskId && session.kind === "coordination");
+        if (!current) throw new PiHostError("DCODE_SESSION_NOT_FOUND", "当前任务没有协调会话");
+        if (this.openingDCodeSessionIds.has(current.id) || this.collaborationDrains.has(current.id)) {
+          throw new PiHostError("SESSION_BUSY", "会话仍在准备或收尾，请稍后再续接");
+        }
+        const runtimeId = this.runtimeByDCodeSessionId.get(current.id);
+        const runtime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
+        if (runtime?.currentRun || runtime?.session.isStreaming || runtime?.session.isCompacting || runtime?.auxiliary?.hasLive || runtime?.ui.hasPendingDialogs) {
+          throw new PiHostError("SESSION_BUSY", "会话仍在运行，请先等待或停止");
+        }
+        if (runtimeId) await this.closeRuntime(runtimeId);
+        const latest = await store.snapshot();
+        const result = await store.continueTaskSession({
+          requestId: params.requestId as string,
+          expectedStoreRevision: latest.storeRevision,
+          taskId,
+        });
+        try {
+          const prepared = await store.prepareTaskSummary({
+            requestId: `task-summary-${createHash("sha256").update(params.requestId as string).digest("hex").slice(0, 40)}`,
+            taskId,
+            trigger: "new_session",
+          });
+          this.options.emit("foundation.changed", { kind: "taskSummary.revised", storeRevision: prepared.storeRevision, taskId });
+        } catch (error) {
+          await store.recordTaskSummaryFailure({ requestId: `summary-failed-${createHash("sha256").update(params.requestId as string).digest("hex").slice(0, 40)}`,
+            taskId, sessionId: result.coordinationSession.id, trigger: "new_session", reasonCode: "SUMMARY_PREPARE_FAILED" }).catch(() => undefined);
+          // The new Session remains usable with its original Task sources.
+          this.options.emit("session.cleanupError", { step: "task summary preparation", ...errorRecord(error) });
+        }
+        this.options.emit("foundation.changed", { kind: "task.sessionContinued", storeRevision: result.storeRevision, taskId });
+        return result;
+      }
+      case "task.summary.history": return (await this.getProductStore()).taskSummaryHistory(params.taskId as string);
+      case "task.summary.source": return (await this.getProductStore()).readTaskSummarySource(params.taskId as string, params.source as import("./product-store.js").TaskSummarySourceRef);
+      case "task.summary.correct": {
+        const result = await (await this.getProductStore()).correctTaskSummary(params as Parameters<ProductStore["correctTaskSummary"]>[0]);
+        this.options.emit("foundation.changed", { kind: "taskSummary.revised", storeRevision: result.storeRevision, taskId: params.taskId as string });
+        return result;
+      }
+      case "task.review.read": return (await this.getProductStore()).readTaskReview(params.taskId as string, params.reviewId as string);
+      case "task.review.request": {
+        const taskId = params.taskId as string;
+        const store = await this.getProductStore();
+        let result = await store.replayTaskReviewRequest({requestId:params.requestId as string,taskId,path:params.path as string,staged:params.staged as boolean,digest:params.digest as string,
+          ...(typeof params.workItemId === "string" ? {workItemId:params.workItemId}:{})});
+        if(!result){
+          const root = await this.workspaceAccess.root({ taskId });
+          const current = await this.workspaceAccess.diff(root.directory, params.path as string, params.staged as boolean);
+          if (current.digest !== params.digest) throw new PiHostError("REVISION_CONFLICT", "文件差异已更新，请重新查看后发起审查");
+          const baseHead = await this.reviewGitHead(root.directory);
+          result = await store.requestTaskReview({
+            requestId: params.requestId as string,
+            expectedStoreRevision: params.expectedStoreRevision as number,
+            taskId, path: current.path, staged: current.staged, diff: current.diff, digest: current.digest,
+            baseHead, rootDigest: `sha256:${createHash("sha256").update(root.directory).digest("hex")}`,
+            ...(typeof params.workItemId === "string" ? { workItemId: params.workItemId } : {}),
+          });
+          this.options.emit("foundation.changed", { kind: "taskReview.requested", storeRevision: result.storeRevision, taskId });
+        }
+        let dispatchError: string | undefined;
+        try {
+          const task = (await store.snapshot()).tasks.find(item => item.id === taskId)!;
+          const coordinator = await store.ensureCoordinatorAgentRun({ requestId: `review-coordinator-${result.review.id}`, taskId, scope: task.scope });
+          await this.enqueueCollaboration({
+            requestId: `review-message-${result.review.id}`, taskId, sourceSessionId: result.review.sessionId,
+            targetAgentRunId: coordinator.agentRun.id, author: "user",
+            submittedText: `发起审查：${result.review.path}`,
+            uiAction: {kind:"task.review.request",reviewId:result.review.id},
+            text: `请审查 ${result.review.path} 的${result.review.staged ? "暂存" : "工作区"}改动。按需要安排独立检查，并在当前任务中处理发现的问题；只返工受影响的工作项。审查结果和来源可在任务概览查看。`,
+          });
+        } catch (error) {
+          dispatchError = errorRecord(error).message;
+        }
+        return { ...result, ...(dispatchError ? { dispatchError } : {}) };
+      }
       case "task.context.inspectFiles":return this.inspectTaskContextFiles(params.taskId as string,params.paths as string[]);
+      case "task.source.read":return (await this.getProductStore()).readTaskSource(params as unknown as Parameters<ProductStore["readTaskSource"]>[0]);
+      case "task.source.used.read":return this.readUsedTaskSource(params.taskId as string,params.sourceUseId as string);
+      case "task.source.used.list":return (await this.getProductStore()).taskSourceUsesForRun(params.taskId as string,params.sessionRunId as string,params.offset as number,params.limit as number);
       case "sessionRun.inputs":return (await this.getProductStore()).sessionRunInputs(params.taskId as string,params.sessionRunId as string);
       case "task.context.replace": {
         const result = await (await this.getProductStore()).replaceTaskContext({
@@ -2568,6 +2686,184 @@ export class PiHost {
     await this.setCoordinatorAccess(active,"exclusiveWrite");
   }
 
+  private async readUsedTaskSource(taskId: string, sourceUseId: string): Promise<unknown> {
+    const store = await this.getProductStore();
+    const used = store.taskSourceUse(taskId, sourceUseId);
+    if (used.kind === "task_message") {
+      const entry = store.readTaskEntry(taskId, used.sourceId);
+      if (entry.digest !== used.digest) return { state: "hash_mismatch", use: used };
+      return { state: "available", use: used, title: "任务历史消息", content: entry.content, sessionId: entry.sessionId, entryId: entry.entryId, currentPath: entry.currentPath };
+    }
+    if (["work_item", "agent_report", "evidence"].includes(used.kind)) {
+      const snapshot=await store.snapshot();
+      const item=used.kind==="work_item"?snapshot.taskWorkItems.find(item=>item.id===used.sourceId&&item.taskId===taskId)
+        :used.kind==="agent_report"?snapshot.agentReports.find(item=>item.id===used.sourceId&&item.taskId===taskId)
+          :snapshot.evidence.find(item=>item.id===used.sourceId&&item.taskId===taskId);
+      if(!item)return {state:"historical_unavailable",use:used,reason:"任务事实已不可读取"};
+      const content=used.kind==="work_item"?JSON.stringify({title:(item as {title:string}).title,state:(item as {state:string}).state,details:(item as {details:unknown}).details})
+        :used.kind==="agent_report"?JSON.stringify((item as {body:unknown}).body)
+          :JSON.stringify({kind:(item as {evidenceKind:string}).evidenceKind,payload:(item as {payload:unknown}).payload,exitKind:(item as {exitKind?:string}).exitKind});
+      if(`sha256:${createHash("sha256").update(content).digest("hex")}`!==used.digest)return {state:"hash_mismatch",use:used,reason:"来源已有新版本，旧正文未保存"};
+      if(redactCredentialText(content).redacted)return {state:"historical_unavailable",use:used,reason:"来源现含受保护信息，正文已隐藏"};
+      return {state:"available",use:used,title:used.kind==="work_item"?"任务工作项":used.kind==="agent_report"?"成员报告":"检查证据",content};
+    }
+    if (used.kind === "project_file") {
+      const task = (await store.snapshot()).tasks.find(item => item.id === taskId);
+      if (task?.scope.kind !== "project" || task.scope.projectId !== used.projectId) return { state: "historical_unavailable", use: used, reason: "项目归属已变化" };
+      const root = await this.workspaceAccess.root({ taskId });
+      if (`sha256:${createHash("sha256").update(root.directory).digest("hex")}` !== used.rootDigest) return { state: "historical_unavailable", use: used, reason: "项目目录已变化" };
+      const current = await this.workspaceAccess.files.read(root.directory, used.sourceId).catch(() => undefined);
+      if (!current) return { state: "historical_unavailable", use: used, reason: "文件已不可读取" };
+      if (current.digest !== used.digest) return { state: "hash_mismatch", use: used, reason: "文件已更新，历史正文未保存" };
+      return { state: "available", use: used, title: used.sourceId, content: current.text };
+    }
+    if (!used.version) return { state: "historical_unavailable", use: used, reason: "灵感版本身份缺失" };
+    const root = await realpath(store.inspirationView().documentRoot).catch(() => undefined);
+    if (!root) return { state: "historical_unavailable", use: used, reason: "灵感资料目录已不可用" };
+    const path = join(root, used.sourceId, `r${used.version}-${used.digest.slice(7)}.md`);
+    const current = await readDCodePromptSource(root, path, true);
+    if (current.kind !== "available") return { state: "historical_unavailable", use: used, reason: current.reason };
+    if (`sha256:${createHash("sha256").update(current.bytes).digest("hex")}` !== used.digest) return { state: "hash_mismatch", use: used };
+    if(!isUtf8(current.bytes)||redactCredentialText(current.bytes.toString("utf8")).redacted)return {state:"historical_unavailable",use:used,reason:"来源现含受保护信息或文本编码无效，正文已隐藏"};
+    return { state: "available", use: used, title: `灵感 · 第 ${used.version} 版`, content: current.bytes.toString("utf8") };
+  }
+
+  private async handleTaskRecall(identity: RuntimePromptIdentity, callId: string, action: TaskRecallAction): Promise<unknown> {
+    const runtime = this.runtimes.get(identity.runtimeId);
+    const sessionRunId = runtime?.currentRun?.sessionRunId;
+    if (!runtime || runtime.runtimeIdentity?.taskId !== identity.taskId || !sessionRunId || runtime.currentRun?.state.phase !== "running") {
+      throw new PiHostError("RUN_REQUIRED", "只能在当前任务的运行中召回来源");
+    }
+    const store = await this.getProductStore();
+    if (action.action === "search") {
+      const query = action.query?.trim();
+      if (!query || query.length > 200) throw new PiHostError("INVALID_ARGUMENT", "请输入 1 至 200 字的检索词");
+      const limit = Math.min(12, Math.max(1, action.limit ?? 12));
+      const source=action.source??"all",taskOffset=action.taskOffset??0,factOffset=action.factOffset??0,projectOffset=action.projectOffset??0;
+      if(action.projectPath)safeWorkspaceRelativePath(action.projectPath,true);
+      const snapshot = await store.snapshot();
+      const task = snapshot.tasks.find(item => item.id === identity.taskId);
+      if (!task) throw new PiHostError("TASK_NOT_FOUND", "任务不存在");
+      const candidates: RecallCandidate[] = [];
+      const includeTask=source==="all"||source==="task",includeFacts=includeTask||source==="facts",includeProject=source==="all"||source==="project",includeInspiration=source==="all"||source==="inspiration";
+      const taskPage=includeTask?store.searchTaskEntriesPage(task.id,query,source==="task"?limit:Math.min(5,limit),runtime.currentRun?.nativeUserEntryId,taskOffset):{items:[],scanned:0,total:0};
+      for (const item of taskPage.items) {
+        candidates.push({ id: `recall-${randomUUID()}`, kind: "task_message", sourceId: item.entryId, title: item.title, digest: item.digest });
+      }
+      const facts: Array<{kind:"work_item"|"agent_report"|"evidence";sourceId:string;title:string;content:string;version?:number}> = [
+        ...snapshot.taskWorkItems.filter(item=>item.taskId===task.id).map(item=>({kind:"work_item" as const,sourceId:item.id,title:`工作项：${item.title}`,content:JSON.stringify({title:item.title,state:item.state,details:item.details}),version:item.revision})),
+        ...snapshot.agentReports.filter(item=>item.taskId===task.id).map(item=>({kind:"agent_report" as const,sourceId:item.id,title:"成员报告",content:JSON.stringify(item.body)})),
+        ...snapshot.evidence.filter(item=>item.taskId===task.id).map(item=>({kind:"evidence" as const,sourceId:item.id,title:`检查证据：${item.evidenceKind}`,content:JSON.stringify({kind:item.evidenceKind,payload:item.payload,exitKind:item.exitKind})})),
+      ];
+      const relevantFacts=includeFacts?facts.filter(fact=>fact.content.length<=32_768&&!redactCredentialText(fact.content).redacted&&`${fact.title}\n${fact.content}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())):[];
+      const factCapacity=Math.max(0,(source==="task"||source==="facts"?limit:Math.min(limit,7))-candidates.length);
+      const selectedFacts=relevantFacts.slice(factOffset,factOffset+factCapacity);
+      for(const fact of selectedFacts){
+        candidates.push({id:`recall-${randomUUID()}`,kind:fact.kind,sourceId:fact.sourceId,title:fact.title,digest:`sha256:${createHash("sha256").update(fact.content).digest("hex")}`,...(fact.version?{version:fact.version}:{})});
+      }
+      const projectCap=source==="project"?limit:Math.max(1,limit-3);
+      let projectInspected=0,projectTruncated=includeProject&&task.scope.kind==="project"&&candidates.length>=projectCap,projectTreeTruncated=false,projectUnavailableDirectories=0;
+      if (includeProject && task.scope.kind === "project" && candidates.length < projectCap) {
+        const root = await this.workspaceAccess.root({ taskId: task.id });
+        const rootDigest = `sha256:${createHash("sha256").update(root.directory).digest("hex")}`;
+        const queue: Array<{ path: string; depth: number }> = [{ path: action.projectPath??"", depth: 0 }];
+        let eligibleSeen=0;
+        projectSearch: while (queue.length && projectInspected < 80 && candidates.length < projectCap) {
+          const directory = queue.shift()!;
+          const tree = await this.workspaceAccess.files.tree(root.directory, directory.path).catch(() => undefined);
+          if (!tree){projectTruncated=true;projectUnavailableDirectories++;continue;}
+          if(tree.truncated){projectTruncated=true;projectTreeTruncated=true;}
+          for (const entry of tree.entries) {
+            if (entry.kind === "directory" && directory.depth < 3 && !/^(node_modules|dist|build|coverage|vendor)$/iu.test(entry.name)) queue.push({ path: entry.relativePath, depth: directory.depth + 1 });
+            if (entry.kind !== "file" || !/\.(md|txt|json|ts|tsx|js|mjs|swift|py)$/iu.test(entry.name)) continue;
+            eligibleSeen++;
+            if(eligibleSeen<=projectOffset)continue;
+            if(projectInspected>=80){projectTruncated=true;break projectSearch;}
+            projectInspected++;
+            const file = await this.workspaceAccess.files.read(root.directory, entry.relativePath).catch(() => undefined);
+            if (!file || file.bytes > 32_768 || !(`${entry.relativePath}\n${file.text}`).toLocaleLowerCase().includes(query.toLocaleLowerCase())) continue;
+            candidates.push({ id: `recall-${randomUUID()}`, kind: "project_file", sourceId: entry.relativePath, title: entry.relativePath,
+              digest: file.digest, projectId: task.scope.projectId, rootDigest });
+            if (candidates.length >= projectCap){projectTruncated=true;break projectSearch;}
+          }
+        }
+        if(queue.length>0)projectTruncated=true;
+      }
+      let inspirationInspected=0,inspirationTruncated=false;
+      for (const node of includeInspiration?store.inspirationView().nodes:[]) {
+        if (candidates.length >= limit) break;
+        inspirationInspected++;
+        if (node.archived || !`${node.title}\n${node.markdown}\n${node.tags.join(" ")}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) continue;
+        candidates.push({ id: `recall-${randomUUID()}`, kind: "inspiration", sourceId: node.id, title: node.title, version: node.revision });
+      }
+      if(includeInspiration&&inspirationInspected<store.inspirationView().nodes.length)inspirationTruncated=true;
+      const existing = this.recallCandidates.get(identity.runtimeId);
+      const items = existing?.sessionRunId === sessionRunId ? existing.items : new Map<string, RecallCandidate>();
+      for (const candidate of candidates) items.set(candidate.id, candidate);
+      while (items.size > 36) items.delete(items.keys().next().value!);
+      this.recallCandidates.set(identity.runtimeId, { sessionRunId, items });
+      const coverage={taskHistory:{scanned:taskPage.scanned,total:taskPage.total,truncated:includeTask&&taskOffset+taskPage.scanned<taskPage.total,nextTaskOffset:includeTask&&taskOffset+taskPage.scanned<taskPage.total?taskOffset+taskPage.scanned:undefined},
+        taskFacts:{returned:selectedFacts.length,total:relevantFacts.length,truncated:includeFacts&&factOffset+selectedFacts.length<relevantFacts.length,nextFactOffset:includeFacts&&factOffset+selectedFacts.length<relevantFacts.length?factOffset+selectedFacts.length:undefined},
+        projectFiles:{available:task.scope.kind==="project",path:action.projectPath??"",scanned:projectInspected,truncated:projectTruncated,listingTruncated:projectTreeTruncated,unavailableDirectories:projectUnavailableDirectories,
+          nextProjectOffset:projectTruncated&&!projectTreeTruncated&&!projectUnavailableDirectories&&projectInspected>0?projectOffset+projectInspected:undefined},
+        inspiration:{scanned:inspirationInspected,truncated:inspirationTruncated}};
+      return { candidates: candidates.map(({ id, kind, title, version }) => ({ id, kind, title, ...(version ? { version } : {}) })), candidateCount: candidates.length,
+        searchIncomplete:coverage.taskHistory.truncated||coverage.taskFacts.truncated||coverage.projectFiles.truncated||coverage.inspiration.truncated,coverage };
+    }
+    if (action.action !== "read" || !action.candidateId) throw new PiHostError("INVALID_ARGUMENT", "请选择检索候选");
+    const candidateSet = this.recallCandidates.get(identity.runtimeId);
+    const candidate = candidateSet?.sessionRunId === sessionRunId ? candidateSet.items.get(action.candidateId) : undefined;
+    if (!candidate) throw new PiHostError("SOURCE_NOT_FOUND", "候选不属于当前运行，请重新检索");
+    let content: string;
+    let digest: string;
+    if (candidate.kind === "task_message") {
+      const entry = store.readTaskEntry(identity.taskId, candidate.sourceId, true);
+      content = entry.content; digest = entry.digest;
+    } else if (["work_item","agent_report","evidence"].includes(candidate.kind)) {
+      const snapshot=await store.snapshot();
+      const item=candidate.kind==="work_item"?snapshot.taskWorkItems.find(item=>item.id===candidate.sourceId&&item.taskId===identity.taskId)
+        :candidate.kind==="agent_report"?snapshot.agentReports.find(item=>item.id===candidate.sourceId&&item.taskId===identity.taskId)
+          :snapshot.evidence.find(item=>item.id===candidate.sourceId&&item.taskId===identity.taskId);
+      if(!item)return {state:"unavailable",reason:"任务事实已不可读取"};
+      content=candidate.kind==="work_item"?JSON.stringify({title:(item as {title:string}).title,state:(item as {state:string}).state,details:(item as {details:unknown}).details})
+        :candidate.kind==="agent_report"?JSON.stringify((item as {body:unknown}).body)
+          :JSON.stringify({kind:(item as {evidenceKind:string}).evidenceKind,payload:(item as {payload:unknown}).payload,exitKind:(item as {exitKind?:string}).exitKind});
+      digest=`sha256:${createHash("sha256").update(content).digest("hex")}`;
+    } else if (candidate.kind === "project_file") {
+      const snapshot = await store.snapshot();
+      const task = snapshot.tasks.find(item => item.id === identity.taskId);
+      if (task?.scope.kind !== "project" || task.scope.projectId !== candidate.projectId) return { state: "unavailable", reason: "项目归属已变化" };
+      const root = await this.workspaceAccess.root({ taskId: identity.taskId });
+      if (`sha256:${createHash("sha256").update(root.directory).digest("hex")}` !== candidate.rootDigest) return { state: "unavailable", reason: "项目目录已变化" };
+      const file = await this.workspaceAccess.files.read(root.directory, candidate.sourceId).catch(() => undefined);
+      if (!file || file.bytes > 32_768) return { state: "unavailable", reason: "文件不可读取或超过本次上限" };
+      content = file.text; digest = file.digest;
+    } else {
+      const node = store.inspirationView().nodes.find(item => item.id === candidate.sourceId);
+      if (!node || node.revision !== candidate.version) return { state: "unavailable", reason: "灵感已经更新，请重新检索" };
+      let frozen: Awaited<ReturnType<ProductStore["inspirationMarkdown"]>>;
+      try { frozen = await store.inspirationMarkdown(node.id,candidate.version); }
+      catch(error){if(error instanceof InspirationError&&error.code==="IDEA_REVISION_CONFLICT")return {state:"unavailable",reason:"灵感版本已变化，请重新检索"};throw error;}
+      const canonicalRoot = await realpath(frozen.rootPath).catch(() => undefined);
+      if (!canonicalRoot) return { state: "unavailable", reason: "灵感资料目录不可用" };
+      const read = await readDCodePromptSource(canonicalRoot, join(canonicalRoot, frozen.relativePath), true);
+      if (read.kind !== "available") return { state: "unavailable", reason: read.reason };
+      content = read.bytes.toString("utf8"); digest = frozen.digest;
+    }
+    if (digest !== candidate.digest && candidate.digest !== undefined) return { state: "unavailable", reason: "来源版本已变化，请重新检索" };
+    if (Buffer.byteLength(content) > 32_768 || redactCredentialText(content).redacted) return { state: "unavailable", reason: "来源正文不能安全读取" };
+    const used = await store.recordTaskSourceUse({
+      requestId: `source-read-${createHash("sha256").update(`${sessionRunId}\0${callId}`).digest("hex").slice(0, 48)}`,
+      taskId: identity.taskId, sessionRunId, ...(identity.agentRunId ? { agentRunId: identity.agentRunId } : {}),
+      kind: candidate.kind, sourceId: candidate.sourceId, digest, bytes: Buffer.byteLength(content),
+      ...(candidate.version ? { version: candidate.version } : {}),
+      ...(candidate.projectId ? { projectId: candidate.projectId } : {}),
+      ...(candidate.rootDigest ? { rootDigest: candidate.rootDigest } : {}),
+    });
+    this.options.emit("foundation.changed", { kind: "taskSource.used", storeRevision: used.storeRevision, taskId: identity.taskId });
+    return { state: "available", title: candidate.title, content, sourceUseId: used.use.id, citation: `[来源](dcode-source:${used.use.id})`, digest };
+  }
+
   private async handleTaskRoute(identity: RuntimePromptIdentity, callId: string, action: TaskRouteAction): Promise<unknown> {
     const store = await this.getProductStore(), snapshot = await store.snapshot();
     const actor = snapshot.agentRuns.find(run => run.id === identity.agentRunId && run.taskId === identity.taskId && run.sessionId === identity.dcodeSessionId);
@@ -2622,23 +2918,68 @@ export class PiHost {
     const actor=snapshot.agentRuns.find(run=>run.id===identity.agentRunId&&run.taskId===identity.taskId&&run.sessionId===identity.dcodeSessionId);
     if(!actor||!["coordinator","verifier"].includes(actor.role)) throw new PiHostError("VERIFICATION_ROLE_REQUIRED","当前成员没有验收权限");
     const taskId=identity.taskId;
-    if(input.action==="context")return verificationContext(snapshot,taskId);
+    if(input.action==="context"){
+      const latest=store.latestRouteInput(taskId);
+      return {...verificationContext(snapshot,taskId),...(latest?{latestUserInput:{id:latest.id,text:latest.text.slice(0,1200),complete:latest.text.length<=1200}}:{})};
+    }
+    if(input.action==="request_recheck"){
+      if(actor.role!=="coordinator"||!input.subjectReviewId)throw new PiHostError("COORDINATOR_REQUIRED","只有任务协调者可固定新版差异");
+      const previous=store.readTaskReview(taskId,input.subjectReviewId).review;
+      if(!previous.workItemId)throw new PiHostError("REVIEW_SCOPE_MISSING","审查工作项缺失");
+      const reworked=snapshot.coordinatorReviews?.some(item=>item.outcome==="rework"&&snapshot.verifications?.some(verification=>verification.id===item.verificationId&&verification.subjectReviewId===previous.id));
+      if(!reworked)throw new PiHostError("REVIEW_RECHECK_SAME_SCOPE","只有成果返工后才固定新版差异；仅补验收依据时请在原审查范围提供新证据");
+      const root=await this.workspaceAccess.root({taskId});
+      if(`sha256:${createHash("sha256").update(root.directory).digest("hex")}`!==previous.rootDigest)throw new PiHostError("REVIEW_SOURCE_MOVED","项目目录已变化，请先核对来源");
+      const current=await this.workspaceAccess.diff(root.directory,previous.path,previous.staged);
+      const baseHead=await this.reviewGitHead(root.directory);
+      const result=await store.requestTaskReview({requestId:`review-recheck-${createHash("sha256").update(`${taskId}\0${identity.runtimeId}\0${callId}`).digest("hex").slice(0, 44)}`,expectedStoreRevision:(await store.snapshot()).storeRevision,taskId,path:previous.path,staged:previous.staged,diff:current.diff,digest:current.digest,baseHead,rootDigest:previous.rootDigest,workItemId:previous.workItemId});
+      this.options.emit("foundation.changed",{kind:"taskReview.requested",taskId,storeRevision:result.storeRevision});
+      return result;
+    }
     if(input.action==="read_report"){
       const report=snapshot.agentReports.find(report=>report.id===input.subjectReportId&&report.taskId===taskId);if(!report)throw new PiHostError("REPORT_NOT_FOUND","报告不属于当前任务");
       const body=JSON.stringify(report.body),offset=input.offset??0,end=Math.min(body.length,offset+(input.limit??12000));return {reportId:report.id,agentRunId:report.agentRunId,reportKind:report.reportKind,content:body.slice(offset,end),totalLength:body.length,...(end<body.length?{nextOffset:end}:{})};
     }
     const run=this.runtimes.get(identity.runtimeId)?.currentRun;
     const requestId=`verification:${createHash("sha256").update(`${taskId}\0${run?.id}\0${callId}`).digest("hex").slice(0,48)}`;
+    if(input.action==="read_review") {
+      if(actor.role!=="verifier"||!input.subjectReviewId||!run?.sessionRunId)throw new PiHostError("VERIFIER_REQUIRED","需要运行中的验收成员读取固定审查范围");
+      const frozen=store.readTaskReview(taskId,input.subjectReviewId);
+      const inspected=await store.inspectTaskReview({requestId,taskId,reviewId:input.subjectReviewId,verifierAgentRunId:actor.id,sessionRunId:run.sessionRunId});
+      this.options.emit("foundation.changed",{kind:"evidence.recorded",taskId,storeRevision:inspected.storeRevision});
+      return {...frozen,evidenceId:inspected.evidenceId};
+    }
     if(input.action==="submit") {
-      if(actor.role!=="verifier"||!input.subjectReportId||!input.verdict||!input.summary) throw new PiHostError("VERIFIER_REQUIRED","需要验收成员指定报告、结论和依据");
-      const result=await store.submitVerification({requestId,taskId,verifierAgentRunId:actor.id,subjectReportId:input.subjectReportId,verdict:input.verdict,evidenceIds:input.evidenceIds??[],findings:input.findings??[],summary:input.summary});
+      if(actor.role!=="verifier"||!!input.subjectReportId===!!input.subjectReviewId||!input.verdict||!input.summary) throw new PiHostError("VERIFIER_REQUIRED","需要验收成员指定一项报告或固定差异、结论和依据");
+      const result=await store.submitVerification({requestId,taskId,verifierAgentRunId:actor.id,...(input.subjectReportId?{subjectReportId:input.subjectReportId}:{subjectReviewId:input.subjectReviewId!}),verdict:input.verdict,evidenceIds:input.evidenceIds??[],findings:input.findings??[],summary:input.summary});
       this.options.emit("foundation.changed",{kind:"verification.submitted",taskId,storeRevision:result.storeRevision});return result;
     }
     if(actor.role!=="coordinator"||!input.verificationId||!input.outcome||!input.reason) throw new PiHostError("COORDINATOR_REQUIRED","需要协调者对已有验收做复核");
-    const result=await store.reviewVerification({requestId,taskId,coordinatorAgentRunId:actor.id,verificationId:input.verificationId,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{})});
+    if(input.outcome==="accepted"){
+      const verification=snapshot.verifications?.find(item=>item.id===input.verificationId&&item.taskId===taskId);
+      if(verification?.subjectReviewId){
+        const reviewed=store.readTaskReview(taskId,verification.subjectReviewId).review;
+        const root=await this.workspaceAccess.root({taskId});
+        if(`sha256:${createHash("sha256").update(root.directory).digest("hex")}`!==reviewed.rootDigest)throw new PiHostError("REVIEW_SOURCE_CHANGED","审查所属目录已变化，请重新固定差异");
+        const current=await this.workspaceAccess.diff(root.directory,reviewed.path,reviewed.staged).catch(()=>undefined);
+        const head=await this.reviewGitHead(root.directory);
+        if(!current||current.digest!==reviewed.digest||head!==reviewed.baseHead)throw new PiHostError("REVIEW_SOURCE_CHANGED","审查后文件差异或 Git 基线已变化，请对当前版本重新独立检查");
+      }
+    }
+    const result=await store.reviewVerification({requestId,taskId,coordinatorAgentRunId:actor.id,verificationId:input.verificationId,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{}),...(input.acknowledgedInputId?{acknowledgedInputId:input.acknowledgedInputId}:{})});
     const stopFailures = await this.stopAffectedRouteMembers(identity, requestId, result.affectedAgentRunIds ?? [], input.reason);
-    if(input.outcome!=="accepted")await this.enqueueCollaboration({requestId:`follow-${requestId}`,taskId,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:input.outcome==="rework"?result.verification.subjectAgentRunId:result.verification.verifierAgentRunId,author:"coordinator",originRawInputId:run?.rawInputId,text:`${input.outcome==="rework"?"请修复对应成果":"请重新独立核验"}：${input.reason}\n${input.strategyChange?`方法调整：${input.strategyChange}`:""}\n验收记录：${result.verification.id}。完成后提交具体结果与新证据，保留无关已通过工作。`});
-    this.options.emit("foundation.changed",{kind:"verification.reviewed",taskId,storeRevision:result.storeRevision});return { ...result, stopFailures };
+    const followupAgentRunId=input.outcome==="rework"?result.verification.subjectAgentRunId:result.verification.verifierAgentRunId;
+    if(input.outcome!=="accepted"&&followupAgentRunId)await this.enqueueCollaboration({requestId:`follow-${requestId}`,taskId,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:followupAgentRunId,author:"coordinator",originRawInputId:run?.rawInputId,text:`${input.outcome==="rework"?"请修复对应成果":"请重新独立核验"}：${input.reason}\n${input.strategyChange?`方法调整：${input.strategyChange}`:""}\n验收记录：${result.verification.id}。完成后提交具体结果与新证据，保留无关已通过工作。`});
+    this.options.emit("foundation.changed",{kind:"verification.reviewed",taskId,storeRevision:result.storeRevision});return { ...result, stopFailures, ...(input.outcome==="rework"&&!followupAgentRunId?{needsAssignment:true,workItemId:result.verification.workItemId}:{}) };
+  }
+
+  private async reviewGitHead(rootDirectory: string): Promise<string> {
+    try { return (await this.workspaceAccess.files.git(rootDirectory, ["rev-parse", "HEAD"])).trim(); }
+    catch (error) {
+      const status = await this.workspaceAccess.gitStatus(rootDirectory).catch(() => undefined);
+      if (status?.repository) return "unborn";
+      throw error;
+    }
   }
 
   private async coordinateTeam(identity:RuntimePromptIdentity, callId:string, action:TeamAction):Promise<unknown> {
@@ -2699,7 +3040,7 @@ export class PiHost {
       return this.enqueueCollaboration({requestId:`team-send:${callId}`,taskId:task.id,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:target.id,author:"coordinator",originRawInputId,text:action.message});
     }
     if(!action.members?.length) throw new PiHostError("INVALID_ARGUMENT","需要有边界的成员工作说明");
-    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{})}})));
+    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{})}})));
     if(original){
       try { for (const run of original.childAgentRuns) store.assertAgentRouteCurrent(run.id, true); }
       catch (error) { return { created: true, scheduled: false, replayed: true, teamRunId: original.teamRun.id, members: original.childAgentRuns, reason: errorRecord(error).message }; }
@@ -2732,7 +3073,7 @@ export class PiHost {
     }
     const workspacePolicy=action.members.some(member=>snapshot.agentProfiles.find(profile=>profile.id===member.profileId)?.role==="worker")?await this.adaptiveWorkspacePolicy(task,snapshot):"managed_worktree";
     const workspaceRootDigest=createHash("sha256").update(await realpath(task.cwd)).digest("hex");
-    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
+    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{}),sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
     const members=[];
     for(const [index,run] of created.childAgentRuns.entries()) {
       const queued=await this.ensureAdaptiveInitialInput(store,run.id);
@@ -2942,6 +3283,7 @@ export class PiHost {
     if(active.currentRun===run)active.currentRun=undefined;
     const identity=active.runtimeIdentity;if(!identity)return;
     try {
+      this.recallCandidates.delete(identity.runtimeId);
       if(!active.closing&&!active.auxiliary?.hasLive&&this.directWorkerRuntimes.has(identity.runtimeId))await this.closeRuntime(identity.runtimeId);
     }finally{
       this.collaborationDrains.delete(identity.dcodeSessionId);
@@ -4127,6 +4469,7 @@ export class PiHost {
           ...(runtimeIdentity && promptContext?.environment.role === "coordinator"
             ? [{name:"dcode-collaboration",hidden:true,factory:createCollaborationExtension((callId,action)=>this.coordinateTeam(runtimeIdentity,callId,action))}] : []),
           ...(runtimeIdentity ? [{ name: "dcode-route", hidden: true, factory: createTaskRouteExtension((callId, action) => this.handleTaskRoute(runtimeIdentity, callId, action)) }] : []),
+          ...(runtimeIdentity ? [{ name: "dcode-recall", hidden: true, factory: createTaskRecallExtension((callId, action) => this.handleTaskRecall(runtimeIdentity, callId, action)) }] : []),
           ...(agentRequestController
             ? [{
               name: "dcode-agent-request",
@@ -4156,6 +4499,7 @@ export class PiHost {
               "ls",
               "dcode_facts",
               DCODE_ROUTE_TOOL_NAME,
+              DCODE_RECALL_TOOL_NAME,
               DCODE_AGENT_REQUEST_TOOL_NAME,
               ...(["coordinator","verifier"].includes(promptContext.environment.role)?[DCODE_VERIFICATION_TOOL_NAME]:[]),
               ...(promptContext.environment.role === "coordinator" ? [DCODE_TASK_ACCEPTANCE_TOOL_NAME, DCODE_TEAM_TOOL_NAME] : []),
@@ -4816,6 +5160,48 @@ export class PiHost {
     const expansion=runtimeIdentity?await expandDCodeInput(rawMessage,active.session):{text:rawMessage,sources:[]};
     if(runtimeIdentity)effectiveMessage=attachmentStore?attachmentPrompt(expansion.text,managed.map(item=>item.attachment),attachmentStore.layout):expansion.text;
     const memberUpdates=runtimeIdentity?await this.coordinatorUpdates(active,effectiveMessage):{text:effectiveMessage,known:new Map<string,string>()};effectiveMessage=memberUpdates.text;
+    let taskSummaryReceipt: TaskSummaryReceipt | undefined;
+    if (runtimeIdentity) {
+      if (active.summaryMarkerPromise) await active.summaryMarkerPromise;
+      const store = await this.getProductStore();
+      const snapshot = await store.snapshot();
+      const sessionRuns = snapshot.sessionRuns.filter(run => run.sessionId === runtimeIdentity.dcodeSessionId);
+      const provenance = snapshot.sessionProvenance.find(item => item.sessionId === runtimeIdentity.dcodeSessionId);
+      const continued = provenance?.details && typeof provenance.details === "object"
+        && "continuedFromSessionId" in provenance.details;
+      const actor = snapshot.agentRuns.find(run => run.id === runtimeIdentity.agentRunId);
+      const trigger = active.resumeSummaryTrigger
+        ?? store.pendingTaskSummaryTrigger(runtimeIdentity.taskId, runtimeIdentity.dcodeSessionId)
+        ?? (continued && sessionRuns.length === 0 ? "new_session" : undefined)
+        ?? (actor && actor.role !== "coordinator" && sessionRuns.length > 0 && !active.memberResumeHandled ? "member_restart" : undefined);
+      if (trigger) {
+        try {
+          let summary = store.taskSummaryHistory(runtimeIdentity.taskId).at(-1);
+          if (!summary?.current || trigger !== "new_session") {
+            const prepared = await store.prepareTaskSummary({
+              requestId: `summary-run-${createHash("sha256").update(`${runtimeIdentity.dcodeSessionId}\0${promptId}`).digest("hex").slice(0, 44)}`,
+              taskId: runtimeIdentity.taskId,
+              trigger,
+            });
+            summary = prepared.summary;
+            this.options.emit("foundation.changed", { kind: "taskSummary.revised", storeRevision: prepared.storeRevision, taskId: runtimeIdentity.taskId });
+          }
+          const prefix = continuationSummaryInput(summary);
+          if (prefix.length + effectiveMessage.length + 2 <= 200_000) {
+            effectiveMessage = `${prefix}\n\n${effectiveMessage}`;
+            taskSummaryReceipt = { id: summary.id, taskId: summary.taskId, revision: summary.revision, digest: summary.digest, trigger: summary.trigger, createdAt: summary.createdAt };
+          } else {
+            await store.recordTaskSummaryFailure({ requestId: `summary-limit-${createHash("sha256").update(promptId).digest("hex").slice(0, 40)}`,
+              taskId: runtimeIdentity.taskId, sessionId: runtimeIdentity.dcodeSessionId, trigger, reasonCode: "INPUT_LIMIT" }).catch(() => undefined);
+            this.options.emit("session.cleanupError", { step: "task summary input limit", message: "本轮输入空间不足，未采用任务摘要" });
+          }
+        } catch (error) {
+          await store.recordTaskSummaryFailure({ requestId: `summary-error-${createHash("sha256").update(promptId).digest("hex").slice(0, 40)}`,
+            taskId: runtimeIdentity.taskId, sessionId: runtimeIdentity.dcodeSessionId, trigger, reasonCode: "SUMMARY_PREPARE_FAILED" }).catch(() => undefined);
+          this.options.emit("session.cleanupError", { step: "task summary preparation", ...errorRecord(error) });
+        }
+      }
+    }
     const call: PromptCallContext = {
       active,
       promptId,
@@ -4863,6 +5249,7 @@ export class PiHost {
         message: rawMessage,
         effectiveMessage,
         inputSources:expansion.sources,
+        ...(taskSummaryReceipt ? { taskSummary: taskSummaryReceipt } : {}),
         managedAttachmentIds: attachmentIds,
         attachmentRefs,
         ...(active.session.model
@@ -4881,6 +5268,8 @@ export class PiHost {
         promptSources: assembledPrompt.sources,
         ...(assembledPrompt.importedHistory ? { importedHistoryReceipt: assembledPrompt.importedHistory } : {}),
       }); }catch(error){await this.rollbackPromptPath(call);throw error;}
+      if (taskSummaryReceipt) active.resumeSummaryTrigger = undefined;
+      active.memberResumeHandled = true;
       this.options.emit("foundation.changed", {
         storeRevision: preparedRun.storeRevision,
         kind: "sessionRun.prepared",
@@ -6051,6 +6440,14 @@ export class PiHost {
 
   private onSessionEvent(active: WritableSession, event: AgentSessionEvent): void {
     if (!this.isActiveSession(active) || active.closing) return;
+    if (event.type === "compaction_end" && !event.aborted && event.result !== undefined && active.runtimeIdentity) {
+      active.resumeSummaryTrigger = "compaction";
+      const identity = active.runtimeIdentity;
+      active.summaryMarkerPromise = this.getProductStore().then(async store => {
+        const marked = await store.markTaskSummaryResume({ requestId: `summary-compaction-${randomUUID()}`, taskId: identity.taskId, sessionId: identity.dcodeSessionId, trigger: "compaction" });
+        this.options.emit("foundation.changed", { kind: "taskSummary.resumeRequired", storeRevision: marked.storeRevision, taskId: identity.taskId });
+      }).catch(error => { this.options.emit("session.cleanupError", { step: "task summary compaction marker", ...errorRecord(error) }); });
+    }
     if (event.type === "agent_start" && active.currentRun && active.currentRun.state.phase !== "stopRequested") {
       this.updateRunState(active, active.currentRun, "running");
     }

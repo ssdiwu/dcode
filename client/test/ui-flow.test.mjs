@@ -168,7 +168,6 @@ test(
     const hostOptions = {
       agentDir: agent,
       sessionsDirectory: join(agent, "sessions"),
-      dataRoot: join(root, ".dcode"),
       userHome: home,
       leaseQuietWindowMs: 1,
       emit: (event, data) => {

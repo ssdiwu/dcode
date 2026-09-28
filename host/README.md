@@ -17,7 +17,12 @@
 - `workspace.*` 仅访问已登记的项目、任务目录和产物；文件/资源读取与 Git 命令从拒绝符号链接的原生目录句柄开始。Markdown/HTML 保存校验原内容摘要，并与 Runtime 写入互斥；敏感路径不进入文件或 Git 展示，单文件产物不扩大父目录范围。
 
 - 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
+- 显式 `--data-root`（客户端测试用 `DCODE_DATA_ROOT`）视为隔离数据根，首次启动不隐式读取当前用户的旧项目与 Pi 数据进行迁移；默认 `~/.dcode/` 的首次迁移仍按原合同执行。需要验证旧数据迁移时，由迁移测试向 Product Store 显式提供受控来源。
 - 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；沿用 Schema 2。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
+- `task.source.read` 仅凭已保存的 Task Context Source 或 Prompt Receipt 来源身份回查文本；灵感快照按受管根与版本 digest 识别，普通运行来源按原 cwd 安全重读。正文与当时摘要一致才返回；旧文件变化或不可读时给出真实状态，不从当前文件伪造历史内容。
+- `task.session.continue` 在旧运行及协作消息收口后，于同一 Task 新建当前协调会话，原会话转为只读历史；显式选择且仍可用的模型沿用到新会话。`task.summary.*` 以追加修订保存有来源的工作摘要与失败状态，运行回执冻结实际采用版本，Raw Input 不被覆盖；压缩及成员执行进程重建只在下一轮续接采用。
+- `dcode_recall` 先按本 Task 历史、所属 Project 文件和全局灵感找有界候选，再读取并记录实际使用来源；User Scope 不递归扫描 Home，其他 Task / Project 历史不进入默认结果。旧灵感保留不可变版本；普通文件变更或来源丢失则回查为不可用。`task.source.used.*` 提供历史来源的逐 Run 分页与受控读取。
+- `task.review.request` 从当前 Task 的真实 Git 差异核对摘要，固定 HEAD、目录身份、路径、暂存状态和正文为审查证据，关联一个工作项。`dcode_verification` 可独立读取固定范围并提交本人本轮新检查证据；协调复核仅推进关联工作项，返工后协调者可固定新差异继续复查。
 - 原生拥有 User Scope / Project、Task、Coordination / Child Session、Session Path、Raw / Effective Input、Runtime Environment、Prompt Receipt、Team / Agent / Session Run、Operation Attempt、Agent Request、Report、Artifact 与 Evidence 投影；
 - 外部 Pi Session 先预览、再经显式 `piImport.importAsTask` 单向导入；D Code 已管理的旧会话在首次晋升时自动接管，其他 Pi 会话不自动进入产品数据库；
 - Runtime Supervisor 在本机按 Task / Session / Agent Run / Runtime 身份维护独立智能体进程；Host 仍负责工具副作用、Provider IO 和产品事实，进程就绪后还须完成本轮接收确认才开始模型循环；同一 Session 单写、workspace 写入冲突、12 个活动 Runtime 上限和 shared-read-only 工具证明均在启动前阻断；
@@ -69,6 +74,8 @@ npm test
 npm run build
 npm start -- --agent-dir ~/.pi/agent
 ```
+
+`npm test` 在构建后逐文件执行测试：多 Host / Runtime 生命周期用例各自持有本机进程和短时等待窗口，并发跑整套会互相抢占资源；测试内容与断言不因此放宽。
 
 ## 目录
 

@@ -16,8 +16,9 @@ import { executionTurns, mergeLiveRows } from "../../workbench/execution-process
 import { projectMessageAttachments } from "../../workbench/message-attachments";
 import { fileType } from "../../workbench/attachments";
 import { ImagePreview } from "./ImagePreview";
+import { TaskSummary } from "./TaskSummary";
 
-export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Workbench; emptyBrand: ReactNode; onSaveInspiration?:(text:string)=>void }) {
+export function Transcript({ work, emptyBrand, onSaveInspiration, onOpenSummarySource }: { work: Workbench; emptyBrand: ReactNode; onSaveInspiration?:(text:string)=>void; onOpenSummarySource?:()=>void }) {
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -127,6 +128,8 @@ export function Transcript({ work, emptyBrand, onSaveInspiration }: { work: Work
         }}
       >
         <div className="reading-lane" ref={content}>
+          {work.session?.kind === "coordination" && <TaskSummary work={work} onSourceOpen={onOpenSummarySource}/>}
+          {work.session?.kind === "standard" && <div className="task-summary-stale" role="status">这是同一任务的历史对话。内容保留供回查，请回到当前主对话继续。</div>}
           {work.presentationError ||
           work.presentation?.adapterState === "unavailable" ? (
             <div role="alert" className="inline-error">

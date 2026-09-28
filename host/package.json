@@ -1,6 +1,6 @@
 {
   "name": "@pi-dcode/host",
-  "version": "0.0.33",
+  "version": "0.0.34",
   "private": true,
   "type": "module",
   "bin": {
@@ -13,7 +13,7 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p tsconfig.json && node scripts/build-native.mjs",
     "start": "node --disable-warning=ExperimentalWarning dist/src/index.js",
-    "test": "npm run build && node --disable-warning=ExperimentalWarning --test dist/test/*.test.js"
+    "test": "npm run build && node --disable-warning=ExperimentalWarning --test --test-concurrency=1 dist/test/*.test.js"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.87.1",

@@ -3,6 +3,8 @@ import { LoadingPlaceholder } from "./components/LoadingPlaceholder";
 import {NewTaskScene} from "./components/NewTaskScene";
 import {AuxiliaryActivities} from "./components/AuxiliaryActivities";
 import {TaskContext} from "./components/TaskContext";
+import {SourceDetail} from "./components/SourceDetail";
+import {UsedSourceDetail} from "./components/UsedSourceDetail";
 import { TaskRouteSummary } from "./components/TaskRouteSummary";
 import {ExtensionRequests} from "./components/ExtensionRequests";
 import {WorkspaceFiles,WorkspaceFileNavigation,FileCloseDialog} from "./components/WorkspaceFiles";
@@ -17,6 +19,7 @@ import {
   type SettingsPageId,
 } from "./components/SettingsWorkspace";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type {TaskSourceSelector} from "../../../../host/src/product-store.js";
 import { AnimatePresence, motion } from "motion/react";
 import { create } from "zustand";
 import useSWR from "swr";
@@ -41,7 +44,7 @@ import {
   Minimize2,
 } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { Markdown } from "./components/Markdown";
+import { Markdown, TaskSourceReferenceContext } from "./components/Markdown";
 import { Composer } from "./components/Composer";
 import { ImportPanel } from "./components/ImportPanel";
 import {
@@ -152,11 +155,16 @@ export function App() {
   const [target, setTarget] = useState<
     TaskWorkbenchInspectorTarget | null | undefined
   >();
+  const [sourceTarget,setSourceTarget]=useState<TaskSourceSelector|null>(null);
+  const [usedSourceId,setUsedSourceId]=useState<string|null>(null);
+  const usedSourceTaskId=useRef<string|null>(null);
   const remoteTarget = work.snapshot?.taskWorkbenchViewState.inspectorTarget;
   const inspector = target === undefined ? remoteTarget : target;
-  useEffect(()=>{if(files.visible)setTarget(null);},[files.visible]);
+  useEffect(()=>{if(files.visible){setTarget(null);setSourceTarget(null);}},[files.visible]);
+  useEffect(()=>{if(display.page!=="task"){setSourceTarget(null);setUsedSourceId(null);}},[display.page]);
+  useEffect(()=>{if(usedSourceTaskId.current!==work.task?.id)setUsedSourceId(null);if(sourceTarget&&sourceTarget.taskId!==work.task?.id)setSourceTarget(null);},[work.task?.id]);
   const select = (task: TaskRecord, sessionId?: string) => {
-    setTarget(null);
+    setTarget(null);setSourceTarget(null);setUsedSourceId(null);
     work.select(task, sessionId);
     display.set({
       page: "task",
@@ -165,7 +173,7 @@ export function App() {
   };
   const projectDraft = (projectId:string|null) => {
     focusDraftAfterMenu.current=true;setProjectMenuId(null);
-    setTarget(null);
+    setTarget(null);setSourceTarget(null);setUsedSourceId(null);
     files.hideForDraft();
     work.setNewProjectId(projectId);
     work.newTask();
@@ -182,8 +190,13 @@ export function App() {
   };
   const openDetail = (value: TaskWorkbenchInspectorTarget | null) => {
     files.conversation();
+    setSourceTarget(null);
     setTarget(value);
     void work.patchView({ inspectorTarget: value }).catch(work.fail);
+  };
+  const openSource=(selector:TaskSourceSelector)=>{
+    files.conversation();
+    setSourceTarget(selector);
   };
   useEffect(
     () =>
@@ -198,7 +211,7 @@ export function App() {
           focusDraftAfterMenu.current=true;setProjectMenuId(null);
           files.hideForDraft();
           display.set({ page: "task", overview: false });
-          setTarget(null);
+          setTarget(null);setSourceTarget(null);setUsedSourceId(null);
           requestAnimationFrame(() =>
             document
               .querySelector<HTMLTextAreaElement>("[data-composer]")
@@ -216,7 +229,7 @@ export function App() {
     });
   }, [work.preferences?.sidebarVisible, work.preferences?.overviewVisible]);
   const inspiration=useInspiration(work,display.page==="inspiration");
-  const ideaSources=work.snapshot?.taskContextSets.find(set=>set.taskId===work.task?.id)?.sources.filter(source=>source.kind==="global_knowledge"&&source.rootPath?.endsWith("/knowledge/inspiration"))??[];
+  const ideaSources=work.snapshot?.taskContextSets.find(set=>set.taskId===work.task?.id)?.sources.filter(source=>!!source.inspirationVersion)??[];
   const showingSettings = display.page === "settings";
   if (showingSettings)
     return (<><FileCloseDialog model={files}/>
@@ -258,7 +271,7 @@ export function App() {
   const tasks = [...(work.snapshot?.tasks ?? [])]
     .filter((t) => t.state !== "archived")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  return (<FileReferenceContext.Provider value={display.page==="task"?reference=>void files.openReference(reference):undefined}>
+  return (<TaskSourceReferenceContext.Provider value={display.page==="task"&&work.task?sourceUseId=>{usedSourceTaskId.current=work.task!.id;setUsedSourceId(sourceUseId);}:null}><FileReferenceContext.Provider value={display.page==="task"?reference=>void files.openReference(reference):undefined}>
     <div
       className={`workbench ${display.nav ? "" : "nav-hidden"}`}
       style={
@@ -435,6 +448,14 @@ export function App() {
               </Menu.Trigger>
               <Menu.Portal>
                 <Menu.Content className="menu" align="end">
+                  {work.session?.kind === "coordination" && (work.draft.targetAgentRunId||work.draft.pathAction||work.draft.pathDraftBackup||work.draft.images.length ? <Menu.Item className="menu-item" disabled>先处理定向、历史续写或未保存图片草稿，再开始新对话</Menu.Item> : <Menu.Item className="menu-item" disabled={work.running} onSelect={() => {
+                    void (async()=>{
+                      await work.flushDrafts();
+                      const bundle=await work.mutateStore<import("./types").TaskBundle>("task.session.continue", { taskId: work.task!.id });
+                      await work.reload();
+                      select(bundle.task,bundle.coordinationSession.id);
+                    })().catch(work.fail);
+                  }}>开始新一段对话</Menu.Item>)}
                   {(
                     [
                       ["rename", "重命名任务"],
@@ -488,9 +509,9 @@ export function App() {
               <button
                 className="icon-button"
                 aria-label="任务概览"
-                aria-pressed={display.overview&&!inspector&&!files.visible}
+                aria-pressed={display.overview&&!inspector&&!sourceTarget&&!files.visible}
                 onClick={() => {
-                  if (inspector||files.visible){openDetail(null);display.set({overview:true});}
+                  if (inspector||sourceTarget||files.visible){setSourceTarget(null);openDetail(null);display.set({overview:true});}
                   else display.set({ overview: !display.overview });
                 }}
               >
@@ -499,7 +520,7 @@ export function App() {
             )
           )}
         </header>
-        {display.page==="task"&&ideaSources.length>0&&<div className="idea-task-context" aria-label="任务引用的灵感"><Sparkles size={14}/><span>下次运行的灵感</span>{ideaSources.map(source=><span className="idea-context-tag" key={source.id}>{source.title} · 第 {source.relativePath.match(/\/r(\d+)-/)?.[1]??"已选"} 版</span>)}</div>}
+        {display.page==="task"&&ideaSources.length>0&&<div className="idea-task-context" aria-label="任务引用的灵感"><Sparkles size={14}/><span>下次运行的灵感</span>{ideaSources.map(source=><button type="button" className="idea-context-tag" key={source.id} onClick={()=>openSource({taskId:work.task!.id,contextSourceId:source.id})}>查看 {source.title} · 第 {source.inspirationVersion!.revision} 版</button>)}</div>}
         {work.loadError ? (
           <div className="workspace-error" role="alert">
             <AlertCircle />
@@ -515,21 +536,21 @@ export function App() {
         ) : !work.snapshot ? (
           <LoadingPlaceholder label="正在读取工作台…"/>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
-          <div className={`work-area ${inspector||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""} ${files.expanded ? "file-expanded" : ""}`}>
+          <div className={`work-area ${inspector||sourceTarget||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""} ${files.expanded ? "file-expanded" : ""}`}>
             {showNewTask && !files.expanded && <NewTaskScene />}
             <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} inert={files.expanded||undefined} aria-hidden={files.expanded||undefined} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
-              {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onOpenSummarySource={()=>display.set({overview:false})} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
-                <Composer
+                {work.session?.kind === "standard" ? <button className="text-button" onClick={() => select(work.task!)}>返回当前主对话</button> : <Composer
                   work={work}
                   models={models}
                   pathForFile={(file)=>api().getPathForFile(file)}
                   onSettings={() => display.set({ page: "settings" })}
                   onCommandMenuChange={setCommandMenuOpen}
-                />
+                />}
               </div>
             </section>
             <AnimatePresence>
@@ -543,6 +564,7 @@ export function App() {
                   transition={{ duration: reduced ? 0 : uiMotion.standard, ease: uiMotion.glide }}
                 >
                   <Overview
+                    key={work.task.id}
                     work={work}
                     onClose={() => display.set({ overview: false })}
                     onSelect={select}
@@ -555,7 +577,8 @@ export function App() {
               <div className="panel-heading"><strong>文件</strong><span className="spacer"/>{files.active&&<button id="file-size-toggle" className={files.expanded?"text-button":"icon-button"} aria-label={files.expanded?"返回对话":"展开文件内容"} aria-expanded={files.expanded} title={files.expanded?"返回对话":"展开文件内容"} onClick={()=>{if(files.expanded){files.collapse();requestAnimationFrame(()=>document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus({preventScroll:true}));}else{files.expand();requestAnimationFrame(()=>document.getElementById("file-size-toggle")?.focus({preventScroll:true}));}}}>{files.expanded?<><Minimize2 size={15}/>返回对话</>:<Maximize2 size={15}/>}</button>}<button className="icon-button" aria-label="收起文件详情" onClick={files.conversation}><X size={15}/></button></div>
               <WorkspaceFiles model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>
             </aside>}
-            {inspector && !files.visible && (
+            {sourceTarget&&work.task?.id===sourceTarget.taskId&&!files.visible&&<SourceDetail selector={sourceTarget} onClose={()=>setSourceTarget(null)}/>}
+            {inspector && !sourceTarget && !files.visible && (
               <Inspector
                 target={inspector}
                 snapshot={work.snapshot}
@@ -680,8 +703,9 @@ export function App() {
         </Overlay>
       )}
       {contextOpen&&work.task&&<Overlay label="上下文与运行依据" onClose={()=>setContextOpen(false)}><div className="panel-heading"><strong>上下文与运行依据</strong><button className="icon-button" aria-label="关闭上下文" onClick={()=>setContextOpen(false)}><X size={15}/></button></div><TaskContext key={work.task.id} work={work}/></Overlay>}
+      {usedSourceId&&work.task&&usedSourceTaskId.current===work.task.id&&<Overlay label="已用来源" onClose={()=>setUsedSourceId(null)}><div className="panel-heading"><strong>已用来源</strong><button className="icon-button" aria-label="关闭来源" onClick={()=>setUsedSourceId(null)}><X size={15}/></button></div><UsedSourceDetail key={`${work.task.id}:${usedSourceId}`} taskId={work.task.id} sourceUseId={usedSourceId} onOpenSession={sessionId=>{setUsedSourceId(null);select(work.task!,sessionId);}}/></Overlay>}
       <FileCloseDialog model={files}/>
-    </div></FileReferenceContext.Provider>
+    </div></FileReferenceContext.Provider></TaskSourceReferenceContext.Provider>
   );
 }
 function Logo() {
@@ -715,6 +739,7 @@ function TaskRow({
     work.snapshot?.sessions.filter(
       (s) => s.taskId === task.id && s.kind === "child",
     ) ?? [];
+  const history = work.snapshot?.sessions.filter(s => s.taskId === task.id && s.kind === "standard") ?? [];
   const failed = work.snapshot?.sessionRuns
     .filter((run) => run.taskId === task.id)
     .at(-1)?.status;
@@ -751,6 +776,7 @@ function TaskRow({
           ))}
         </details>
       )}
+      {history.length > 0 && <details className="child-sessions"><summary><ChevronRight size={12}/><span>历史对话</span><small>{history.length}</small></summary>{history.map(session => <button className="nav-row" key={session.id} aria-current={active && work.session?.id === session.id ? "page" : undefined} onClick={() => select(task, session.id)}><MessageSquare size={12}/><span>{session.title}</span></button>)}</details>}
     </div>
   );
 }
@@ -817,6 +843,9 @@ function Overview({
 }) {
   const snapshot = work.snapshot!;
   const task = work.task!;
+  const [reviewDetail,setReviewDetail]=useState<{id:string;path:string;digest:string;baseHead:string;round:number;diff:string}|null>(null);
+  const [reviewError,setReviewError]=useState("");
+  const reviewRequest=useRef(0);
   const expanded = snapshot.taskWorkbenchViewState.expandedHudSections;
   const section = (id: string, title: string, content: ReactNode) => (
     <div className="overview-section">
@@ -840,6 +869,9 @@ function Overview({
     </div>
   );
   const items = snapshot.taskWorkItems.filter((i) => i.taskId === task.id);
+  const reviews = snapshot.taskReviewRequests.filter(review => review.taskId === task.id);
+  const reviewRound=(review:(typeof reviews)[number])=>reviews.filter(item=>item.path===review.path&&item.staged===review.staged).findIndex(item=>item.id===review.id)+1;
+  const openReview=(review:(typeof reviews)[number])=>{const request=++reviewRequest.current;setReviewDetail(null);setReviewError("");void api().request<{diff:string}>("task.review.read",{taskId:task.id,reviewId:review.id}).then(result=>{if(request===reviewRequest.current)setReviewDetail({id:review.id,path:review.path,digest:review.digest,baseHead:review.baseHead,round:reviewRound(review),diff:result.diff});}).catch(reason=>{if(request===reviewRequest.current)setReviewError(errorText(reason));});};
   const members = snapshot.agentRuns.filter((r) => r.taskId === task.id);
   const requests = snapshot.agentRequests.filter(
     (r) => r.taskId === task.id && r.status === "open",
@@ -889,6 +921,7 @@ function Overview({
           ) : (
             <p className="secondary">尚未制定工作清单</p>
           )}
+          {reviews.length>0&&<div className="task-reviews"><strong>审查</strong><ul>{reviews.map(review=>{const verification=snapshot.verifications?.filter(record=>record.subjectReviewId===review.id).at(-1);const checked=verification&&snapshot.coordinatorReviews?.find(item=>item.verificationId===verification.id);return <li key={review.id}><button className="text-button" onClick={()=>openReview(review)}>{review.path} · 第 {reviewRound(review)} 次 · {review.digest.slice(7,15)}</button><small>{checked?checked.outcome==="accepted"?"协调复核通过":checked.outcome==="rework"?"需要返工":"需要复查":verification?verification.verdict==="pass"?"独立检查通过，待复核":"发现问题，待复核":"待独立检查"}</small></li>;})}</ul>{reviewError&&<p role="alert" className="inline-error">{reviewError}</p>}{reviewDetail&&<div className="task-review-snapshot"><div><strong>{reviewDetail.path} · 第 {reviewDetail.round} 次审查的差异</strong><button className="text-button" onClick={()=>{reviewRequest.current++;setReviewDetail(null);}}>关闭</button></div><pre>{reviewDetail.diff}</pre><details><summary>审查身份</summary><p className="secondary">{reviewDetail.id} · {reviewDetail.digest} · HEAD {reviewDetail.baseHead}</p></details></div>}</div>}
         </>,
       )}
       {section(

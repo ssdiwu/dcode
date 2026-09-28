@@ -120,7 +120,12 @@ test("team precheck and paused member retry each use the latest threshold withou
   }) as typeof fetch;
   const host=new PiHost({agentDir:agent,dataRoot:join(root,".dcode"),userHome:home,emit:()=>{},agentIdleTimeoutMs:1000,leaseQuietWindowMs:1});
   const snapshot=()=>host.handle("foundation.snapshot",{}) as Promise<FoundationSnapshot>;
-  let serial=0;const set=async(value:number)=>host.handle("clientPreferences.set",{requestId:`team-threshold-${++serial}`,expectedStoreRevision:(await snapshot()).storeRevision,modelQuotaThresholdPercent:value});
+  let serial=0;const set=async(value:number)=>{
+    for(let attempt=0;attempt<5;attempt++){
+      try{return await host.handle("clientPreferences.set",{requestId:`team-threshold-${++serial}`,expectedStoreRevision:(await snapshot()).storeRevision,modelQuotaThresholdPercent:value});}
+      catch(error){if((error as {code?:string}).code!=="REVISION_CONFLICT"||attempt===4)throw error;}
+    }
+  };
   const until=async(check:()=>Promise<boolean>,label:string)=>{for(let i=0;i<600;i++){if(await check())return;await new Promise(r=>setTimeout(r,20));}throw Error(label);};
   try{
     await host.start();let snap=await snapshot();const profile=snap.agentProfiles.find(p=>p.id==="builtin-explore")!;

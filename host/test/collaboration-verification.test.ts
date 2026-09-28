@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {mkdtemp,mkdir,rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
+import {createHash} from "node:crypto";
 import {ProductStore,type AgentRunRecord} from "../src/product-store.js";
+import {verificationContext} from "../src/verification-context.js";
 
 test("independent verification preserves work ownership, rejects stale/self evidence, and records bounded rework separately from acceptance",async()=>{
   const root=await mkdtemp(join(tmpdir(),"dcode-verification-")),home=join(root,"home");await mkdir(home);
@@ -48,4 +50,71 @@ test("independent verification preserves work ownership, rejects stale/self evid
     await store.reviewVerification({requestId:"accepted",taskId:task.task.id,coordinatorAgentRunId:owner.agentRun.id,verificationId:passed.verification.id,outcome:"accepted",reason:"核对覆盖范围与保存证据后通过"});
     snapshot=await store.snapshot();assert.equal(snapshot.tasks[0]!.state,"active");assert.equal(snapshot.coordinatorReviews?.length,3);assert.equal(snapshot.verifications?.length,3);assert.equal(snapshot.taskWorkItems.find(item=>item.ownerAssignmentId===assignments.get(a.id))?.state,"completed");
   } finally {await store.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("a fixed Task diff can be independently reviewed without inventing an executor report",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"dcode-review-scope-")),home=join(root,"home");await mkdir(home);
+  const store=await ProductStore.open({dataRoot:join(root,".dcode"),userHome:home});
+  try {
+    const initial=await store.snapshot(),scope={kind:"user" as const,userId:initial.currentUser.id};
+    const task=await store.createTask({requestId:"review-task",expectedStoreRevision:initial.storeRevision,scope,title:"审查差异",goal:"修复一项问题"});
+    const coordinator=await store.ensureCoordinatorAgentRun({requestId:"review-coordinator",taskId:task.task.id,scope});
+    const team=await store.createTeamRun({requestId:"review-team",taskId:task.task.id,scope,coordinatorAgentRunId:coordinator.agentRun.id,members:[{profileId:"builtin-verifier",title:"独立审查",taskPacket:{}}]});
+    const verifier=team.childAgentRuns[0]!;
+    const prepared=await store.prepareSessionRun({requestId:"review-verifier-run",taskId:task.task.id,scope,sessionId:verifier.sessionId,runtimeId:"review-runtime",agentRunId:verifier.id,workspaceId:"review-workspace",cwd:home,workspaceAccess:"sharedReadOnly",message:"审查固定差异",attachmentRefs:[],roleRevision:"verifier:v1",contextRevision:1,profileSnapshot:{role:"verifier"},tools:[{name:"read",description:"Read",parameters:{type:"object"}}],toolsWritable:false,systemPromptDigest:`sha256:${"f".repeat(64)}`,promptSources:[]});
+    await store.startSessionRun(prepared.sessionRunId);
+    const diff="--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-old\n+new\n";
+    const before=await store.snapshot();
+    const requested=await store.requestTaskReview({requestId:"review-request",expectedStoreRevision:before.storeRevision,taskId:task.task.id,path:"example.ts",staged:false,diff,digest:`sha256:${createHash("sha256").update(diff).digest("hex")}`,baseHead:"a".repeat(40),rootDigest:`sha256:${"b".repeat(64)}`});
+    const originalInput=store.latestRouteInput(task.task.id)?.id;
+    const reviewNotice=await store.queueCollaborationMessage({requestId:"review-ui-action",taskId:task.task.id,sourceSessionId:task.coordinationSession.id,targetAgentRunId:coordinator.agentRun.id,author:"user",submittedText:"发起审查：example.ts",uiAction:{kind:"task.review.request",reviewId:requested.review.id},text:"请审查 example.ts 的改动"});
+    assert.equal(store.latestRouteInput(task.task.id)?.id,originalInput,"结构化审查动作不能让既有路线变成待核对输入");
+    assert.equal((store.sessionRunInputs(task.task.id,prepared.sessionRunId)).rawText,"审查固定差异");
+    assert.equal(store.readTaskReview(task.task.id,requested.review.id).diff,diff);
+    const reviewSnapshot=await store.snapshot();
+    assert.equal(reviewSnapshot.taskReviewRequests[0]?.workItemId,requested.review.workItemId);
+    assert.ok(!JSON.stringify(reviewSnapshot.evidence.find(item=>item.id===requested.review.evidenceId)?.payload).includes(diff));
+    assert.ok(!JSON.stringify(verificationContext(reviewSnapshot,task.task.id)).includes(diff));
+    const inspected=await store.inspectTaskReview({requestId:"inspect-review",taskId:task.task.id,reviewId:requested.review.id,verifierAgentRunId:verifier.id,sessionRunId:prepared.sessionRunId});
+    const failed=await store.submitVerification({requestId:"review-failed",taskId:task.task.id,verifierAgentRunId:verifier.id,subjectReviewId:requested.review.id,verdict:"fail",evidenceIds:[inspected.evidenceId],findings:[{kind:"product",description:"发现具体问题"}],summary:"固定差异仍有问题"});
+    await store.reviewVerification({requestId:"review-recheck",taskId:task.task.id,coordinatorAgentRunId:coordinator.agentRun.id,verificationId:failed.verification.id,outcome:"recheck",reason:"补足检查依据"});
+    await assert.rejects(store.submitVerification({requestId:"reuse-old-review-evidence",taskId:task.task.id,verifierAgentRunId:verifier.id,subjectReviewId:requested.review.id,verdict:"fail",evidenceIds:[inspected.evidenceId],findings:[{kind:"product",description:"重新判断"}],summary:"旧证据"}),/最近复查要求/);
+    const checkedAgain=await store.inspectTaskReview({requestId:"inspect-review-again",taskId:task.task.id,reviewId:requested.review.id,verifierAgentRunId:verifier.id,sessionRunId:prepared.sessionRunId});
+    const failedAgain=await store.submitVerification({requestId:"review-failed-again",taskId:task.task.id,verifierAgentRunId:verifier.id,subjectReviewId:requested.review.id,verdict:"fail",evidenceIds:[checkedAgain.evidenceId],findings:[{kind:"product",description:"发现具体问题"}],summary:"重新检查仍有问题"});
+    await store.reviewVerification({requestId:"review-rework",taskId:task.task.id,coordinatorAgentRunId:coordinator.agentRun.id,verificationId:failedAgain.verification.id,outcome:"rework",reason:"只修改这项工作",strategyChange:"直接核对修订后的差异"});
+    assert.equal((await store.snapshot()).taskWorkItems.find(item=>item.id===requested.review.workItemId)?.state,"pending");
+    await assert.rejects(store.requestTaskReview({requestId:"unchanged-recheck",expectedStoreRevision:(await store.snapshot()).storeRevision,taskId:task.task.id,path:"example.ts",staged:false,diff,digest:requested.review.digest,baseHead:"a".repeat(40),rootDigest:`sha256:${"b".repeat(64)}`,workItemId:requested.review.workItemId}),/未变化/);
+    await assert.rejects(store.submitVerification({requestId:"old-review-recheck",taskId:task.task.id,verifierAgentRunId:verifier.id,subjectReviewId:requested.review.id,verdict:"fail",evidenceIds:[inspected.evidenceId],findings:[{kind:"product",description:"旧问题"}],summary:"旧差异"}),/新的差异/);
+    const repair=await store.createTeamRun({requestId:"repair-same-work",taskId:task.task.id,scope,coordinatorAgentRunId:coordinator.agentRun.id,members:[{profileId:"builtin-worker",title:"只修复审查问题",taskPacket:{reviewWorkItemId:requested.review.workItemId,instruction:"修复具体问题",acceptance:"复查固定差异"}}]});
+    const worker=repair.childAgentRuns[0]!;
+    assert.equal((await store.snapshot()).taskWorkItems.find(item=>item.id===requested.review.workItemId)?.ownerAssignmentId,repair.assignments.at(-1)?.id);
+    const repairRun=await store.prepareSessionRun({requestId:"repair-run",taskId:task.task.id,scope,sessionId:worker.sessionId,runtimeId:"repair-runtime",agentRunId:worker.id,workspaceId:"repair-workspace",cwd:home,workspaceAccess:"sharedReadOnly",message:"修复审查问题",attachmentRefs:[],roleRevision:"worker:v1",contextRevision:1,profileSnapshot:{role:"worker"},tools:[],toolsWritable:false,systemPromptDigest:`sha256:${"f".repeat(64)}`,promptSources:[]});
+    await store.startSessionRun(repairRun.sessionRunId);
+    await store.finishSessionRun({sessionRunId:repairRun.sessionRunId,providerAttemptId:repairRun.providerAttemptId,outcome:"succeeded",assistantText:"已修复原工作项"});
+    const revisedDiff="--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-old\n+fixed\n";
+    const nextReview=await store.requestTaskReview({requestId:"review-request-after-fix",expectedStoreRevision:(await store.snapshot()).storeRevision,taskId:task.task.id,path:"example.ts",staged:false,diff:revisedDiff,digest:`sha256:${createHash("sha256").update(revisedDiff).digest("hex")}`,baseHead:"a".repeat(40),rootDigest:`sha256:${"b".repeat(64)}`,workItemId:requested.review.workItemId});
+    await assert.rejects(store.replayTaskReviewRequest({requestId:"review-request-after-fix",taskId:task.task.id,path:"example.ts",staged:false,digest:nextReview.review.digest}),/对应不同范围/);
+    const revisedInspection=await store.inspectTaskReview({requestId:"inspect-revised-review",taskId:task.task.id,reviewId:nextReview.review.id,verifierAgentRunId:verifier.id,sessionRunId:prepared.sessionRunId});
+    const base={taskId:task.task.id,verifierAgentRunId:verifier.id,subjectReviewId:nextReview.review.id,summary:"核对新固定差异",findings:[],evidenceIds:[revisedInspection.evidenceId],verdict:"pass" as const};
+    await assert.rejects(store.submitVerification({...base,requestId:"view-only"}),/实际验证/);
+    const attempt=await store.prepareToolAttempt({taskId:task.task.id,sessionId:verifier.sessionId,sessionRunId:prepared.sessionRunId,toolCallId:"inspect-file",toolName:"read",parameterDigest:`sha256:${"1".repeat(64)}`});
+    await store.finishOperationAttempt({attemptId:attempt.attemptId,outcome:"succeeded",resultDigest:`sha256:${"2".repeat(64)}`});
+    const checked=await store.recordToolEvidence({requestId:"checked-review",attemptId:attempt.attemptId,toolName:"read",outcome:"succeeded",resultDigest:`sha256:${"2".repeat(64)}`});
+    const submitted=await store.submitVerification({...base,requestId:"review-pass",evidenceIds:[revisedInspection.evidenceId,checked.evidence.id]});
+    assert.equal(submitted.verification.subjectKind,"review_request");
+    assert.equal(submitted.verification.subjectReportId,undefined);
+    const late=await store.prepareSessionRun({requestId:"late-worker-run",taskId:task.task.id,scope,sessionId:worker.sessionId,runtimeId:"repair-runtime",agentRunId:worker.id,workspaceId:"repair-workspace",cwd:home,workspaceAccess:"sharedReadOnly",message:"补充修改",attachmentRefs:[],roleRevision:"worker:v1",contextRevision:1,profileSnapshot:{role:"worker"},tools:[],toolsWritable:false,systemPromptDigest:`sha256:${"f".repeat(64)}`,promptSources:[]});
+    await store.startSessionRun(late.sessionRunId);await store.finishSessionRun({sessionRunId:late.sessionRunId,providerAttemptId:late.providerAttemptId,outcome:"succeeded",assistantText:"审查后又提交修改"});
+    await assert.rejects(store.reviewVerification({requestId:"accept-stale-worker",taskId:task.task.id,coordinatorAgentRunId:coordinator.agentRun.id,verificationId:submitted.verification.id,outcome:"accepted",reason:"旧验收"}),/验收后执行者又提交/);
+    const inspectedLatest=await store.inspectTaskReview({requestId:"inspect-after-worker",taskId:task.task.id,reviewId:nextReview.review.id,verifierAgentRunId:verifier.id,sessionRunId:prepared.sessionRunId});
+    const freshAttempt=await store.prepareToolAttempt({taskId:task.task.id,sessionId:verifier.sessionId,sessionRunId:prepared.sessionRunId,toolCallId:"inspect-after-worker",toolName:"read",parameterDigest:`sha256:${"3".repeat(64)}`});
+    await store.finishOperationAttempt({attemptId:freshAttempt.attemptId,outcome:"succeeded",resultDigest:`sha256:${"4".repeat(64)}`});
+    const freshEvidence=await store.recordToolEvidence({requestId:"evidence-after-worker",attemptId:freshAttempt.attemptId,toolName:"read",outcome:"succeeded",resultDigest:`sha256:${"4".repeat(64)}`});
+    const submittedLatest=await store.submitVerification({...base,requestId:"review-pass-after-worker",evidenceIds:[inspectedLatest.evidenceId,freshEvidence.evidence.id]});
+    const newRequirement=await store.queueCollaborationMessage({requestId:"new-user-requirement",taskId:task.task.id,sourceSessionId:task.coordinationSession.id,targetAgentRunId:coordinator.agentRun.id,author:"user",text:"新增验收条件 X"});
+    await assert.rejects(store.reviewVerification({requestId:"review-without-input-check",taskId:task.task.id,coordinatorAgentRunId:coordinator.agentRun.id,verificationId:submittedLatest.verification.id,outcome:"accepted",reason:"直接接受"}),/新用户输入/);
+    const accepted=await store.reviewVerification({requestId:"review-accepted",taskId:task.task.id,coordinatorAgentRunId:coordinator.agentRun.id,verificationId:submittedLatest.verification.id,outcome:"accepted",reason:"已核对新输入 X 与这项文件修复无关",acknowledgedInputId:newRequirement.message.originRawInputId});
+    assert.equal(accepted.workItemCompleted,true);
+    assert.equal((await store.snapshot()).taskWorkItems.find(item=>item.id===requested.review.workItemId)?.state,"completed");
+  }finally{await store.close();await rm(root,{recursive:true,force:true});}
 });

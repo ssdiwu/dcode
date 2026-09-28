@@ -32,6 +32,18 @@ test("inspiration persists content, draft and layout independently and refuses s
   }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
 });
 
+test("recall export checks the expected Inspiration revision inside its serialized read",async()=>{
+  const f=await fixture(),store=f.store;
+  try{
+    const nodeId=id();await mutate(store,save(nodeId,"版本来源","第一版"));
+    const first=await store.inspirationMarkdown(nodeId,1);assert.match(await readFile(first.path,"utf8"),/第一版/);
+    await mutate(store,save(nodeId,"版本来源","第二版",1));
+    await assert.rejects(store.inspirationMarkdown(nodeId,1),{code:"IDEA_REVISION_CONFLICT"});
+    const second=await store.inspirationMarkdown(nodeId,2);assert.match(await readFile(second.path,"utf8"),/第二版/);
+    assert.match(await readFile(first.path,"utf8"),/第一版/);
+  }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
+});
+
 test("references enter actual task context, preserve other sources and retain previous Markdown versions through archive",async()=>{
   const f=await fixture(),store=f.store;
   try {
@@ -55,6 +67,19 @@ test("references enter actual task context, preserve other sources and retain pr
     await mutate(store,{kind:"archive",nodeId,archived:false});assert.equal(store.inspirationView().nodes[0]?.archived,false);
     await chmod(oldPath,0o600);await writeFile(oldPath,"被外部改写");
     await assert.rejects(assertIdeaSnapshotDigest(store.layout,oldPath,`sha256:${createHash("sha256").update("被外部改写").digest("hex")}`),{code:"IDEA_SNAPSHOT_CHANGED"});
+  }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
+});
+
+test("an unrelated knowledge directory with the same suffix is not presented as managed Inspiration",async()=>{
+  const f=await fixture(),store=f.store;
+  try {
+    const first=await store.snapshot(),created=await store.createTask({requestId:randomUUID(),expectedStoreRevision:first.storeRevision,scope:{kind:"user",userId:first.currentUser.id},title:"其他知识",goal:"核对根目录身份"});
+    const root=join(f.home,"notes","knowledge","inspiration"),nodeId=id(),relativePath=`${nodeId}/r1-${"a".repeat(64)}.md`;
+    await mkdir(join(root,nodeId),{recursive:true});await writeFile(join(root,relativePath),"这不是 D Code 灵感快照");
+    const before=await store.snapshot();await store.replaceTaskContext({requestId:randomUUID(),expectedStoreRevision:before.storeRevision,taskId:created.task.id,scope:created.task.scope,expectedContextRevision:1,sources:[{kind:"global_knowledge",rootPath:root,relativePath,title:"同名目录"}]});
+    const source=(await store.snapshot()).taskContextSets.find(set=>set.taskId===created.task.id)!.sources[0]!;
+    assert.equal(source.inspirationVersion,undefined);
+    await assert.rejects(store.readTaskSource({taskId:created.task.id,contextSourceId:source.id}),/此入口只打开任务引用的灵感版本/);
   }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
 });
 
