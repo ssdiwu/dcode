@@ -17,6 +17,12 @@ struct FileHelper {
         let targetDevice: String?
         let targetInode: String?
         let requireEmptyTarget: Bool?
+        let query: String?
+        let limit: Int?
+        let expectedRootDevice: String?
+        let expectedRootInode: String?
+        let expectedFileDevice: String?
+        let expectedFileInode: String?
     }
     struct DirectorySwapError: LocalizedError { var errorDescription: String? { "原目录或空目标目录发生变化，项目文件没有被覆盖。" } }
     struct InvalidRequest: LocalizedError { var errorDescription: String? { "文件请求格式无效。" } }
@@ -86,6 +92,20 @@ struct FileHelper {
                 guard process.terminationStatus == 0, let text = String(data: bytes, encoding: .utf8) else { emit(["ok": false, "code": arguments == top ? "GIT_NOT_REPOSITORY" : "GIT_UNAVAILABLE", "message": "Git 未能完成当前读取，文件没有被修改。"]); return }
                 emit(["ok": true, "stdout": text]); return
             }
+            if request.action == "search", let query = request.query, let limit = request.limit {
+                let result = try WorkspaceFileSearch.search(rootPath: request.root, query: query, limit: limit)
+                emit(["ok": true, "rootDevice": result.rootDevice, "rootInode": result.rootInode,
+                    "entries": result.entries.map { ["name": $0.name, "relativePath": $0.relativePath,
+                        "fileDevice": $0.fileDevice, "fileInode": $0.fileInode] },
+                    "truncated": result.truncated]); return
+            }
+            if request.action == "identity" {
+                guard let path = WorkspaceFileReader.relativeComponents(of: request.path, inside: request.root)?.joined(separator: "/"),
+                      !path.isEmpty else { throw WorkspaceFileSecurePathError.outsideSourceFolder }
+                let value = try WorkspaceFileSearch.identity(rootPath: request.root, relativePath: path)
+                emit(["ok": true, "rootDevice": value.rootDevice, "rootInode": value.rootInode,
+                    "fileDevice": value.fileDevice, "fileInode": value.fileInode]); return
+            }
             if request.action == "kind" {
                 let root = WorkspaceFileReader.standardizedAbsolutePath(request.root)
                 let path = WorkspaceFileReader.standardizedAbsolutePath(request.path)
@@ -128,13 +148,22 @@ struct FileHelper {
                 }
                 emit(["ok": true, "entries": entries, "truncated": truncated]); return
             }
-            if request.action == "asset" {
-                let data = try await WorkspaceFileReader.readRawBytes(path: request.path, sourceFolderPath: request.root, maximumBytes: 8 * 1024 * 1024)
+            let expectedIdentity: WorkspaceFileIdentity?
+            if request.action == "read-reference" || request.action == "asset-reference" {
+                guard let rootDevice = request.expectedRootDevice, let rootInode = request.expectedRootInode,
+                      let fileDevice = request.expectedFileDevice, let fileInode = request.expectedFileInode else { throw InvalidRequest() }
+                expectedIdentity = WorkspaceFileIdentity(rootDevice: rootDevice, rootInode: rootInode,
+                    fileDevice: fileDevice, fileInode: fileInode)
+            } else { expectedIdentity = nil }
+            if request.action == "asset" || request.action == "asset-reference" {
+                let data = try await WorkspaceFileReader.readRawBytes(path: request.path, sourceFolderPath: request.root,
+                    maximumBytes: 8 * 1024 * 1024, expectedIdentity: expectedIdentity)
                 emit(["ok": true, "base64": data.base64EncodedString()]); return
             }
             let snapshot: WorkspaceFileSnapshot
-            if request.action == "read" {
-                snapshot = try await WorkspaceFileReader.read(path: request.path, sourceFolderPath: request.root)
+            if request.action == "read" || request.action == "read-reference" {
+                snapshot = try await WorkspaceFileReader.read(path: request.path, sourceFolderPath: request.root,
+                    expectedIdentity: expectedIdentity)
             } else if request.action == "save", let text = request.text {
                 guard request.overwrite == true || request.expectedDigest != nil else { throw InvalidRequest() }
                 snapshot = try await WorkspaceFileWriter.save(path: request.path, sourceFolderPath: request.root, text: text, expectedBaseDigest: request.overwrite == true ? nil : request.expectedDigest)

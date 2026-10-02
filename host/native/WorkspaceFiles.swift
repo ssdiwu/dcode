@@ -38,13 +38,14 @@ enum WorkspaceFileSecurePathError: Error, Equatable, Sendable {
     case outsideSourceFolder
     case symbolicLink
     case notRegularFile
+    case changedIdentity
     case cannotOpen
 }
 
 enum WorkspaceFileSecurePath {
     /// 逐级打开到 rootPath，再逐级打开 relativeComponents（全部必须存在且为目录），
     /// 返回最终目录描述符；调用方负责 `close`。任一环节失败即关闭已打开的描述符。
-    static func openParentDirectory(rootPath: String, relativeComponents: [String]) throws -> Int32 {
+    static func openParentDirectory(rootPath: String, relativeComponents: [String], expectedRoot: WorkspaceFileIdentity? = nil) throws -> Int32 {
         var directoryDescriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard directoryDescriptor >= 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
         do {
@@ -52,6 +53,14 @@ enum WorkspaceFileSecurePath {
                 .filter { $0 != "/" }
             for component in rootComponents {
                 directoryDescriptor = try openNext(component, from: directoryDescriptor)
+            }
+            if let expectedRoot {
+                var metadata = stat()
+                guard Darwin.fstat(directoryDescriptor, &metadata) == 0,
+                      String(metadata.st_dev) == expectedRoot.rootDevice,
+                      String(metadata.st_ino) == expectedRoot.rootInode else {
+                    throw WorkspaceFileSecurePathError.changedIdentity
+                }
             }
             for component in relativeComponents {
                 directoryDescriptor = try openNext(component, from: directoryDescriptor)
@@ -118,6 +127,180 @@ enum WorkspaceFileSecurePath {
     }
 }
 
+struct WorkspaceFileIdentity: Sendable {
+    let rootDevice: String
+    let rootInode: String
+    let fileDevice: String
+    let fileInode: String
+}
+
+struct WorkspaceFileSearchEntry: Sendable {
+    let name: String
+    let relativePath: String
+    let fileDevice: String
+    let fileInode: String
+    let score: Int
+}
+
+struct WorkspaceFileSearchResult: Sendable {
+    let rootDevice: String
+    let rootInode: String
+    let entries: [WorkspaceFileSearchEntry]
+    let truncated: Bool
+}
+
+/// Name-only discovery uses the same no-follow directory descriptor boundary as
+/// read/save. It never opens a candidate file or reads its contents.
+enum WorkspaceFileSearch {
+    private static let denied = Set([
+        ".git", ".ssh", ".gnupg", ".aws", ".pi", ".dcode",
+        "auth.json", "credentials.json", "id_rsa", "id_ed25519", ".npmrc",
+        ".netrc", ".pypirc", ".git-credentials", ".gitconfig",
+    ])
+    private static let generatedDirectories = Set(["node_modules", "dist", "build", "coverage", "vendor"])
+    private static let maximumVisited = 100_000
+    private static let maximumDepth = 32
+
+    private struct State {
+        let query: String
+        let limit: Int
+        let deadline: Date
+        var visited = 0
+        var entries: [WorkspaceFileSearchEntry] = []
+        var truncated = false
+        var stopped = false
+    }
+
+    private static func allowed(_ name: String) -> Bool {
+        let normalized = name.precomposedStringWithCanonicalMapping.lowercased()
+        if normalized.isEmpty || normalized == "." || normalized == ".." || normalized == ".env" || normalized.hasPrefix(".env.") { return false }
+        if denied.contains(normalized) || normalized.utf8.count > 255 { return false }
+        return !normalized.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+
+    private static func score(name: String, relativePath: String, query: String) -> Int? {
+        let label = name.precomposedStringWithCanonicalMapping.lowercased()
+        let path = relativePath.precomposedStringWithCanonicalMapping.lowercased()
+        let base: Int
+        if label == query { base = 0 }
+        else if label.hasPrefix(query) { base = 10 + label.count - query.count }
+        else if let range = label.range(of: query) { base = 100 + label.distance(from: label.startIndex, to: range.lowerBound) }
+        else if let range = path.range(of: query) { base = 200 + path.distance(from: path.startIndex, to: range.lowerBound) }
+        else { return nil }
+        let generated = relativePath.split(separator: "/").dropLast().contains {
+            generatedDirectories.contains($0.lowercased())
+        }
+        return base + (generated ? 1_000 : 0)
+    }
+
+    private static func add(_ entry: WorkspaceFileSearchEntry, to state: inout State) {
+        if state.entries.count < state.limit { state.entries.append(entry); return }
+        state.truncated = true
+        guard let worst = state.entries.indices.max(by: {
+            (state.entries[$0].score, state.entries[$0].relativePath) <
+            (state.entries[$1].score, state.entries[$1].relativePath)
+        }) else { return }
+        if (entry.score, entry.relativePath) < (state.entries[worst].score, state.entries[worst].relativePath) {
+            state.entries[worst] = entry
+        }
+    }
+
+    private static func walk(_ descriptor: Int32, path: String, depth: Int, state: inout State) {
+        guard let directory = Darwin.fdopendir(descriptor) else {
+            Darwin.close(descriptor)
+            state.truncated = true
+            return
+        }
+        defer { Darwin.closedir(directory) }
+        var children: [(name: String, relativePath: String)] = []
+        while let item = Darwin.readdir(directory) {
+            if state.stopped { return }
+            state.visited += 1
+            if state.visited > maximumVisited || Date() >= state.deadline {
+                state.truncated = true
+                state.stopped = true
+                return
+            }
+            let name = withUnsafePointer(to: &item.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) }
+            }
+            guard allowed(name) else { continue }
+            let relativePath = path.isEmpty ? name : "\(path)/\(name)"
+            guard relativePath.utf8.count <= 2_000 else { continue }
+            var metadata = stat()
+            guard Darwin.fstatat(Darwin.dirfd(directory), name, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
+                state.truncated = true
+                continue
+            }
+            let kind = metadata.st_mode & S_IFMT
+            if kind == S_IFREG {
+                if let rank = score(name: name, relativePath: relativePath, query: state.query) {
+                    add(WorkspaceFileSearchEntry(name: name, relativePath: relativePath,
+                        fileDevice: String(metadata.st_dev), fileInode: String(metadata.st_ino), score: rank), to: &state)
+                }
+            } else if kind == S_IFDIR {
+                if depth >= maximumDepth {
+                    state.truncated = true
+                    continue
+                }
+                children.append((name: name, relativePath: relativePath))
+            }
+        }
+        children.sort {
+            let left = generatedDirectories.contains($0.name.lowercased()) ? 1 : 0
+            let right = generatedDirectories.contains($1.name.lowercased()) ? 1 : 0
+            return left == right ? $0.name < $1.name : left < right
+        }
+        for childPath in children {
+            if state.stopped { return }
+            let child = Darwin.openat(Darwin.dirfd(directory), childPath.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            if child >= 0 { walk(child, path: childPath.relativePath, depth: depth + 1, state: &state) }
+            else { state.truncated = true }
+        }
+    }
+
+    static func search(rootPath: String, query: String, limit: Int) throws -> WorkspaceFileSearchResult {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...50).contains(limit) else {
+            throw WorkspaceFileSecurePathError.cannotOpen
+        }
+        let root = try WorkspaceFileSecurePath.openParentDirectory(rootPath: rootPath, relativeComponents: [])
+        var metadata = stat()
+        guard Darwin.fstat(root, &metadata) == 0 else { Darwin.close(root); throw WorkspaceFileSecurePathError.cannotOpen }
+        let rootDevice = String(metadata.st_dev), rootInode = String(metadata.st_ino)
+        var state = State(query: query.precomposedStringWithCanonicalMapping.lowercased(),
+            limit: limit, deadline: Date().addingTimeInterval(3))
+        walk(root, path: "", depth: 0, state: &state)
+        state.entries.sort { ($0.score, $0.relativePath) < ($1.score, $1.relativePath) }
+        return WorkspaceFileSearchResult(rootDevice: rootDevice, rootInode: rootInode,
+            entries: state.entries, truncated: state.truncated)
+    }
+
+    static func identity(rootPath: String, relativePath: String) throws -> WorkspaceFileIdentity {
+        let parts = relativePath.split(separator: "/").map(String.init)
+        guard let filename = parts.last, !parts.contains(".."), parts.allSatisfy(allowed) else {
+            throw WorkspaceFileSecurePathError.outsideSourceFolder
+        }
+        let root = try WorkspaceFileSecurePath.openParentDirectory(rootPath: rootPath, relativeComponents: [])
+        defer { Darwin.close(root) }
+        var rootMetadata = stat()
+        guard Darwin.fstat(root, &rootMetadata) == 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
+        var parent = Darwin.dup(root)
+        guard parent >= 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
+        defer { Darwin.close(parent) }
+        for part in parts.dropLast() {
+            let next = Darwin.openat(parent, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { throw WorkspaceFileSecurePathError.cannotOpen }
+            Darwin.close(parent)
+            parent = next
+        }
+        var fileMetadata = stat()
+        guard Darwin.fstatat(parent, filename, &fileMetadata, AT_SYMLINK_NOFOLLOW) == 0,
+              fileMetadata.st_mode & S_IFMT == S_IFREG else { throw WorkspaceFileSecurePathError.notRegularFile }
+        return WorkspaceFileIdentity(rootDevice: String(rootMetadata.st_dev), rootInode: String(rootMetadata.st_ino),
+            fileDevice: String(fileMetadata.st_dev), fileInode: String(fileMetadata.st_ino))
+    }
+}
+
 enum WorkspaceFileReaderError: LocalizedError, Equatable {
     case outsideSourceFolder
     case symbolicLink
@@ -157,6 +340,7 @@ enum WorkspaceFileReaderError: LocalizedError, Equatable {
         case .outsideSourceFolder: .outsideSourceFolder
         case .symbolicLink: .symbolicLink
         case .notRegularFile: .notRegularFile
+        case .changedIdentity: .changedWhileReading
         case .cannotOpen: .cannotOpen
         }
     }
@@ -168,6 +352,7 @@ enum WorkspaceFileReader {
     static func read(
         path: String,
         sourceFolderPath: String,
+        expectedIdentity: WorkspaceFileIdentity? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) async throws -> WorkspaceFileSnapshot {
         try await Task.detached(priority: .userInitiated) {
@@ -179,7 +364,8 @@ enum WorkspaceFileReader {
 
             let fileDescriptor = try securelyOpenFile(
                 rootPath: root,
-                relativeComponents: relativeComponents
+                relativeComponents: relativeComponents,
+                expectedIdentity: expectedIdentity
             )
             defer { Darwin.close(fileDescriptor) }
 
@@ -189,6 +375,9 @@ enum WorkspaceFileReader {
             }
             guard before.st_mode & S_IFMT == S_IFREG else {
                 throw WorkspaceFileReaderError.notRegularFile
+            }
+            if let expectedIdentity, String(before.st_dev) != expectedIdentity.fileDevice || String(before.st_ino) != expectedIdentity.fileInode {
+                throw WorkspaceFileReaderError.changedWhileReading
             }
             guard before.st_size >= 0 else { throw WorkspaceFileReaderError.cannotRead }
             guard before.st_size <= off_t(maximumBytes) else {
@@ -244,7 +433,8 @@ enum WorkspaceFileReader {
     static func readRawBytes(
         path: String,
         sourceFolderPath: String,
-        maximumBytes: Int
+        maximumBytes: Int,
+        expectedIdentity: WorkspaceFileIdentity? = nil
     ) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
             let root = standardizedAbsolutePath(sourceFolderPath)
@@ -254,7 +444,8 @@ enum WorkspaceFileReader {
             }
             let fileDescriptor = try securelyOpenFile(
                 rootPath: root,
-                relativeComponents: relativeComponents
+                relativeComponents: relativeComponents,
+                expectedIdentity: expectedIdentity
             )
             defer { Darwin.close(fileDescriptor) }
             var metadata = stat()
@@ -263,6 +454,9 @@ enum WorkspaceFileReader {
             }
             guard metadata.st_mode & S_IFMT == S_IFREG else {
                 throw WorkspaceFileReaderError.notRegularFile
+            }
+            if let expectedIdentity, String(metadata.st_dev) != expectedIdentity.fileDevice || String(metadata.st_ino) != expectedIdentity.fileInode {
+                throw WorkspaceFileReaderError.changedWhileReading
             }
             guard metadata.st_size >= 0, metadata.st_size <= off_t(maximumBytes) else {
                 throw WorkspaceFileReaderError.fileTooLarge(maximumBytes: maximumBytes)
@@ -310,7 +504,8 @@ enum WorkspaceFileReader {
 
     private static func securelyOpenFile(
         rootPath: String,
-        relativeComponents: [String]
+        relativeComponents: [String],
+        expectedIdentity: WorkspaceFileIdentity? = nil
     ) throws -> Int32 {
         guard let filename = relativeComponents.last else {
             throw WorkspaceFileReaderError.notRegularFile
@@ -318,7 +513,8 @@ enum WorkspaceFileReader {
         do {
             let directoryDescriptor = try WorkspaceFileSecurePath.openParentDirectory(
                 rootPath: rootPath,
-                relativeComponents: Array(relativeComponents.dropLast())
+                relativeComponents: Array(relativeComponents.dropLast()),
+                expectedRoot: expectedIdentity
             )
             do {
                 guard let fileDescriptor = try WorkspaceFileSecurePath.openExistingFile(
@@ -402,6 +598,7 @@ enum WorkspaceFileWriterError: LocalizedError, Equatable {
         case .outsideSourceFolder: .outsideSourceFolder
         case .symbolicLink: .symbolicLink
         case .notRegularFile: .notRegularFile
+        case .changedIdentity: .cannotOpen
         case .cannotOpen: .cannotOpen
         }
     }

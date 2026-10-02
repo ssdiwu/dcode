@@ -1,0 +1,8 @@
+# D Code 0.0.36 exploratory performance observation
+
+- Source: main@456a1c2 with uncommitted 0.0.35 and 0.0.36 changes as served by Vite on 2026-09-29. This is not a frozen revision.
+- Test surface: Electron 1440x900 hidden BrowserWindow with backgroundThrottling=false; actual Transcript and ConversationRail components; 120 synthetic user/assistant pairs, 240 message DOM nodes, 120 navigation items of which 18 were rendered. No real Host, Task, Composer, IPC, file attachments, or tool output.
+- Warmups: two cycles. Measurement: seven cycles, performance.now before a component state change or scroll assignment through two requestAnimationFrame callbacks. Input is only a fixture textarea state change. Task switch is only swapping a synthetic session dataset. Times are therefore diagnostic, not end-to-end product latency.
+- Raw data: [dcode-036-performance-observation-2026-09-29.json](dcode-036-performance-observation-2026-09-29.json). The one-off rerun script remains in the task's `/tmp/dcode-perf-036-jpE1Bm/bench.mjs`; rerunning it uses the then-current local source, not the source frozen at this observation.
+- Memory: renderer process workingSetSize from app.getAppMetrics, KB, sampled during repeated stream and synthetic session switches over 304 seconds. Not total application memory. GC creates a large early drop, so first/peak/last differences cannot be read as a leak verdict.
+- Baseline: no tagged, committed, or otherwise frozen runnable 0.0.35 baseline found. The only current released source tag is v0.0.34. This observation does not satisfy PRD0033's same machine A/B seven-run and five-minute regression acceptance.

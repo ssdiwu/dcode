@@ -1,4 +1,5 @@
 import {createHash} from "node:crypto";
+import {isUtf8} from "node:buffer";
 import {spawn} from "node:child_process";
 import {fileURLToPath} from "node:url";
 import {isAbsolute,join,relative,extname,resolve} from "node:path";
@@ -6,6 +7,8 @@ import {redactCredentialText} from "./credential-material.js";
 
 export interface WorkspaceFile {relativePath:string;text:string;digest:string;bytes:number;editable:boolean;kind:"markdown"|"html"|"source"|"image";dataUrl?:string}
 export interface WorkspaceTree {relativePath:string;entries:Array<{name:string;relativePath:string;kind:"directory"|"file"|"link"|"other"}>;truncated:boolean}
+export interface WorkspaceFileIdentity {rootDevice:string;rootInode:string;fileDevice:string;fileInode:string}
+export interface WorkspaceFileSearchResult {entries:Array<{name:string;relativePath:string;fileDevice:string;fileInode:string}>;rootDevice:string;rootInode:string;truncated:boolean}
 export class WorkspaceFileError extends Error {constructor(readonly code:string,message:string){super(message);}}
 // macOS system aliases are fixed platform paths. Never resolve a changed
 // project/saved-root symlink into a newly authorized directory.
@@ -22,7 +25,7 @@ export class WorkspaceFiles {
   private waiting:Array<()=>void>=[];
   constructor(private readonly helper=fileURLToPath(new URL("../bin/dcode-files",import.meta.url))){}
   private async call(root:string,relativePath:string,action:string,extra:Record<string,unknown>={}):Promise<Record<string,unknown>> {
-    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="kind"||action==="tree"||action==="git"||action==="swap-directories");
+    const canonical=workspaceRootPath(root);safeWorkspaceRelativePath(relativePath,action==="kind"||action==="tree"||action==="search"||action==="git"||action==="swap-directories");
     const path=join(canonical,relativePath);
     if(relative(canonical,path).startsWith("..")||isAbsolute(relative(canonical,path)))throw new WorkspaceFileError("FILE_SCOPE","文件不在项目目录内");
     if(this.active>=4)await new Promise<void>(resolve=>this.waiting.push(resolve));
@@ -61,6 +64,25 @@ export class WorkspaceFiles {
     if(result.kind!=="file"&&result.kind!=="directory")throw new WorkspaceFileError("FILE_UNAVAILABLE","文件或目录不可用");
     return result.kind;
   }
+  async identity(root:string,path:string):Promise<WorkspaceFileIdentity>{
+    safeWorkspaceRelativePath(path);
+    const result=await this.call(root,path,"identity");
+    for(const key of ["rootDevice","rootInode","fileDevice","fileInode"] as const)if(typeof result[key]!=="string"||!/^\d+$/u.test(result[key]))throw new WorkspaceFileError("FILE_HELPER_FAILED","文件身份响应无效");
+    return {rootDevice:result.rootDevice as string,rootInode:result.rootInode as string,fileDevice:result.fileDevice as string,fileInode:result.fileInode as string};
+  }
+  async search(root:string,query:string,limit=30):Promise<WorkspaceFileSearchResult>{
+    if(typeof query!=="string"||!query.trim()||query.length>128||/[\u0000-\u001f]/u.test(query)||!Number.isInteger(limit)||limit<1||limit>50)throw new WorkspaceFileError("FILE_SEARCH_QUERY","请输入有效的文件名称");
+    const result=await this.call(root,"","search",{query:query.trim(),limit});
+    if(!Array.isArray(result.entries)||result.entries.length>limit||typeof result.rootDevice!=="string"||typeof result.rootInode!=="string"||!/^\d+$/u.test(result.rootDevice)||!/^\d+$/u.test(result.rootInode))throw new WorkspaceFileError("FILE_HELPER_FAILED","文件搜索响应无效");
+    const entries=result.entries.flatMap(raw=>{
+      if(!raw||typeof raw!=="object"||Array.isArray(raw))return [];
+      const entry=raw as Record<string,unknown>;
+      if(typeof entry.name!=="string"||typeof entry.relativePath!=="string"||typeof entry.fileDevice!=="string"||typeof entry.fileInode!=="string"||!/^\d+$/u.test(entry.fileDevice)||!/^\d+$/u.test(entry.fileInode))return [];
+      try{safeWorkspaceRelativePath(entry.relativePath);if(entry.name!==entry.relativePath.split("/").at(-1))return [];}catch{return [];}
+      return [{name:entry.name,relativePath:entry.relativePath,fileDevice:entry.fileDevice,fileInode:entry.fileInode}];
+    });
+    return {entries,rootDevice:result.rootDevice,rootInode:result.rootInode,truncated:result.truncated===true};
+  }
   async tree(root:string,path=""):Promise<WorkspaceTree>{
     const result=await this.call(root,path,"tree");const entries=(result.entries as Array<{name:string;kind:WorkspaceTree["entries"][number]["kind"]}>).filter(entry=>{try{safeWorkspaceRelativePath(join(path,entry.name));return true;}catch{return false;}}).map(entry=>({...entry,relativePath:join(path,entry.name)})).sort((a,b)=>(a.kind==="directory"?0:1)-(b.kind==="directory"?0:1)||a.name.localeCompare(b.name));
     return {relativePath:path,entries,truncated:result.truncated===true};
@@ -69,11 +91,22 @@ export class WorkspaceFiles {
     if([".png",".jpg",".jpeg",".gif",".webp"].includes(extname(path).toLowerCase())){const asset=await this.asset(root,path);const bytes=Buffer.from(asset.base64,"base64");return {relativePath:path,text:"",kind:"image",editable:false,bytes:bytes.length,digest:`sha256:${createHash("sha256").update(bytes).digest("hex")}`,dataUrl:`data:${asset.mimeType};base64,${asset.base64}`};}
     return this.snapshot(path,await this.call(root,path,"read"));
   }
-  async asset(root:string,path:string):Promise<{base64:string;mimeType:string}>{
-    const result=await this.call(root,path,"asset");const base64=String(result.base64??"");
+  async readMatchingIdentity(root:string,path:string,expected:WorkspaceFileIdentity):Promise<WorkspaceFile>{
+    safeWorkspaceRelativePath(path);
+    const identity={expectedRootDevice:expected.rootDevice,expectedRootInode:expected.rootInode,expectedFileDevice:expected.fileDevice,expectedFileInode:expected.fileInode};
+    if([".png",".jpg",".jpeg",".gif",".webp"].includes(extname(path).toLowerCase())){
+      const asset=await this.asset(root,path,expected);const bytes=Buffer.from(asset.base64,"base64");
+      return {relativePath:path,text:"",kind:"image",editable:false,bytes:bytes.length,digest:`sha256:${createHash("sha256").update(bytes).digest("hex")}`,dataUrl:`data:${asset.mimeType};base64,${asset.base64}`};
+    }
+    return this.snapshot(path,await this.call(root,path,"read-reference",identity));
+  }
+  async asset(root:string,path:string,expected?:WorkspaceFileIdentity):Promise<{base64:string;mimeType:string}>{
+    const identity=expected?{expectedRootDevice:expected.rootDevice,expectedRootInode:expected.rootInode,expectedFileDevice:expected.fileDevice,expectedFileInode:expected.fileInode}:{};
+    const result=await this.call(root,path,expected?"asset-reference":"asset",identity);const base64=String(result.base64??"");
     const mime:Record<string,string>={".css":"text/css",".js":"text/javascript",".mjs":"text/javascript",".json":"application/json",".html":"text/html",".htm":"text/html",".svg":"image/svg+xml",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".gif":"image/gif",".webp":"image/webp",".woff":"font/woff",".woff2":"font/woff2",".ttf":"font/ttf",".otf":"font/otf",".mp4":"video/mp4",".webm":"video/webm",".mp3":"audio/mpeg",".wav":"audio/wav",".pdf":"application/pdf"};
     const mimeType=mime[extname(path).toLowerCase()]??"application/octet-stream";
-    if(redactCredentialText(Buffer.from(base64,"base64").toString("utf8")).redacted)throw new WorkspaceFileError("FILE_CREDENTIAL_MATERIAL","本机资源包含凭据内容");
+    const bytes=Buffer.from(base64,"base64");
+    if(isUtf8(bytes)&&redactCredentialText(bytes.toString("utf8")).redacted)throw new WorkspaceFileError("FILE_CREDENTIAL_MATERIAL","本机资源包含凭据内容");
     return {base64,mimeType};
   }
   async save(root:string,path:string,text:string,expectedDigest:string,overwrite=false):Promise<WorkspaceFile>{

@@ -56,11 +56,12 @@ test("real Host inspiration: create, preserve same-node edits, move, reference, 
     fireEvent.click(screen.getByRole("button",{name:"新建文字灵感"}));
     await waitFor(()=>assert.ok(screen.getByRole("textbox",{name:"灵感标题"})));
     fireEvent.change(screen.getByRole("textbox",{name:"灵感标题"}),{target:{value:"可复用的判断"}});
-    fireEvent.change(screen.getByRole("textbox",{name:"灵感内容"}),{target:{value:"保存真实知识内容"}});
+    fireEvent.change(screen.getByRole("textbox",{name:"灵感内容"}),{target:{value:"# 保存真实知识内容"}});
     fireEvent.click(screen.getByRole("button",{name:"保存灵感",exact:true}));
     await waitFor(()=>assert.ok(screen.getByRole("button",{name:"灵感 可复用的判断"})));
     await waitFor(()=>assert.equal(screen.queryByRole("textbox",{name:"灵感内容"})===null,true));
     const node=screen.getByRole("button",{name:"灵感 可复用的判断"});
+    assert.equal(node.querySelector(".idea-node-summary")?.textContent,"保存真实知识内容");
     fireEvent.click(screen.getByRole("button",{name:"将选中灵感成组"}));
     assert.match(screen.getByRole("status",{name:"画布操作提示"}).textContent,/至少.*2.*新建/);
     fireEvent.click(screen.getByRole("button",{name:"连线 L"}));
@@ -120,7 +121,7 @@ test("real Host inspiration: create, preserve same-node edits, move, reference, 
     fireEvent.click(screen.getByRole("button",{name:"选择 V"}));
     fireEvent.click(node,{detail:0});assert.equal(node.getAttribute("aria-pressed"),"true","Assistive activation must select the node");
     fireEvent.doubleClick(node);
-    await waitFor(()=>assert.equal(screen.getByRole("textbox",{name:"灵感内容"}).value,"保存真实知识内容"));
+    await waitFor(()=>assert.equal(screen.getByRole("textbox",{name:"灵感内容"}).value,"# 保存真实知识内容"));
     fireEvent.change(screen.getByRole("textbox",{name:"灵感内容"}),{target:{value:"尚未保存的新编辑"}});
     fireEvent.doubleClick(node);
     assert.equal(screen.getByRole("textbox",{name:"灵感内容"}).value,"尚未保存的新编辑","Repeated edit entry must not replace the draft");

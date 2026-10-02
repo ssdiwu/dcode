@@ -1,3 +1,4 @@
+import { uiText } from "../shared/ui-language.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import {
@@ -37,7 +38,7 @@ export async function inspectCandidate(path: string, schemaVersion: number) {
       info,
     )
   )
-    throw new Error("候选不是 D Code Web 应用");
+    throw new Error(uiText("候选不是 D Code Web 应用"));
   const schema = await readFile(
     join(appPath, "Contents/Resources/host/dist/src/product-store-schema.js"),
     "utf8",
@@ -46,7 +47,7 @@ export async function inspectCandidate(path: string, schemaVersion: number) {
     schema.match(/PRODUCT_STORE_SCHEMA_VERSION\s*=\s*(\d+)/)?.[1],
   );
   if (actual !== schemaVersion)
-    throw new Error("候选的数据版本不同，需要先完成专门的数据迁移验证");
+    throw new Error(uiText("候选的数据版本不同，需要先完成专门的数据迁移验证"));
   const hash = createHash("sha256");
   const walk = async (directory: string) => {
     for (const entry of (
@@ -58,7 +59,7 @@ export async function inspectCandidate(path: string, schemaVersion: number) {
       if (entry.isSymbolicLink()) {
         const resolved = await realpath(path);
         if (!resolved.startsWith(`${appPath}/`))
-          throw new Error("候选包含应用目录之外的文件引用");
+          throw new Error(uiText("候选包含应用目录之外的文件引用"));
         hash.update(await readlink(path));
       } else if (entry.isDirectory()) await walk(path);
       else if (entry.isFile()) hash.update(await readBundleFile(path));
@@ -89,7 +90,7 @@ async function stopChild(child: ChildProcess) {
   while (alive() && Date.now() < deadline)
     await new Promise((r) => setTimeout(r, 50));
   if (alive())
-    throw new Error("候选进程尚未退出，原版本暂未重新连接，以免产生两个写入者");
+    throw new Error(uiText("候选进程尚未退出，原版本暂未重新连接，以免产生两个写入者"));
 }
 export async function switchApplication(options: {
   bridge: HostBridge;
@@ -103,7 +104,7 @@ export async function switchApplication(options: {
 }) {
   const sourceApp = dirname(dirname(dirname(options.executablePath)));
   if (!sourceApp.endsWith(".app"))
-    throw new Error("请从本地 .app 候选中进行切换");
+    throw new Error(uiText("请从本地 .app 候选中进行切换"));
   const snapshot = await options.bridge.request<{
     schemaVersion: number;
     storeRevision: number;
@@ -127,22 +128,22 @@ export async function switchApplication(options: {
   if (!targetPath)
     throw new Error(
       options.direction === "rollback"
-        ? "没有可回滚的上一构建"
-        : "请先成功构建候选",
+        ? uiText("没有可回滚的上一构建")
+        : uiText("请先成功构建候选"),
     );
   const source = await inspectCandidate(sourceApp, snapshot.schemaVersion);
   const target = await inspectCandidate(targetPath, snapshot.schemaVersion);
-  if (source.appPath === target.appPath) throw new Error("候选就是当前应用");
+  if (source.appPath === target.appPath) throw new Error(uiText("候选就是当前应用"));
   if (
     options.direction === "rollback" &&
     previous?.fromDigest !== target.digest
   )
-    throw new Error("上一构建已经改变，不能按旧回执回滚");
+    throw new Error(uiText("上一构建已经改变，不能按旧回执回滚"));
   await options.flush();
   const current = await options.bridge.request<{ storeRevision: number; composerDrafts?:{attachments?:unknown[]}[] }>(
     "foundation.snapshot",
   );
-  if(!target.supportsManagedAttachments && current.composerDrafts?.some(draft=>draft.attachments?.length)) throw new Error("目标构建无法恢复附件草稿，请先发送或移除未发送的附件，再切换构建。");
+  if(!target.supportsManagedAttachments && current.composerDrafts?.some(draft=>draft.attachments?.length)) throw new Error(uiText("目标构建无法恢复附件草稿，请先发送或移除未发送的附件，再切换构建。"));
   const handoff = await mkdtemp(join(tmpdir(), "dcode-handoff-"));
   const { receipt } = await options.bridge.request<{ receipt: Receipt }>(
     "selfEvolution.prepare",
@@ -193,14 +194,14 @@ export async function switchApplication(options: {
     let confirmed = false;
     while (Date.now() < deadline) {
       if (launchError) throw launchError;
-      if (earlyExit) throw new Error("候选启动后提前退出");
+      if (earlyExit) throw new Error(uiText("候选启动后提前退出"));
       try {
         const marker = JSON.parse(await readFile(ready, "utf8")) as {
           id?: string;
           pid?: number;
         };
         if ((marker as { status?: string }).status === "failed")
-          throw new Error("候选无法恢复原会话");
+          throw new Error(uiText("候选无法恢复原会话"));
         if (marker.id === receipt.id && marker.pid === child.pid) {
           confirmed = true;
           break;
@@ -214,14 +215,14 @@ export async function switchApplication(options: {
       }
       await new Promise((r) => setTimeout(r, 100));
     }
-    if (!confirmed) throw new Error("候选未确认恢复原任务");
+    if (!confirmed) throw new Error(uiText("候选未确认恢复原任务"));
     await writeFile(go, receipt.id, { flag: "wx", mode: 0o600 });
     options.finish();
     return true;
   } catch (error) {
     if (child) await stopChild(child);
     if (shutdownApproved && !options.bridge.hasExited)
-      throw new Error("旧服务尚未确认退出，已暂停切换，未启动其他写入者");
+      throw new Error(uiText("旧服务尚未确认退出，已暂停切换，未启动其他写入者"));
     const restored = disconnected ? await options.reconnect() : options.bridge;
     const next = await restored.request<{ storeRevision: number }>(
       "foundation.snapshot",
@@ -235,7 +236,7 @@ export async function switchApplication(options: {
         expectedStoreRevision: next.storeRevision,
         id: receipt.id,
         state: "recovery_required",
-        issue: "候选未完成启动确认，已返回原应用",
+        issue: uiText("候选未完成启动确认，已返回原应用"),
       });
     }
     const fresh = await restored.request<{ storeRevision: number }>(
@@ -247,6 +248,6 @@ export async function switchApplication(options: {
       id: receipt.id,
       state: options.direction === "rollback" ? "cancelled" : "rolled_back",
     });
-    throw new Error("候选未能完成恢复，已返回原版本。");
+    throw new Error(uiText("候选未能完成恢复，已返回原版本。"));
   }
 }

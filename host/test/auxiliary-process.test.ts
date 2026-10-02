@@ -38,6 +38,24 @@ test('a foreground-only command releases its helper without counting the process
   try{const result=await manager.tool(tmpdir()).execute('short',{command:'echo finished'},undefined);assert.ok(result);await until(async()=>!manager.hasLive,'helper automatically exits');assert.ok(records.some(info=>info.status==='exited'));assert.ok(!records.some(info=>info.status==='background'));}finally{await manager.dispose();}
 });
 
+test('agent bash and its background children do not inherit Host-only environment secrets',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dcode-auxiliary-env-'));
+  const manager=new AuxiliaryProcesses(async()=>{});
+  const key='DCODE_SYNTHETIC_HOST_SECRET',previous=process.env[key];
+  process.env[key]='synthetic-secret-for-test-only';
+  try{
+    const foreground=await manager.tool(root).execute('secret-foreground',{command:'printf "%s" "${DCODE_SYNTHETIC_HOST_SECRET-}"'},undefined);
+    assert.equal(foreground.content[0]?.type,'text');
+    assert.equal(foreground.content[0]?.text,'(no output)');
+    await manager.tool(root).execute('secret-background',{command:'(/bin/bash -c \'printf "%s" "${DCODE_SYNTHETIC_HOST_SECRET-}" > inherited.txt; sleep 60\') &'},undefined);
+    await until(async()=>{try{await readFile(join(root,'inherited.txt'));return true;}catch{return false;}},'background child wrote its environment observation');
+    assert.equal(await readFile(join(root,'inherited.txt'),'utf8'),'');
+  }finally{
+    if(previous===undefined)delete process.env[key];else process.env[key]=previous;
+    await manager.dispose();await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('an unexpectedly killed helper leaves the live group unknown until the remaining service exits',async()=>{
   const root=await mkdtemp(join(tmpdir(),'dcode-auxiliary-crash-')),records:AuxiliaryProcessInfo[]=[];const manager=new AuxiliaryProcesses(async info=>{records.push(info);});let servicePid=0;
   try{

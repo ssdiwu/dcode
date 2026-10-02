@@ -8,6 +8,9 @@
 
 ## 当前能力
 
+- 客户端中文／英语偏好由 Product Store 保存；`prompt-assembler.ts` 将当前语言冻结在下一轮协调者与成员的实际运行依据中，历史标题与消息不改写。
+- `imageGeneration.*` 是独立的试验生图接缝，使用精确安装版本的 Codex App Server、ChatGPT 订阅认证及单模型受控目录；Pi Runtime 不接管这项认证。明确提交后才发起一个不自动重放的 Attempt，完整成功轮次与本地图片核验通过后保存不可变 Artifact。失败轮次的可证明图片只供待核对预览；保存证明与文件不一致时不伪称已保存。此路径不承诺一次扣量或稳定生产支持。
+
 - `project.update/recover` 维护 D Code 项目名称和唯一目录，保留 Task/Session 身份及原私有会话字节，以新私有副本续接运行。可选文件移动使用同盘目录交换和耐久计划，不合并非空目标；prepared/unknown 计划持续保护源、目标，跨作用域和重启都不能绕过。提交前重新检查登记项目，运行数据和当前应用不能成为移动源或目标。
 
 - 默认使用本机架构，不引入远程 worker 或跨机器控制面。独立主进程按需启动、空闲回收后以新执行身份续接；辅助进程组单独登记，停止请求不立即释放目录占用，真实退出或未确认状态分别记录。
@@ -18,7 +21,7 @@
 
 - 默认在当前用户 `~/.dcode/` 建立版本化 SQLite Product Store；使用独立进程租约、原子首次迁移、schema fingerprint、幂等 request ID、revision 冲突和中断恢复，损坏或未知 schema 不回退为空成功；
 - 显式 `--data-root`（客户端测试用 `DCODE_DATA_ROOT`）视为隔离数据根，首次启动不隐式读取当前用户的旧项目与 Pi 数据进行迁移；默认 `~/.dcode/` 的首次迁移仍按原合同执行。需要验证旧数据迁移时，由迁移测试向 Product Store 显式提供受控来源。
-- 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；沿用 Schema 2。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
+- 灵感正文、画布布局和编辑草稿由 `inspiration.ts` 校验，经 Product Store 的 `knowledge.inspiration` 记录保存；原有灵感表由当前 Schema 3 继续保留。内容与位置分开修改，旧内容版本不能覆盖新编辑。媒体长期复制到 `~/.dcode/knowledge/inspiration/media/`，不参与对话附件到期清理；Markdown 导出为不可变版本文件，显式进入 Task 的 `global_knowledge` 上下文，归档不破坏历史引用。
 - `task.source.read` 仅凭已保存的 Task Context Source 或 Prompt Receipt 来源身份回查文本；灵感快照按受管根与版本 digest 识别，普通运行来源按原 cwd 安全重读。正文与当时摘要一致才返回；旧文件变化或不可读时给出真实状态，不从当前文件伪造历史内容。
 - `task.session.continue` 在旧运行及协作消息收口后，于同一 Task 新建当前协调会话，原会话转为只读历史；显式选择且仍可用的模型沿用到新会话。`task.summary.*` 以追加修订保存有来源的工作摘要与失败状态，运行回执冻结实际采用版本，Raw Input 不被覆盖；压缩及成员执行进程重建只在下一轮续接采用。
 - `dcode_recall` 先按本 Task 历史、所属 Project 文件和全局灵感找有界候选，再读取并记录实际使用来源；User Scope 不递归扫描 Home，其他 Task / Project 历史不进入默认结果。旧灵感保留不可变版本；普通文件变更或来源丢失则回查为不可用。`task.source.used.*` 提供历史来源的逐 Run 分页与受控读取。
@@ -62,7 +65,7 @@
 
 ## 命令
 
-Pi 0.87.1 的进程适配保留 Host 对会话与凭据的所有权：`prepareRequest` 使用 SessionManager 的当前投影，`finishTurn` 的继续/结束决定跨进程传回；系统提示词与工具声明随规范上下文进入请求。`pi-prompt-compat.ts` 集中处理固定 SDK 的完整提示词替换，历史分支变更使用 `refreshContext()`，容量选择复用 SDK 当前投影的用量/估算，压缩后未知用量按有效消息重新估计。OpenAI `thinkingSignature` 中的有效加密状态作为协议数据保留，摘要和真实凭据继续脱敏；已经损坏的旧签名在运行投影中省略，历史正文仍保留。复制校验保留系统消息、上下文编辑与压缩边界，原始消息仍保持原文；SDK 兼容与运行隐私回归覆盖这些行为。
+Pi 0.99.1 的进程适配保留 Host 对会话与凭据的所有权：`prepareRequest` 使用 SessionManager 的当前投影，`finishTurn` 的继续/结束决定跨进程传回；系统提示词与工具声明随规范上下文进入请求。`pi-prompt-compat.ts` 集中处理固定 SDK 的完整提示词替换，历史分支变更使用 `refreshContext()`，容量选择复用 SDK 当前投影的用量/估算，压缩后未知用量按有效消息重新估计。OpenAI `thinkingSignature` 中的有效加密状态作为协议数据保留，摘要和真实凭据继续脱敏；已经损坏的旧签名在运行投影中省略，历史正文仍保留。复制校验保留系统消息、上下文编辑与压缩边界，原始消息仍保持原文；SDK 兼容与运行隐私回归覆盖这些行为。
 
 路线选择候选（[PRD 0032](../doc/40-版本实施方案/0032-0.0.33-协调者按需探索与路线选择产品需求.md)）：`task-routes.ts` 约束有界候选、检查与采用/失效/停止，状态保存在既有 Task Plan 的受管 `routeExploration` 中；通用计划写入不能擦除或替换该记录。`dcode_route` 以真实运行身份提供摘要、分页原文、用户输入适用性核对及预算上限调整；更新校验计划版本、证据归属、新鲜度与累计投入。unknown 检查可由其后产生的新工具证据补齐，同候选最后一次检查须为 ready；reject/revise 仍要求修订候选，采用时也复验时间边界。
 
@@ -78,6 +81,9 @@ npm start -- --agent-dir ~/.pi/agent
 `npm test` 在构建后逐文件执行测试：多 Host / Runtime 生命周期用例各自持有本机进程和短时等待窗口，并发跑整套会互相抢占资源；测试内容与断言不因此放宽。
 
 ## 目录
+
+- `src/image-app-server.ts` / `image-model-catalog.ts`：固定 Codex 0.157.1、生图专用目录与默认拒绝；空 environment、MCP／插件禁用、完整分页检查和受控模型元数据阻止额外工具重新进入。目录来自固定官方 ModelInfo，仅清空其 utility tools，许可与摘要由源码注释和 Legal 记录。
+- `src/image-generation.ts` / `generated-image-files.ts`：不重放的 Task Attempt、完整终态、Store 来源锚点、受管图像证明及重启核对；`native/GeneratedImage.swift` 完整解码图片，并经目录句柄排他导出。
 
 - `src/project-directory-change.ts`：原生项目目录变更计划、目录身份验证、交换与恢复；`native/FileHelper.swift` 的目录交换始终核对源/目标身份。
 
@@ -144,7 +150,7 @@ npm start -- --agent-dir ~/.pi/agent
 Web 设置恢复新增原生接口：`clientPreferences.get/set/importLegacy` 管理工作台偏好及旧界面偏好的单向继承；`dcodeModelProvider.save/remove` 管理原生供应商，显式接管只读旧来源的非敏感配置；`task.manage` 与会话复制入口保留产品历史。`maintenance.status/start` 和 `selfEvolution.*` 记录 Web 本机候选检查、构建和恢复回执，重启前检查所有运行活动。原生 SDK 会话使用内存 SettingsManager，模型与思考切换不回写 Pi 设置。核心凭据引用边界和资源安全策略不变。
 
 
-模型路径（Pi 0.87.1）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
+模型路径（Pi 0.99.1）：`dcodeModels.get/refresh/select/setThinking` 是客户端模型控件的核心入口。目录及认证状态由核心投影，刷新使用 Pi 官方目录并保留原生配置；目录缓存位于 D Code Data Root 的 `models-cache.json`。已有 Runtime 切换前同步原生注册，模型/思考控制的重复请求不重新执行。视图不会接触凭据正文。
 
 
 受管附件（0.0.30 修复候选）：`attachment.import/get/resolve` 由 Host 管理副本，`attachment-files.ts` 负责受控目录、原子文件、完整性校验与清理。草稿附件元数据使用现有 `composer_drafts.payload_json`；`taskDraft.set` / `dcodeSession.composerDraft.set` 可携带 `attachmentIds`，空文字但有附件时保留草稿。`dcodeSession.prompt` 只接收附件 ID，核心读取图片并生成文件引用，在 `prepareSessionRun` 同事务内写原文、引用、生效输入及附件 Artifact。Schema 仍为 2，附件输入不混入交付物列表。
@@ -178,3 +184,7 @@ OpenAI Codex 的公共连接方法投影为“浏览器登录”/“设备码登
 `src/device-code-channel.ts` 只在平台壳继承的 fd4 上处理 `{id,flowId}`，环境标记启动即删除。Host 只投影当前 OpenAI Codex 设备码流程的 `{userCode,expiresAt}` 或 null，不提供通用方法、凭据读取、完整 notice 或授权 URL。两端限制帧、并发、字段和等待时长，错误不落公共日志；取消/失败/到期/保存/退出清除 Host 展示值。该通道与原 API fd3 独立，`dcodeAuth.get` 只暴露 `canReadDeviceCode` 布尔能力。实际源码边界与生命周期见 `oauth-device-flow.test.ts` 和 `device-code-channel.test.ts`。
 
 `workspace.reference` 保留原taskId入口，并可仅传显式source解析文件内部引用；两者互斥，显式来源不借用当前对话的其他目录。返回kind区分文件/目录（含登记根目录）。原生文件helper通过既有逐级O_NOFOLLOW目录描述符及fstatat无跟随检查完成kind识别，不扩单文件产物的父目录权限；目录维护prepared/unknown时拒绝普通项目文件访问。保存仍使用原Root重验、digest冲突和WorkspaceWriteGuard。对应workspace-access测试及客户端来源回归，不涉及OAuth或配额改变。
+
+`workspace.fileSearch` 只从当前 Task 的 Project 登记目录有界查找文件名，不读取正文；User Scope 未显式登记目录时返回需选择范围的空态，不扫 Home。选中的 `dcode-file:` Markdown 引用进入用户 Raw Input 原文，Host 以与界面同版的 Markdown 解析规则，在提交、编辑与队列实际投递前重新校验 Task、目录、文件身份。`workspace.readReference` 在同一次原生 `openat/O_NOFOLLOW` 读取中核对目录与文件 device/inode，供客户端直接建立文件视图；普通二进制格式仍按当前文件查看器能力明确返回不可预览。参见 `file-mentions.test.ts` 与 [PRD 0033](../doc/40-版本实施方案/0033-0.0.36-协作过程可视化与工作台质感产品需求.md)。
+
+Product Store Schema 3 追加 Task 内 Workflow、不可变版本、阶段、Run、Work Item 绑定和有来源的整体报告。`dcodeSession.prompt.workflowDraft` 在保存首条用户 Raw Input 时原子建立零阶段草稿；协调者通过 `dcode_team` 修订阶段、启动、停止后续推进或安全继续。报告请求以 `workflowReportRunId` 在生成前绑定 Run／版本／Goal；`task.workflow.complete` 复核阶段独立证据、协调报告与最新输入，仍不代替用户接受 Task。Goal 修订拒绝未收口 Team Run 或活动 Workflow，重启不会把消失的 Runtime 伪装为继续运行。参见 `task-workflow.test.ts` 与 [PRD 0034](../doc/40-版本实施方案/0034-0.0.36-任务内工作流产品需求.md)。

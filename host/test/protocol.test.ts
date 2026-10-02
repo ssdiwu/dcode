@@ -24,6 +24,70 @@ test("parseRequest accepts a valid envelope", () => {
   assert.equal(request.method, "host.hello");
 });
 
+test("error response removes synthetic credentials from message and nested details", () => {
+  const secret = "sk-test_syntheticProtocolSecret12345";
+  const response = errorResponse("r-secret", "host.hello", "SAMPLE_FAILURE", `Retry after ${secret}`, {
+    cause: { authorization: `Bearer ${secret}`, apiKey: "fixture-short-key" },
+    retryable: true,
+  });
+  assert.equal(response.error.code, "SAMPLE_FAILURE");
+  assert.equal(response.error.message.includes(secret), false);
+  assert.equal(JSON.stringify(response.error.details).includes(secret), false);
+  assert.equal(JSON.stringify(response.error.details).includes("fixture-short-key"), false);
+  assert.equal((response.error.details as {retryable:boolean}).retryable, true);
+  const unsafeCorrelation = errorResponse(secret, `missing.${secret}`, "METHOD_NOT_FOUND", `Unknown ${secret}`);
+  assert.equal(JSON.stringify(unsafeCorrelation).includes(secret), false);
+});
+
+test("failure events redact diagnostic fields while preserving the failure state", () => {
+  const secret = "sk-test_syntheticEventSecret123456";
+  const event = protocolEvent("session.promptFailed", {
+    code: "MODEL_FAILED",
+    message: `Provider rejected ${secret}`,
+    details: { token: "short-fixture", cause: [`Bearer ${secret}`] },
+    failed: true,
+  });
+  assert.equal(JSON.stringify(event).includes(secret), false);
+  assert.deepEqual({ code: (event.data as {code:string}).code, failed: (event.data as {failed:boolean}).failed }, {
+    code: "MODEL_FAILED",
+    failed: true,
+  });
+  assert.equal((event.data as {details:{token:string}}).details.token, "[REDACTED]");
+});
+
+test("failed runtime tool events redact nested details without changing normal media events", () => {
+  const failed = protocolEvent("session.event", {
+    type: "tool_execution_end",
+    toolCallId: "tool-1",
+    isError: true,
+    result: { content: [{ type: "text", text: "Tool failed" }], details: { token: "opaque123" } },
+  });
+  assert.equal(JSON.stringify(failed).includes("opaque123"), false);
+  assert.equal((failed.data as {result:{details:{token:string}}}).result.details.token, "[REDACTED]");
+
+  for (const [name, data] of [
+    ["message_end", { type: "message_end", message: { role: "toolResult", isError: true, details: { token: "opaque123" } } }],
+    ["turn_end", { type: "turn_end", toolResults: [{ role: "toolResult", isError: true, details: { token: "opaque123" } }] }],
+    ["agent_end", { type: "agent_end", messages: [{ role: "toolResult", isError: true, details: { token: "opaque123" } }] }],
+  ] as const) {
+    assert.equal(JSON.stringify(protocolEvent("session.event", data)).includes("opaque123"), false, name);
+  }
+
+  const media = "data:image/png;base64,AAAA";
+  const failedMedia = protocolEvent("session.event", {
+    type: "tool_execution_end",
+    isError: true,
+    result: { content: [{ type: "image", data: media }], details: { token: "opaque123" } },
+  });
+  assert.equal((failedMedia.data as {result:{content:[{data:string}]}}).result.content[0].data, media);
+  const normal = protocolEvent("session.event", {
+    type: "tool_execution_end",
+    isError: false,
+    result: { content: [{ type: "image", data: media }] },
+  });
+  assert.equal((normal.data as {result:{content:[{data:string}]}}).result.content[0].data, media);
+});
+
 test("parseRequest rejects an unsupported version", () => {
   assert.throws(
     () => parseRequest({ version: 2, type: "request", id: "r1", method: "host.hello" }),
@@ -82,6 +146,10 @@ test("method parameter validation rejects invalid values", () => {
     goal: "Create the native Task bundle",
     acceptance: ["Task exists"],
   }));
+  assert.doesNotThrow(() => validateMethodParams("task.goal.history",{taskId:"task-a"}));
+  assert.doesNotThrow(() => validateMethodParams("task.goal.update",{requestId:"goal-change",expectedStoreRevision:2,scope:{kind:"user",userId:"current-user"},taskId:"task-a",expectedTaskRevision:1,goal:"明确结果",acceptance:["可验收"]}));
+  assert.throws(() => validateMethodParams("task.goal.update",{requestId:"goal-missing",expectedStoreRevision:2,scope:{kind:"user",userId:"current-user"},taskId:"task-a",goal:"结果",acceptance:[]}),
+    (error:unknown)=>error instanceof ProtocolValidationError&&error.code==="INVALID_PARAMS");
   const taskContextReplace = {
     requestId: "task-context-replace",
     expectedStoreRevision: 2,
@@ -110,6 +178,50 @@ test("method parameter validation rejects invalid values", () => {
     document: { version: 1, title: "Plan" },
   };
   assert.doesNotThrow(() => validateMethodParams("task.plan.create", taskPlanCreate));
+  const workflow = {
+    requestId: "workflow-create", expectedStoreRevision: 3,
+    scope: { kind: "project", projectId: "project-a" }, taskId: "task-a",
+    originRawInputId: "raw-a", goal: "先实现再检查",
+    stages: [
+      { id: "build", title: "实现", completion: "变更完成", dependsOn: [] },
+      { id: "check", title: "检查", completion: "留下核查证据", dependsOn: ["build"] },
+    ],
+  };
+  assert.doesNotThrow(() => validateMethodParams("task.workflow.create", workflow));
+  assert.doesNotThrow(() => validateMethodParams("task.workflow.start", {
+    requestId: "workflow-start", expectedStoreRevision: 4,
+    scope: workflow.scope, taskId: workflow.taskId,
+    workflowId: "workflow-a", expectedWorkflowRevision: 1,
+  }));
+  assert.doesNotThrow(() => validateMethodParams("dcodeSession.prompt", {
+    dcodeSessionId: "coordination-session", promptId: "workflow-report-prompt",
+    message: "汇总工作流结果", workflowReportRunId: "workflow-run-a",
+  }));
+  assert.doesNotThrow(() => validateMethodParams("dcodeSession.prompt", {
+    dcodeSessionId: "coordination-session", promptId: "workflow-draft-prompt",
+    message: "请分阶段处理", workflowDraft: { goal: "完成任务", constraints: ["保留原文"] },
+  }));
+  assert.throws(() => validateMethodParams("dcodeSession.prompt", {
+    dcodeSessionId: "coordination-session", promptId: "bad-workflow-draft-prompt",
+    message: "请分阶段处理", workflowDraft: { goal: "完成任务" }, targetAgentRunId: "member-a",
+  }), (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS");
+  assert.throws(() => validateMethodParams("dcodeSession.prompt", {
+    dcodeSessionId: "coordination-session", promptId: "bad-workflow-report-prompt",
+    message: "不能向成员伪造工作流报告", workflowReportRunId: "workflow-run-a",
+    targetAgentRunId: "member-a",
+  }), (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS");
+  assert.throws(
+    () => validateMethodParams("task.workflow.create", { ...workflow, stages: [{ ...workflow.stages[0], dependsOn: "check" }] }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
+  assert.throws(
+    () => validateMethodParams("task.workflow.stop", {
+      requestId: "workflow-stop", expectedStoreRevision: 5,
+      scope: workflow.scope, taskId: workflow.taskId,
+      runId: "workflow-run-a", expectedRunRevision: 1,
+    }),
+    (error: unknown) => error instanceof ProtocolValidationError && error.code === "INVALID_PARAMS",
+  );
   assert.doesNotThrow(() => validateMethodParams("task.workItem.create", {
     requestId: "task-work-create",
     expectedStoreRevision: 4,

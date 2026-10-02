@@ -1,0 +1,24 @@
+src/model-catalog-configuration.ts(253,26): error TS2339: Property 'samplingParams' does not exist on type 'Partial<ProviderModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+  Property 'samplingParams' does not exist on type 'Partial<ProviderImageModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+src/model-catalog-configuration.ts(253,68): error TS2339: Property 'samplingParams' does not exist on type 'Partial<ProviderModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+  Property 'samplingParams' does not exist on type 'Partial<ProviderImageModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+src/model-catalog-configuration.ts(254,26): error TS2339: Property 'thinkingLevelMap' does not exist on type 'Partial<ProviderModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+  Property 'thinkingLevelMap' does not exist on type 'Partial<ProviderImageModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+src/model-catalog-configuration.ts(255,46): error TS2339: Property 'thinkingLevelMap' does not exist on type 'Partial<ProviderModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+  Property 'thinkingLevelMap' does not exist on type 'Partial<ProviderImageModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+src/model-catalog-configuration.ts(261,53): error TS2339: Property 'compat' does not exist on type 'Partial<ProviderModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+  Property 'compat' does not exist on type 'Partial<ProviderImageModelConfig> & { apiOverride?: string | undefined; baseUrlOverride?: string | undefined; }'.
+test/sdk-compatibility.test.ts(29,110): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(30,112): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(31,141): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(33,120): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(34,119): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(35,99): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool
+test/sdk-compatibility.test.ts(36,108): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionToolContext'.
+  Type 'ExtensionContext' is missing the following properties from type 'ExtensionToolContext': tools, executeTool

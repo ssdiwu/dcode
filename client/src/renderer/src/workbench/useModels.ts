@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { api, errorText } from "../types";
@@ -36,7 +37,7 @@ export function useModels({sessionId, mutateStore, onChanged, onError}: {
       void (async()=>{
         if(result.ok||result.code==="SYNC_REQUIRED"||result.code==="FAILED")await mutateConnections(current=>current?{providers:current.providers.map(p=>p.providerId===providerId?{...p,state:result.ok?"configured":result.code==="SYNC_REQUIRED"?"sync_required":"failed",...(result.ok||result.code==="SYNC_REQUIRED"?{managed:true,external:false}:{})}:p)}:current,false);
         await Promise.all([mutateConnections(),mutate()]);await onChanged();
-      })().catch(()=>setFailure("连接操作已返回，页面刷新失败，请重新刷新连接状态。"));
+      })().catch(()=>setFailure(uiText("连接操作已返回，页面刷新失败，请重新刷新连接状态。")));
       return result;
     }catch{return {ok:false as const,code:"OUTCOME_UNKNOWN" as const};}
     finally{key="";apiKeyFlight.current=false;setConnectionBusy(false);}

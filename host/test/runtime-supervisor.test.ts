@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -120,6 +120,8 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
     defaultProvider: "barrier",
     defaultModel: "barrier-model",
     enabledModels: ["barrier/barrier-model"],
+    shellPath: "/bin/bash",
+    shellCommandPrefix: "printf prefix-ran > prefix-marker.txt",
   })}\n`);
   await writeFile(join(agentDir, "auth.json"), "{}\n");
   await writeFile(join(agentDir, "models.json"), `${JSON.stringify({
@@ -467,6 +469,18 @@ test("two explicit Runtimes keep different D Code Sessions active concurrently",
     };
     assert.equal(nativeStarted.binding.sessionId, taskA.coordinationSession.id);
     assert.notEqual(nativeStarted.binding.adapterSessionId, "adapter-a");
+    const envKey='DCODE_SYNTHETIC_HOST_SECRET',previousEnv=process.env[envKey];
+    process.env[envKey]='synthetic-secret-for-test-only';
+    try {
+      const runtime=(host as unknown as {runtimes:Map<string,{session:{getActiveToolNames:()=>string[];getToolDefinition:(name:string)=>{execute:(id:string,args:{command:string})=>Promise<{content:Array<{text?:string}>}>}|undefined}}>}).runtimes.get('runtime-native');
+      assert.ok(runtime);
+      assert.ok(runtime.session.getActiveToolNames().includes('bash'));
+      const bash=runtime.session.getToolDefinition('bash');
+      assert.ok(bash);
+      const output=await bash.execute('native-secret',{command:'printf "%s" "${DCODE_SYNTHETIC_HOST_SECRET-}"'});
+      assert.equal(output.content[0]?.text,'(no output)');
+      assert.equal(await readFile(join(workspaceA,'prefix-marker.txt'),'utf8'),'prefix-ran');
+    } finally {if(previousEnv===undefined)delete process.env[envKey];else process.env[envKey]=previousEnv;}
     const withNative = await host.handle("runtime.list", {}) as {
       runtimes: Array<{ identity: { runtimeId: string } }>;
     };

@@ -1,3 +1,4 @@
+import { uiText } from "../../shared/ui-language.ts";
 import type {
   HostEvent,
   FoundationSnapshot,
@@ -19,6 +20,7 @@ export interface MessagePart {
 export interface MessageRow {
   id: string;
   role: "user" | "assistant" | "process" | "coordination";
+  navigationEligible?: boolean;
   collaborationGroupId?:string;
   inputBoundary?:boolean;
   time?: string;
@@ -35,6 +37,7 @@ export function messageRows(
     type: string;
     timestamp?: string;
     message?: unknown;
+    navigationEligible?: boolean;
   }[],
 ): MessageRow[] {
   const rows: MessageRow[] = [];
@@ -52,7 +55,7 @@ export function messageRows(
       parts.push({
         kind: "text",
         text:
-          msg.stopReason === "aborted" ? "本次执行已停止。" : typeof msg.errorMessage === "string" ? msg.errorMessage : "本次执行失败，请重试。",
+          msg.stopReason === "aborted" ? uiText("本次执行已停止。") : typeof msg.errorMessage === "string" ? msg.errorMessage : uiText("本次执行失败，请重试。"),
       });
     const content =
       typeof msg.content === "string"
@@ -66,16 +69,16 @@ export function messageRows(
         parts.push({
           kind: role === "process" ? "tool" : "text",
           text: String(part.text ?? ""),
-          ...(role === "process" ? {toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? "工具"), toolResult: true, isError: msg.isError === true} : {}),
+          ...(role === "process" ? {toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? uiText("工具")), toolResult: true, isError: msg.isError === true} : {}),
         });
       else if (part.type === "thinking" && String(part.thinking ?? "").trim())
         parts.push({ kind: "thinking", text: String(part.thinking ?? "") });
       else if (part.type === "toolCall")
         parts.push({
           kind: "tool",
-          text: `${String(part.name ?? part.toolName ?? "工具")}\n${JSON.stringify(part.arguments ?? {}, null, 2)}`,
+          text: `${String(part.name ?? part.toolName ?? uiText("工具"))}\n${JSON.stringify(part.arguments ?? {}, null, 2)}`,
           toolCallId: String(part.id ?? entry.id),
-          toolName: String(part.name ?? part.toolName ?? "工具"),
+          toolName: String(part.name ?? part.toolName ?? uiText("工具")),
         });
       else if (
         part.type === "image" &&
@@ -86,13 +89,13 @@ export function messageRows(
           kind: "image",
           text: part.data,
           mimeType: String(part.mimeType),
-          ...(role === "process" ? {toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? "工具"), toolResult: true, isError: msg.isError === true} : {}),
+          ...(role === "process" ? {toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? uiText("工具")), toolResult: true, isError: msg.isError === true} : {}),
         });
     }
     if (role === "process" && parts.length === 0)
-      parts.push({ kind: "tool", text: "工具已结束，无文本输出。", toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? "工具"), toolResult: true, isError: msg.isError === true });
+      parts.push({ kind: "tool", text: uiText("工具已结束，无文本输出。"), toolCallId: String(msg.toolCallId ?? entry.id), toolName: String(msg.toolName ?? uiText("工具")), toolResult: true, isError: msg.isError === true });
     if (parts.length)
-      rows.push({ id: entry.id, role, time: entry.timestamp, parts, messageId: msg.timestamp == null ? undefined : String(msg.timestamp), stopReason: typeof msg.stopReason === "string" ? msg.stopReason : undefined });
+      rows.push({ id: entry.id, role, time: entry.timestamp, parts, ...(entry.navigationEligible === undefined ? {} : {navigationEligible: entry.navigationEligible}), messageId: msg.timestamp == null ? undefined : String(msg.timestamp), stopReason: typeof msg.stopReason === "string" ? msg.stopReason : undefined });
   }
   return rows;
 }
@@ -150,7 +153,7 @@ export function reduceStream(
     const previous = tools[index];
     const result = record(data.type === "tool_execution_update" ? data.partialResult : data.result);
     const output = Array.isArray(result.content) ? result.content.map(value => String(record(value).text ?? "")).filter(Boolean).join("\n") : "";
-    const tool: LiveTool = {id,inputMessageId:previous?.inputMessageId??next.inputMessageId, name: String(data.toolName ?? previous?.name ?? "工具"), input: data.args === undefined ? previous?.input ?? "" : JSON.stringify(data.args, null, 2), output: output || previous?.output || "", state: data.type === "tool_execution_end" ? data.isError ? "error" : "complete" : "running"};
+    const tool: LiveTool = {id,inputMessageId:previous?.inputMessageId??next.inputMessageId, name: String(data.toolName ?? previous?.name ?? uiText("工具")), input: data.args === undefined ? previous?.input ?? "" : JSON.stringify(data.args, null, 2), output: output || previous?.output || "", state: data.type === "tool_execution_end" ? data.isError ? "error" : "complete" : "running"};
     if (index < 0) tools.push(tool); else tools[index] = tool;
     return {...next, tools};
   }
@@ -228,7 +231,7 @@ export interface RevisionApi {
 export function mutationQueue(client: RevisionApi) {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-    const requestId = crypto.randomUUID();
+    const requestId = typeof params.requestId==="string"&&params.requestId?params.requestId:crypto.randomUUID();
     const run = async (): Promise<T> => {
       for (let attempt = 0; ; attempt++) {
         const snapshot = await client.request<FoundationSnapshot>(

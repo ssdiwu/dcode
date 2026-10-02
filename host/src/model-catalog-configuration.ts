@@ -232,12 +232,12 @@ export async function registerCatalogProviders(
       models: snapshot.modelCatalogEntries
         .filter((m) => m.providerId === provider.id)
         .map((m) => {
-          const metadata = m.nonsecret as Partial<
-            NonNullable<
-              Parameters<ModelRuntime["registerProvider"]>[1]["models"]
-            >[number]
-          > & { apiOverride?: string; baseUrlOverride?: string };
+          const metadata = m.nonsecret as Partial<Extract<
+            NonNullable<Parameters<ModelRuntime["registerProvider"]>[1]["models"]>[number],
+            {type?:"chat"}
+          >> & { apiOverride?: string; baseUrlOverride?: string };
           return {
+            type: "chat" as const,
             id: m.modelId,
             name: m.name,
             reasoning: m.reasoning,

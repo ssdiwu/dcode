@@ -1,3 +1,4 @@
+import { uiText } from "../shared/ui-language.ts";
 import {blockedPreviewProxy} from "./preview-network.js";
 import {protocol,session,WebContentsView,type BrowserWindow} from "electron";
 import {randomUUID} from "node:crypto";
@@ -13,9 +14,9 @@ export class HTMLPreview {
   private owner?:string;
   constructor(private readonly window:()=>BrowserWindow|null,private readonly bridge:()=>HostBridge|null,private readonly emit:(event:string,data:unknown)=>void){}
   async update(input:PreviewInput):Promise<{id:string;network:boolean;blocked:boolean}>{
-    if(!input||typeof input.clientId!=="string"||input.clientId.length>100||typeof input.path!=="string"||typeof input.text!=="string"||!input.bounds)throw new Error("预览内容无效");
+    if(!input||typeof input.clientId!=="string"||input.clientId.length>100||typeof input.path!=="string"||typeof input.text!=="string"||!input.bounds)throw new Error(uiText("预览内容无效"));
     const generation=++this.generation;this.owner=input.clientId;
-    const window=this.window(),bridge=this.bridge();if(!window||!bridge)throw new Error("预览服务尚未连接");
+    const window=this.window(),bridge=this.bridge();if(!window||!bridge)throw new Error(uiText("预览服务尚未连接"));
     const preserveMainFocus=window.webContents.isFocused(),previous=this.active,interaction=previous?.interactions??0;
     try{await bridge.request("workspace.preview",{source:input.source,path:input.path,text:input.text,expectedRoot:input.root});}
     catch(error){if(generation===this.generation)await this.close(input.clientId);throw error;}
@@ -71,13 +72,13 @@ export class HTMLPreview {
   bounds(bounds:PreviewInput["bounds"],clientId?:string):void {
     if(clientId&&clientId!==this.owner)return;
     const active=this.active,window=this.window();if(!active||!window)return;
-    if(!bounds||Object.values(bounds).some(value=>!Number.isFinite(value)||value<0||value>16384))throw new Error("预览位置无效");
+    if(!bounds||Object.values(bounds).some(value=>!Number.isFinite(value)||value<0||value>16384))throw new Error(uiText("预览位置无效"));
     const zoom=window.webContents.getZoomFactor(),available=window.getContentBounds();
     const x=Math.round(bounds.x*zoom),y=Math.round(bounds.y*zoom);
     active.view.setBounds({x,y,width:Math.max(0,Math.min(Math.round(bounds.width*zoom),available.width-x)),height:Math.max(0,Math.min(Math.round(bounds.height*zoom),available.height-y))});
     active.view.setVisible(bounds.width>0&&bounds.height>0);
   }
-  async allowNetwork(id:string,allow:boolean):Promise<void>{const active=this.active;if(!active||active.id!==id)throw new Error("预览已经改变");active.network=allow;active.blocked=false;await active.browserSession.setProxy(allow?{mode:"system"}:await blockedPreviewProxy());if(!allow)await active.browserSession.closeAllConnections();if(this.active===active)active.view.webContents.reload();}
+  async allowNetwork(id:string,allow:boolean):Promise<void>{const active=this.active;if(!active||active.id!==id)throw new Error(uiText("预览已经改变"));active.network=allow;active.blocked=false;await active.browserSession.setProxy(allow?{mode:"system"}:await blockedPreviewProxy());if(!allow)await active.browserSession.closeAllConnections();if(this.active===active)active.view.webContents.reload();}
   async close(clientId?:string):Promise<void>{
     if(clientId&&clientId!==this.owner)return;
     this.generation++;this.owner=undefined;await this.disposeActive();

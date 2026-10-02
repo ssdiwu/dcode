@@ -1,3 +1,4 @@
+import { uiText } from "../../../../shared/ui-language.ts";
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
@@ -5,8 +6,8 @@ import { X } from "lucide-react";
 export function ImagePreview({src,onClose}:{src:string;onClose:()=>void}) {
   const dialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{dialog.current?.showModal();},[]);
-  return <dialog className="image-preview-dialog" ref={dialog} aria-label="图片预览" onClose={onClose} onClick={event=>{if(event.target===event.currentTarget)dialog.current?.close();}}>
-    <button className="icon-button image-preview-close" aria-label="关闭图片预览" onClick={()=>dialog.current?.close()}><X size={20}/></button>
-    <img src={src} alt="图片预览"/>
+  return <dialog className="image-preview-dialog" ref={dialog} aria-label={uiText("图片预览")} onClose={onClose} onClick={event=>{if(event.target===event.currentTarget)dialog.current?.close();}}>
+    <button className="icon-button image-preview-close" aria-label={uiText("关闭图片预览")} onClick={()=>dialog.current?.close()}><X size={20}/></button>
+    <img src={src} alt={uiText("图片预览")}/>
   </dialog>;
 }

@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 import { inheritedApiKeyChannel } from "./api-key-channel.js";
 import { JsonlDecoder, JsonlWriter } from "./jsonl.js";
 import { PiHost } from "./pi-host.js";
+import { diagnosticError, diagnosticText } from "./diagnostic-safety.js";
 import type { LegacyStoreKind } from "./legacy-migration.js";
 import {
-  ProtocolValidationError,
   errorResponse,
   isHostMethod,
   parseRequest,
@@ -49,7 +49,7 @@ function parseCli(argv: readonly string[]): CliOptions {
       process.stderr.write("Usage: pi-dcode-host [--agent-dir PATH] [--sessions-dir PATH] [--lease-agent-dir PATH] [--search-cache-dir PATH] [--data-root PATH]\n");
       process.exit(0);
     }
-    throw new Error(`Unknown argument: ${argument}`);
+    throw new Error(`Unknown argument: ${diagnosticText(argument)}`);
   }
   return options;
 }
@@ -65,20 +65,7 @@ function rawCorrelation(value: unknown): { id: string; method: string } | undefi
 }
 
 function errorDetails(error: unknown): { code: string; message: string; details?: unknown } {
-  if (error instanceof ProtocolValidationError) {
-    return error.details === undefined
-      ? { code: error.code, message: error.message }
-      : { code: error.code, message: error.message, details: error.details };
-  }
-  if (typeof error === "object" && error !== null) {
-    const value = error as { code?: unknown; message?: unknown; details?: unknown };
-    if (typeof value.code === "string" && typeof value.message === "string") {
-      return value.details === undefined
-        ? { code: value.code, message: value.message }
-        : { code: value.code, message: value.message, details: value.details };
-    }
-  }
-  return { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
+  return diagnosticError(error);
 }
 
 function legacyUserDefaultsSnapshot(raw: string | undefined): Record<string, unknown> | undefined {
@@ -86,8 +73,8 @@ function legacyUserDefaultsSnapshot(raw: string | undefined): Record<string, unk
   let value: unknown;
   try {
     value = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`D Code legacy UserDefaults snapshot is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    throw new Error("D Code legacy UserDefaults snapshot is invalid JSON");
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("D Code legacy UserDefaults snapshot must be an object");
@@ -132,7 +119,7 @@ const host = new PiHost({
   ...(Object.keys(legacySourcePaths).length > 0 ? { legacySourcePaths } : {}),
   emit: (event, data) => {
     void writer.write(protocolEvent(event, data)).catch((error) => {
-      process.stderr.write(`D Code host output error: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`D Code host output error: ${diagnosticText(error)}\n`);
     });
   },
 });
@@ -186,7 +173,7 @@ function schedule(value: unknown): void {
     ? Promise.resolve().then(() => handleValue(value))
     : requestQueue.then(() => handleValue(value));
   const task = operation.catch((error) => {
-    process.stderr.write(`D Code host request error: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(`D Code host request error: ${diagnosticText(error, true)}\n`);
   });
   if (!bypassQueue) requestQueue = task;
   activeRequests.add(task);
@@ -214,7 +201,7 @@ async function shutdown(exitCode: number): Promise<void> {
     await host.close();
     await writer.flush();
   } catch (error) {
-    process.stderr.write(`D Code host shutdown error: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(`D Code host shutdown error: ${diagnosticText(error, true)}\n`);
     exitCode = exitCode === 0 ? 1 : exitCode;
   }
   clearTimeout(forceExit);
@@ -246,12 +233,12 @@ for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) {
 }
 
 process.on("uncaughtException", (error) => {
-  process.stderr.write(`D Code host uncaught exception: ${error.stack ?? error.message}\n`);
+  process.stderr.write(`D Code host uncaught exception: ${diagnosticText(error, true)}\n`);
   void shutdown(1);
 });
 
 process.on("unhandledRejection", (error) => {
-  process.stderr.write(`D Code host unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(`D Code host unhandled rejection: ${diagnosticText(error, true)}\n`);
   void shutdown(1);
 });
 

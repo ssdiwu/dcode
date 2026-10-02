@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {conversationTurns, currentTurn, turnIndexAtPosition} from "../src/renderer/src/workbench/conversation-navigation.ts";
+import {conversationTurns, currentTurn} from "../src/renderer/src/workbench/conversation-navigation.ts";
 
 const row = (id, role, text) => ({id,role,parts:[{kind:role === "process" ? "tool" : "text",text}]});
 
@@ -14,16 +14,26 @@ test("conversation navigation uses user turns and keeps repeated questions disti
   assert.deepEqual(conversationTurns([]),[]);
 });
 
-test("dense rail pointer positions and reading anchors stay within actual turns",()=>{
-  assert.equal(turnIndexAtPosition(0,100,5),0);
-  assert.equal(turnIndexAtPosition(50,100,5),2);
-  assert.equal(turnIndexAtPosition(100,100,5),4);
-  assert.equal(turnIndexAtPosition(-10,100,5),0);
-  assert.equal(turnIndexAtPosition(20,0,5),-1);
-  assert.equal(turnIndexAtPosition(20,100,0),-1);
+test("reading anchors stay within actual user inputs",()=>{
   const anchors=[{id:"u1",top:24},{id:"u2",top:640},{id:"u3",top:1200}];
   assert.equal(currentTurn(anchors,0),"u1");
   assert.equal(currentTurn(anchors,800),"u2");
   assert.equal(currentTurn(anchors,2400),"u3");
   assert.equal(currentTurn([],0),null);
+});
+
+test("coordinator handoffs and tool boundaries do not become questions or borrow a previous answer",()=>{
+  const rows=[row("u1","user","用户要求"),row("a1","assistant","首个回答"),
+    {...row("handoff","coordination","主对话的安排"),collaborationGroupId:"g1"},
+    {...row("a2","assistant","成员执行结果"),collaborationGroupId:"g1"},
+    row("u2","user","用户补充"),row("a3","assistant","补充回答")];
+  assert.deepEqual(conversationTurns(rows),[
+    {id:"u1",question:"用户要求",answer:"首个回答"},
+    {id:"u2",question:"用户补充",answer:"补充回答"},
+  ]);
+  assert.equal(conversationTurns(rows,"流式回答")[1].answer,"补充回答 流式回答");
+  assert.equal(conversationTurns(rows.slice(0,4),"流式协作进展")[0].answer,"首个回答");
+  assert.deepEqual(conversationTurns([row("u1","user","真实提问"),
+    {...row("system","user","原生系统事件"),navigationEligible:false},row("reply","assistant","系统事件回复")]),
+    [{id:"u1",question:"真实提问",answer:""}]);
 });

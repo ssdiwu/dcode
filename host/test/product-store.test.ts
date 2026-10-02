@@ -42,6 +42,68 @@ function open(f: Fixture, options: { faultInjector?: (point: ProductStoreFaultPo
   });
 }
 
+test('language preference persists and only localizes newly generated session labels',async()=>{
+ const f=await fixture('dcode-language-store-');let store=await open(f);
+ try{
+  assert.equal(store.clientPreferences().language,'zh-CN');
+  let snap=await store.snapshot();
+  const original=await store.createTask({requestId:'language-task',expectedStoreRevision:snap.storeRevision,scope:{kind:'user',userId:snap.currentUser.id},title:'用户名称 KEEP',goal:'中文目标 KEEP',acceptance:['用户验收 KEEP']});
+  snap=await store.snapshot();
+  await store.setClientPreferences({requestId:'language-en',expectedStoreRevision:snap.storeRevision,language:'en'});
+  await assert.rejects(store.setClientPreferences({requestId:'invalid-language',expectedStoreRevision:(await store.snapshot()).storeRevision,language:'fr' as 'en'}),{code:'INVALID_ARGUMENT'});
+  const copied=await store.copyTaskSession({requestId:'language-copy-en',expectedStoreRevision:(await store.snapshot()).storeRevision,sourceSessionId:original.coordinationSession.id});
+  assert.match(copied.task.title,/用户名称 KEEP Copy$/);
+  const continued=await store.continueTaskSession({requestId:'language-continue-en',expectedStoreRevision:(await store.snapshot()).storeRevision,taskId:original.task.id});
+  assert.match(continued.coordinationSession.title,/用户名称 KEEP · Conversation 2$/);
+  const source=store.readTaskSummarySource(original.task.id,{kind:'task',id:original.task.id});
+  assert.equal(source.title,'用户名称 KEEP');assert.match(source.content!,/Task goal: 中文目标 KEEP\nAcceptance criteria: 用户验收 KEEP/);
+  const before=await store.snapshot();
+  await store.close();store=await open(f);assert.equal(store.clientPreferences().language,'en');
+  await store.setClientPreferences({requestId:'language-zh',expectedStoreRevision:(await store.snapshot()).storeRevision,language:'zh-CN'});
+  assert.deepEqual((await store.snapshot()).sessions.map(session=>session.title),before.sessions.map(session=>session.title));
+  const next=await store.continueTaskSession({requestId:'language-continue-zh',expectedStoreRevision:(await store.snapshot()).storeRevision,taskId:original.task.id});
+  assert.match(next.coordinationSession.title,/用户名称 KEEP · 第 3 段$/);
+ }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
+});
+
+test("Product Store closing rejects new mutations while an accepted write finishes",async()=>{
+  const f=await fixture("dcode-product-store-close-race-");
+  const store=await open(f);
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  let entered!:()=>void;
+  const reached=new Promise<void>(resolve=>{entered=resolve;});
+  try {
+    const snapshot=await store.snapshot();
+    const lease=(store as unknown as {lease:{assertOwned:()=>Promise<void>}}).lease;
+    const original=lease.assertOwned.bind(lease);
+    let held=false;
+    lease.assertOwned=async()=>{if(!held){held=true;entered();await gate;}await original();};
+    const first=store.createTask({requestId:"accepted-before-close",expectedStoreRevision:snapshot.storeRevision,scope:{kind:"user",userId:snapshot.currentUser.id},title:"Accepted",goal:"Finish the accepted write"});
+    await reached;
+    const closing=store.close();
+    const late=store.createTask({requestId:"after-close-started",expectedStoreRevision:snapshot.storeRevision,scope:{kind:"user",userId:snapshot.currentUser.id},title:"Late",goal:"Must not enter the queue"});
+    try {
+      await assert.rejects(Promise.race([
+        late,
+        new Promise<never>((_resolve,reject)=>setTimeout(()=>reject(new Error("new mutation stayed queued after close began")),250)),
+      ]),(error:unknown)=>error instanceof ProductStoreError&&error.code==="PRODUCT_STORE_CLOSED");
+    } finally {
+      release();
+      await Promise.allSettled([first,late,closing]);
+    }
+    const reopened=await open(f);
+    try {
+      const result=await reopened.snapshot();
+      assert.deepEqual(result.tasks.map(task=>task.title),["Accepted"]);
+    } finally {await reopened.close();}
+  } finally {
+    release();
+    await store.close().catch(()=>undefined);
+    await rm(f.root,{recursive:true,force:true});
+  }
+});
+
 function schemaFingerprintForTest(database: DatabaseSync): string {
   const definitions = database.prepare(`
     SELECT type, name, tbl_name, sql
@@ -55,6 +117,12 @@ function schemaFingerprintForTest(database: DatabaseSync): string {
 function rewriteAsSchemaV1Fixture(database: DatabaseSync): void {
   database.exec(`
     PRAGMA foreign_keys = OFF;
+    DROP TABLE task_workflow_work_items;
+    DROP TABLE task_workflow_reports;
+    DROP TABLE task_workflow_runs;
+    DROP TABLE task_workflow_stages;
+    DROP TABLE task_workflow_versions;
+    DROP TABLE task_workflows;
     DROP TABLE task_context_sources;
     DROP TABLE task_context_sets;
     DELETE FROM schema_migrations;
@@ -63,6 +131,28 @@ function rewriteAsSchemaV1Fixture(database: DatabaseSync): void {
     PRAGMA user_version = 1;
   `);
   database.prepare("UPDATE dcode_meta SET value = '1' WHERE key IN ('schema_version', 'minimum_reader_schema_version')").run();
+  database.prepare("UPDATE dcode_meta SET value = '0.0.28' WHERE key = 'product_version'").run();
+  database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
+    .run(schemaFingerprintForTest(database));
+  database.exec("PRAGMA foreign_keys = ON");
+}
+
+function rewriteAsSchemaV2Fixture(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE task_workflow_work_items;
+    DROP TABLE task_workflow_reports;
+    DROP TABLE task_workflow_runs;
+    DROP TABLE task_workflow_stages;
+    DROP TABLE task_workflow_versions;
+    DROP TABLE task_workflows;
+    DELETE FROM schema_migrations;
+    INSERT INTO schema_migrations(version, applied_at, product_version)
+    VALUES (2, '2026-08-24T00:00:00.000Z', '0.0.28');
+    PRAGMA user_version = 2;
+  `);
+  database.prepare("UPDATE dcode_meta SET value = '2' WHERE key IN ('schema_version', 'minimum_reader_schema_version')").run();
+  database.prepare("UPDATE dcode_meta SET value = '0.0.28' WHERE key = 'product_version'").run();
   database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
     .run(schemaFingerprintForTest(database));
   database.exec("PRAGMA foreign_keys = ON");
@@ -93,7 +183,7 @@ async function prewriteSchemaV1PromotionBackup(f: Fixture): Promise<void> {
     `${JSON.stringify({
       migrationId: migrationID,
       fromSchemaVersion: 1,
-      toSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
+      toSchemaVersion: 2,
       sourceDigest: digest,
     }, null, 2)}\n`,
   );
@@ -356,6 +446,67 @@ test("task.create atomically creates a User Scope Task, Coordination Session and
   }
 });
 
+test("Task Goal draft and revisions keep original input separate and survive restart", async () => {
+  const f = await fixture();
+  let store = await open(f);
+  try {
+    const scope = {kind:"user" as const,userId:(await store.snapshot()).currentUser.id};
+    const draft = await store.setTaskDraft({requestId:"goal-draft",expectedStoreRevision:0,scope,text:"提交原文",goal:"短期结果",acceptance:["验收目的"]});
+    assert.equal(draft.composerDraft?.text,"提交原文");
+    assert.equal(draft.composerDraft?.goal,"短期结果");
+    await store.close();store = await open(f);
+    assert.equal((await store.snapshot()).composerDrafts[0]?.goal,"短期结果");
+    const created = await store.createTask({requestId:"goal-created",expectedStoreRevision:1,scope,title:"目标任务",goal:"短期结果",acceptance:["验收目的"]});
+    const revised = await store.updateTaskGoal({requestId:"goal-revised",expectedStoreRevision:2,taskId:created.task.id,scope,expectedTaskRevision:1,goal:"修订后的结果",acceptance:["新验收目的"]});
+    assert.equal(revised.task.goal,"修订后的结果");
+    assert.equal(revised.task.revision,2);
+    assert.deepEqual(store.taskGoalHistory(created.task.id).map(item=>item.goal),["短期结果","修订后的结果"]);
+    const oldSource=store.readTaskSummarySource(created.task.id,{kind:"task",id:created.task.id,revision:1});
+    assert.equal(oldSource.state,"available");
+    assert.match(oldSource.content??"",/短期结果/);
+    await assert.rejects(store.updateTaskGoal({requestId:"stale-goal",expectedStoreRevision:3,taskId:created.task.id,scope,expectedTaskRevision:1,goal:"旧表单覆盖",acceptance:[]}),
+      (error:unknown)=>error instanceof ProductStoreError&&error.code==="REVISION_CONFLICT");
+    await store.close();store = await open(f);
+    assert.deepEqual(store.taskGoalHistory(created.task.id).map(item=>item.goal),["短期结果","修订后的结果"]);
+    assert.equal((await store.snapshot()).tasks[0]?.goal,"修订后的结果");
+  } finally {await store.close();await rm(f.root,{recursive:true,force:true});}
+});
+
+test("a waiting member and a prepared run block Goal revision until their Team Run settles", async()=>{
+  const f=await fixture();const store=await open(f);
+  try{
+    const scope={kind:"user" as const,userId:(await store.snapshot()).currentUser.id};
+    const {task,coordinationSession}=await store.createTask({requestId:"goal-race-task",expectedStoreRevision:0,scope,title:"后台成员目标",goal:"旧目标"});
+    const owner=await store.ensureCoordinatorAgentRun({requestId:"goal-race-owner",taskId:task.id,scope});
+    const team=await store.createTeamRun({requestId:"goal-race-team",taskId:task.id,scope,coordinatorAgentRunId:owner.agentRun.id,members:[{profileId:"builtin-explore",title:"后台检查",taskPacket:{}}]});
+    const member=team.childAgentRuns[0]!;
+    const queued=await store.queueCollaborationMessage({requestId:"goal-race-message",taskId:task.id,sourceSessionId:coordinationSession.id,targetAgentRunId:member.id,author:"user",text:"检查当前目标"});
+    const delivered=await store.transitionCollaborationMessage({requestId:"goal-race-delivered",id:queued.message.id,expectedRevision:queued.message.revision,state:"delivering"});
+    const prepare=(requestId:string,expectedTaskRevision:number)=>store.prepareSessionRun({requestId,taskId:task.id,scope,sessionId:member.sessionId,collaborationMessageId:delivered.message.id,
+      runtimeId:`runtime-${member.id}`,agentRunId:member.id,workspaceId:`workspace-${member.id}`,cwd:f.home,workspaceAccess:"sharedReadOnly",message:"检查当前目标",attachmentRefs:[],
+      roleRevision:"explore:v1",contextRevision:1,expectedTaskRevision,profileSnapshot:{role:"explore"},tools:[{name:"read",description:"Read",parameters:{type:"object"}}],toolsWritable:false,
+      systemPromptDigest:`sha256:${"f".repeat(64)}`,promptSources:[]});
+    let release!:()=>void,arrived!:()=>void;
+    const barrier=new Promise<void>(resolve=>{release=resolve;}),atBarrier=new Promise<void>(resolve=>{arrived=resolve;});
+    const launch=(async()=>{const captured=(await store.snapshot()).tasks.find(item=>item.id===task.id)!;arrived();await barrier;return prepare("stale-member-prepare",captured.revision);})();
+    await atBarrier;
+    const before=await store.snapshot();
+    await assert.rejects(store.updateTaskGoal({requestId:"goal-race-update-blocked",expectedStoreRevision:before.storeRevision,taskId:task.id,scope,expectedTaskRevision:before.tasks.find(item=>item.id===task.id)!.revision,goal:"新目标",acceptance:[]}),
+      (error:unknown)=>error instanceof ProductStoreError&&error.code==="REVISION_CONFLICT");
+    release();
+    const prepared=await launch;
+    assert.equal((await store.snapshot()).sessionRuns.find(run=>run.id===prepared.sessionRunId)?.status,"prepared");
+    await assert.rejects(store.updateTaskGoal({requestId:"goal-after-prepare",expectedStoreRevision:(await store.snapshot()).storeRevision,taskId:task.id,scope,expectedTaskRevision:task.revision,goal:"第三目标",acceptance:[]}),
+      (error:unknown)=>error instanceof ProductStoreError&&error.code==="REVISION_CONFLICT");
+    await store.finishSessionRun({sessionRunId:prepared.sessionRunId,providerAttemptId:prepared.providerAttemptId,outcome:"aborted"});
+    await store.finishTeamRun({requestId:"goal-team-settled",taskId:task.id,teamRunId:team.teamRun.id,status:"aborted",reason:"旧安排已停止，允许重新核对目标"});
+    const latest=await store.snapshot();
+    const changed=await store.updateTaskGoal({requestId:"goal-race-update",expectedStoreRevision:latest.storeRevision,taskId:task.id,scope,expectedTaskRevision:latest.tasks.find(item=>item.id===task.id)!.revision,goal:"新目标",acceptance:[]});
+    assert.equal(changed.task.goal,"新目标");
+    assert.equal((await store.snapshot()).tasks.find(item=>item.id===task.id)?.goal,"新目标");
+  }finally{await store.close();await rm(f.root,{recursive:true,force:true});}
+});
+
 test("Project Scope resolves to a real Project and never uses a nullable owner", async () => {
   const f = await fixture();
   const store = await open(f);
@@ -591,7 +742,7 @@ test("opening a schema v1 Product Store creates a private backup then promotes e
     store = await open(f);
     const promoted = await store.snapshot();
     assert.equal(promoted.schemaVersion, PRODUCT_STORE_SCHEMA_VERSION);
-    assert.equal(promoted.storeRevision, created.storeRevision + 1);
+    assert.equal(promoted.storeRevision, created.storeRevision + 2);
     assert.deepEqual(
       promoted.taskContextSets.map((set) => ({ taskId: set.taskId, revision: set.revision, sourceCount: set.sources.length })),
       [{ taskId: created.task.id, revision: 1, sourceCount: 0 }],
@@ -602,6 +753,42 @@ test("opening a schema v1 Product Store creates a private backup then promotes e
     assert.ok(migrationDirectory);
     assert.equal((await stat(join(f.dataRoot, "migrations", migrationDirectory!, "product-store-before.sqlite3"))).isFile(), true);
     assert.equal((await stat(join(f.dataRoot, "migrations", migrationDirectory!, "manifest.json"))).isFile(), true);
+  } finally {
+    await store.close().catch(() => undefined);
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("opening a schema v2 Product Store preserves existing Task facts and backs up before adding Workflow tables", async () => {
+  const f = await fixture("dcode-schema-v2-promotion-");
+  let store = await open(f);
+  try {
+    const initial = await store.snapshot();
+    const created = await store.createTask({
+      requestId: "create-v2-task",
+      expectedStoreRevision: initial.storeRevision,
+      scope: { kind: "user", userId: initial.currentUser.id },
+      title: "Existing task",
+      goal: "Preserve my task while upgrading",
+    });
+    await store.close();
+    const legacy = new DatabaseSync(join(f.dataRoot, "product-store.sqlite3"));
+    rewriteAsSchemaV2Fixture(legacy);
+    legacy.close();
+
+    store = await open(f);
+    const promoted = await store.snapshot();
+    assert.equal(promoted.schemaVersion, 3);
+    assert.equal(promoted.storeRevision, created.storeRevision + 1);
+    assert.equal(promoted.tasks[0]?.id, created.task.id);
+    assert.equal(promoted.taskContextSets[0]?.taskId, created.task.id);
+    const promotion = promoted.events.find((event) => event.kind === "schema.promoted" &&
+      (event.payload as { fromSchemaVersion?: number }).fromSchemaVersion === 2);
+    assert.ok(promotion);
+    const directories = await readdir(join(f.dataRoot, "migrations"));
+    const backup = directories.find((entry) => entry.startsWith("schema-v2-to-v3-"));
+    assert.ok(backup);
+    assert.equal((await stat(join(f.dataRoot, "migrations", backup!, "product-store-before.sqlite3"))).isFile(), true);
   } finally {
     await store.close().catch(() => undefined);
     await rm(f.root, { recursive: true, force: true });
@@ -752,7 +939,7 @@ test("a schema v1 promotion resumes after its stable backup already exists", asy
     store = await open(f);
     const snapshot = await store.snapshot();
     assert.equal(snapshot.schemaVersion, PRODUCT_STORE_SCHEMA_VERSION);
-    assert.equal(snapshot.events.filter((event) => event.kind === "schema.promoted").length, 1);
+    assert.equal(snapshot.events.filter((event) => event.kind === "schema.promoted").length, 2);
   } finally {
     await store.close().catch(() => undefined);
     await rm(f.root, { recursive: true, force: true });
@@ -1067,6 +1254,7 @@ test("Team Run creates one Coordinator and two child Agent Sessions without comp
     assert.equal(created.teamRun.status, "active");
     assert.equal(created.coordinatorAgentRun.sessionId, task.coordinationSession.id);
     assert.equal(created.childSessions.length, 2);
+    assert.deepEqual(created.childSessions.map(child=>child.title),["Explore the architecture","Verify the contract"]);
     assert.equal(created.childAgentRuns.length, 2);
     assert.equal(created.assignments.filter((assignment) => assignment.assignmentKind === "coordinator").length, 1);
     assert.equal(created.assignments.filter((assignment) => assignment.assignmentKind === "member").length, 2);
@@ -1502,7 +1690,7 @@ test("Task Acceptance is a Coordinator-bound request: feedback resumes work, emp
 
 test("Pi import publishes one Task bundle with unknown historical lineage and immutable provenance", async () => {
   const f = await fixture();
-  const store = await open(f);
+  let store = await open(f);
   try {
     const user = (await store.snapshot()).currentUser;
     const imported = await store.importPiSessionAsTask({
@@ -1552,10 +1740,24 @@ test("Pi import publishes one Task bundle with unknown historical lineage and im
     assert.equal(snapshot.piImports[0]?.sourceSessionId, "pi-session-1");
     assert.equal(snapshot.events[0]?.kind, "piImport.completed");
 
+    const initialGoal=imported.task.goal;
+    const renamed=await store.manageTask({requestId:"import-goal-rename",expectedStoreRevision:1,taskId:imported.task.id,action:"rename",title:"Renamed imported Task"});
+    assert.equal(renamed.task.revision,2);
+    const changed=await store.updateTaskGoal({requestId:"import-goal-change",expectedStoreRevision:2,taskId:imported.task.id,scope:imported.task.scope,expectedTaskRevision:2,goal:"修订导入任务目标",acceptance:["已核对"]});
+    assert.equal(changed.task.revision,3);
+    assert.deepEqual(store.taskGoalHistory(imported.task.id).map(item=>item.taskRevision),[1,3]);
+    for(const revision of [1,2]) {
+      const old=store.readTaskSummarySource(imported.task.id,{kind:"task",id:imported.task.id,revision});
+      assert.equal(old.state,"available");assert.match(old.content??"",new RegExp(initialGoal));
+    }
+    await store.close();store=await open(f);
+    assert.deepEqual(store.taskGoalHistory(imported.task.id).map(item=>item.goal),[initialGoal,"修订导入任务目标"]);
+    assert.equal(store.readTaskSummarySource(imported.task.id,{kind:"task",id:imported.task.id,revision:1}).state,"available");
+
     await assert.rejects(
       store.importPiSessionAsTask({
         requestId: "import-pi-session-again",
-        expectedStoreRevision: 1,
+        expectedStoreRevision: 3,
         scope: { kind: "user", userId: user.id },
         sourceSessionId: "pi-session-1",
         sourcePath: join(f.root, "pi-session-1.jsonl"),

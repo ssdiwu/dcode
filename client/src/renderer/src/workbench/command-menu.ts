@@ -1,8 +1,9 @@
+import { localizeUi } from "../../../shared/ui-language.ts";
 import type { ComposerCommand } from "./useCommands";
 
 export type CommandGroup = "skill" | "command" | "prompt";
 export const commandGroups: readonly CommandGroup[] = ["skill", "command", "prompt"];
-export const commandGroupLabels = {skill:"技能",command:"命令",prompt:"模板"};
+export const commandGroupLabels = localizeUi({skill:"技能",command:"命令",prompt:"模板"});
 export interface CommandOption {
   key: string;
   command: ComposerCommand;

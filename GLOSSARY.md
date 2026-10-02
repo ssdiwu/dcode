@@ -345,7 +345,7 @@ D Code 中说明“希望达到什么结果”的产品语义，附着于 Projec
 _Avoid_: 独立 Goal 数据库、会话标题、项目与任务之间的中间容器
 
 **Task（任务）**：
-具有稳定身份、短期结果、范围、状态和验收条件的基本完成单位，并且必须恰好属于一个 Project Scope 或当前用户的 User Scope。Task 可以拥有 Plan、Work List、多个 Task Session、一个或多个 Agent Run、Knowledge 引用、Artifact 与 Evidence；创建或编辑 Task 本身不会自动启动 Agent，任一会话或运行结束也不会自动完成 Task。
+具有稳定身份、短期结果、范围、状态和验收条件的基本完成单位，并且必须恰好属于一个 Project Scope 或当前用户的 User Scope。Task 可以拥有 Plan、Work List、可选的任务内工作流、多个 Task Session、一个或多个 Agent Run、Knowledge 引用、Artifact 与 Evidence；创建或编辑 Task 本身不会自动启动 Agent，任一会话、工作流或运行结束也不会自动完成 Task。
 _Avoid_: nullable Project Task、无归属任务、D Code Session、单条 Todo、模型回复、一次 Agent Run
 
 **Task Draft（任务草稿）**：
@@ -359,6 +359,14 @@ _Avoid_: Import Candidate、只读旧会话、无归属 Task、永久迁移模�
 **Plan（计划）**：
 Task 为达到短期目标而采用、可以随证据修订或推翻的结构化推进方案。更换 Plan 通常不改变 Task 身份；Plan 不拥有 Task、Session 或 Agent Team，也不建立第二份 Work List。
 _Avoid_: Task、静态路线图、模型思维链
+
+**Task Workflow（任务内工作流；界面简称“工作流”）**：
+一个 Task 为完成其目标而明确创建的可执行阶段安排，描述阶段、依赖、完成与停止条件，并以 D Code 已有 Work Item、Team Run、Agent Run、报告和证据推进。它可修订并保留来源，同一 Task 可以有多轮；工作流不拥有 Task、Goal、Plan、Work List 或成员身份，也不是仅有步骤文字的计划。
+_Avoid_: 第二任务系统、跨 Task 调度器、Task Plan、全局自动化、外部脚本 Runtime
+
+**Workflow Run（工作流执行）**：
+某个 Task Workflow 一次已启动或可续接的执行事实，记录实际阶段、成员、结果、阻塞、停止与恢复位置。历史和当前执行有稳定区分；重启后的续接保存身份和证据，但不伪装恢复已经消失的模型生成或工具过程。运行完成不自动完成所属 Task 或替用户接受结果。
+_Avoid_: Task、Team Run、Agent Run、一次模型轮次、自动验收
 
 **Work List（工作清单）**：
 一个 Task 当前需要跟踪的 Work Item、状态、依赖、交付物和证据集合，用于回答“这项任务现在还要推进什么”。它属于 Task，不属于某个 D Code Session；工作项可以由任务内的独立成员执行和验收，只有确需独立任务身份、目标与验收生命周期时才提升为 Subtask。
@@ -375,6 +383,26 @@ _Avoid_: Work Item、计划阶段、Agent Assignment
 **Task View（任务视图）**：
 对同一批 Task 按字段进行筛选、排序、分组或时间投影的保存视图，例如列表、看板、路线图、Agent 执行和用户关注。Task View 不复制 Task，也不拥有第二份状态。
 _Avoid_: 任务副本、独立看板数据库、Task 状态源
+
+**Task Group（任务分组）**：
+属于一个 Project Scope 或当前用户 User Scope 的任务列表组织方式，保存名称、折叠与顺序，引用该范围内既有 Task。它是 Task View 的组织配置，不改变 Task 的作用域、执行目录、会话或验收；删除分组只解除组织关系。
+_Avoid_: 新 Project 层、任务副本、跨 Scope 迁移、另一份任务状态
+
+**Workflow Template（工作流模板）**：
+由 D Code Product Store 保存、属于指定项目或当前用户范围的可复用工作安排，拥有稳定身份、不可变内容版本、参数和来源。启动模板是在明确目标 Scope 中建立新的 Task Workflow／Workflow Run，不复制原任务的成员、进程、结果或验收；模板不是可直接执行的外部脚本，也不拥有 Task。
+_Avoid_: 已经运行的工作流、成果副本、ZCode 脚本格式、第二任务系统
+
+**Automation（定时自动化）**：
+用户明确启用、由 D Code 保存的重复执行配置，包含目标 Scope、任务说明或模板版本、时间规则、时区、有效范围和运行上限。在实际调度与运行宿主可用时，每次触发建立有身份的 Automation Run，并继续使用 D Code 原有任务和执行合同；保存配置、到期时间和实际运行分别成立。
+_Avoid_: 提醒文案、模型无限循环、隐式授权、保证关机或退出后执行
+
+**Automation Run（自动执行记录）**：
+某项 Automation 的一次到期或显式手动触发记录，固定配置来源和触发身份，关联准入、实际 Task／Workflow Run、结果及恢复状态。未执行、阻塞、已结束和结果未知各自成立，同一时间槽不能因重启重复自动启动；记录不等于运行进程，也不自动接受所属 Task。
+_Avoid_: Task 本身、Workflow Run、仍存活的 PID、重发未知副作用
+
+**Terminal Session（终端会话）**：
+用户从明确的 Scope 和初始目录打开、由 Host 管理辅助进程与生命周期的手动交互终端。它拥有独立会话身份、输入输出和可解释的断开／停止状态，不等于 D Code Session、Agent Run 或 Agent Execution Process；目录不是操作系统沙箱，输出不自动成为模型上下文或长期资料。
+_Avoid_: Pi TUI 转绘、智能体主执行进程、第二产品对话、默认上下文来源
 
 **Project Management（项目管理能力）**：
 Project 通过 Task、Task View、字段、Subtask、依赖、自动化与进展摘要组织长期工作的内置能力。它管理同一份 Task 真相，不等于新的 Project 对象，也不要求采用固定项目管理方法。

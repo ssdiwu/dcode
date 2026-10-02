@@ -9,6 +9,11 @@ import electron from 'electron';
 const client=fileURLToPath(new URL('../..',import.meta.url)),host=join(client,'../host/dist/src');
 const temp=await mkdtemp(join(tmpdir(),'dcode-project-row-'));
 for(const folder of ['agent','project-a','project-b'])await mkdir(join(temp,folder));
+await mkdir(join(temp,'agent','sessions','import-fixture'),{recursive:true});
+await writeFile(join(temp,'agent','sessions','import-fixture','import-fixture.jsonl'),[
+  JSON.stringify({type:'session',version:3,id:'import-fixture',timestamp:'2026-09-29T00:00:00.000Z',cwd:temp}),
+  JSON.stringify({type:'message',id:'import-user',parentId:null,timestamp:'2026-09-29T00:00:00.000Z',message:{role:'user',content:'导入测试内容',timestamp:1}}),
+].join('\n')+'\n');
 for(const folder of ['project-a','project-b'])await writeFile(join(temp,folder,'note.md'),'# Original\n'+folder+'\n');
 for(const name of ['a.txt','b.txt','user.txt'])await writeFile(join(temp,name),'Fixture '+name);
 await writeFile(join(temp,'project-a','preview.html'),'<!doctype html><h1>Isolated preview</h1>');
@@ -20,8 +25,21 @@ const prefix=`globalThis.fetch=async(input)=>{if(!String(input).startsWith('http
 const hostEntry=join(temp,'host.mjs');await writeFile(hostEntry,prefix+entry);
 const runner=join(temp,'runner.cjs');
 await writeFile(runner,`
-const{app,BrowserWindow,nativeTheme}=require('electron'),fs=require('node:fs/promises'),assert=require('node:assert/strict');
+const{app,BrowserWindow,nativeTheme,ipcMain}=require('electron'),fs=require('node:fs/promises'),assert=require('node:assert/strict');
 BrowserWindow.prototype.show=function(){};BrowserWindow.prototype.focus=function(){};
+let holdProjectUpdate=false,releaseProjectUpdate,holdImport=false,releaseImport;
+const registerHandle=ipcMain.handle.bind(ipcMain);
+ipcMain.handle=(channel,handler)=>registerHandle(channel,(event,...args)=>{
+ if(channel==='dcode:request'&&args[0]==='project.update'&&holdProjectUpdate){
+  holdProjectUpdate=false;
+  return new Promise((resolve,reject)=>{releaseProjectUpdate=()=>Promise.resolve(handler(event,...args)).then(resolve,reject);});
+ }
+ if(channel==='dcode:request'&&args[0]==='piImport.importAsTask'&&holdImport){
+  holdImport=false;
+  return new Promise((resolve,reject)=>{releaseImport=()=>Promise.resolve(handler(event,...args)).then(resolve,reject);});
+ }
+ return handler(event,...args);
+});
 app.once('browser-window-created',(_event,win)=>win.webContents.once('did-finish-load',async()=>{
  const run=code=>win.webContents.executeJavaScript(code,true).catch(error=>{throw Error(code.slice(0,120)+": "+error.message);}),sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const until=async(code,label)=>{for(let i=0;i<300;i++){if(await run(code))return;await sleep(25);}throw Error('Timeout '+label);};
@@ -40,7 +58,34 @@ app.once('browser-window-created',(_event,win)=>win.webContents.once('did-finish
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Down'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Down'});
   await until('document.activeElement?.getAttribute("role")==="menuitem"','menu keyboard focus');
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Return'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Return'});
-  await until('document.querySelector("[role=dialog]")?.getAttribute("aria-label")===\"编辑项目\"','real editor');await click('取消');await until('document.activeElement?.getAttribute("aria-label")==='+JSON.stringify('更多项目操作 '+a),'editor returns focus to project action');
+  await until('document.querySelector("[role=dialog]")?.getAttribute("aria-label")===\"编辑项目\"','real editor');
+  await until('document.activeElement===document.querySelector("[role=dialog] input")','project name receives initial focus');
+  await run('document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",isComposing:true,bubbles:true}))');
+  assert.equal(await run('!!document.querySelector("[role=dialog]")'),true,'IME Escape keeps the dialog open');
+  await run('(()=>{const panel=document.querySelector("[role=dialog]"),select=document.createElement("select"),option=document.createElement("option"),link=document.createElement("a"),editable=document.createElement("div");option.textContent="选项";select.append(option);select.setAttribute("aria-label","测试选择框");link.href="#";link.textContent="测试链接";editable.contentEditable="true";editable.textContent="测试可编辑内容";panel.append(select,link,editable);editable.focus();})()');
+  assert.equal(await run('document.activeElement===document.querySelector("[role=dialog] [contenteditable]")'),true,'editable control can receive focus');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
+  await until('document.activeElement===document.querySelector("[role=dialog] button")','Tab wraps from editable content to first dialog control');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab',modifiers:['shift']});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab',modifiers:['shift']});
+  await until('document.activeElement===document.querySelector("[role=dialog] [contenteditable]")','Shift-Tab wraps to last editable control');
+  await run('document.querySelector("[role=dialog] select").focus()');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
+  await until('document.activeElement===document.querySelector("[role=dialog] a[href]")','Tab reaches the dialog link after select');
+  holdProjectUpdate=true;await click('保存项目');for(let i=0;i<300&&!releaseProjectUpdate;i++)await sleep(25);assert.equal(typeof releaseProjectUpdate,'function','project save held');
+  assert.equal(await run('document.querySelector("[role=dialog] input")?.disabled'),true,'project name is frozen while saving');
+  assert.equal(await run('document.querySelector("[role=dialog] .folder-picker")?.disabled'),true,'project directory is frozen while saving');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await sleep(40);
+  assert.equal(await run('!!document.querySelector("[role=dialog]")'),true,'Escape cannot dismiss an in-flight save');
+  assert.equal(await run('Array.from(document.querySelectorAll("[role=dialog] button")).find(b=>b.textContent.trim()==="取消")?.disabled'),true,'cancel is unavailable while saving');
+  assert.equal(await run('document.querySelector("[role=dialog] button[aria-label=关闭]")?.disabled'),true,'close is unavailable while saving');
+  await run('document.querySelector(".overlay").dispatchEvent(new MouseEvent("mousedown",{bubbles:true}))');
+  assert.equal(await run('!!document.querySelector("[role=dialog]")'),true,'backdrop cannot dismiss an in-flight save');
+  releaseProjectUpdate();await until('!document.querySelector("[role=dialog]")','saved project closes after completion');
+  await until('document.activeElement?.getAttribute("aria-label")==='+JSON.stringify('更多项目操作 '+a),'editor returns focus to project action');
+  await run('document.querySelector("[aria-label=新建项目]").focus()');await click('新建项目');
+  await until('document.querySelector("[role=dialog]")?.getAttribute("aria-label")===\"新建项目\"','new project dialog');
+  await until('document.activeElement===document.querySelector("[role=dialog] input")','new project name receives focus');
+  await click('取消');await until('document.activeElement?.getAttribute("aria-label")==="新建项目"','new project returns focus');
   await draft(a,'A 草稿',true);assert.equal(await run(row(a)+'.open'),false);assert.equal(await run('document.querySelectorAll(".attachment").length'),1);
   await click('文件与 Git');await until('!!document.querySelector(".file-navigation")','project file view');await click('note.md');await until('!!document.querySelector(".file-markdown")','document');await click('编辑');
   await run('(()=>{const i=document.querySelector(".file-editor");Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set.call(i,"# Unsaved A");i.dispatchEvent(new Event("input",{bubbles:true}));})()');
@@ -49,9 +94,19 @@ app.once('browser-window-created',(_event,win)=>win.webContents.once('did-finish
   await click('preview.html');await until('!!document.querySelector(".html-preview-surface")','HTML preview');
   const previewVisible=()=>win.contentView.children.some(v=>v.webContents&&v.webContents!==win.webContents&&v.getBounds().width>0&&v.getBounds().height>0);
   for(let i=0;i<100&&!previewVisible();i++)await sleep(20);assert.equal(previewVisible(),true);
+  const previewView=win.contentView.children.find(v=>v.webContents&&v.webContents!==win.webContents);
+  const surface=await run('(()=>{const box=document.querySelector(".html-preview-surface").getBoundingClientRect(),bar=document.querySelector(".html-preview .preview-toolbar").getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,height:box.height,toolbarBottom:bar.bottom};})()');
+  const viewBounds=previewView.getBounds();
+  assert.ok(Math.abs(viewBounds.x-surface.x)<3&&Math.abs(viewBounds.y-surface.y)<3&&Math.abs(viewBounds.width-surface.width)<3,'native HTML view remains inside the no-task file surface');
+  assert.ok(surface.toolbarBottom<=viewBounds.y+2,'preview does not cover its permission bar');
   await click('返回任务');await key('更多项目操作 '+a);await until('!!document.querySelector("[role=menuitem]")','menu over preview');for(let i=0;i<100&&previewVisible();i++)await sleep(20);assert.equal(previewVisible(),false);
   win.webContents.send('dcode:event',{version:1,type:'event',event:'shell.settings'});await until('!!document.querySelector("[aria-label=设置分类]")','system settings from open project menu');
   await click('返回工作台');await until('!document.querySelector("[role=menuitem]")','menu unmounted');for(let i=0;i<100&&!previewVisible();i++)await sleep(20);assert.equal(previewVisible(),true,'Preview resumes after menu is unmounted by settings');
+  const resumedSurface=await run('(()=>{const box=document.querySelector(".html-preview-surface").getBoundingClientRect(),bar=document.querySelector(".html-preview .preview-toolbar").getBoundingClientRect();return {x:box.x,y:box.y,width:box.width,toolbarBottom:bar.bottom};})()');
+  const resumedView=win.contentView.children.find(v=>v.webContents&&v.webContents!==win.webContents&&v.getBounds().width>0);
+  const resumedBounds=resumedView.getBounds();
+  assert.ok(Math.abs(resumedBounds.x-resumedSurface.x)<3&&Math.abs(resumedBounds.y-resumedSurface.y)<3&&Math.abs(resumedBounds.width-resumedSurface.width)<3,'HTML view repositions after settings return '+JSON.stringify({resumedBounds,resumedSurface}));
+  assert.ok(resumedSurface.toolbarBottom<=resumedBounds.y+2,'permission bar remains visible after settings return');
   await key('更多项目操作 '+a);await until('!!document.querySelector("[role=menuitem]")','menu before keyboard escape');
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
   await until('!document.querySelector("[role=menuitem]")&&document.activeElement?.getAttribute("aria-label")==='+JSON.stringify('更多项目操作 '+a),'Escape completes focus return');
@@ -68,6 +123,17 @@ app.once('browser-window-created',(_event,win)=>win.webContents.once('did-finish
   const foreign=saved.composerDrafts.filter(d=>d.draftKind==='new_task'&&(d.scope.kind==='user'||d.scope.projectId===fixture.b));assert.equal(foreign.length,2);assert.ok(foreign.every(d=>d.attachments.length===1));
   // Dispose only this fixture's unsaved buffer, then let normal quit protection run.
   await draft(a,'');await click('打开文件详情');await until('!!document.querySelector(".file-tab-strip")','return to buffers');await click('关闭文件 note.md · '+a);await until('!!document.querySelector("[role=dialog]")','dirty close');await click('放弃更改');
+  await click('设置');await click('已归档任务');await click('导入 Pi 会话…');
+  await until('document.querySelector("[role=dialog]")?.getAttribute("aria-label")==="导入 Pi 会话"','import dialog');
+  await until('Array.from(document.querySelectorAll("[role=dialog] button")).some(b=>b.textContent.trim()==="导入")','import candidate');
+  holdImport=true;await click('导入');for(let i=0;i<300&&!releaseImport;i++)await sleep(25);assert.equal(typeof releaseImport,'function','import held');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await sleep(40);
+  assert.equal(await run('!!document.querySelector("[role=dialog]")'),true,'Escape cannot dismiss an in-flight import');
+  await run('document.querySelector(".overlay").dispatchEvent(new MouseEvent("mousedown",{bubbles:true}))');
+  assert.equal(await run('!!document.querySelector("[role=dialog]")'),true,'backdrop cannot dismiss an in-flight import');
+  assert.equal(await run('document.querySelector("[role=dialog] button[aria-label=关闭导入]")?.disabled'),true,'import close is unavailable while saving');
+  releaseImport();await until('!document.querySelector("[role=dialog]")','import dialog closes after completion');
+  await until('window.dcode.request("foundation.snapshot",{}).then(s=>s.tasks.length===2)','import creates one task');
   await fs.writeFile(${JSON.stringify(join(temp,'result.json'))},JSON.stringify({passed:true,actualHost:true,actualWindowKeyboard:true,independentDrafts:3,firstSubmitOnly:true,projectOwnership:true,unsavedBufferRetained:true,menuOnlyExistingEdit:true,nativePreviewYields:true,editorReturnFocus:true,previewAfterSettings:true,themes:2,widths:2,fontScales:3}));app.quit();
  }catch(error){await fs.writeFile(${JSON.stringify(join(temp,'failure.png'))},(await win.webContents.capturePage()).toPNG());await fs.writeFile(${JSON.stringify(join(temp,'result.json'))},JSON.stringify({passed:false,error:String(error),stack:error.stack}));app.exit(1);}
 }));import(${JSON.stringify(pathToFileURL(join(client,'dist/src/main/index.js')).href)});

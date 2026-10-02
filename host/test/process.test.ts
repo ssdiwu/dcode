@@ -107,6 +107,76 @@ test("host process keeps stdout as JSONL and shuts down cleanly", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("host protocol and startup diagnostics redact synthetic credentials", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-dcode-diagnostic-test-"));
+  const secret = "sk-test_syntheticDiagnosticSecret12345";
+  const agentDir = join(root, "agent");
+  await mkdir(join(agentDir, "sessions"), { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "{}\n");
+  try {
+    const ready = spawn(process.execPath, [hostEntry, "--agent-dir", agentDir, "--data-root", join(root, ".dcode")], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const readyExit = once(ready, "exit");
+    try {
+      const output = collectMessages(ready.stdout);
+      const launched = await output.waitFor(message => message.event === "host.ready", "host.ready");
+      assert.equal(launched.event, "host.ready");
+      ready.stdin.write(request("bad-method", `missing.${secret}`));
+      const failure = await output.waitFor(message => message.id === "bad-method", "redacted method failure");
+      const body = failure.error as {code:string;message:string};
+      assert.equal(body.code, "METHOD_NOT_FOUND");
+      assert.equal(body.message.includes(secret), false);
+      assert.equal(JSON.stringify(failure).includes(secret), false);
+      ready.stdin.write(request("shutdown", "host.shutdown"));
+      await readyExit;
+    } finally {
+      if (ready.exitCode === null && ready.signalCode === null) { ready.kill(); await readyExit; }
+    }
+
+    const blockedRoot = join(root, secret);
+    await writeFile(blockedRoot, "occupied");
+    const failed = spawn(process.execPath, [hostEntry, "--agent-dir", agentDir, "--data-root", blockedRoot], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const failedExit = once(failed, "exit");
+    try {
+      let stderr = "";
+      failed.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      const events = collectMessages(failed.stdout);
+      const startup = await events.waitFor(message => message.event === "host.startFailed", "host.startFailed");
+      const data = startup.data as {code:string;message:string};
+      assert.equal(data.message.includes(secret), false);
+      const [exitCode] = await failedExit as [number | null, NodeJS.Signals | null];
+      assert.notEqual(exitCode, 0);
+      assert.equal(stderr.includes(secret), false);
+    } finally {
+      if (failed.exitCode === null && failed.signalCode === null) { failed.kill(); await failedExit; }
+    }
+
+    const invalid = spawn(process.execPath, [hostEntry, `--unknown=${secret}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let cliStderr = "";
+    invalid.stderr.on("data", (chunk: Buffer) => { cliStderr += chunk.toString("utf8"); });
+    const [cliExit] = await once(invalid, "exit") as [number | null, NodeJS.Signals | null];
+    assert.notEqual(cliExit, 0);
+    assert.equal(cliStderr.includes(secret), false);
+
+    const invalidSnapshot = spawn(process.execPath, [hostEntry], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, D_CODE_LEGACY_USER_DEFAULTS_JSON: `{"key":${secret}}` },
+    });
+    let snapshotStderr = "";
+    invalidSnapshot.stderr.on("data", (chunk: Buffer) => { snapshotStderr += chunk.toString("utf8"); });
+    const [snapshotExit] = await once(invalidSnapshot, "exit") as [number | null, NodeJS.Signals | null];
+    assert.notEqual(snapshotExit, 0);
+    assert.equal(snapshotStderr.includes(secret), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("search worker keeps the Host process JSONL-only and does not create a session lease", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-dcode-search-process-test-"));
   const agentDir = join(root, "agent");

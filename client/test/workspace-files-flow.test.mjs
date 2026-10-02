@@ -87,7 +87,21 @@ test('file workbench edits, conflict recovery, tabs, exact references and quit p
   fireEvent.change(screen.getByRole('textbox',{name:'跳转到文件行'}),{target:{value:'2'}});fireEvent.keyDown(screen.getByRole('textbox',{name:'跳转到文件行'}),{key:'Enter'});fireEvent.click(screen.getByRole('button',{name:'引用当前行'}));await waitFor(()=>assert.match(receivedDraft,/note\.md:2/));assert.match(receivedDraft,/updated second/);
   fireEvent.click(screen.getByRole('button',{name:'other.md'}));await waitFor(()=>assert.ok(screen.getByRole('heading',{name:'Other file'})));assert.equal(screen.getAllByRole('tab').length,2);fireEvent.click(screen.getByRole('tab',{name:'note.md · File UI'}));fireEvent.click(screen.getByRole('button',{name:'编辑'}));fireEvent.change(screen.getByRole('textbox',{name:'文件编辑内容'}),{target:{value:'# Unsaved\n'}});
   assert.doesNotThrow(()=>model.beforeProjectDirectoryChange(project.project.id,join(fixture,'next'),false),'an unrelated User Scope buffer survives metadata-only relocation');assert.throws(()=>model.beforeProjectDirectoryChange(project.project.id,join(fixture,'next'),true),/尚未保存/,'moving actual files sees User Scope editors too');
-  await act(async()=>{await assert.rejects([...flushers][0](),/未保存/);});assert.ok(screen.getByRole('dialog',{name:'文件有未保存修改'}));fireEvent.click(screen.getByRole('button',{name:'继续编辑'}));assert.equal(screen.getByRole('textbox',{name:'文件编辑内容'}).value,'# Unsaved\n');fireEvent.click(screen.getByRole('button',{name:'关闭文件 note.md · File UI'}));fireEvent.click(screen.getByRole('button',{name:'保存并关闭'}));await waitFor(()=>assert.ok(!screen.queryByRole('button',{name:'关闭文件 note.md · File UI'})));assert.equal(await readFile(join(home,'note.md'),'utf8'),'# Unsaved\n');await act(async()=>model.invalidateProject(project.project.id,join(fixture,'next'),true));assert.equal(model.allTabs.length,0);
+  const editor=screen.getByRole('textbox',{name:'文件编辑内容'});editor.focus();
+  await act(async()=>{await assert.rejects([...flushers][0](),/未保存/);});
+  let dialog=screen.getByRole('dialog',{name:'文件有未保存修改'});
+  assert.equal(document.activeElement,screen.getByRole('button',{name:'继续编辑'}),'dirty file dialog focuses its first safe action');
+  fireEvent.keyDown(dialog,{key:'Escape',isComposing:true});assert.ok(screen.getByRole('dialog',{name:'文件有未保存修改'}),'IME Escape does not close the dialog');
+  fireEvent.keyDown(dialog,{key:'Escape'});await waitFor(()=>assert.equal(screen.queryByRole('dialog',{name:'文件有未保存修改'}),null));assert.equal(document.activeElement,editor,'Escape returns focus to the editor');
+  const closeButton=screen.getByRole('button',{name:'关闭文件 note.md · File UI'});closeButton.focus();fireEvent.click(closeButton);
+  dialog=screen.getByRole('dialog',{name:'文件有未保存修改'});
+  assert.equal(document.activeElement,screen.getByRole('button',{name:'继续编辑'}));
+  fireEvent.keyDown(dialog,{key:'Tab',shiftKey:true});assert.equal(document.activeElement,screen.getByRole('button',{name:'保存并关闭'}),'Shift-Tab wraps to the last dialog action');
+  fireEvent.keyDown(dialog,{key:'Tab'});assert.equal(document.activeElement,screen.getByRole('button',{name:'继续编辑'}),'Tab wraps to the first dialog action');
+  fireEvent.click(screen.getByRole('button',{name:'保存并关闭'}));
+  await waitFor(()=>assert.ok(!screen.queryByRole('button',{name:'关闭文件 note.md · File UI'})));
+  assert.equal(document.activeElement,screen.getByRole('tab',{name:'other.md · File UI'}),'removed tab returns focus to the surviving tab');
+  assert.equal(await readFile(join(home,'note.md'),'utf8'),'# Unsaved\n');await act(async()=>model.invalidateProject(project.project.id,join(fixture,'next'),true));assert.equal(model.allTabs.length,0);
  }finally{cleanup();await host.close();await rm(fixture,{recursive:true,force:true});}
 });
 

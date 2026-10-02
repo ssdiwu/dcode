@@ -1,0 +1,71 @@
+import assert from "node:assert/strict";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
+import {mkdtemp,mkdir,readFile,writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {fileURLToPath,pathToFileURL} from "node:url";
+import electron from "electron";
+
+const client=fileURLToPath(new URL("../..",import.meta.url)),host=join(client,"../host/dist/src");
+const temp=await mkdtemp(join(tmpdir(),"dcode-task-goal-ui-"));
+await mkdir(join(temp,"agent"));
+await writeFile(join(temp,"agent/settings.json"),JSON.stringify({defaultProvider:"goal-fixture",defaultModel:"model",enabledModels:["goal-fixture/model"]}));
+await writeFile(join(temp,"agent/models.json"),JSON.stringify({providers:{"goal-fixture":{baseUrl:"https://goal-fixture.invalid/v1",api:"openai-completions",apiKey:"fixture-only-key",models:[{id:"model",name:"Fixture",reasoning:false,contextWindow:100000,maxTokens:4096}]}}}));
+let entry=await readFile(join(host,"index.js"),"utf8");
+entry=entry.replace(/^#!.*\n/,"").replace(/from "\.\//g,`from "${pathToFileURL(host+"/").href}`).replace("const host = new PiHost({",`const host = new PiHost({userHome:${JSON.stringify(temp)},`);
+const prefix=`globalThis.fetch=async(input)=>{if(!String(input).startsWith('https://goal-fixture.invalid/'))throw Error('Unexpected fixture network');const frame=(text,finish=null)=>'data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',model:'model',choices:[{index:0,delta:text?{role:'assistant',content:text}:{},finish_reason:finish}],...(finish?{usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}:{})})+'\\n\\n';return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode(frame('收到目标')+frame('','stop')+'data: [DONE]\\n\\n'));c.close();}}),{headers:{'content-type':'text/event-stream'}});};\n`;
+const hostEntry=join(temp,"host.mjs");await writeFile(hostEntry,prefix+entry);
+const runner=join(temp,"runner.cjs");
+await writeFile(runner,`
+const{app,BrowserWindow}=require('electron'),fs=require('node:fs/promises'),assert=require('node:assert/strict');
+BrowserWindow.prototype.show=function(){};BrowserWindow.prototype.focus=function(){};
+app.once('browser-window-created',(_event,win)=>win.webContents.once('did-finish-load',async()=>{
+ const run=code=>win.webContents.executeJavaScript(code,true),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ const until=async(code,label)=>{for(let i=0;i<300;i++){if(await run(code))return;await sleep(25);}throw Error('Timeout '+label+'; active='+await run('document.activeElement?.outerHTML?.slice(0,300)'));};
+ const click=label=>run('(()=>{const label='+JSON.stringify(label)+';const b=Array.from(document.querySelectorAll("button")).find(b=>b.getAttribute("aria-label")===label||b.textContent.trim()===label);if(!b)throw Error("Missing button "+label);b.click();})()');
+ const type=(selector,value)=>run('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');if(!e)throw Error("Missing input");Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set.call(e,'+JSON.stringify(value)+');e.dispatchEvent(new Event("input",{bubbles:true}));})()');
+ let menuCaptured=false;
+ const openGoal=async()=>{await run('document.querySelector("[aria-label=添加内容]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(e=>e.textContent.trim()==="目标")','Goal menu item');if(!menuCaptured){assert.equal(await run('document.querySelector(".composer-add-heading")?.textContent'),"添加");await sleep(100);await fs.writeFile(${JSON.stringify(join(temp,"add-menu.png"))},(await win.webContents.capturePage()).toPNG());menuCaptured=true;}await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(e=>e.textContent.trim()==="目标").click()');await until('!!document.querySelector(".task-goal-editor")','Goal editor');};
+ try{
+  await until('!!document.querySelector("[data-composer]")','new task');
+  await openGoal();
+  await until('document.activeElement===document.querySelector(".task-goal-editor textarea")','Goal focus');
+  await type('.task-goal-editor textarea:first-of-type','交付可运行的编辑器');
+  await type('.task-goal-editor label:nth-of-type(2) textarea','打开成功\\n用户确认');
+  await fs.writeFile(${JSON.stringify(join(temp,"goal-editor.png"))},(await win.webContents.capturePage()).toPNG());
+  win.setContentSize(800,700);await sleep(100);
+  const narrow=await run('(()=>{const panel=document.querySelector(".task-goal-editor").getBoundingClientRect(),composer=document.querySelector(".composer").getBoundingClientRect();return {panelLeft:panel.left,panelRight:panel.right,composerLeft:composer.left,composerRight:composer.right,width:innerWidth};})()');
+  assert.ok(narrow.panelLeft>=0&&narrow.panelRight<=narrow.width&&narrow.composerLeft>=0&&narrow.composerRight<=narrow.width,'Goal editor stays within the narrow window');
+  await fs.writeFile(${JSON.stringify(join(temp,"goal-editor-narrow.png"))},(await win.webContents.capturePage()).toPNG());win.setContentSize(1440,900);
+  await click('保存到草稿');await until('!document.querySelector(".task-goal-editor")','Goal draft saved');
+  await until('window.dcode.request("foundation.snapshot").then(s=>s.composerDrafts.some(d=>d.goal==="交付可运行的编辑器"&&d.acceptance.length===2))','durable Goal draft');
+  await new Promise(resolve=>{win.webContents.once('did-finish-load',resolve);win.reload();});
+  await until('!!document.querySelector("[data-composer]")','reloaded new task');
+  await openGoal();assert.equal(await run('document.querySelector(".task-goal-editor textarea")?.value'),'交付可运行的编辑器');await click('收起');
+  await run('(async()=>{const s=await window.dcode.request("foundation.snapshot");return window.dcode.request("project.create",{requestId:"goal-scope-project",expectedStoreRevision:s.storeRevision,title:"目标切换项目",directory:'+JSON.stringify(${JSON.stringify(temp)})+'});})()');
+  await until('Array.from(document.querySelectorAll(".project-title")).some(e=>e.textContent.startsWith("目标切换"))','project ready');
+  const chooseScope=async(label)=>{await run('document.querySelector("[aria-label=任务归属]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}))');await until('Array.from(document.querySelectorAll("[role=menuitem]")).some(e=>e.textContent.trim()==='+JSON.stringify(label)+')','scope choice');await run('Array.from(document.querySelectorAll("[role=menuitem]")).find(e=>e.textContent.trim()==='+JSON.stringify(label)+').click()');};
+  await chooseScope('目标切换项目');await openGoal();assert.equal(await run('document.querySelector(".task-goal-editor textarea")?.value'),'');await click('收起');
+  await chooseScope('独立任务');await openGoal();assert.equal(await run('document.querySelector(".task-goal-editor textarea")?.value'),'交付可运行的编辑器');await click('收起');
+  await openGoal();await type('.task-goal-editor textarea:first-of-type','应被取消的目标');await click('取消本次编辑');await until('!document.querySelector(".task-goal-editor")','cancel closed Goal editor');await openGoal();assert.equal(await run('document.querySelector(".task-goal-editor textarea")?.value'),'交付可运行的编辑器');await click('收起');
+  await type('[data-composer]','请先完成第一步，保持原话。');await click('发送');
+  await until('window.dcode.request("foundation.snapshot").then(s=>s.tasks.length===1&&s.tasks[0].goal==="交付可运行的编辑器")','Task created with explicit Goal');
+  const created=await run('window.dcode.request("foundation.snapshot")');assert.deepEqual(created.tasks[0].acceptance,['打开成功','用户确认']);
+  await until('window.dcode.request("dcodeSession.presentation",{dcodeSessionId:'+JSON.stringify(created.sessions.find(s=>s.kind==='coordination').id)+'}).then(p=>p.submissions?.some(i=>i.text==="请先完成第一步，保持原话。"))','raw submitted text retained');
+  await until('window.dcode.request("foundation.snapshot").then(s=>s.sessionRuns.filter(r=>r.taskId==='+JSON.stringify(created.tasks[0].id)+').at(-1)?.status==="completed")','first run completed');await sleep(100);
+  await openGoal();await type('.task-goal-editor textarea:first-of-type','交付稳定版本');await click('保存修订');
+  await until('window.dcode.request("foundation.snapshot").then(s=>s.tasks[0].goal==="交付稳定版本")','Goal revision saved');
+  await until('!document.querySelector(".task-goal-editor")','revision editor closed');
+  await openGoal();await until('document.querySelector(".task-goal-editor details summary")?.textContent.includes("2")','Goal history visible');
+  const history=await run('window.dcode.request("task.goal.history",{taskId:'+JSON.stringify(created.tasks[0].id)+'})');assert.deepEqual(history.map(item=>item.goal),['交付可运行的编辑器','交付稳定版本']);
+  await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:true,goalDraftRestored:true,firstSubmitSeparate:true,revisionHistory:history.length}));app.quit();
+ }catch(error){await fs.writeFile(${JSON.stringify(join(temp,"failure.png"))},(await win.webContents.capturePage()).toPNG());await fs.writeFile(${JSON.stringify(join(temp,"result.json"))},JSON.stringify({passed:false,error:String(error),stack:error.stack}));app.exit(1);}
+}));import(${JSON.stringify(pathToFileURL(join(client,"dist/src/main/index.js")).href)});
+`);
+const env={...process.env,DCODE_HOST_ENTRY:hostEntry,DCODE_DATA_ROOT:join(temp,".dcode"),DCODE_AGENT_DIR:join(temp,"agent"),DCODE_USER_DATA:join(temp,"profile"),DCODE_WIDTH:"1440",PI_OFFLINE:"1"};
+for(const key of ["ELECTRON_RUN_AS_NODE","DCODE_RENDERER_URL","DCODE_THEME","DCODE_CAPTURE","DCODE_CREDENTIAL_PIPE_FD","DCODE_DEVICE_CODE_PIPE_FD"])delete env[key];
+let output;try{output=await promisify(execFile)(electron,[runner],{cwd:client,env,timeout:120000,maxBuffer:2_000_000});}catch(error){output=error;}
+const result=JSON.parse(await readFile(join(temp,"result.json"),"utf8"));
+console.log(JSON.stringify({temp,...result}));
+assert.equal(result.passed,true,JSON.stringify(output));

@@ -86,6 +86,22 @@ test("small exploration can check its own tools, while changed context and reope
   } finally { await f.close(); }
 });
 
+test("revising and reverting a Task Goal each require route recheck", async () => {
+  const f=await routeFixture();
+  try {
+    await f.act({action:"begin",question:"核对原目标的路线",independentCheck:false,budget:{candidates:2,checks:2,rounds:2}});
+    assert.equal(f.store.taskRouteContext(f.task.id)?.contextCurrent,true);
+    for(const run of [f.ownerRun,f.reviewerRun]) await f.store.finishSessionRun({sessionRunId:run.sessionRunId,providerAttemptId:run.providerAttemptId,outcome:"aborted"});
+    await f.store.finishTeamRun({requestId:"goal-route-team-settled",taskId:f.task.id,teamRunId:f.reviewer.teamRunId!,status:"aborted",reason:"本轮成员已结束，重新核对目标"});
+    const original=(await f.store.snapshot()).tasks.find(task=>task.id===f.task.id)!;
+    const revised=await f.store.updateTaskGoal({requestId:"goal-change",expectedStoreRevision:(await f.store.snapshot()).storeRevision,taskId:f.task.id,scope:f.scope,expectedTaskRevision:original.revision,goal:"新短期结果",acceptance:["新验收条件"]});
+    assert.equal(f.store.taskRouteContext(f.task.id)?.contextCurrent,false);
+    const restored=await f.store.updateTaskGoal({requestId:"goal-revert",expectedStoreRevision:revised.storeRevision,taskId:f.task.id,scope:f.scope,expectedTaskRevision:revised.task.revision,goal:original.goal,acceptance:original.acceptance});
+    assert.equal(restored.task.goal,original.goal);
+    assert.equal(f.store.taskRouteContext(f.task.id)?.contextCurrent,false);
+  } finally {await f.close();}
+});
+
 test("new user input must be acknowledged and can extend a stopped exploration without resetting its history", async () => {
   const f = await routeFixture();
   try {

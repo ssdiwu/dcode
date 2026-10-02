@@ -60,6 +60,9 @@ test("route-bound delegation enforces readiness and dependencies; invalidation c
     const invalid = await f.act({ action: "invalidate", reason: "发现读取接口前提不成立", evidenceIds: [] });
     assert.ok(invalid.affectedAgentRunIds.includes(reader.id)); assert.ok(invalid.affectedAgentRunIds.includes(writer.id));
     assert.ok(!invalid.affectedAgentRunIds.includes(independent.id));
+    const beforeInvalidSend=(await f.store.snapshot()).collaborationMessages?.length??0;
+    await assert.rejects(f.store.queueCollaborationMessage({requestId:"user-to-invalidated-member",taskId:f.task.id,sourceSessionId:f.owner.sessionId,targetAgentRunId:writer.id,author:"user",text:"继续旧安排"}),/路线已经改变或失效/);
+    assert.equal((await f.store.snapshot()).collaborationMessages?.length??0,beforeInvalidSend,"invalidated member must not receive a queued user input");
     await assert.rejects(f.store.prepareToolAttempt({ taskId: f.task.id, sessionId: writer.sessionId, sessionRunId: br.sessionRunId, toolCallId: "stale-write", toolName: "write", parameterDigest: `sha256:${"b".repeat(64)}` }), /路线已经改变/);
     await f.store.finishSessionRun({ sessionRunId: br.sessionRunId, providerAttemptId: br.providerAttemptId, outcome: "succeeded", assistantText: "迟到的旧路线报告" });
     let snapshot = await f.store.snapshot();

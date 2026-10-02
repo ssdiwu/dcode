@@ -14,3 +14,7 @@ if(result.status!==0)throw new Error(`Native file boundary build failed (${resul
 const auth=spawnSync("xcrun",["swiftc","-O","-target",nativeTarget,"-swift-version","6","-parse-as-library",join(root,"native/ModelCredentials.swift"),join(root,"native/OAuthBrowser.swift"),join(root,"native/KeychainInteraction.swift"),"-o",join(root,"dist/bin/dcode-model-credentials")],{stdio:"inherit"});
 if(auth.error)throw auth.error;
 if(auth.status!==0)throw new Error(`Native model credential boundary build failed (${auth.status})`);
+
+const image=spawnSync("xcrun",["swiftc","-O","-target",nativeTarget,"-swift-version","6","-parse-as-library",join(root,"native/WorkspaceFiles.swift"),join(root,"native/GeneratedImage.swift"),"-o",join(root,"dist/bin/dcode-generated-image")],{stdio:"inherit"});
+if(image.error)throw image.error;
+if(image.status!==0)throw new Error(`Native image boundary build failed (${image.status})`);

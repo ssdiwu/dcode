@@ -1,3 +1,4 @@
+import { uiText } from "../../shared/ui-language.ts";
 /** Type-only imports keep the Host contract authoritative without bundling it. */
 import type {
   FoundationSnapshot,
@@ -13,18 +14,26 @@ import type {
 export type {
   FoundationSnapshot,
   TaskRecord,
+  TaskGoalRevisionRecord,
+  TaskWorkflowRecord,
+  TaskWorkflowVersionRecord,
+  TaskWorkflowStageRecord,
+  TaskWorkflowRunRecord,
+  TaskWorkflowReportBinding,
   TaskSummaryRecord,
   TaskSummarySourceRef,
   TaskScope,
   TaskBundle,
   TaskWorkbenchViewStatePatch,
   TaskWorkbenchInspectorTarget,
+  TaskSourceSelector,
   DCodeSessionRecord,
   AgentRequestRecord,
   ClientPreferences,
   SessionEntryRecord,
   NativeSessionPathAction,
   ComposerDraftRecord,
+  PendingWorkflowSubmissionRecord,
 } from "../../../../host/src/product-store.js";
 export type { SessionInspection, HostEvent, PromptImageInput };
 export type { InspirationView, IdeaNode, IdeaDraft, IdeaKind, IdeaPosition, InspirationOperation } from "../../../../host/src/inspiration.js";
@@ -58,6 +67,7 @@ export interface DcodeApi {
   getPathForFile: (file: File) => string;
   previewInspiration:(nodeId:string,media:boolean)=>Promise<void>;
   previewAttachment: (id: string) => Promise<void>;
+  exportGeneratedImage:(input:{taskId:string;generationId:string})=>Promise<boolean>;
   switchCandidate: (direction: "candidate" | "rollback") => Promise<boolean>;
   signalRestoreFailed: () => Promise<void>;
   signalReady: (selection: {
@@ -81,7 +91,7 @@ export interface DcodeApi {
 }
 export function api(): DcodeApi {
   const value = (window as unknown as { dcode?: DcodeApi }).dcode;
-  if (!value) throw new Error("无法连接应用，请重新打开 D Code。");
+  if (!value) throw new Error(uiText("无法连接应用，请重新打开 D Code。"));
   return value;
 }
 export function fetchSnapshot(): Promise<FoundationSnapshot> {
@@ -95,8 +105,8 @@ export function errorText(reason: unknown): string {
   const readable=message.replace(/^Error invoking remote method '[^']+':\s*/u,"").replace(/^Error:\s*/u,"").replace(/^[A-Z][A-Z0-9_]+:\s*/u,"");
   if(/(?:FILE_|WORKSPACE_|GIT_|HTML_)/u.test(message))return readable;
   if (/REVISION_CONFLICT/.test(message))
-    return "数据刚刚更新，请重试。输入内容已保留。";
+    return uiText("数据刚刚更新，请重试。输入内容已保留。");
   if (/MODEL|model.*not|API key|authentication/i.test(message))
-    return "模型暂不可用，请检查模型选择和供应商连接。输入内容已保留。";
+    return uiText("模型暂不可用，请检查模型选择和供应商连接。输入内容已保留。");
   return readable;
 }

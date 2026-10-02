@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import {createContext,useEffect,useLayoutEffect,useRef,useState} from "react";
 import type {WorkspaceFile} from "../../../../../host/src/workspace-files.js";
 import type {WorkspaceSource} from "../../../../../host/src/workspace-access.js";
@@ -71,9 +72,26 @@ export function useWorkspaceFiles(work:Workbench){
     updateTabs(values=>[...values,tab]);void load(tab);
   };
   const navigate=(target:WorkspaceSource,path="")=>{selectionRequest.current++;setNavigationRequest(value=>value+1);setBrowserSource(canonical(target));setNavigationPath(path);setNavigationView("files");setNavigationVisible(true);setNotice("");};
+  const openFileMentionReference=async(reference:string)=>{
+    const taskId=work.task?.id,request=++selectionRequest.current;
+    if(!taskId){setNotice(uiText("请先选择任务，再打开项目文件引用"));setVisible(true);return;}
+    try{
+      const document=await api().request<WorkspaceFile&{source:WorkspaceSource;path:string;absolutePath:string;root:string}>("workspace.readReference",{taskId,reference});
+      if(request!==selectionRequest.current||taskRef.current!==taskId)return;
+      const owner=canonical(document.source),id=JSON.stringify([sourceKey(owner),document.path,"file",null]);
+      const existing=latest.current.find(tab=>tab.id===id);
+      if(existing&&fileDirty(existing)){setNotice(uiText("这个文件有尚未保存的编辑；请先保存或关闭后再打开引用。"));setVisible(true);return;}
+      ticket(id);
+      activate(id);
+      const next:FileTab={id,source:owner,path:document.path,kind:"file",lineRevision:existing?.lineRevision??0,document,draft:document.kind==="html"?document.text:undefined,mode:document.kind==="html"?"edit":"preview",loading:false,saving:false};
+      if(existing)updateTabs(tabs=>tabs.map(tab=>tab.id===id?next:tab));
+      else updateTabs(tabs=>[...tabs,next]);
+    }catch(error){if(request===selectionRequest.current&&taskRef.current===taskId){setNotice(errorText(error));setVisible(true);}}
+  };
   const openReference=async(reference:string,referenceSource?:WorkspaceSource)=>{
+    if(reference.startsWith("dcode-file:")){void openFileMentionReference(reference);return;}
     const taskId=referenceSource?undefined:work.task?.id,request=++selectionRequest.current;
-    if(!referenceSource&&!taskId){setNotice("请先选择任务，再打开本机文件引用");setVisible(true);return;}
+    if(!referenceSource&&!taskId){setNotice(uiText("请先选择任务，再打开本机文件引用"));setVisible(true);return;}
     try{
       const target=await api().request<{source:WorkspaceSource;path:string;line?:number;kind:"file"|"directory"}>("workspace.reference",{...(referenceSource?{source:referenceSource}:{taskId}),reference});
       if(request!==selectionRequest.current||(taskId&&taskRef.current!==taskId))return;
@@ -81,10 +99,11 @@ export function useWorkspaceFiles(work:Workbench){
     }catch(error){if(request===selectionRequest.current&&(!taskId||taskRef.current===taskId)){setNotice(errorText(error));setVisible(true);}}
   };
   const openRelative=(tab:FileTab,reference:string)=>{
+    if(reference.startsWith("dcode-file:")){void openReference(reference);return;}
     if(/^(?:[a-z][a-z0-9+.-]*:|\/)/iu.test(reference)){void openReference(reference,tab.source);return;}
     try{
       const pathname=decodeURIComponent(reference.split(/[?#]/u)[0]??""),parts=tab.path.split("/").slice(0,-1);
-      if(pathname)for(const part of pathname.split("/")){if(part===".."){if(!parts.length)throw new Error("引用不在当前文件目录范围内");parts.pop();}else if(part&&part!==".")parts.push(part);}
+      if(pathname)for(const part of pathname.split("/")){if(part===".."){if(!parts.length)throw new Error(uiText("引用不在当前文件目录范围内"));parts.pop();}else if(part&&part!==".")parts.push(part);}
       const line=reference.match(/#L?(\d+)$/u);void openReference((pathname?parts.join("/"):tab.path)+(line?"#L"+line[1]:""),tab.source);
     }catch(error){setNotice(errorText(error));}
   };
@@ -111,10 +130,10 @@ export function useWorkspaceFiles(work:Workbench){
     setClosing(null);
   };
   const close=(id:string)=>{const tab=latest.current.find(tab=>tab.id===id);if(tab?.saving)return;if(tab&&fileDirty(tab))setClosing(id);else discard(id);};
-  useEffect(()=>work.registerQuitFlush(async()=>{const dirty=latest.current.find(fileDirty);if(dirty){setClosing(dirty.id);throw new Error(`文件 ${dirty.path} 有未保存修改，请先保存或放弃。`);}}),[work.registerQuitFlush]);
+  useEffect(()=>work.registerQuitFlush(async()=>{const dirty=latest.current.find(fileDirty);if(dirty){setClosing(dirty.id);throw new Error(uiText("文件 {0} 有未保存修改，请先保存或放弃。", [dirty.path]));}}),[work.registerQuitFlush]);
   const quote=(tab:FileTab,lineOverride?:number)=>{
     if(!tab.document)return;const line=lineOverride??tab.line??1,content=(tab.draft??tab.document.text).split("\n")[line-1];
-    work.updateDraft(work.draftKey,previous=>({...previous,text:`${previous.text}${previous.text?"\n\n":""}[${tab.path}:${line}](<${encodeURI(tab.document!.absolutePath)}#L${line}>)${fileDirty(tab)?"（未保存编辑）":""}\n> ${content??""}\n`}));
+    work.updateDraft(work.draftKey,previous=>({...previous,text:`${previous.text}${previous.text?"\n\n":""}[${tab.path}:${line}](<${encodeURI(tab.document!.absolutePath)}#L${line}>)${fileDirty(tab)?uiText("（未保存编辑）"):""}\n> ${content??""}\n`}));
   };
   const projectFileScope=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
     const taskIds=new Set(work.snapshot?.tasks.filter(task=>task.scope.kind==="project"&&task.scope.projectId===projectId).map(task=>task.id));
@@ -126,7 +145,7 @@ export function useWorkspaceFiles(work:Workbench){
   };
   const beforeProjectDirectoryChange=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
     const {contains}=projectFileScope(projectId,targetDirectory,moveFiles);
-    if(latest.current.some(tab=>contains(tab)&&(fileDirty(tab)||tab.saving)))throw new Error("请先保存或关闭相关目录中尚未保存的文件，再更换目录");
+    if(latest.current.some(tab=>contains(tab)&&(fileDirty(tab)||tab.saving)))throw new Error(uiText("请先保存或关闭相关目录中尚未保存的文件，再更换目录"));
   };
   const invalidateProject=(projectId:string,targetDirectory:string,moveFiles:boolean)=>{
     const {sourceOwned,contains}=projectFileScope(projectId,targetDirectory,moveFiles);
@@ -134,9 +153,9 @@ export function useWorkspaceFiles(work:Workbench){
     if(browserSource&&sourceOwned(browserSource))setNavigationVersion(value=>value+1);
   };
   const sourceTitle=(target:WorkspaceSource)=>{
-    if(target.artifactId)return work.snapshot?.artifacts.find(item=>item.id===target.artifactId)?.title??"产物不可用";
-    if(target.projectId)return work.snapshot?.projects.find(item=>item.id===target.projectId)?.title??"项目不可用";
-    return work.snapshot?.tasks.find(item=>item.id===target.taskId)?.title??"任务不可用";
+    if(target.artifactId)return work.snapshot?.artifacts.find(item=>item.id===target.artifactId)?.title??uiText("产物不可用");
+    if(target.projectId)return work.snapshot?.projects.find(item=>item.id===target.projectId)?.title??uiText("项目不可用");
+    return work.snapshot?.tasks.find(item=>item.id===target.taskId)?.title??uiText("任务不可用");
   };
   const hide=()=>{if(visible||expanded)captureViews(true);selectionRequest.current++;setExpanded(false);setVisible(false);setNotice("");};
   return {source,baseSource,scope,treeExpanded:directories[scope]??[],toggleDirectory:(path:string)=>setDirectories(previous=>{const values=previous[scope]??[];return {...previous,[scope]:values.includes(path)?values.filter(value=>value!==path):[...values,path]};}),expanded,expand:()=>{if(visible&&!expanded){captureViews(true);setExpanded(true);}},collapse:()=>{if(expanded){captureViews(true);setExpanded(false);}},readView,writeView,registerView,navigationRequest,navigationVisible,navigationPath,navigationView,setNavigationView,sourceTitle,notice,

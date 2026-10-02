@@ -15,10 +15,10 @@ There is no separately embedded Node.js 22.22.3 binary. Candidate assembly
 copies Electron's complete `LICENSE` and `LICENSES.chromium.html` into
 `Contents/Resources/Legal/`, preserving the runtime's bundled notices.
 
-### Pi 0.87.1
+### Pi 0.99.1
 
 D Code uses the following packages from the Pi Agent Harness. The three direct
-SDK packages are pinned to npm version `0.87.1`; transitive versions are recorded
+SDK packages are pinned to npm version `0.99.1`; transitive versions are recorded
 in `host/package-lock.json`:
 
 - `@earendil-works/pi-ai`
@@ -26,12 +26,26 @@ in `host/package-lock.json`:
 - `@earendil-works/pi-coding-agent`
 - `@earendil-works/chord` (transitive SDK dependency)
 - `@earendil-works/pi-telemetry`
+- `@earendil-works/pi-mcp` (transitive package; not automatically enabled)
+- `@earendil-works/pi-codemode` (transitive package; not automatically enabled)
 - `@earendil-works/pi-tui` (transitive package; D Code does not use it as its
   product UI)
 
 License: MIT. Copyright (c) 2025 Mario Zechner. The complete notice is in
 `legal/Pi-v0.84.1-MIT.txt` in the source repository. Its wording matches the
-upstream v0.87.1 license; the filename retains the original audit version.
+upstream v0.99.1 license; the filename retains the original audit version.
+
+### Codex 0.157.1 image model metadata
+
+The optional image adapter uses an installed, independently managed Codex CLI;
+the CLI executable is not embedded in D Code. `host/src/image-model-catalog.ts`
+contains the complete `gpt-6-luna` ModelInfo from OpenAI Codex tag
+`rust-v0.157.1`, with only `experimental_supported_tools` cleared to prevent
+model metadata from reintroducing unrelated utility tools. D Code replaces
+the runtime's base instructions. The original source and digest are recorded
+in that file. License: Apache-2.0. The upstream `LICENSE` and `NOTICE` are
+preserved in `legal/Codex-v0.157.1-LICENSE.txt` and
+`legal/Codex-v0.157.1-NOTICE.txt`, and copied into candidate Legal resources.
 
 ### grok-mermaid 0.2.2
 

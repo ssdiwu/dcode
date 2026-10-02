@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { autoUpdate, flip, offset, shift, size, useFloating } from "@floating-ui/react-dom";
@@ -54,7 +55,7 @@ export function CommandMenu({anchor,input,trigger,options,active,loading,error,o
   return createPortal(<div ref={refs.setFloating} className="command-popover" data-placement={placement} style={{...floatingStyles,visibility:isPositioned?"visible":"hidden"}} onKeyDown={event => {
     if (event.key === "Escape" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {event.preventDefault();event.stopPropagation();onClose();input.current?.focus();}
   }}>
-    <div ref={list} className="command-list" id="composer-commands" role="listbox" aria-label="技能与命令" aria-busy={loading}>
+    <div ref={list} className="command-list" id="composer-commands" role="listbox" aria-label={uiText("搜索技能")} aria-busy={loading}>
       {commandGroups.map(group => {
         const rows = options.map((option,index)=>({option,index})).filter(row=>row.option.group===group);
         if (!rows.length) return null;
@@ -68,10 +69,10 @@ export function CommandMenu({anchor,input,trigger,options,active,loading,error,o
           </button>)}
         </div>;
       })}
-      {loading&&<p className="command-menu-state" role="status">正在读取技能与命令…</p>}
+      {loading&&<p className="command-menu-state" role="status">{uiText("正在读取技能与命令…")}</p>}
       {!loading&&error&&<p className="command-menu-state" role="alert">{error}</p>}
-      {!loading&&!error&&!options.length&&<p className="command-menu-state">没有匹配的技能、命令或模板。</p>}
+      {!loading&&!error&&!options.length&&<p className="command-menu-state">{uiText("没有匹配的技能；已知命令仍可直接输入完整名称调用。")}</p>}
     </div>
-    <div className="command-menu-footer"><span>{!loading&&!error?`${options.length} 项`:""}</span><span className="command-key-hints">↑↓ 选择 · Enter 使用 · Esc 关闭</span><button className="icon-button" type="button" aria-label="关闭技能菜单" tabIndex={-1} onMouseDown={event=>event.preventDefault()} onClick={()=>{onClose();input.current?.focus();}}><X size={13}/></button></div>
+    <div className="command-menu-footer"><span>{!loading&&!error?uiText("{0} 项", [options.length]):""}</span><span className="command-key-hints">{uiText("↑↓ 选择 · Enter 使用 · Esc 关闭")}</span><button className="icon-button" type="button" aria-label={uiText("关闭技能菜单")} tabIndex={-1} onMouseDown={event=>event.preventDefault()} onClick={()=>{onClose();input.current?.focus();}}><X size={13}/></button></div>
   </div>,document.body);
 }

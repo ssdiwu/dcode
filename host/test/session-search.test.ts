@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import type { Worker } from "node:worker_threads";
 import { searchEntryDigest } from "../src/search-entry-digest.js";
 import { D_CODE_SESSION_ORIGIN_TYPE, SessionReader } from "../src/session-reader.js";
 import { SessionSearchIndex, type SessionSearchIndexStatus } from "../src/session-search-index.js";
@@ -1534,5 +1535,39 @@ test("closing the search index rejects pending and future searches without recre
   } finally {
     await index.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an unexpected zero-code worker exit rejects pending search and permits a fresh worker", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dcode-search-zero-exit-test-"));
+  const sessions = join(root, "sessions");
+  const cache = join(root, "cache");
+  await mkdir(sessions, { recursive: true });
+  const statuses: SessionSearchIndexStatus[] = [];
+  const index = new SessionSearchIndex({sessionsDirectory:sessions,cacheDirectory:cache,emit:(event,data)=>{
+    if(event==="session.searchIndexChanged") statuses.push(data as SessionSearchIndexStatus);
+  }});
+  const params = {query:"",requestToken:"before-exit",limit:20,projectSourceFolders:[],refresh:false};
+  let exitedWorker: Worker | undefined;
+  try {
+    const pending = index.search(params);
+    exitedWorker = (index as unknown as {worker?:Worker}).worker;
+    assert.ok(exitedWorker);
+    // Fault injection at the actual Worker exit handler while its request is in flight.
+    exitedWorker.removeAllListeners("message");
+    exitedWorker.emit("exit",0);
+    await assert.rejects(Promise.race([
+      pending,
+      new Promise<never>((_resolve,reject)=>setTimeout(()=>reject(new Error("Search remained pending after worker exit")),250)),
+    ]),(error:unknown)=>typeof error==="object"&&error!==null&&(error as {code?:unknown}).code==="SEARCH_INDEX_FAILED");
+    assert.equal(statuses.at(-1)?.state,"failed");
+    await exitedWorker.terminate();
+    exitedWorker=undefined;
+    const recovered=await index.search({...params,requestToken:"after-exit"});
+    assert.equal(recovered.requestToken,"after-exit");
+  } finally {
+    await exitedWorker?.terminate();
+    await index.close();
+    await rm(root,{recursive:true,force:true});
   }
 });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiHost, PiHostError } from "../src/pi-host.js";
+import type { ProductStore } from "../src/product-store.js";
 import { publishNewFileAtomically } from "../src/atomic-file.js";
 import { searchEntryDigest } from "../src/search-entry-digest.js";
 import { SessionLease } from "../src/session-lease.js";
@@ -108,6 +109,56 @@ test("an explicit data root does not silently import legacy projects from the us
   }
 });
 
+test("Host exposes Task Goal draft, revision, and history through Protocol v1", async()=>{
+  const f=await fixture();
+  const events:string[]=[];
+  const host=new PiHost({agentDir:f.agentDir,dataRoot:join(f.root,".dcode"),userHome:f.root,emit:event=>events.push(event)});
+  try {
+    const initial=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const scope={kind:"user" as const,userId:initial.currentUser.id};
+    await host.handle("taskDraft.set",{requestId:"goal-host-draft",expectedStoreRevision:initial.storeRevision,scope,text:"原始请求",goal:"目标草稿",acceptance:["验收草稿"]});
+    const drafted=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    assert.equal(drafted.composerDrafts[0]?.goal,"目标草稿");
+    const created=await host.handle("task.create",{requestId:"goal-host-create",expectedStoreRevision:drafted.storeRevision,scope,title:"目标任务",goal:"目标草稿",acceptance:["验收草稿"]}) as {task:import("../src/product-store.js").TaskRecord;storeRevision:number};
+    const revised=await host.handle("task.goal.update",{requestId:"goal-host-update",expectedStoreRevision:created.storeRevision,scope,taskId:created.task.id,expectedTaskRevision:created.task.revision,goal:"修改后的目标",acceptance:["新验收"]}) as {task:import("../src/product-store.js").TaskRecord};
+    const history=await host.handle("task.goal.history",{taskId:created.task.id}) as import("../src/product-store.js").TaskGoalRevisionRecord[];
+    assert.equal(revised.task.goal,"修改后的目标");
+    assert.deepEqual(history.map(item=>item.goal),["目标草稿","修改后的目标"]);
+    assert.ok(events.includes("foundation.changed"));
+  } finally {await host.close();await rm(f.root,{recursive:true,force:true});}
+});
+
+test("a background member opening barrier rejects a concurrent Task Goal edit",async()=>{
+  const f=await fixture();const host=new PiHost({agentDir:f.agentDir,dataRoot:join(f.root,".dcode"),userHome:f.root,emit:()=>{}});
+  let release!:()=>void,arrived!:()=>void;
+  const barrier=new Promise<void>(resolve=>{release=resolve;}),atBarrier=new Promise<void>(resolve=>{arrived=resolve;});
+  try{
+    const initial=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const scope={kind:"user" as const,userId:initial.currentUser.id};
+    const created=await host.handle("task.create",{requestId:"opening-goal-task",expectedStoreRevision:initial.storeRevision,scope,title:"成员启动目标",goal:"旧目标"}) as {task:import("../src/product-store.js").TaskRecord};
+    const internal=host as unknown as {getProductStore:()=>Promise<ProductStore>;startDCodeRuntime:(params:Record<string,unknown>)=>Promise<unknown>;assertWorkerRuntimeWorkspaceBeforeBinding:(params:unknown)=>Promise<void>};
+    const store=await internal.getProductStore();
+    const owner=await store.ensureCoordinatorAgentRun({requestId:"opening-goal-owner",taskId:created.task.id,scope});
+    const team=await store.createTeamRun({requestId:"opening-goal-team",taskId:created.task.id,scope,coordinatorAgentRunId:owner.agentRun.id,members:[{profileId:"builtin-explore",title:"成员",taskPacket:{}}]});
+    const member=team.childAgentRuns[0]!;
+    internal.assertWorkerRuntimeWorkspaceBeforeBinding=async()=>{arrived();await barrier;throw new Error("opening barrier released");};
+    const opening=internal.startDCodeRuntime({runtimeId:`runtime-${member.id}`,taskId:created.task.id,dcodeSessionId:member.sessionId,agentRunId:member.id,scope,workspace:{workspaceId:`source:${member.id}`,cwd:f.root,access:"sharedReadOnly"}}).then(()=>null,error=>error);
+    await atBarrier;
+    const before=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const current=before.tasks.find(task=>task.id===created.task.id)!;
+    await assert.rejects(host.handle("task.goal.update",{requestId:"opening-goal-update",expectedStoreRevision:before.storeRevision,scope,taskId:current.id,expectedTaskRevision:current.revision,goal:"新目标",acceptance:[]}),
+      (error:unknown)=>error instanceof PiHostError&&error.code==="TASK_BUSY");
+    release();assert.match(String(await opening),/opening barrier released/);
+    const after=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    assert.equal(after.tasks.find(task=>task.id===current.id)?.goal,"旧目标");
+    await assert.rejects(host.handle("task.goal.update",{requestId:"opening-goal-team-unsettled",expectedStoreRevision:after.storeRevision,scope,taskId:current.id,expectedTaskRevision:current.revision,goal:"新目标",acceptance:[]}),/团队工作/);
+    await store.finishTeamRun({requestId:"opening-goal-team-settled",taskId:current.id,teamRunId:team.teamRun.id,status:"aborted",reason:"成员未能启动，旧安排已停止"});
+    const settled=await host.handle("foundation.snapshot",{}) as import("../src/product-store.js").FoundationSnapshot;
+    const changed=await host.handle("task.goal.update",{requestId:"opening-goal-after",expectedStoreRevision:settled.storeRevision,scope,taskId:current.id,expectedTaskRevision:settled.tasks.find(task=>task.id===current.id)!.revision,goal:"新目标",acceptance:[]}) as {task:import("../src/product-store.js").TaskRecord};
+    assert.equal(changed.task.goal,"新目标");
+  }finally{release();await host.close();await rm(f.root,{recursive:true,force:true});}
+});
+
 test("host lists, inspects, and opens with immediate takeover", async () => {
   const f = await fixture();
   const events: Array<{ event: string; data?: unknown }> = [];
@@ -132,8 +183,8 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
       };
     };
     assert.equal(hello.protocolVersion, 1);
-    assert.equal(hello.hostVersion, "0.0.34");
-    assert.equal(hello.piVersion, "0.87.1");
+    assert.equal(hello.hostVersion, "0.0.37");
+    assert.equal(hello.piVersion, "0.99.1");
     assert.equal(hello.capabilities.extensionDialogs, true);
     assert.equal(hello.capabilities.extensionCustomHeadless, false);
     assert.equal(hello.capabilities.extensionWidgets, false);
@@ -186,6 +237,24 @@ test("host lists, inspects, and opens with immediate takeover", async () => {
   } finally {
     await host.close();
     await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("legacy writable session bash cannot inherit a Host-only environment secret", async () => {
+  const f=await fixture();
+  const key='DCODE_SYNTHETIC_HOST_SECRET',previous=process.env[key];
+  process.env[key]='synthetic-secret-for-test-only';
+  const host=new PiHost({agentDir:f.agentDir,dataRoot:join(f.root,'.dcode'),userHome:f.root,emit:()=>{}});
+  try {
+    await host.handle('session.open',{sessionId:f.sessionId,mode:'writable',writeIntent:true});
+    const active=(host as unknown as {active:{session:{getToolDefinition:(name:string)=>{execute:(id:string,args:{command:string})=>Promise<{content:Array<{type:string;text?:string}>}>}|undefined}}}).active;
+    const bash=active.session.getToolDefinition('bash');
+    assert.ok(bash);
+    const result=await bash.execute('legacy-secret',{command:'printf "%s" "${DCODE_SYNTHETIC_HOST_SECRET-}"'});
+    assert.equal(result.content[0]?.text,'(no output)');
+  } finally {
+    if(previous===undefined)delete process.env[key];else process.env[key]=previous;
+    await host.close();await rm(f.root,{recursive:true,force:true});
   }
 });
 

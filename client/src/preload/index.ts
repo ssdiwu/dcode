@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("dcode", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   previewInspiration: (nodeId:string,media:boolean) => ipcRenderer.invoke("dcode:previewInspiration",nodeId,media),
   previewAttachment: (id: string) => ipcRenderer.invoke("dcode:previewAttachment", id),
+  exportGeneratedImage:(input:{taskId:string;generationId:string})=>ipcRenderer.invoke("dcode:exportGeneratedImage",input),
   switchCandidate: (direction: "candidate" | "rollback") =>
     ipcRenderer.invoke("dcode:switchCandidate", direction),
   signalRestoreFailed: () => ipcRenderer.invoke("dcode:restoreFailed"),

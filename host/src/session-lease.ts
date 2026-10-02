@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
+  link,
   open,
   readFile,
   realpath,
   rename,
   rm,
   stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -189,13 +191,20 @@ async function resolveExistingLease(
 }
 
 async function writeOwner(path: string, owner: SessionLeaseOwner, exclusive: boolean): Promise<void> {
-  if (exclusive) {
-    await writeFile(path, `${JSON.stringify(owner, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    return;
-  }
   const temporary = join(dirname(path), `.owner-${owner.nonce}.tmp`);
-  await writeFile(temporary, `${JSON.stringify(owner, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-  await rename(temporary, path);
+  try {
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(owner, null, 2)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (exclusive) await link(temporary, path);
+    else await rename(temporary, path);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
 }
 
 export interface AcquireSessionLeaseOptions {

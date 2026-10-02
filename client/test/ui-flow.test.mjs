@@ -177,9 +177,24 @@ test(
     };
     let host = new PiHost(hostOptions);
     await host.start();
+    let injectDraftConflict = false;
+    let draftConflictInjected = false;
+    let draftSaveAttemptsAfterConflict = 0;
+    let conflictSessionId;
     window.dcode = {
       request: async (method, params = {}) => {
         validateMethodParams(method, params);
+        if (method === "taskDraft.set" && injectDraftConflict) {
+          injectDraftConflict = false;
+          draftConflictInjected = true;
+          await host.handle("clientPreferences.set", {
+            requestId: "concurrent-draft-preference",
+            expectedStoreRevision: params.expectedStoreRevision,
+            readingPosition: { sessionId: conflictSessionId, offset: 42 },
+          });
+        }
+        if (method === "taskDraft.set" && draftConflictInjected)
+          draftSaveAttemptsAfterConflict++;
         return await host.handle(method, params);
       },
       subscribe: (handler) => {
@@ -282,6 +297,13 @@ test(
       await waitFor(() => assert.equal(work.draft.text, ""));
       const taskA = work.task,
         sessionA = work.session.id;
+      conflictSessionId = sessionA;
+      fireEvent.change(screen.getByLabelText("draft"), {
+        target: { value: "成员不可接续时保留这份要求" },
+      });
+      await act(async () => work.send("missing-member"));
+      assert.match(work.error, /请选择本任务已创建的成员/);
+      assert.equal(work.draft.text, "成员不可接续时保留这份要求");
       const copySnapshot = await host.handle("foundation.snapshot", {});
       const copied = await host.handle("dcodeSession.copy", {
         requestId: "copy-full-history",
@@ -324,12 +346,16 @@ test(
       fireEvent.click(screen.getByText("new"));
       await waitFor(() => assert.equal(work.task, null));
       assert.equal(work.draft.text, "");
+      injectDraftConflict = true;
       fireEvent.change(screen.getByLabelText("draft"), {
         target: { value: "新任务未提交草稿" },
       });
       await act(async () => {
         await new Promise((r) => setTimeout(r, 600));
       });
+      assert.equal(draftConflictInjected, true, "A concurrent Store write must cause the intended draft conflict");
+      await waitFor(() => assert.ok(draftSaveAttemptsAfterConflict >= 2, `The same draft write must retry after a fresh revision; attempts=${draftSaveAttemptsAfterConflict}; error=${work.error}`), { timeout: 5000 });
+      assert.equal(work.draft.text, "新任务未提交草稿", "A conflict must keep the local draft visible");
       await act(async () => work.select(taskA, sessionA));
       await waitFor(() => assert.equal(work.draft.text, "A 独有的草稿"));
       responseDelay = 1500;

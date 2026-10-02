@@ -22,30 +22,78 @@ const {useConversationNavigation}=await server.ssrLoadModule("/src/workbench/use
 await server.close();
 const turns=[1,2,3].map(index=>({id:`u${index}`,question:`问题 ${index}`,answer:`回答 ${index}`}));
 
-test("rail previews and jumps with pointer and keyboard, including first/last turns",()=>{
+test("each user question is a separate focusable target with a sourced preview",()=>{
   const chosen=[];
   const view=render(React.createElement(ConversationRail,{turns,activeId:"u2",onNavigate:id=>chosen.push(id)}));
-  const button=screen.getByRole("button",{name:/对话导航/});
-  button.getBoundingClientRect=()=>({top:0,height:100,left:0,width:32,right:32,bottom:100});
-  fireEvent.focus(button);
-  fireEvent.keyDown(button,{key:"Home"});
+  const second=screen.getByRole("button",{name:/第 2 条提问/});
+  assert.equal(second.getAttribute("aria-current"),"location");
+  fireEvent.focus(second);
+  assert.match(screen.getByRole("tooltip").textContent,/问题 2.*回答 2/);
+  fireEvent.keyDown(second,{key:"Home"});
+  const first=screen.getByRole("button",{name:/第 1 条提问/});
+  assert.equal(document.activeElement,first);
   assert.match(screen.getByRole("tooltip").textContent,/问题 1/);
-  fireEvent.keyDown(button,{key:"Enter"});
-  fireEvent.keyDown(button,{key:"End"});
-  fireEvent.keyDown(button,{key:" "});
-  fireEvent.pointerMove(button,{clientY:14});
+  fireEvent.keyDown(first,{key:"Enter"});
+  fireEvent.keyDown(first,{key:"End"});
+  const last=screen.getByRole("button",{name:/第 3 条提问/});
+  assert.equal(document.activeElement,last);
+  fireEvent.keyDown(last,{key:" "});
+  fireEvent.pointerEnter(first);
   assert.match(screen.getByRole("tooltip").textContent,/问题 1/);
-  fireEvent.click(button,{detail:1,clientY:14});
+  fireEvent.click(first);
   assert.deepEqual(chosen,["u1","u3","u1"]);
-  fireEvent.pointerLeave(button);
-  assert.match(button.getAttribute("aria-label"),/第 1 轮/);
-  fireEvent.keyDown(button,{key:"ArrowDown"});fireEvent.keyDown(button,{key:"Enter"});
+  fireEvent.pointerLeave(first);
+  fireEvent.keyDown(first,{key:"ArrowDown"});
+  fireEvent.keyDown(screen.getByRole("button",{name:/第 2 条提问/}),{key:"Enter"});
   assert.equal(chosen.at(-1),"u2");
-  fireEvent.blur(button);fireEvent.pointerLeave(button);
+  fireEvent.blur(screen.getByRole("button",{name:/第 2 条提问/}));
   assert.equal(screen.queryByRole("tooltip"),null);
   view.rerender(React.createElement(ConversationRail,{turns:[],activeId:null,onNavigate:()=>{}}));
   assert.equal(screen.queryByRole("navigation"),null);
   cleanup();
+});
+
+test("a 160-question rail renders only the visible window and keeps the active input reachable",()=>{
+  const longTurns=Array.from({length:160},(_,index)=>({id:`u${index+1}`,question:`问题 ${index+1}`,answer:`回答 ${index+1}`}));
+  const chosen=[];
+  try {
+    render(React.createElement(ConversationRail,{turns:longTurns,activeId:"u120",onNavigate:id=>chosen.push(id)}));
+    const rail=screen.getByRole("navigation",{name:"提问导航"});
+    assert.equal(rail.dataset.itemCount,"160");
+    assert.ok(Number(rail.dataset.renderedItemCount)<30,"the long directory must be virtualized");
+    const active=screen.getByRole("button",{name:/第 120 条提问/});
+    assert.equal(active.getAttribute("aria-current"),"location");
+    fireEvent.focus(active);
+    fireEvent.keyDown(active,{key:"Home"});
+    const first=screen.getByRole("button",{name:/第 1 条提问/});
+    assert.equal(document.activeElement,first);
+    fireEvent.keyDown(first,{key:"End"});
+    const last=screen.getByRole("button",{name:/第 160 条提问/});
+    assert.equal(document.activeElement,last);
+    fireEvent.keyDown(last,{key:"Enter"});
+    assert.deepEqual(chosen,["u160"]);
+    assert.ok(Number(rail.dataset.renderedItemCount)<30);
+    const track=rail.querySelector('.conversation-rail-track');
+    track.scrollTop=60*40;fireEvent.scroll(track);
+    assert.equal(screen.getByRole("button",{name:/第 61 条提问/}).tabIndex,0);
+    assert.equal(screen.queryByRole("button",{name:/第 160 条提问/}),null);
+  } finally {cleanup();}
+});
+
+test("a native non-user record does not become a navigation target",()=>{
+  const nativeEntries=[
+    {id:"u1",sourceKind:"native",messageRole:"user",content:{text:"真实提问",handled:true},createdAt:"2026-09-29T00:00:00Z"},
+    {id:"event",sourceKind:"native",messageRole:"other",content:{text:"内部记录",handled:true},createdAt:"2026-09-29T00:00:01Z"},
+  ];
+  const work={imported:[],session:{id:"native"},preferences:{},presentation:{adapterState:"ready",nativeEntries},readingPosition:()=>0,saveReading:()=>{},draft:{text:"",images:[]},draftKey:"native",updateDraft:()=>{},fail:()=>{},stream:{messages:[]}};
+  try {
+    render(React.createElement(Transcript,{work,emptyBrand:null}));
+    const rail=screen.getByRole("navigation",{name:"提问导航"});
+    assert.equal(rail.dataset.itemCount,"1");
+    assert.ok(screen.getByRole("button",{name:/真实提问/}));
+    assert.equal(screen.queryByRole("button",{name:/内部记录/}),null);
+    assert.ok(screen.getByRole("article",{name:"会话记录"}));
+  } finally {cleanup();}
 });
 
 test("reading navigation scrolls to the user anchor and follows later manual scrolling",async()=>{
@@ -68,14 +116,15 @@ test("reading navigation scrolls to the user anchor and follows later manual scr
   }
   try {
     render(React.createElement(Harness));
-    const button=screen.getByRole("button",{name:/对话导航/});
-    fireEvent.focus(button);fireEvent.keyDown(button,{key:"End"});fireEvent.keyDown(button,{key:"Enter"});
+    const button=screen.getByRole("button",{name:/第 1 条提问/});
+    fireEvent.focus(button);fireEvent.keyDown(button,{key:"End"});fireEvent.keyDown(screen.getByRole("button",{name:/第 3 条提问/}),{key:"Enter"});
     const viewport=document.querySelector('[data-viewport]');
     assert.equal(viewport.scrollTop,1200);
     await waitFor(()=>assert.equal(screen.getByTestId("active").textContent,"u3"));
     fireEvent.wheel(viewport);viewport.scrollTop=620;fireEvent.scroll(viewport);
     await waitFor(()=>assert.equal(screen.getByTestId("active").textContent,"u2"));
-    fireEvent.keyDown(button,{key:"Home"});fireEvent.keyDown(button,{key:"Enter"});
+    const end=screen.getByRole("button",{name:/第 3 条提问/});
+    fireEvent.keyDown(end,{key:"Home"});fireEvent.keyDown(screen.getByRole("button",{name:/第 1 条提问/}),{key:"Enter"});
     assert.equal(viewport.scrollTop,0);
     await waitFor(()=>assert.equal(screen.getByTestId("active").textContent,"u1"));
   } finally {cleanup();HTMLElement.prototype.getBoundingClientRect=originalRect;HTMLElement.prototype.scrollTo=originalScrollTo;}
@@ -102,8 +151,8 @@ test("explicit turn navigation stays paused during streaming even when its targe
   const work=text=>({...base,stream:{messages:[{id:"live",text,thinking:"",ended:false}]}});
   try {
     const view=render(React.createElement(Transcript,{work:work("正在回复"),emptyBrand:null}));
-    const rail=screen.getByRole("button",{name:/对话导航/});
-    fireEvent.focus(rail);fireEvent.keyDown(rail,{key:"End"});fireEvent.keyDown(rail,{key:"Enter"});
+    const rail=screen.getByRole("button",{name:/第 1 条提问/});
+    fireEvent.focus(rail);fireEvent.keyDown(rail,{key:"End"});fireEvent.keyDown(screen.getByRole("button",{name:/第 2 条提问/}),{key:"Enter"});
     const viewport=document.querySelector('.transcript');
     assert.equal(viewport.scrollTop,20);
     height=600;

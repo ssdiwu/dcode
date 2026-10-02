@@ -11,8 +11,85 @@ import {
   type LegacySourceManifestEntry,
 } from "./legacy-migration.js";
 
-export const PRODUCT_STORE_SCHEMA_VERSION = 2;
+export const PRODUCT_STORE_SCHEMA_VERSION = 3;
 export const PRODUCT_STORE_APPLICATION_ID = 0x44434f44; // "DCOD"
+
+const WORKFLOW_SCHEMA_SQL = `
+  CREATE TABLE task_workflows (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    origin_raw_input_id TEXT NOT NULL REFERENCES raw_inputs(id),
+    current_version INTEGER NOT NULL CHECK(current_version >= 1),
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX task_workflows_by_task ON task_workflows(task_id, created_at, id);
+
+  CREATE TABLE task_workflow_versions (
+    workflow_id TEXT NOT NULL REFERENCES task_workflows(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL CHECK(version >= 1),
+    origin_raw_input_id TEXT NOT NULL REFERENCES raw_inputs(id),
+    goal_revision INTEGER NOT NULL CHECK(goal_revision >= 1),
+    goal TEXT NOT NULL CHECK(length(goal) BETWEEN 1 AND 20000),
+    constraints_json TEXT NOT NULL CHECK(json_valid(constraints_json)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(workflow_id, version)
+  ) STRICT;
+
+  CREATE TABLE task_workflow_stages (
+    workflow_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 500),
+    completion TEXT NOT NULL CHECK(length(completion) BETWEEN 1 AND 10000),
+    depends_on_json TEXT NOT NULL CHECK(json_valid(depends_on_json)),
+    PRIMARY KEY(workflow_id, version, id),
+    UNIQUE(workflow_id, version, ordinal),
+    FOREIGN KEY(workflow_id, version)
+      REFERENCES task_workflow_versions(workflow_id, version) ON DELETE CASCADE
+  ) STRICT;
+
+  CREATE TABLE task_workflow_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    workflow_id TEXT NOT NULL REFERENCES task_workflows(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active', 'stopped', 'interrupted', 'completed')),
+    reason TEXT,
+    completion_report_id TEXT REFERENCES agent_reports(id),
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY(workflow_id, version)
+      REFERENCES task_workflow_versions(workflow_id, version)
+  ) STRICT;
+  CREATE UNIQUE INDEX one_active_workflow_run_per_task
+    ON task_workflow_runs(task_id) WHERE status = 'active';
+
+  CREATE TABLE task_workflow_reports (
+    run_id TEXT PRIMARY KEY REFERENCES task_workflow_runs(id) ON DELETE CASCADE,
+    workflow_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    coordinator_report_id TEXT NOT NULL UNIQUE REFERENCES agent_reports(id),
+    goal_revision INTEGER NOT NULL CHECK(goal_revision >= 1),
+    latest_input_sequence INTEGER NOT NULL CHECK(latest_input_sequence >= 0),
+    final_review_sequence INTEGER NOT NULL CHECK(final_review_sequence >= 0),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(workflow_id, version)
+      REFERENCES task_workflow_versions(workflow_id, version)
+  ) STRICT;
+
+  CREATE TABLE task_workflow_work_items (
+    run_id TEXT NOT NULL REFERENCES task_workflow_runs(id) ON DELETE CASCADE,
+    stage_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL UNIQUE REFERENCES task_work_items(id),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(run_id, stage_id)
+  ) STRICT;
+`;
 
 const TASK_CONTEXT_SCHEMA_SQL = `
   CREATE TABLE task_context_sets (
@@ -1831,6 +1908,8 @@ function createSchema(
       UNIQUE(source_session_id, source_digest, importer_version)
     ) STRICT;
 
+    ${WORKFLOW_SCHEMA_SQL}
+
     PRAGMA application_id = ${PRODUCT_STORE_APPLICATION_ID};
     PRAGMA user_version = ${PRODUCT_STORE_SCHEMA_VERSION};
   `);
@@ -1839,7 +1918,7 @@ function createSchema(
     const insertMeta = database.prepare("INSERT INTO dcode_meta(key, value) VALUES (?, ?)");
     insertMeta.run("schema_version", String(PRODUCT_STORE_SCHEMA_VERSION));
     insertMeta.run("minimum_reader_schema_version", String(PRODUCT_STORE_SCHEMA_VERSION));
-    insertMeta.run("product_version", "0.0.28");
+    insertMeta.run("product_version", "0.0.36");
     insertMeta.run("store_revision", "0");
     insertMeta.run("current_user_id", identity.userId);
     insertMeta.run("created_at", now);
@@ -1848,7 +1927,7 @@ function createSchema(
     database.prepare(`
       INSERT INTO schema_migrations(version, applied_at, product_version)
       VALUES (?, ?, ?)
-    `).run(PRODUCT_STORE_SCHEMA_VERSION, now, "0.0.28");
+    `).run(PRODUCT_STORE_SCHEMA_VERSION, now, "0.0.36");
     database.prepare(`
       INSERT INTO local_users(id, home_directory, revision, created_at, updated_at)
       VALUES (?, ?, 1, ?, ?)
@@ -1987,6 +2066,12 @@ function validateProductStoreSchemaVersion(database: DatabaseSync, expectedSchem
     if (expectedSchemaVersion >= 2) {
       requiredTables.push("task_context_sets", "task_context_sources");
     }
+    if (expectedSchemaVersion >= 3) {
+      requiredTables.push(
+        "task_workflows", "task_workflow_versions", "task_workflow_stages",
+        "task_workflow_runs", "task_workflow_work_items", "task_workflow_reports",
+      );
+    }
     const tables = new Set((database.prepare(`
       SELECT name FROM sqlite_master WHERE type = 'table'
     `).all() as Array<{ name?: unknown }>).flatMap((row) => (
@@ -2026,10 +2111,10 @@ function validateProductStoreSchemaVersion(database: DatabaseSync, expectedSchem
     const storeRevision = meta.get("store_revision") ?? "";
     if (
       !migration
-      || migration.product_version !== "0.0.28"
+      || migration.product_version !== (expectedSchemaVersion >= 3 ? "0.0.36" : "0.0.28")
       || meta.get("schema_version") !== String(expectedSchemaVersion)
       || meta.get("minimum_reader_schema_version") !== String(expectedSchemaVersion)
-      || meta.get("product_version") !== "0.0.28"
+      || meta.get("product_version") !== (expectedSchemaVersion >= 3 ? "0.0.36" : "0.0.28")
       || meta.get("migration_state") !== "complete"
       || meta.get("schema_fingerprint") !== schemaFingerprint(database)
       || !/^\d+$/.test(storeRevision)
@@ -2101,6 +2186,50 @@ function validateProductStoreSchemaVersion(database: DatabaseSync, expectedSchem
       }
     }
 
+    if (expectedSchemaVersion >= 3) {
+      const invalidWorkflow = database.prepare(`
+        SELECT w.id FROM task_workflows w
+        JOIN raw_inputs source ON source.id = w.origin_raw_input_id
+        LEFT JOIN task_workflow_versions v
+          ON v.workflow_id = w.id AND v.version = w.current_version
+        WHERE v.workflow_id IS NULL OR source.task_id <> w.task_id LIMIT 1
+      `).get() as { id?: unknown } | undefined;
+      const invalidVersionSource = database.prepare(`
+        SELECT v.workflow_id FROM task_workflow_versions v
+        JOIN task_workflows w ON w.id = v.workflow_id
+        JOIN raw_inputs source ON source.id = v.origin_raw_input_id
+        WHERE source.task_id <> w.task_id LIMIT 1
+      `).get() as { workflow_id?: unknown } | undefined;
+      const invalidRun = database.prepare(`
+        SELECT r.id FROM task_workflow_runs r
+        JOIN task_workflows w ON w.id = r.workflow_id
+        WHERE r.task_id <> w.task_id LIMIT 1
+      `).get() as { id?: unknown } | undefined;
+      const invalidBinding = database.prepare(`
+        SELECT b.run_id FROM task_workflow_work_items b
+        JOIN task_workflow_runs r ON r.id = b.run_id
+        JOIN task_work_items i ON i.id = b.work_item_id
+        LEFT JOIN task_workflow_stages s
+          ON s.workflow_id = r.workflow_id AND s.version = r.version AND s.id = b.stage_id
+        WHERE i.task_id <> r.task_id OR s.id IS NULL LIMIT 1
+      `).get() as { run_id?: unknown } | undefined;
+      const invalidReport = database.prepare(`
+        SELECT b.run_id FROM task_workflow_reports b
+        JOIN task_workflow_runs r ON r.id = b.run_id
+        JOIN task_workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
+        WHERE b.workflow_id <> r.workflow_id OR b.version <> r.version
+          OR b.goal_revision <> v.goal_revision OR b.coordinator_report_id <> r.completion_report_id
+          OR r.status <> 'completed' LIMIT 1
+      `).get() as { run_id?: unknown } | undefined;
+      if (invalidWorkflow || invalidVersionSource || invalidRun || invalidBinding || invalidReport) {
+        throw new ProductStoreSchemaError(
+          "PRODUCT_STORE_SCHEMA_INVALID",
+          "D Code Product Store Workflow references are incomplete or cross Task boundaries",
+          { invalidWorkflow, invalidVersionSource, invalidRun, invalidBinding, invalidReport },
+        );
+      }
+    }
+
     const invalidJSONChecks = [
       ["tasks", "acceptance_json"],
       ["session_entries", "content_json"],
@@ -2138,6 +2267,10 @@ function validateProductStoreSchemaVersion(database: DatabaseSync, expectedSchem
       ["mutation_receipts", "result_json"],
       ["store_events", "payload_json"],
       ["legacy_sources", "details_json"],
+      ...(expectedSchemaVersion >= 3 ? [
+        ["task_workflow_versions", "constraints_json"],
+        ["task_workflow_stages", "depends_on_json"],
+      ] as const : []),
     ] as const;
     for (const [table, column] of invalidJSONChecks) {
       const invalid = database.prepare(`
@@ -2310,7 +2443,7 @@ export async function migrateProductStoreSchemaIfNeeded(
     PRAGMA trusted_schema = OFF;
   `);
   const applicationId = Number(scalarPragma(database, "PRAGMA application_id"));
-  const schemaVersion = Number(scalarPragma(database, "PRAGMA user_version"));
+  let schemaVersion = Number(scalarPragma(database, "PRAGMA user_version"));
   if (applicationId !== PRODUCT_STORE_APPLICATION_ID) {
     throw new ProductStoreSchemaError(
       "PRODUCT_STORE_SCHEMA_UNSUPPORTED",
@@ -2319,7 +2452,7 @@ export async function migrateProductStoreSchemaIfNeeded(
     );
   }
   if (schemaVersion === PRODUCT_STORE_SCHEMA_VERSION) return;
-  if (schemaVersion !== 1) {
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
     throw new ProductStoreSchemaError(
       "PRODUCT_STORE_SCHEMA_UNSUPPORTED",
       "D Code has no safe migration path for this Product Store schema",
@@ -2327,59 +2460,71 @@ export async function migrateProductStoreSchemaIfNeeded(
     );
   }
 
-  validateProductStoreSchemaVersion(database, 1);
-  const backup = await writeSchemaPromotionBackup(database, layout, 1, PRODUCT_STORE_SCHEMA_VERSION);
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    database.exec(TASK_CONTEXT_SCHEMA_SQL);
-    database.prepare(`
-      INSERT INTO task_context_sets(task_id, revision, created_at, updated_at)
-      SELECT id, 1, ?, ? FROM tasks
-    `).run(now, now);
-    const currentRevision = Number((database.prepare(
-      "SELECT value FROM dcode_meta WHERE key = 'store_revision'",
-    ).get() as { value?: unknown } | undefined)?.value);
-    if (!Number.isSafeInteger(currentRevision) || currentRevision < 0) {
-      throw new ProductStoreSchemaError(
-        "PRODUCT_STORE_SCHEMA_INVALID",
-        "D Code Product Store has an invalid store revision before schema migration",
+  while (schemaVersion < PRODUCT_STORE_SCHEMA_VERSION) {
+    const nextVersion = schemaVersion + 1;
+    validateProductStoreSchemaVersion(database, schemaVersion);
+    const backup = await writeSchemaPromotionBackup(database, layout, schemaVersion, nextVersion);
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      if (nextVersion === 2) {
+        database.exec(TASK_CONTEXT_SCHEMA_SQL);
+        database.prepare(`
+          INSERT INTO task_context_sets(task_id, revision, created_at, updated_at)
+          SELECT id, 1, ?, ? FROM tasks
+        `).run(now, now);
+      } else if (nextVersion === 3) {
+        database.exec(WORKFLOW_SCHEMA_SQL);
+      }
+      const currentRevision = Number((database.prepare(
+        "SELECT value FROM dcode_meta WHERE key = 'store_revision'",
+      ).get() as { value?: unknown } | undefined)?.value);
+      if (!Number.isSafeInteger(currentRevision) || currentRevision < 0) {
+        throw new ProductStoreSchemaError(
+          "PRODUCT_STORE_SCHEMA_INVALID",
+          "D Code Product Store has an invalid store revision before schema migration",
+        );
+      }
+      const nextStoreRevision = currentRevision + 1;
+      const productVersion = nextVersion >= 3 ? "0.0.36" : "0.0.28";
+      database.prepare(`
+        INSERT INTO schema_migrations(version, applied_at, product_version)
+        VALUES (?, ?, ?)
+      `).run(nextVersion, now, productVersion);
+      database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_version'")
+        .run(String(nextVersion));
+      database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'minimum_reader_schema_version'")
+        .run(String(nextVersion));
+      database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'product_version'")
+        .run(productVersion);
+      database.prepare("UPDATE dcode_meta SET value = 'complete' WHERE key = 'migration_state'").run();
+      database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")
+        .run(String(nextStoreRevision));
+      database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
+        .run(schemaFingerprint(database));
+      database.exec(`PRAGMA user_version = ${nextVersion}`);
+      database.prepare(`
+        INSERT INTO store_events(
+          event_id, store_revision, kind, entity_kind, entity_id,
+          task_id, payload_json, created_at
+        ) VALUES (?, ?, 'schema.promoted', 'productStore', 'product-store', NULL, ?, ?)
+      `).run(
+        randomUUID(),
+        nextStoreRevision,
+        JSON.stringify({
+          migrationId: backup.migrationId,
+          fromSchemaVersion: schemaVersion,
+          toSchemaVersion: nextVersion,
+          sourceDigest: backup.digest,
+        }),
+        now,
       );
+      database.exec("COMMIT");
+    } catch (error) {
+      rollback(database);
+      throw error;
     }
-    const nextStoreRevision = currentRevision + 1;
-    database.prepare(`
-      INSERT INTO schema_migrations(version, applied_at, product_version)
-      VALUES (?, ?, '0.0.28')
-    `).run(PRODUCT_STORE_SCHEMA_VERSION, now);
-    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_version'")
-      .run(String(PRODUCT_STORE_SCHEMA_VERSION));
-    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'minimum_reader_schema_version'")
-      .run(String(PRODUCT_STORE_SCHEMA_VERSION));
-    database.prepare("UPDATE dcode_meta SET value = 'complete' WHERE key = 'migration_state'").run();
-    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'store_revision'")
-      .run(String(nextStoreRevision));
-    database.prepare("UPDATE dcode_meta SET value = ? WHERE key = 'schema_fingerprint'")
-      .run(schemaFingerprint(database));
-    database.exec(`PRAGMA user_version = ${PRODUCT_STORE_SCHEMA_VERSION}`);
-    database.prepare(`
-      INSERT INTO store_events(
-        event_id, store_revision, kind, entity_kind, entity_id,
-        task_id, payload_json, created_at
-      ) VALUES (?, ?, 'schema.promoted', 'productStore', 'product-store', NULL, ?, ?)
-    `).run(
-      randomUUID(),
-      nextStoreRevision,
-      JSON.stringify({
-        migrationId: backup.migrationId,
-        fromSchemaVersion: schemaVersion,
-        toSchemaVersion: PRODUCT_STORE_SCHEMA_VERSION,
-        sourceDigest: backup.digest,
-      }),
-      now,
-    );
-    database.exec("COMMIT");
-  } catch (error) {
-    rollback(database);
-    throw error;
+    schemaVersion = nextVersion;
+    validateProductStoreSchemaVersion(database, schemaVersion);
   }
   validateProductStoreSchema(database);
 }

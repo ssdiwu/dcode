@@ -1,3 +1,4 @@
+import { uiText, setDisplayLanguage } from "../shared/ui-language.ts";
 import {closePreviewProxy} from "./preview-network.js";
 import { HTMLPreview } from "./html-preview.js";
 import { readLegacyPreferences } from "./legacy-preferences.js";
@@ -14,14 +15,18 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile,realpath,stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { HostBridge } from "../host/bridge.js";
 import { resolveClientPaths } from "./paths.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const paths = resolveClientPaths(here, app.isPackaged, process.resourcesPath);
+const appVersion = app.isPackaged
+  ? app.getVersion()
+  : (JSON.parse(readFileSync(join(here, "..", "..", "..", "package.json"), "utf8")) as {version:string}).version;
 const devUrl = process.env.DCODE_RENDERER_URL;
 if (devUrl && !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(devUrl))
   throw new Error("Invalid development renderer URL");
@@ -73,7 +78,7 @@ async function startHost(): Promise<boolean> {
   const next = await HostBridge.start(hostOptions());
   await next.request("host.hello");
   bridge = next;
-  diagnostic("Host 已连接，协议握手完成");
+  diagnostic(uiText("Host 已连接，协议握手完成"));
   if (!process.env.DCODE_DATA_ROOT) {
     const snapshot = await next.request<{storeRevision:number}>("foundation.snapshot");
     await next.request("clientPreferences.importLegacy", {requestId:`legacy-preferences-${Date.now()}`, expectedStoreRevision:snapshot.storeRevision, values:await readLegacyPreferences()});
@@ -108,8 +113,8 @@ async function startHost(): Promise<boolean> {
             (t) => t.id === data.runtime?.taskId,
           );
           new Notification({
-            title: "本次执行已完成",
-            body: task?.title ?? "可以查看执行结果。",
+            title: uiText("本次执行已完成"),
+            body: task?.title ?? uiText("可以查看执行结果。"),
           }).show();
         })
         .catch((error) => console.error("[dcode] notification", String(error)));
@@ -158,7 +163,7 @@ function setupIPC() {
     if(input.action==="bounds")return htmlPreview.bounds(input.bounds as Parameters<HTMLPreview["bounds"]>[0],input.clientId as string|undefined);
     if(input.action==="network"&&typeof input.id==="string"&&typeof input.allow==="boolean")return htmlPreview.allowNetwork(input.id,input.allow);
     if(input.action==="close")return htmlPreview.close(typeof input.clientId==="string"?input.clientId:undefined);
-    throw new Error("预览操作无效");
+    throw new Error(uiText("预览操作无效"));
   });
   trustedHandle("dcode:restoreFailed", async () => {
     if (process.env.DCODE_SWITCH_ID && process.env.DCODE_SWITCH_READY) {
@@ -176,11 +181,14 @@ function setupIPC() {
   trustedHandle(
     "dcode:request",
     (method: string, params: Record<string, unknown> = {}) => {
-      if (!bridge) throw new Error("运行服务尚未连接，请重新连接。");
+      if(method==='imageGeneration.export')throw new Error('Image exports require the native save dialog');
+      if (!bridge) throw new Error(uiText("运行服务尚未连接，请重新连接。"));
       return bridge
-        .request(method, params)
+        .request(method, params,method==='imageGeneration.connect'?{timeoutMs:11*60_000}:{})
         .then(async result => {
-          if (method === "clientPreferences.set" && "appearance" in params) await refreshNotifications();
+          if (method === "clientPreferences.set" && ["appearance","language","fontScale","notificationsEnabled"].some(key=>key in params)) {
+            applyShellPreferences((result as {preferences:ShellPreferences}).preferences);
+          }
           return result;
         })
         .catch((error: Error & { code?: string }) => {
@@ -204,9 +212,9 @@ function setupIPC() {
         }[];
       }>("selfEvolution.list");
       const receipt = receipts.find((r) => r.id === id);
-      if (!receipt) throw new Error("恢复回执不存在");
+      if (!receipt) throw new Error(uiText("恢复回执不存在"));
       const expected = join(receipt.toApp, "Contents/MacOS/D Code");
-      if (expected !== process.execPath) throw new Error("恢复应用身份不匹配");
+      if (expected !== process.execPath) throw new Error(uiText("恢复应用身份不匹配"));
       const snapshot = await bridge.request<{ storeRevision: number }>(
         "foundation.snapshot",
       );
@@ -230,7 +238,7 @@ function setupIPC() {
           await readFile(process.env.DCODE_SWITCH_READY, "utf8"),
         );
         if (prior.id !== id || prior.pid !== process.pid)
-          throw new Error("启动确认文件不匹配");
+          throw new Error(uiText("启动确认文件不匹配"));
       }
       const go = process.env.DCODE_SWITCH_GO;
       if (go) {
@@ -265,7 +273,7 @@ function setupIPC() {
                       }
                     }
                   } catch {
-                    diagnostic("上一构建已启动，回滚记录需人工确认");
+                    diagnostic(uiText("上一构建已启动，回滚记录需人工确认"));
                   }
                 }
                 window?.show();
@@ -288,9 +296,9 @@ function setupIPC() {
   trustedHandle(
     "dcode:switchCandidate",
     async (direction: "candidate" | "rollback") => {
-      if (!bridge || quitting) throw new Error("当前不能切换应用");
+      if (!bridge || quitting) throw new Error(uiText("当前不能切换应用"));
       if (direction !== "candidate" && direction !== "rollback")
-        throw new Error("切换方式无效");
+        throw new Error(uiText("切换方式无效"));
       quitting = true;
       try {
         return await switchApplication({
@@ -300,7 +308,7 @@ function setupIPC() {
           env: process.env,
           flush: async () => {
             const issue = await new Promise<string | undefined>((resolve) => {
-              const timer = setTimeout(() => resolve("界面未完成保存"), 8000);
+              const timer = setTimeout(() => resolve(uiText("界面未完成保存")), 8000);
               quitAck = (error) => {
                 clearTimeout(timer);
                 resolve(error);
@@ -330,7 +338,7 @@ function setupIPC() {
     },
   );
   trustedHandle("dcode:diagnostics", () => ({
-    version: app.getVersion(),
+    version: appVersion,
     packaged: app.isPackaged,
     hostReady: !!bridge && !bridge.hasExited,
     events: [...diagnostics],
@@ -349,32 +357,42 @@ function setupIPC() {
       "maintenance.status",
     );
     if (!state?.candidatePath || state.candidatePath !== path)
-      throw new Error("候选路径无效");
+      throw new Error(uiText("候选路径无效"));
     shell.showItemInFolder(path);
   });
-  trustedHandle("dcode:chooseContextFiles",async()=>{if(!window)return [];const result=await dialog.showOpenDialog(window,{title:"选择任务附加资料",properties:["openFile","multiSelections"],filters:[{name:"文本与代码",extensions:["md","markdown","txt","json","ts","tsx","js","py","swift","yaml","yml","toml"]}]});return result.canceled?[]:result.filePaths;});
+  trustedHandle("dcode:chooseContextFiles",async()=>{if(!window)return [];const result=await dialog.showOpenDialog(window,{title:uiText("选择任务附加资料"),properties:["openFile","multiSelections"],filters:[{name:uiText("文本与代码"),extensions:["md","markdown","txt","json","ts","tsx","js","py","swift","yaml","yml","toml"]}]});return result.canceled?[]:result.filePaths;});
   trustedHandle("dcode:chooseDirectory", async () => {
     if (!window) return null;
     const result = await dialog.showOpenDialog(window, {
-      title: "选择项目文件夹",
+      title: uiText("选择项目文件夹"),
       properties: ["openDirectory", "createDirectory"],
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
   trustedHandle("dcode:previewInspiration", async (nodeId:string,media:boolean) => {
-    if(!bridge||!window||!/^idea-[a-f0-9-]{36}$/.test(nodeId)||typeof media!=="boolean")throw new Error("灵感预览暂不可用。");
+    if(!bridge||!window||!/^idea-[a-f0-9-]{36}$/.test(nodeId)||typeof media!=="boolean")throw new Error(uiText("灵感预览暂不可用。"));
     const file=await bridge.request<{path:string;name?:string}>(media?"inspiration.media":"inspiration.export",{nodeId});
     window.previewFile(file.path,file.name);
   });
   trustedHandle("dcode:previewAttachment", async (id: string) => {
-    if (!bridge || !window || typeof id !== "string" || !/^attachment-[a-f0-9]{32}$/.test(id)) throw new Error("附件预览暂不可用。");
+    if (!bridge || !window || typeof id !== "string" || !/^attachment-[a-f0-9]{32}$/.test(id)) throw new Error(uiText("附件预览暂不可用。"));
     const file=await bridge.request<{path:string;name:string}>("attachment.resolve",{id});
     window.previewFile(file.path,file.name);
+  });
+  trustedHandle("dcode:exportGeneratedImage",async(input:{taskId:string;generationId:string})=>{
+    if(!bridge||!window||typeof input?.taskId!=='string'||typeof input.generationId!=='string')throw new Error('IMAGE_RESULT_UNAVAILABLE');
+    const context=await bridge.request<{mimeType:string}>("imageGeneration.exportContext",input);
+    const image=context;
+    const extension=image.mimeType==='image/jpeg'?'jpg':image.mimeType==='image/webp'?'webp':'png';
+    const destination=await dialog.showSaveDialog(window,{title:uiText("导出生成图片"),defaultPath:`generated-image.${extension}`,filters:[{name:extension.toUpperCase(),extensions:[extension]}]});
+    if(destination.canceled||!destination.filePath)return false;
+    const directory=await realpath(dirname(destination.filePath)),identity=await stat(directory);
+    await bridge.request("imageGeneration.export",{...input,destination:destination.filePath,context,expectedDirectory:{directory,device:String(identity.dev),inode:String(identity.ino)}});return true;
   });
   trustedHandle("dcode:openExternal", async (url: string) => {
     const parsed = new URL(url);
     if (!["https:", "http:"].includes(parsed.protocol))
-      throw new Error("不支持打开此链接。");
+      throw new Error(uiText("不支持打开此链接。"));
     await shell.openExternal(parsed.href);
   });
   trustedHandle("dcode:notify", (options: { title: string; body?: string }) => {
@@ -405,11 +423,16 @@ function setupIPC() {
 }
 async function refreshNotifications() {
   if (!bridge) return;
-  const preferences = await bridge.request<{
+  applyShellPreferences(await bridge.request<ShellPreferences>("clientPreferences.get"));
+}
+type ShellPreferences={
     notificationsEnabled: boolean;
     appearance?: "system" | "light" | "dark";
     fontScale?: "compact" | "standard" | "large";
-  }>("clientPreferences.get");
+    language?: "zh-CN" | "en";
+};
+function applyShellPreferences(preferences:ShellPreferences) {
+  setDisplayLanguage(preferences.language??"zh-CN");
   notifyEnabled = preferences.notificationsEnabled;
   nativeTheme.themeSource =
     process.env.DCODE_THEME === "light" || process.env.DCODE_THEME === "dark"
@@ -425,7 +448,7 @@ async function refreshNotifications() {
   buildMenu();
 }
 async function saveNotifications(value: boolean) {
-  if (!bridge) throw new Error("运行服务未连接");
+  if (!bridge) throw new Error(uiText("运行服务未连接"));
   for (let attempt = 0; ; attempt++) {
     const snapshot = await bridge.request<{ storeRevision: number }>(
       "foundation.snapshot",
@@ -453,55 +476,55 @@ function buildMenu() {
       {
         label: "D Code",
         submenu: [
-          { role: "about", label: "关于 D Code" },
+          { role: "about", label: uiText("关于 D Code") },
           { type: "separator" },
           {
-            label: "设置…",
+            label: uiText("设置…"),
             accelerator: "Cmd+,",
             click: () => sendEvent("shell.settings"),
           },
           { type: "separator" },
-          { role: "hide", label: "隐藏 D Code" },
-          { role: "quit", label: "退出 D Code" },
+          { role: "hide", label: uiText("隐藏 D Code") },
+          { role: "quit", label: uiText("退出 D Code") },
         ],
       },
       {
-        label: "文件",
+        label: uiText("menu.file"),
         submenu: [
           {
-            label: "新建任务",
+            label: uiText("新建任务"),
             accelerator: "Cmd+N",
             click: () => sendEvent("shell.newTask"),
           },
           {
-            label: "新建项目…",
+            label: uiText("新建项目…"),
             accelerator: "Cmd+Shift+N",
             click: () => sendEvent("shell.newProject"),
           },
           { type: "separator" },
-          { role: "close", label: "关闭窗口" },
+          { role: "close", label: uiText("关闭窗口") },
         ],
       },
-      { role: "editMenu", label: "编辑" },
+      { role: "editMenu", label: uiText("编辑") },
       {
-        label: "视图",
+        label: uiText("视图"),
         submenu: [
           {
-            label: "搜索",
+            label: uiText("搜索"),
             accelerator: "Cmd+K",
             click: () => sendEvent("shell.focusSearch"),
           },
-          { role: "togglefullscreen", label: "进入全屏幕" },
+          { role: "togglefullscreen", label: uiText("进入全屏幕") },
           ...(!app.isPackaged
-            ? [{ role: "toggleDevTools" as const, label: "开发者工具" }]
+            ? [{ role: "toggleDevTools" as const, label: uiText("开发者工具") }]
             : []),
         ],
       },
       {
-        label: "任务",
+        label: uiText("menu.task"),
         submenu: [
           {
-            label: "完成通知",
+            label: uiText("完成通知"),
             type: "checkbox",
             checked: notifyEnabled,
             click: (item) => {
@@ -509,7 +532,7 @@ function buildMenu() {
                 buildMenu();
                 void dialog.showMessageBox({
                   type: "error",
-                  message: "通知偏好未能保存",
+                  message: uiText("通知偏好未能保存"),
                   detail: String(error),
                 });
               });
@@ -517,7 +540,7 @@ function buildMenu() {
           },
         ],
       },
-      { role: "windowMenu", label: "窗口" },
+      { role: "windowMenu", label: uiText("窗口") },
     ]),
   );
 }
@@ -541,6 +564,22 @@ async function createWindow() {
       sandbox: false,
     },
   });
+  const mainContents = window.webContents;
+  const canWriteClipboard = (
+    contents: typeof mainContents | null,
+    permission: string,
+    details: { isMainFrame: boolean; requestingUrl?: string },
+  ) =>
+    permission === "clipboard-sanitized-write" &&
+    contents === mainContents &&
+    details.isMainFrame &&
+    details.requestingUrl === rendererUrl;
+  mainContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(canWriteClipboard(contents, permission, details));
+  });
+  mainContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    canWriteClipboard(contents, permission, details),
+  );
   window.once("ready-to-show", () => {
     if (!process.env.DCODE_SWITCH_ID) window?.show();
   });
@@ -572,7 +611,7 @@ app.on("before-quit", (event) => {
     let saveError: string | undefined;
     if (window && !window.isDestroyed()) {
       saveError = await new Promise<string | undefined>((resolve) => {
-        const timer = setTimeout(() => resolve("界面没有及时完成保存。"), 8000);
+        const timer = setTimeout(() => resolve(uiText("界面没有及时完成保存。")), 8000);
         quitAck = (error) => {
           clearTimeout(timer);
           resolve(error);
@@ -584,9 +623,9 @@ app.on("before-quit", (event) => {
     if (saveError) {
       const choice = await dialog.showMessageBox({
         type: "warning",
-        message: "退出前还有内容需要处理",
+        message: uiText("退出前还有内容需要处理"),
         detail: saveError,
-        buttons: ["返回工作台", "仍然退出"],
+        buttons: [uiText("返回工作台"), uiText("仍然退出")],
         defaultId: 0,
         cancelId: 0,
       });

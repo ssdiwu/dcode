@@ -1,9 +1,11 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import type { MessagePart, MessageRow, StreamState } from "../workbench.ts";
 
 export interface ProcessStep {
   id: string;
   kind: "thinking" | "text" | "tool" | "image";
   title: string;
+  toolName?: string;
   text: string;
   output?: string;
   mimeType?: string;
@@ -19,7 +21,34 @@ export interface ExecutionTurn {
   status: "running" | "complete" | "error" | "aborted" | "interrupted" | "unknown";
   hasResponse: boolean;
 }
-export const toolLabel = (name: string) => ({bash:"终端",read:"读取文件",write:"写入文件",edit:"编辑文件",grep:"搜索内容",find:"查找文件",ls:"查看目录",dcode_team:"协作安排",dcode_verification:"验收记录",dcode_request:"等待决定",dcode_request_task_acceptance:"任务验收"})[name] ?? name;
+export const toolLabel = (name: string) => ({bash:uiText("终端"),read:uiText("读取文件"),write:uiText("写入文件"),edit:uiText("编辑文件"),grep:uiText("搜索内容"),find:uiText("查找文件"),ls:uiText("查看目录"),dcode_team:uiText("协作安排"),dcode_verification:uiText("验收记录"),dcode_request:uiText("等待决定"),dcode_request_task_acceptance:uiText("任务验收")})[name] ?? (name || uiText("工具"));
+
+const toolInput = (text: string): Record<string, unknown> => {
+  if (text.length > 32_768) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+};
+
+/** A scan-friendly description from a known tool call, never from untrusted output text. */
+export function toolPresentation(step: ProcessStep): { summary: string; status: string; fileReference?: string } {
+  const input = toolInput(step.text);
+  const path = typeof input.path === "string" && input.path.trim() ? input.path.trim() : undefined;
+  const rawName = path?.replace(/\\/gu, "/").split("/").filter(Boolean).at(-1);
+  const fileName = rawName && (rawName.length > 80 ? `${rawName.slice(0, 79)}…` : rawName);
+  const name = step.toolName;
+  const summary = name === "read" ? fileName ? uiText("读取 {0}", [fileName]) : uiText("读取文件") :
+    name === "edit" ? fileName ? uiText("编辑 {0}", [fileName]) : uiText("编辑文件") :
+    name === "write" ? fileName ? uiText("写入 {0}", [fileName]) : uiText("写入文件") :
+    name === "grep" ? fileName ? uiText("搜索 {0}", [fileName]) : uiText("搜索内容") :
+    name === "find" ? fileName ? uiText("查找 {0}", [fileName]) : uiText("查找文件") :
+    name === "ls" ? fileName ? uiText("查看 {0}", [fileName]) : uiText("查看目录") :
+    name === "bash" ? uiText("运行命令") : step.title;
+  const status = step.state === "running" ? uiText("进行中") : step.state === "error" ? uiText("失败，查看错误") :
+    step.state === "unknown" || !step.state ? uiText("状态待核对") : step.output?.trim() ? uiText("已返回结果") : uiText("已完成");
+  return { summary, status, ...(path && ["read", "edit", "write", "grep", "find", "ls"].includes(name ?? "") ? { fileReference: path } : {}) };
+}
 
 /** Merge the live adapter view into the current turn by message identity, never by an older answer's text. */
 export function mergeLiveRows(rows: MessageRow[], stream: StreamState): MessageRow[] {
@@ -57,7 +86,7 @@ export function executionTurns(rows: MessageRow[], stream: StreamState, running:
   for (const row of rows) {
     if (row.role === "user"||row.role==="coordination") grouped.push({id:row.id,user:row,rows:[],collaborationGroupId:row.collaborationGroupId});
     else {
-      if(row.collaborationGroupId&&grouped.at(-1)?.collaborationGroupId!==row.collaborationGroupId)grouped.push({id:`update-${row.collaborationGroupId}`,rows:[],collaborationGroupId:row.collaborationGroupId,updateLabel:"进展更新"});
+      if(row.collaborationGroupId&&grouped.at(-1)?.collaborationGroupId!==row.collaborationGroupId)grouped.push({id:`update-${row.collaborationGroupId}`,rows:[],collaborationGroupId:row.collaborationGroupId,updateLabel:uiText("进展更新")});
       if (!grouped.length) grouped.push({id:row.id,rows:[]});
       grouped.at(-1)!.rows.push(row);
     }
@@ -74,22 +103,22 @@ export function executionTurns(rows: MessageRow[], stream: StreamState, running:
         if (part.kind === "image") {
           const existing = steps.find(step => step.id === id && step.kind === "tool");
           if (existing) existing.state = part.isError ? "error" : "complete";
-          else steps.push({id,kind:"tool",title:toolLabel(part.toolName ?? "工具"),text:"",state:part.isError?"error":"complete"});
-          steps.push({id:`${id}:image:${partIndex}`,kind:"image",title:toolLabel(part.toolName ?? "工具"),text:part.text,mimeType:part.mimeType});
+          else steps.push({id,kind:"tool",title:toolLabel(part.toolName ?? uiText("工具")),toolName:part.toolName,text:"",state:part.isError?"error":"complete"});
+          steps.push({id:`${id}:image:${partIndex}`,kind:"image",title:toolLabel(part.toolName ?? uiText("工具")),text:part.text,mimeType:part.mimeType});
           continue;
         }
         const existing = steps.find(step=>step.id===id && step.kind==="tool");
         if (existing) {existing.output = [existing.output,part.text].filter(Boolean).join("\n");existing.state=part.isError?"error":"complete";}
-        else steps.push({id,kind:"tool",title:toolLabel(part.toolName ?? "工具"),text:"",output:part.text,state:part.isError?"error":"complete"});
-      } else if (part.kind !== "file" && part.text.trim()) steps.push({id,kind:part.kind,title:part.kind==="thinking"?"思考":part.kind==="tool"?toolLabel(part.toolName ?? "工具"):"进展",text:part.kind==="tool"?part.text.slice(part.text.indexOf("\n")+1):part.text,mimeType:part.mimeType});
+        else steps.push({id,kind:"tool",title:toolLabel(part.toolName ?? uiText("工具")),toolName:part.toolName,text:"",output:part.text,state:part.isError?"error":"complete"});
+      } else if (part.kind !== "file" && part.text.trim()) steps.push({id,kind:part.kind,title:part.kind==="thinking"?uiText("思考"):part.kind==="tool"?toolLabel(part.toolName ?? uiText("工具")):uiText("进展"),...(part.kind==="tool"?{toolName:part.toolName}:{}),text:part.kind==="tool"?part.text.slice(part.text.indexOf("\n")+1):part.text,mimeType:part.mimeType});
     }
     for (const tool of stream.tools ?? []) {
       const recordedOwner=grouped.findIndex(candidate=>candidate.rows.some(row=>row.parts.some(part=>part.toolCallId===tool.id)));
       const inputOwner=tool.inputMessageId?grouped.findIndex(candidate=>candidate.user?.messageId===tool.inputMessageId||candidate.rows.some(row=>row.inputBoundary&&row.messageId===tool.inputMessageId)):-1;
       if(index!==(recordedOwner>=0?recordedOwner:inputOwner>=0?inputOwner:grouped.length-1))continue;
       const existing = steps.find(step=>step.id===tool.id);
-      if (existing) {existing.output=tool.output || existing.output;existing.state=tool.state;}
-      else steps.push({id:tool.id,kind:"tool",title:toolLabel(tool.name),text:tool.input,output:tool.output,state:tool.state});
+      if (existing) {existing.output=tool.output || existing.output;existing.state=tool.state;existing.toolName=tool.name;}
+      else steps.push({id:tool.id,kind:"tool",title:toolLabel(tool.name),toolName:tool.name,text:tool.input,output:tool.output,state:tool.state});
     }
     const terminal = latestAssistant?.stopReason;
     const last = index === grouped.length - 1;
@@ -109,10 +138,16 @@ export function executionTurns(rows: MessageRow[], stream: StreamState, running:
 }
 
 export function processPreview(turn: ExecutionTurn): string {
-  const step = turn.steps.at(-1);
-  if (!step) return turn.running ? "正在生成回复…" : "";
-  if(["协作安排","验收记录","等待决定","任务验收"].includes(step.title)) return `${step.title} · ${step.state==="error"?"未完成，展开查看原因":step.state==="running"?"正在处理…":step.state==="unknown"?"状态待核对":"已返回结果"}`;
-  const text = (step.output || step.text).replace(/\s+/g," ").trim();
-  const tail = text.length > 180 ? `…${text.slice(-180)}` : text;
-  return `${step.kind === "tool" ? `${step.title} · ` : ""}${tail}`;
+  const step = turn.status === "error"
+    ? turn.steps.findLast(item => item.kind === "tool" && item.state === "error") ?? turn.steps.at(-1)
+    : turn.steps.at(-1);
+  if (!step) return turn.running ? uiText("正在生成回复…") : "";
+  if (turn.status === "error" && step.kind !== "tool") return uiText("展开查看错误与执行记录");
+  if (step.kind === "tool") {
+    const { summary, status } = toolPresentation(step);
+    return [summary, status].filter(Boolean).join(" · ");
+  }
+  if (step.kind === "image") return uiText("图像输出");
+  const text = step.text.replace(/\s+/gu, " ").trim();
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }

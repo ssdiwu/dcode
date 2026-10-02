@@ -1,4 +1,5 @@
 import { DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT, isModelQuotaThresholdPercent } from "./model-quota-policy.js";
+import { CODEX_IMAGE_CLI_VERSION, type ImageGenerationRecord, type GeneratedImageInfo } from "./image-generation-types.js";
 import {recoverAuxiliaryProcess,type AuxiliaryProcessInfo} from "./auxiliary-process.js";
 import type {ProjectDirectoryChange} from "./project-directory-change.js";
 import {inputSourceReceipts,type InputSourceReceipt} from "./input-expansion.js";
@@ -14,7 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { isUtf8 } from "node:buffer";
 import { chmod, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, parse, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   assertSafeProductStoreTarget,
@@ -164,6 +165,8 @@ export interface WebEvolutionReceipt {
 }
 
 export interface ClientPreferences {
+  /** UI and new Agent output language; historical source text remains immutable. */
+  language?: "zh-CN" | "en";
   modelQuotaThresholdPercent: number;
   appearance?: "system" | "light" | "dark";
   fontScale?: "compact" | "standard" | "large";
@@ -181,6 +184,10 @@ export interface ClientPreferences {
 }
 
 export interface ComposerDraftRecord {
+  /** Explicit Task Goal draft for a new Task; never replaces submitted message text. */
+  goal?: string;
+  acceptance?: string[];
+  pendingWorkflowSubmission?: PendingWorkflowSubmissionRecord;
   pathAction?:NativeSessionPathAction;
   pathDraftBackup?:{text:string;attachmentIds:string[];attachments?:ManagedAttachment[];targetAgentRunId?:string};
   targetAgentRunId?: string;
@@ -194,6 +201,15 @@ export interface ComposerDraftRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PendingWorkflowSubmissionRecord {
+  promptId:string;
+  kind:"create"|"report";
+  sourceDraftKey:string;
+  goal?:string;
+  constraints?:string[];
+  runId?:string;
 }
 
 export interface RuntimeModelCatalogProviderInput {
@@ -243,6 +259,14 @@ export interface TaskRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskGoalRevisionRecord {
+  taskId: string;
+  goal: string;
+  acceptance: string[];
+  taskRevision: number;
+  changedAt: string;
 }
 
 export type TaskContextSourceKind = "scope_document" | "global_knowledge";
@@ -303,6 +327,76 @@ export interface TaskWorkItemRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskWorkflowStageInput {
+  id: string;
+  title: string;
+  completion: string;
+  dependsOn: string[];
+}
+
+export interface TaskWorkflowDraftInput {
+  goal: string;
+  constraints?: string[];
+}
+
+export interface TaskWorkflowRecord {
+  id: string;
+  taskId: string;
+  originRawInputId: string;
+  currentVersion: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskWorkflowVersionRecord {
+  workflowId: string;
+  version: number;
+  originRawInputId: string;
+  goalRevision: number;
+  goal: string;
+  constraints: string[];
+  createdAt: string;
+}
+
+export interface TaskWorkflowStageRecord extends TaskWorkflowStageInput {
+  workflowId: string;
+  version: number;
+  ordinal: number;
+}
+
+export interface TaskWorkflowRunRecord {
+  id: string;
+  taskId: string;
+  workflowId: string;
+  version: number;
+  status: "active" | "stopped" | "interrupted" | "completed";
+  reason?: string;
+  completionReportId?: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface TaskWorkflowWorkItemBinding {
+  runId: string;
+  stageId: string;
+  workItemId: string;
+  createdAt: string;
+}
+
+export interface TaskWorkflowReportBinding {
+  runId: string;
+  workflowId: string;
+  version: number;
+  coordinatorReportId: string;
+  goalRevision: number;
+  latestInputSequence: number;
+  finalReviewSequence: number;
+  createdAt: string;
 }
 
 export type TaskSummarySection = "confirmed" | "pending" | "blocked" | "next";
@@ -506,6 +600,7 @@ export interface PreparedSessionRun {
   sessionRunId: string;
   promptReceiptId: string;
   providerAttemptId: string;
+  workflow?: TaskWorkflowRecord;
 }
 
 export interface SessionRunRecord {
@@ -802,6 +897,12 @@ export interface FoundationSnapshot {
   taskContextSets: TaskContextSetRecord[];
   taskPlans: TaskPlanRecord[];
   taskWorkItems: TaskWorkItemRecord[];
+  taskWorkflows: TaskWorkflowRecord[];
+  taskWorkflowVersions: TaskWorkflowVersionRecord[];
+  taskWorkflowStages: TaskWorkflowStageRecord[];
+  taskWorkflowRuns: TaskWorkflowRunRecord[];
+  taskWorkflowWorkItems: TaskWorkflowWorkItemBinding[];
+  taskWorkflowReports: TaskWorkflowReportBinding[];
   taskSummaries: TaskSummaryRecord[];
   taskSummaryFailures: TaskSummaryFailureRecord[];
   taskReviewRequests: TaskReviewRequestRecord[];
@@ -983,6 +1084,71 @@ function parseStringArray(value: unknown, field: string): string[] {
     throw new ProductStoreError("INVALID_ARGUMENT", `${field} must be an array of strings up to 2000 characters`);
   }
   return [...value];
+}
+
+function normalizedWorkflowConstraints(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Workflow constraints must contain at most 32 items");
+  }
+  return value.map((item, index) => requiredCredentialFreeString(item, `constraints[${index}]`, 2_000).trim());
+}
+
+function normalizedWorkflowDraft(value: unknown): { goal: string; constraints: string[] } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Workflow draft must contain a goal and optional constraints");
+  }
+  const draft = value as Record<string, unknown>;
+  if (Object.keys(draft).some(key => !["goal", "constraints"].includes(key))) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Workflow draft contains unsupported fields");
+  }
+  return { goal: requiredCredentialFreeString(draft.goal, "workflowDraft.goal", 20_000).trim(),
+    constraints: normalizedWorkflowConstraints(draft.constraints ?? []) };
+}
+
+function normalizedPendingWorkflowSubmission(value:unknown):PendingWorkflowSubmissionRecord {
+  if(typeof value!=="object"||value===null||Array.isArray(value))throw new ProductStoreError("INVALID_ARGUMENT","待核对工作流提交无效");
+  const input=value as Record<string,unknown>;
+  if(Object.keys(input).some(key=>!["promptId","kind","sourceDraftKey","goal","constraints","runId"].includes(key)))throw new ProductStoreError("INVALID_ARGUMENT","待核对工作流提交字段无效");
+  const promptId=requiredString(input.promptId,"pendingWorkflowSubmission.promptId",128);
+  const sourceDraftKey=requiredString(input.sourceDraftKey,"pendingWorkflowSubmission.sourceDraftKey",250);
+  if(input.kind==="create"){
+    const draft=normalizedWorkflowDraft({goal:input.goal,constraints:input.constraints??[]});
+    return {promptId,kind:"create",sourceDraftKey,goal:draft.goal,constraints:draft.constraints};
+  }
+  if(input.kind==="report")return {promptId,kind:"report",sourceDraftKey,runId:requiredString(input.runId,"pendingWorkflowSubmission.runId",200)};
+  throw new ProductStoreError("INVALID_ARGUMENT","待核对工作流提交类型无效");
+}
+
+function normalizedWorkflowStages(value: unknown): TaskWorkflowStageInput[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 24) {
+    throw new ProductStoreError("INVALID_ARGUMENT", "Workflow requires 1…24 stages");
+  }
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `stages[${index}] must be an object`);
+    }
+    const stage = entry as Record<string, unknown>;
+    if (Object.keys(stage).some(key => !["id", "title", "completion", "dependsOn"].includes(key))) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `stages[${index}] contains unsupported fields`);
+    }
+    const id = requiredString(stage.id, `stages[${index}].id`, 100);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) || seen.has(id)) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `stages[${index}].id must be unique and stable`);
+    }
+    const title = requiredCredentialFreeString(stage.title, `stages[${index}].title`, 500).trim();
+    const completion = requiredCredentialFreeString(stage.completion, `stages[${index}].completion`, 10_000).trim();
+    if (!Array.isArray(stage.dependsOn) || stage.dependsOn.length > 24) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `stages[${index}].dependsOn is invalid`);
+    }
+    const dependsOn = stage.dependsOn.map((dependency, dependencyIndex) =>
+      requiredString(dependency, `stages[${index}].dependsOn[${dependencyIndex}]`, 100));
+    if (new Set(dependsOn).size !== dependsOn.length || dependsOn.some(dependency => !seen.has(dependency))) {
+      throw new ProductStoreError("INVALID_ARGUMENT", `stages[${index}] may depend only on distinct earlier stages`);
+    }
+    seen.add(id);
+    return { id, title, completion, dependsOn };
+  });
 }
 
 const TASK_WORKBENCH_HUD_SECTIONS = new Set(["progress", "team", "waiting", "deliverables"]);
@@ -1490,10 +1656,85 @@ function taskWorkItem(row: SQLiteRow): TaskWorkItemRecord {
   };
 }
 
+function taskWorkflow(row: SQLiteRow): TaskWorkflowRecord {
+  return {
+    id: text(row, "id"),
+    taskId: text(row, "task_id"),
+    originRawInputId: text(row, "origin_raw_input_id"),
+    currentVersion: integer(row, "current_version"),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function taskWorkflowVersion(row: SQLiteRow): TaskWorkflowVersionRecord {
+  return {
+    workflowId: text(row, "workflow_id"),
+    version: integer(row, "version"),
+    originRawInputId: text(row, "origin_raw_input_id"),
+    goalRevision: integer(row, "goal_revision"),
+    goal: text(row, "goal"),
+    constraints: JSON.parse(text(row, "constraints_json")) as string[],
+    createdAt: text(row, "created_at"),
+  };
+}
+
+function taskWorkflowStage(row: SQLiteRow): TaskWorkflowStageRecord {
+  return {
+    workflowId: text(row, "workflow_id"),
+    version: integer(row, "version"),
+    id: text(row, "id"),
+    ordinal: integer(row, "ordinal"),
+    title: text(row, "title"),
+    completion: text(row, "completion"),
+    dependsOn: JSON.parse(text(row, "depends_on_json")) as string[],
+  };
+}
+
+function taskWorkflowRun(row: SQLiteRow): TaskWorkflowRunRecord {
+  return {
+    id: text(row, "id"),
+    taskId: text(row, "task_id"),
+    workflowId: text(row, "workflow_id"),
+    version: integer(row, "version"),
+    status: text(row, "status") as TaskWorkflowRunRecord["status"],
+    ...(typeof row.reason === "string" ? { reason: row.reason } : {}),
+    ...(typeof row.completion_report_id === "string" ? { completionReportId: row.completion_report_id } : {}),
+    revision: integer(row, "revision"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    ...(typeof row.completed_at === "string" ? { completedAt: row.completed_at } : {}),
+  };
+}
+
+function taskWorkflowWorkItem(row: SQLiteRow): TaskWorkflowWorkItemBinding {
+  return {
+    runId: text(row, "run_id"),
+    stageId: text(row, "stage_id"),
+    workItemId: text(row, "work_item_id"),
+    createdAt: text(row, "created_at"),
+  };
+}
+
+function taskWorkflowReport(row: SQLiteRow): TaskWorkflowReportBinding {
+  return {
+    runId: text(row, "run_id"), workflowId: text(row, "workflow_id"),
+    version: integer(row, "version"), coordinatorReportId: text(row, "coordinator_report_id"),
+    goalRevision: integer(row, "goal_revision"),
+    latestInputSequence: integer(row, "latest_input_sequence"),
+    finalReviewSequence: integer(row, "final_review_sequence"),
+    createdAt: text(row, "created_at"),
+  };
+}
+
 function composerDraft(row: SQLiteRow): ComposerDraftRecord {
-  const payload = JSON.parse(text(row, "payload_json")) as { scope?: unknown; attachments?: ManagedAttachment[]; targetAgentRunId?: string;pathAction?:NativeSessionPathAction;pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"] };
+  const payload = JSON.parse(text(row, "payload_json")) as { scope?: unknown; goal?: unknown; acceptance?: unknown; pendingWorkflowSubmission?:unknown; attachments?: ManagedAttachment[]; targetAgentRunId?: string;pathAction?:NativeSessionPathAction;pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"] };
   return {
     ...(payload?.scope ? { scope: normalizedTaskScope(payload.scope) } : {}),
+    ...(typeof payload.goal === "string" ? {goal:payload.goal} : {}),
+    ...(Array.isArray(payload.acceptance) ? {acceptance:parseStringArray(payload.acceptance,"stored acceptance")} : {}),
+    ...(payload.pendingWorkflowSubmission?{pendingWorkflowSubmission:normalizedPendingWorkflowSubmission(payload.pendingWorkflowSubmission)}:{}),
     ...(payload.attachments?.length ? {attachments:payload.attachments} : {}),
     ...(payload.targetAgentRunId?{targetAgentRunId:payload.targetAgentRunId}:{}),
     ...(payload.pathAction?{pathAction:payload.pathAction}:{}),
@@ -2055,6 +2296,8 @@ function evidenceRecord(row: SQLiteRow): EvidenceRecord {
 export class ProductStore {
   readonly layout: DCodeDataRootLayout;
   private closed = false;
+  private closing = false;
+  private closePromise?: Promise<void>;
   private mutationQueue: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -2168,6 +2411,9 @@ export class ProductStore {
       SELECT COUNT(*) AS count FROM team_runs
       WHERE status IN ('prepared', 'active', 'waiting')
     `).get() as { count?: unknown } | undefined;
+    const workflowRunning = this.database.prepare(`
+      SELECT COUNT(*) AS count FROM task_workflow_runs WHERE status = 'active'
+    `).get() as { count?: unknown } | undefined;
     const openRequests = this.database.prepare(`
       SELECT COUNT(*) AS count FROM agent_requests
       WHERE status = 'open' AND kind <> 'task_acceptance'
@@ -2181,6 +2427,7 @@ export class ProductStore {
       && (running?.count ?? 0) === 0
       && (agentRunning?.count ?? 0) === 0
       && (teamRunning?.count ?? 0) === 0
+      && (workflowRunning?.count ?? 0) === 0
       && (openRequests?.count ?? 0) === 0
     ) return;
     await this.lease.assertOwned();
@@ -2214,6 +2461,12 @@ export class ProductStore {
         WHERE status IN ('prepared', 'active', 'waiting')
       `).run(now);
       this.database.prepare(`
+        UPDATE task_workflow_runs
+        SET status = 'interrupted', reason = 'host_restarted',
+            revision = revision + 1, updated_at = ?
+        WHERE status = 'active'
+      `).run(now);
+      this.database.prepare(`
         UPDATE agent_requests
         SET status = 'cancelled', answer_json = ?, revision = revision + 1, updated_at = ?
         WHERE status = 'open' AND kind <> 'task_acceptance'
@@ -2235,6 +2488,7 @@ export class ProductStore {
           interruptedRuns: typeof running?.count === "number" ? running.count : 0,
           interruptedAgentRuns: typeof agentRunning?.count === "number" ? agentRunning.count : 0,
           interruptedTeamRuns: typeof teamRunning?.count === "number" ? teamRunning.count : 0,
+          interruptedWorkflowRuns: typeof workflowRunning?.count === "number" ? workflowRunning.count : 0,
           cancelledAgentRequests: typeof openRequests?.count === "number" ? openRequests.count : 0,
           preservedTaskAcceptanceRequests: typeof openAcceptanceRequests?.count === "number"
             ? openAcceptanceRequests.count
@@ -2528,9 +2782,87 @@ export class ProductStore {
     });
   }
 
+  imageGenerations(taskId?:string):ImageGenerationRecord[] {
+    this.assertOpen();
+    if(taskId)requiredString(taskId,'taskId',200);
+    const rows=this.database.prepare(`SELECT * FROM operation_attempts WHERE operation_kind='external_side_effect' AND json_extract(outcome_json,'$.kind')='image_generation' ${taskId?'AND task_id=?':''} ORDER BY prepared_at,id`).all(...(taskId?[taskId]:[])) as SQLiteRow[];
+    return rows.map(row=>{
+      const outcome=JSON.parse(text(row,'outcome_json')) as {version:number;record:ImageGenerationRecord};
+      const record=outcome.record;
+      if(outcome.version!==1||!record||record.id!==text(row,'id')||record.taskId!==text(row,'task_id')||record.sessionId!==text(row,'session_id')||typeof record.description!=='string'||!['zh-CN','en'].includes(record.language))throw new ProductStoreError('PRODUCT_STORE_CORRUPT','Image generation record is invalid');
+      const status=text(row,'status');
+      return {...record,state:status==='unknown'?'unknown':status==='succeeded'?'succeeded':status==='failed'?(record.state==='cancelled'?'cancelled':'failed'):record.state,updatedAt:text(row,'updated_at')};
+    });
+  }
+
+  async prepareImageGeneration(input:{requestId:string;expectedStoreRevision:number;taskId:string;sessionId:string;description:string}):Promise<{storeRevision:number;generation:ImageGenerationRecord}> {
+    const taskId=requiredString(input.taskId,'taskId',200),sessionId=requiredString(input.sessionId,'sessionId',200),description=requiredString(input.description,'description',8000);
+    if(redactCredentialText(description).redacted)throw new ProductStoreError('INVALID_ARGUMENT','IMAGE_DESCRIPTION_CONTAINS_CREDENTIAL');
+    return this.mutate('imageGeneration.prepare',input.requestId,input.expectedStoreRevision,{taskId,sessionId,description},(_revision,now)=>{
+      const current=this.database.prepare('SELECT state FROM tasks WHERE id=?').get(taskId) as SQLiteRow|undefined;
+      const main=this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=? AND kind='coordination'").get(sessionId,taskId);
+      if(!current||!main)throw new ProductStoreError('NOT_FOUND','IMAGE_TASK_MAIN_REQUIRED');
+      if(['archived','accepted'].includes(text(current,'state')))throw new ProductStoreError('REVISION_CONFLICT','IMAGE_TASK_INACTIVE');
+      if(this.imageGenerations(taskId).some(record=>['queued','running'].includes(record.state)))throw new ProductStoreError('REVISION_CONFLICT','IMAGE_TASK_BUSY');
+      const id=`attempt-${randomUUID()}`;
+      const generation:ImageGenerationRecord={id,requestId:input.requestId,taskId,sessionId,description,language:this.clientPreferences().language??'zh-CN',state:'queued',phase:'queued',createdAt:now,updatedAt:now,source:'codex_chatgpt',componentVersion:CODEX_IMAGE_CLI_VERSION,revision:1};
+      this.database.prepare(`INSERT INTO operation_attempts(id,task_id,session_id,operation_kind,target_identity,parameter_digest,replay_policy,status,outcome_json,prepared_at,updated_at) VALUES (?,?,?,'external_side_effect',?,?,'never','prepared',?,?,?)`).run(id,taskId,sessionId,`imageGeneration:${id}`,`sha256:${payloadHash({taskId,sessionId,description})}`,canonicalJSON({kind:'image_generation',version:1,record:generation}),now,now);
+      return {value:{generation},event:{kind:'imageGeneration.prepared',entityKind:'operationAttempt',entityId:id,taskId,payload:{generationId:id}}};
+    });
+  }
+
+  async transitionImageGeneration(id:string,patch:Pick<ImageGenerationRecord,'state'|'phase'>&Partial<Pick<ImageGenerationRecord,'threadId'|'turnId'|'accountFingerprint'|'plan'|'errorCode'>>):Promise<{storeRevision:number;generation:ImageGenerationRecord}> {
+    const current=this.imageGenerations().find(record=>record.id===id);
+    if(!current)throw new ProductStoreError('NOT_FOUND','IMAGE_RECORD_NOT_FOUND');
+    for(const key of ['threadId','turnId','accountFingerprint','plan','errorCode'] as const)if(patch[key]!==undefined)requiredString(patch[key],key,200);
+    if(!['queued','running','failed','cancelled','unknown'].includes(patch.state)||!['queued','submitting','active','finished'].includes(patch.phase))throw new ProductStoreError('INVALID_ARGUMENT','Invalid image state');
+    return this.mutate('imageGeneration.transition',`image-state:${id}:${current.revision}`,undefined,{id,patch},(_revision,now)=>{
+      const live=this.imageGenerations(current.taskId).find(record=>record.id===id)!;
+      if(['succeeded','failed','cancelled'].includes(live.state))return {value:{generation:live},event:{kind:'imageGeneration.unchanged',entityKind:'operationAttempt',entityId:id,taskId:live.taskId,payload:{generationId:id}}};
+      const generation:ImageGenerationRecord={...live,...patch,updatedAt:now,revision:live.revision+1};
+      const status=['queued','running'].includes(generation.state)?'prepared':generation.state==='unknown'?'unknown':'failed';
+      this.database.prepare('UPDATE operation_attempts SET status=?,outcome_json=?,completed_at=?,updated_at=? WHERE id=?').run(status,canonicalJSON({kind:'image_generation',version:1,record:generation}),status==='prepared'?null:now,now,id);
+      return {value:{generation},event:{kind:'imageGeneration.updated',entityKind:'operationAttempt',entityId:id,taskId:live.taskId,payload:{generationId:id,state:generation.state}}};
+    });
+  }
+
+  async completeImageGeneration(id:string,info:GeneratedImageInfo):Promise<{storeRevision:number;generation:ImageGenerationRecord;artifact:ArtifactRecord}> {
+    const current=this.imageGenerations().find(record=>record.id===id);
+    if(!current||!current.threadId||!current.turnId)throw new ProductStoreError('NOT_FOUND','IMAGE_RESULT_SOURCE_MISSING');
+    if(!current.resultInfo||canonicalJSON(current.resultInfo)!==canonicalJSON(info))throw new ProductStoreError('INVALID_ARGUMENT','IMAGE_RESULT_DIGEST_MISMATCH');
+    if(current.terminalStatus!=='completed')throw new ProductStoreError('REVISION_CONFLICT','IMAGE_TURN_INCOMPLETE');
+    if(!/^sha256:[a-f0-9]{64}$/u.test(info.digest)||!['png','jpg','webp'].includes(info.extension)||!['image/png','image/jpeg','image/webp'].includes(info.mimeType)||!Number.isSafeInteger(info.bytes)||info.bytes<1||info.bytes>5_000_000)throw new ProductStoreError('INVALID_ARGUMENT','Invalid generated image result');
+    return this.mutate('imageGeneration.complete',`image-complete:${id}`,undefined,{id,info},(_revision,now)=>{
+      const live=this.imageGenerations(current.taskId).find(record=>record.id===id)!;
+      if(!['running','unknown'].includes(live.state))throw new ProductStoreError('REVISION_CONFLICT','IMAGE_RESULT_STATE_CHANGED');
+      const artifactId=`image-${id}`;
+      const path=join(this.layout.artifactsDirectory,'generated-images',id,`image.${info.extension}`);
+      const title=`${live.language==='en'?'Generated image':'生成图片'} · ${live.description.split('\n')[0]!.trim().slice(0,80)}`;
+      const metadata={...info,generationId:id,source:live.source,componentVersion:live.componentVersion,threadId:live.threadId,turnId:live.turnId};
+      this.database.prepare(`INSERT INTO artifacts(id,task_id,session_id,kind,title,managed_path,digest,metadata_json,revision,created_at,updated_at) VALUES (?,?,?,'generated_image',?,?,?,?,1,?,?)`).run(artifactId,live.taskId,live.sessionId,title,path,info.digest,canonicalJSON(metadata),now,now);
+      const generation:ImageGenerationRecord={...live,state:'succeeded',phase:'finished',artifactId,updatedAt:now,revision:live.revision+1};delete generation.errorCode;
+      this.database.prepare("UPDATE operation_attempts SET status='succeeded',outcome_json=?,completed_at=?,updated_at=? WHERE id=?").run(canonicalJSON({kind:'image_generation',version:1,record:generation}),now,now,id);
+      const artifact:ArtifactRecord={id:artifactId,taskId:live.taskId,sessionId:live.sessionId,kind:'generated_image',title,managedPath:path,digest:info.digest,metadata,revision:1};
+      return {value:{generation,artifact},event:{kind:'imageGeneration.succeeded',entityKind:'artifact',entityId:artifactId,taskId:live.taskId,payload:{generationId:id,artifactId,digest:info.digest}}};
+    });
+  }
+
+  async retainImageResultProof(id:string,info:GeneratedImageInfo,terminalStatus:NonNullable<ImageGenerationRecord['terminalStatus']>='completed'):Promise<void>{
+    const current=this.imageGenerations().find(record=>record.id===id);
+    if(!current||!current.threadId||!current.turnId||current.state!=='running')throw new ProductStoreError('REVISION_CONFLICT','IMAGE_RESULT_SOURCE_MISSING');
+    if(!/^sha256:[a-f0-9]{64}$/u.test(info.digest)||info.bytes<1||info.bytes>5_000_000||!['png','jpg','webp'].includes(info.extension))throw new ProductStoreError('INVALID_ARGUMENT','Invalid image proof');
+    await this.mutate('imageGeneration.proof',`image-proof:${id}`,undefined,{id,info},(_revision,now)=>{
+      const live=this.imageGenerations(current.taskId).find(record=>record.id===id)!;
+      if(live.resultInfo&&canonicalJSON(live.resultInfo)!==canonicalJSON(info))throw new ProductStoreError('REVISION_CONFLICT','IMAGE_RESULT_DIGEST_MISMATCH');
+      const generation={...live,resultInfo:info,terminalStatus,revision:live.revision+1,updatedAt:now};
+      this.database.prepare('UPDATE operation_attempts SET outcome_json=?,updated_at=? WHERE id=?').run(canonicalJSON({kind:'image_generation',version:1,record:generation}),now,id);
+      return {value:{},event:{kind:'imageGeneration.resultRetained',entityKind:'operationAttempt',entityId:id,taskId:live.taskId,payload:{generationId:id,digest:info.digest}}};
+    });
+  }
+
   clientPreferences(): ClientPreferences {
     const row = this.database.prepare("SELECT value_json FROM product_settings WHERE key = 'workbench.clientPreferences'").get() as SQLiteRow | undefined;
-    const defaults:ClientPreferences={modelQuotaThresholdPercent:DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT,notificationsEnabled:typeof this.importedSetting("dcode.notifications.completionEnabled")==="boolean" ? this.importedSetting("dcode.notifications.completionEnabled") as boolean : true,readingPositions:{}};
+    const defaults:ClientPreferences={language:"zh-CN",modelQuotaThresholdPercent:DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT,notificationsEnabled:typeof this.importedSetting("dcode.notifications.completionEnabled")==="boolean" ? this.importedSetting("dcode.notifications.completionEnabled") as boolean : true,readingPositions:{}};
     const appearance=this.importedSetting("dcode.appearance"),fontScale=this.importedSetting("dcode.appearance.fontScale");
     if(["system","light","dark"].includes(appearance as string))defaults.appearance=appearance as ClientPreferences["appearance"];
     if(["compact","standard","large"].includes(fontScale as string))defaults.fontScale=fontScale as ClientPreferences["fontScale"];
@@ -2543,17 +2875,19 @@ export class ProductStore {
     if (!row) return defaults;
     try {
       const value = JSON.parse(text(row, "value_json")) as ClientPreferences;
+      if(value.language!==undefined&&!['zh-CN','en'].includes(value.language))throw new Error("invalid language");
       if (typeof value.notificationsEnabled !== "boolean" || !value.readingPositions || Object.values(value.readingPositions).some(offset => !Number.isInteger(offset) || offset < 0 || offset > 100_000_000)) throw new Error("invalid shape");
       if(value.modelQuotaThresholdPercent!==undefined&&!isModelQuotaThresholdPercent(value.modelQuotaThresholdPercent))throw new Error("invalid quota threshold");
       return {...defaults,...value};
     } catch { throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Client preferences are invalid"); }
   }
 
-  async setClientPreferences(input: { requestId: string; expectedStoreRevision: number; notificationsEnabled?: boolean; appearance?: ClientPreferences["appearance"]; fontScale?: ClientPreferences["fontScale"]; sidebarVisible?: boolean; overviewVisible?: boolean; sidebarWidth?: number; inspectorWidth?: number; defaultThinking?: string; modelQuotaThresholdPercent?: number; enabledModels?: string[] | null; disabledResources?: string[]; readingPosition?: { sessionId: string; offset: number } }): Promise<{ storeRevision: number; preferences: ClientPreferences }> {
+  async setClientPreferences(input: { requestId: string; expectedStoreRevision: number; language?: ClientPreferences["language"]; notificationsEnabled?: boolean; appearance?: ClientPreferences["appearance"]; fontScale?: ClientPreferences["fontScale"]; sidebarVisible?: boolean; overviewVisible?: boolean; sidebarWidth?: number; inspectorWidth?: number; defaultThinking?: string; modelQuotaThresholdPercent?: number; enabledModels?: string[] | null; disabledResources?: string[]; readingPosition?: { sessionId: string; offset: number } }): Promise<{ storeRevision: number; preferences: ClientPreferences }> {
     if (input.notificationsEnabled !== undefined && typeof input.notificationsEnabled !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "notificationsEnabled must be boolean");
-    const settingKeys = ["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"] as const;
+    const settingKeys = ["language", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"] as const;
     const changes: Partial<ClientPreferences> = {};
     for (const key of settingKeys) if (input[key] !== undefined) Object.assign(changes, { [key]: input[key] });
+    if(changes.language!==undefined&&!['zh-CN','en'].includes(changes.language))throw new ProductStoreError("INVALID_ARGUMENT","Invalid display language");
     if (changes.appearance && !["system", "light", "dark"].includes(changes.appearance)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid appearance");
     if (changes.fontScale && !["compact", "standard", "large"].includes(changes.fontScale)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid font scale");
     for (const key of ["sidebarVisible", "overviewVisible"] as const) if (changes[key] !== undefined && typeof changes[key] !== "boolean") throw new ProductStoreError("INVALID_ARGUMENT", "Invalid visibility preference");
@@ -2771,20 +3105,28 @@ export class ProductStore {
     return await this.serializeMutation(()=>sweepAttachmentFiles(this.layout,this.attachmentCatalog(),this.now()));
   }
 
-  async setTaskDraft(input: { requestId: string; expectedStoreRevision: number; scope: TaskScope; text: string; attachmentIds?: string[] }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
+  async setTaskDraft(input: { requestId: string; expectedStoreRevision: number; scope: TaskScope; text: string; goal?: string; acceptance?: string[]; pendingWorkflowSubmission?:PendingWorkflowSubmissionRecord|null; attachmentIds?: string[] }): Promise<{ storeRevision: number; composerDraft?: ComposerDraftRecord }> {
     const scope = normalizedTaskScope(input.scope);
     if (typeof input.text !== "string" || input.text.length > 200_000) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid task draft text");
     if (redactCredentialText(input.text).redacted) throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED", "Task draft contains credential material");
+    if (input.goal !== undefined && (typeof input.goal !== "string" || input.goal.length > 4_000)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid Task Goal draft");
+    if (input.goal !== undefined) assertCredentialFreeValue(input.goal, "goal");
+    if (input.acceptance !== undefined && (!Array.isArray(input.acceptance) || input.acceptance.length > 100)) throw new ProductStoreError("INVALID_ARGUMENT", "Invalid Task acceptance draft");
+    if (input.acceptance !== undefined) assertCredentialFreeValue(parseStringArray(input.acceptance, "acceptance"), "acceptance");
+    const pending=input.pendingWorkflowSubmission?normalizedPendingWorkflowSubmission(input.pendingWorkflowSubmission):input.pendingWorkflowSubmission;
     const scopeId = scope.kind === "user" ? scope.userId : scope.projectId;
     const id = `task-draft:${scope.kind}:${scopeId}`;
-    return await this.mutate<{ composerDraft?: ComposerDraftRecord }>("taskDraft.set", input.requestId, input.expectedStoreRevision, { scope, text: input.text, attachmentIds:input.attachmentIds??null }, (_revision, now) => {
+    return await this.mutate<{ composerDraft?: ComposerDraftRecord }>("taskDraft.set", input.requestId, input.expectedStoreRevision, { scope, text: input.text, goal:input.goal??null, acceptance:input.acceptance??null, pendingWorkflowSubmission:pending??null, attachmentIds:input.attachmentIds??null }, (_revision, now) => {
       const user = this.currentUser();
       if (scope.kind === "user" ? scope.userId !== user.id : !this.database.prepare("SELECT id FROM projects WHERE id = ? AND user_id = ?").get(scope.projectId, user.id)) throw new ProductStoreError("NOT_FOUND", "Task draft scope does not exist");
       const existing=this.database.prepare("SELECT payload_json FROM composer_drafts WHERE id=?").get(id) as SQLiteRow|undefined;
       const payload=existing?JSON.parse(text(existing,"payload_json")):{};
       const attachments=this.attachmentsForIds(input.attachmentIds,payload.attachments??[]);
-      if (input.text.length === 0 && !attachments.length) this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(id);
-      else this.database.prepare(`INSERT INTO composer_drafts(id,task_id,session_id,draft_kind,text,payload_json,source_ordinal,revision,created_at,updated_at) VALUES (?,NULL,NULL,'new_task',?,?,NULL,1,?,?) ON CONFLICT(id) DO UPDATE SET text=excluded.text,payload_json=excluded.payload_json,revision=composer_drafts.revision+1,updated_at=excluded.updated_at`).run(id,input.text,canonicalJSON({ ...payload, scope, attachments }),now,now);
+      const goal=input.goal??payload.goal??"";
+      const acceptance=input.acceptance??payload.acceptance??[];
+      const pendingWorkflowSubmission=input.pendingWorkflowSubmission===undefined?payload.pendingWorkflowSubmission:pending;
+      if (input.text.length === 0 && !attachments.length && !goal && !acceptance.length && !pendingWorkflowSubmission) this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(id);
+      else this.database.prepare(`INSERT INTO composer_drafts(id,task_id,session_id,draft_kind,text,payload_json,source_ordinal,revision,created_at,updated_at) VALUES (?,NULL,NULL,'new_task',?,?,NULL,1,?,?) ON CONFLICT(id) DO UPDATE SET text=excluded.text,payload_json=excluded.payload_json,revision=composer_drafts.revision+1,updated_at=excluded.updated_at`).run(id,input.text,canonicalJSON({ ...payload, scope, goal, acceptance, pendingWorkflowSubmission:pendingWorkflowSubmission??null, attachments }),now,now);
       const row = this.database.prepare("SELECT * FROM composer_drafts WHERE id = ?").get(id) as SQLiteRow | undefined;
       return { value: row ? { composerDraft: composerDraft(row) } : {}, event: { kind: "taskDraft.updated", entityKind: "composerDraft", entityId: id, payload: { textBytes: Buffer.byteLength(input.text, "utf8") } } };
     });
@@ -2797,6 +3139,7 @@ export class ProductStore {
     sessionId: string;
     text: string;
     attachmentIds?: string[];
+    pendingWorkflowSubmission?:PendingWorkflowSubmissionRecord|null;
     targetAgentRunId?: string | null;
     pathAction?:NativeSessionPathAction|null;
     pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"]|null;
@@ -2809,12 +3152,13 @@ export class ProductStore {
     if (redactCredentialText(input.text).redacted) {
       throw new ProductStoreError("CREDENTIAL_MATERIAL_REJECTED", "D Code Session Composer Draft contains credential material");
     }
+    const pending=input.pendingWorkflowSubmission?normalizedPendingWorkflowSubmission(input.pendingWorkflowSubmission):input.pendingWorkflowSubmission;
     const textValue = input.text;
     return await this.mutate<{ composerDraft?: ComposerDraftRecord }>(
       "dcodeSession.composerDraft.set",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, sessionId, text: textValue, attachmentIds:input.attachmentIds??null, targetAgentRunId:input.targetAgentRunId??null,pathAction:input.pathAction??null,pathDraftBackup:input.pathDraftBackup??null },
+      { taskId, sessionId, text: textValue, attachmentIds:input.attachmentIds??null, pendingWorkflowSubmission:pending??null, targetAgentRunId:input.targetAgentRunId??null,pathAction:input.pathAction??null,pathDraftBackup:input.pathDraftBackup??null },
       (_storeRevision, now) => {
         const sessionRow = this.database.prepare(`
           SELECT id FROM sessions WHERE id = ? AND task_id = ?
@@ -2829,6 +3173,7 @@ export class ProductStore {
         `).get(sessionId) as SQLiteRow | undefined;
         const payload=existing?JSON.parse(text(existing,"payload_json")):{};
         const attachments=this.attachmentsForIds(input.attachmentIds,payload.attachments??[]);
+        if(input.pendingWorkflowSubmission!==undefined)payload.pendingWorkflowSubmission=pending??null;
         const targetAgentRunId=input.targetAgentRunId===undefined?payload.targetAgentRunId:input.targetAgentRunId;
         if(targetAgentRunId && !this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role<>'coordinator'").get(targetAgentRunId,taskId)) throw new ProductStoreError("INVALID_ARGUMENT","定向草稿只能选择本任务已创建的成员");
         payload.targetAgentRunId=targetAgentRunId??null;
@@ -2840,7 +3185,7 @@ export class ProductStore {
         }
         if(payload.pathDraftBackup){const backup=payload.pathDraftBackup as NonNullable<ComposerDraftRecord["pathDraftBackup"]>;if(typeof backup.text!=="string"||backup.text.length>200000||!Array.isArray(backup.attachmentIds)||backup.attachmentIds.length>32)throw new ProductStoreError("INVALID_ARGUMENT","原草稿备份无效");assertCredentialFreeValue(backup,"pathDraftBackup");backup.attachments=this.attachmentsForIds(backup.attachmentIds);}
 
-        if (textValue.length === 0 && !attachments.length && !targetAgentRunId && !payload.pathAction && !payload.pathDraftBackup) {
+        if (textValue.length === 0 && !attachments.length && !targetAgentRunId && !payload.pathAction && !payload.pathDraftBackup && !payload.pendingWorkflowSubmission) {
           if (existing) {
             this.database.prepare("DELETE FROM composer_drafts WHERE id = ?").run(text(existing, "id"));
           }
@@ -2877,6 +3222,7 @@ export class ProductStore {
           sessionId,
           draftKind: "session_path",
           attachments,
+          ...(payload.pendingWorkflowSubmission?{pendingWorkflowSubmission:normalizedPendingWorkflowSubmission(payload.pendingWorkflowSubmission)}:{}),
           ...(targetAgentRunId?{targetAgentRunId}:{}),
           ...(payload.pathAction?{pathAction:payload.pathAction}:{}),
           ...(payload.pathDraftBackup?{pathDraftBackup:payload.pathDraftBackup}:{}),
@@ -3306,6 +3652,24 @@ export class ProductStore {
       taskWorkItems: (
         this.database.prepare("SELECT * FROM task_work_items ORDER BY task_id, ordinal, id").all() as SQLiteRow[]
       ).map(taskWorkItem),
+      taskWorkflows: (
+        this.database.prepare("SELECT * FROM task_workflows ORDER BY task_id, created_at, id").all() as SQLiteRow[]
+      ).map(taskWorkflow),
+      taskWorkflowVersions: (
+        this.database.prepare("SELECT * FROM task_workflow_versions ORDER BY workflow_id, version").all() as SQLiteRow[]
+      ).map(taskWorkflowVersion),
+      taskWorkflowStages: (
+        this.database.prepare("SELECT * FROM task_workflow_stages ORDER BY workflow_id, version, ordinal").all() as SQLiteRow[]
+      ).map(taskWorkflowStage),
+      taskWorkflowRuns: (
+        this.database.prepare("SELECT * FROM task_workflow_runs ORDER BY task_id, created_at, id").all() as SQLiteRow[]
+      ).map(taskWorkflowRun),
+      taskWorkflowWorkItems: (
+        this.database.prepare("SELECT * FROM task_workflow_work_items ORDER BY run_id, stage_id").all() as SQLiteRow[]
+      ).map(taskWorkflowWorkItem),
+      taskWorkflowReports: (
+        this.database.prepare("SELECT * FROM task_workflow_reports ORDER BY run_id").all() as SQLiteRow[]
+      ).map(taskWorkflowReport),
       taskSummaries: (this.database.prepare("SELECT id FROM tasks ORDER BY created_at,id").all() as SQLiteRow[])
         .flatMap(row => this.taskSummaryHistory(text(row, "id")).slice(-1)),
       taskSummaryFailures: (this.database.prepare("SELECT payload_json FROM store_events WHERE kind='taskSummary.failed' ORDER BY sequence DESC LIMIT 200").all() as SQLiteRow[])
@@ -3588,6 +3952,7 @@ export class ProductStore {
   }
 
   private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing || this.closed) throw new ProductStoreError("PRODUCT_STORE_CLOSED", "D Code Product Store is closed");
     const next = this.mutationQueue.then(operation, operation);
     this.mutationQueue = next.then(() => undefined, () => undefined);
     return await next;
@@ -3808,7 +4173,7 @@ export class ProductStore {
       const sourceTask=this.database.prepare("SELECT * FROM tasks WHERE id=?").get(text(sourceSession,"task_id")) as SQLiteRow;
       if(this.database.prepare("SELECT id FROM session_runs WHERE session_id=? AND status IN ('prepared','running','waiting') LIMIT 1").get(sourceSessionId))throw new ProductStoreError("REVISION_CONFLICT","请等待当前运行结束后再复制");
       const taskId=`task-${randomUUID()}`,sessionId=`session-${randomUUID()}`;
-      const title=`${text(sourceSession,"title")} 副本`.slice(0,200);
+      const title=`${text(sourceSession,"title")} ${this.clientPreferences().language==='en'?'Copy':'副本'}`.slice(0,200);
       const insert=(table:string,row:SQLiteRow,overrides:Record<string,unknown>)=>{const next={...row,...overrides};const keys=Object.keys(next);this.database.prepare(`INSERT INTO ${table}(${keys.map(k=>`"${k}"`).join(",")}) VALUES (${keys.map(()=>"?").join(",")})`).run(...keys.map(k=>next[k]) as (string|number|bigint|Uint8Array|null)[]);};
       insert("tasks",sourceTask,{id:taskId,title,state:"draft",revision:1,created_at:now,updated_at:now});
       const context=this.database.prepare("SELECT * FROM task_context_sets WHERE task_id=?").get(text(sourceTask,"id")) as SQLiteRow;
@@ -4001,6 +4366,7 @@ export class ProductStore {
             entityId: taskRecord.id,
             taskId: taskRecord.id,
             payload: {
+              requestId:input.requestId,
               task: taskRecord,
               coordinationSession,
               coordinatorAssignment: assignment,
@@ -4009,6 +4375,27 @@ export class ProductStore {
         };
       },
     );
+  }
+
+  taskGoalHistory(taskId: string): TaskGoalRevisionRecord[] {
+    this.assertOpen();
+    const id = requiredString(taskId,"taskId",200);
+    const currentRow = this.database.prepare("SELECT * FROM tasks WHERE id=?").get(id) as SQLiteRow | undefined;
+    if (!currentRow) throw new ProductStoreError("NOT_FOUND","任务不存在");
+    const current = task(currentRow);
+    const created = this.database.prepare("SELECT payload_json,created_at FROM store_events WHERE task_id=? AND kind IN ('task.created','piImport.completed') ORDER BY sequence LIMIT 1").get(id) as SQLiteRow | undefined;
+    const updates = this.database.prepare("SELECT payload_json,created_at FROM store_events WHERE task_id=? AND kind='task.goalUpdated' ORDER BY sequence").all(id) as SQLiteRow[];
+    const result:TaskGoalRevisionRecord[]=[];
+    if (created) {
+      const original=(JSON.parse(text(created,"payload_json")) as {task:TaskRecord}).task;
+      result.push({taskId:id,goal:original.goal,acceptance:original.acceptance,taskRevision:original.revision,changedAt:text(created,"created_at")});
+    } else if (updates.length) {
+      const original=(JSON.parse(text(updates[0]!,"payload_json")) as {previous:TaskGoalRevisionRecord}).previous;
+      result.push(original);
+    }
+    for (const row of updates) result.push((JSON.parse(text(row,"payload_json")) as {current:TaskGoalRevisionRecord}).current);
+    if (!result.length) result.push({taskId:id,goal:current.goal,acceptance:current.acceptance,taskRevision:current.revision,changedAt:current.updatedAt});
+    return result;
   }
 
   async continueTaskSession(input: {
@@ -4051,7 +4438,7 @@ export class ProductStore {
           id: `session-${randomUUID()}`,
           taskId,
           kind: "coordination",
-          title: `${currentTask.title.slice(0, 175)} · 第 ${integer(ordinalRow, "total") + 1} 段`,
+          title: `${currentTask.title.slice(0, 175)} · ${this.clientPreferences().language==='en'?`Conversation ${integer(ordinalRow,"total")+1}`:`第 ${integer(ordinalRow,"total")+1} 段`}`,
           runtimeAdapter: "pi",
           lineageStatus: "native",
           state: "idle",
@@ -4403,14 +4790,17 @@ export class ProductStore {
       throw new ProductStoreError("INVALID_ARGUMENT", "摘要来源身份无效");
     }
     if (!this.database.prepare("SELECT id FROM tasks WHERE id=?").get(taskId)) throw new ProductStoreError("NOT_FOUND", "任务不存在");
-    let title = "来源";
+    const english=this.clientPreferences().language==='en';
+    const label=(zh:string,en:string)=>english?en:zh;
+    const goalContent=(goal:string,acceptance:string[])=>`${label('任务目标：','Task goal: ')}${goal}\n${label('验收要求：','Acceptance criteria: ')}${acceptance.join(english?'; ':'；')||label('未单独列出','Not specified')}`;
+    let title = label("来源","Source");
     let content: string | undefined;
     if (source.kind === "summary_revision" || source.kind === "user_correction") {
       if (source.id !== `task-summary-${taskId}` || !source.revision) throw new ProductStoreError("NOT_FOUND", "摘要来源不属于当前任务");
       const old = this.taskSummaryHistory(taskId).find(item => item.revision === source.revision);
-      title = `任务摘要 · 第 ${source.revision} 版`;
+      title = english?`Task summary · Version ${source.revision}`:`任务摘要 · 第 ${source.revision} 版`;
       if (old) content = (["confirmed", "pending", "blocked", "next"] as TaskSummarySection[])
-        .map(key => `${({ confirmed: "已确认", pending: "未完成", blocked: "阻塞与待核对", next: "下一步" })[key]}\n${old.sections[key].map(claim => `• ${claim.text}`).join("\n") || "暂无记录"}`)
+        .map(key => `${({ confirmed:label("已确认","Confirmed"),pending:label("未完成","Incomplete"),blocked:label("阻塞与待核对","Blockers and unconfirmed items"),next:label("下一步","Next step") })[key]}\n${old.sections[key].map(claim => `• ${claim.text}`).join("\n") || label("暂无记录","No records yet")}`)
         .join("\n\n");
     } else {
       const table = source.kind === "task" ? "tasks" : source.kind === "task_route" ? "task_plans" : source.kind === "work_item" ? "task_work_items" : source.kind === "raw_input" ? "raw_inputs" : "agent_reports";
@@ -4418,15 +4808,18 @@ export class ProductStore {
         .get(...(table === "tasks" ? [source.id] : [source.id, taskId])) as SQLiteRow | undefined;
       if (!row || source.kind === "task" && source.id !== taskId) throw new ProductStoreError("NOT_FOUND", "摘要来源不属于当前任务");
       const revision = typeof row.revision === "number" ? row.revision : undefined;
-      title = source.kind === "task" ? text(row, "title") : source.kind === "work_item" ? text(row, "title") : source.kind === "task_route" ? "任务路线" : source.kind === "raw_input" ? "用户提交原文" : "成员报告";
+      title = source.kind === "task" ? text(row, "title") : source.kind === "work_item" ? text(row, "title") : source.kind === "task_route" ? label("任务路线","Task route") : source.kind === "raw_input" ? label("用户提交原文","Submitted original text") : label("成员报告","Member report");
       if (source.revision === undefined || source.revision === revision) {
         content = source.kind === "task"
-          ? `任务目标：${text(row, "goal")}\n验收要求：${(JSON.parse(text(row, "acceptance_json")) as string[]).join("；") || "未单独列出"}`
+          ? goalContent(text(row,"goal"),JSON.parse(text(row,"acceptance_json")) as string[])
           : source.kind === "work_item"
-            ? `工作项：${text(row, "title")}\n当前状态：${text(row, "state")}`
+            ? `${label('工作项：','Work item: ')}${text(row, "title")}\n${label('当前状态：','Current state: ')}${text(row, "state")}`
             : source.kind === "task_route" ? JSON.stringify(JSON.parse(text(row, "document_json")), null, 2)
               : source.kind === "raw_input" ? text(row, "submitted_text")
               : (() => { const body = JSON.parse(text(row, "body_json")) as { text?: unknown }; return typeof body.text === "string" ? body.text : JSON.stringify(body, null, 2); })();
+      } else if (source.kind === "task") {
+        const historical=this.taskGoalHistory(taskId).filter(item=>item.taskRevision<=source.revision!).at(-1);
+        if (historical) content=goalContent(historical.goal,historical.acceptance);
       }
     }
     if (!content || content.length > 65_536 || redactCredentialText(content).redacted) return { state: "historical_unavailable", title };
@@ -4647,7 +5040,10 @@ export class ProductStore {
     const row = this.database.prepare("SELECT goal,acceptance_json FROM tasks WHERE id=?").get(taskId) as SQLiteRow | undefined;
     if (!row) throw new ProductStoreError("NOT_FOUND", "任务不存在");
     const context = this.database.prepare("SELECT revision FROM task_context_sets WHERE task_id=?").get(taskId) as SQLiteRow | undefined;
-    return payloadHash({ goal: text(row, "goal"), acceptance: text(row, "acceptance_json"), contextRevision: context ? integer(context, "revision") : 0 });
+    const changed=this.database.prepare("SELECT MAX(sequence) AS sequence FROM store_events WHERE task_id=? AND kind='task.goalUpdated'").get(taskId) as SQLiteRow;
+    // Preserve existing route keys until a Goal revision; reverting wording still needs recheck.
+    return payloadHash({ goal: text(row, "goal"), acceptance: text(row, "acceptance_json"), contextRevision: context ? integer(context, "revision") : 0,
+      ...(typeof changed.sequence==="number"?{goalChangeSequence:changed.sequence}:{}) });
   }
 
   private routeWorkItems(taskId: string): TaskWorkItemRecord[] {
@@ -4693,7 +5089,30 @@ export class ProductStore {
   assertAgentRouteCurrent(agentRunId: string, requireInputCurrent = false): void {
     const assignment = this.database.prepare("SELECT * FROM agent_assignments WHERE agent_run_id=? AND assignment_kind='member' ORDER BY created_at DESC,rowid DESC LIMIT 1").get(agentRunId) as SQLiteRow | undefined;
     if (!assignment) return;
-    const packet = JSON.parse(text(assignment, "task_packet_json")) as { routeBinding?: RouteBinding };
+    const packet = JSON.parse(text(assignment, "task_packet_json")) as {
+      routeBinding?: RouteBinding;
+      workflowBinding?: { workflowRunId?: string; stageId?: string; workItemId?: string;
+        purpose?: string; targetWorkItemId?: string };
+    };
+    const workflowBinding = packet.workflowBinding;
+    if (workflowBinding) {
+      const run = this.database.prepare("SELECT workflow_id, version, status FROM task_workflow_runs WHERE id = ? AND task_id = ?")
+        .get(workflowBinding.workflowRunId ?? null, text(assignment, "task_id")) as SQLiteRow | undefined;
+      if (run) this.assertWorkflowGoalCurrent(text(run,"workflow_id"),integer(run,"version"),text(assignment,"task_id"));
+      const stage = run ? this.database.prepare(`
+        SELECT id FROM task_workflow_stages WHERE workflow_id = ? AND version = ? AND id = ?
+      `).get(run.workflow_id as string, run.version as number, workflowBinding.stageId ?? null) : undefined;
+      const ownWork = this.database.prepare("SELECT id FROM task_work_items WHERE id = ? AND owner_assignment_id = ?")
+        .get(workflowBinding.workItemId ?? null, text(assignment, "id"));
+      const target = this.database.prepare(`
+        SELECT work_item_id FROM task_workflow_work_items WHERE run_id = ? AND stage_id = ?
+      `).get(workflowBinding.workflowRunId ?? null, workflowBinding.stageId ?? null) as SQLiteRow | undefined;
+      if (!run || !["active", "stopped"].includes(text(run, "status")) || !stage || !ownWork
+        || target?.work_item_id !== (workflowBinding.purpose === "verify"
+          ? workflowBinding.targetWorkItemId : workflowBinding.workItemId)) {
+        throw new ProductStoreError("REVISION_CONFLICT", "Workflow member assignment is no longer current");
+      }
+    }
     if (!packet.routeBinding) return;
     const taskId = text(assignment, "task_id");
     const context = this.taskRouteContext(taskId);
@@ -4724,6 +5143,19 @@ export class ProductStore {
     return row ? JSON.parse(text(row, "context_projection_json")).workAssignment : undefined;
   }
 
+  private sessionWorkflowReport(sessionRunId: string): {
+    runId: string; workflowId: string; version: number; goalRevision: number;
+  } | undefined {
+    const row = this.database.prepare(`
+      SELECT e.context_projection_json FROM session_runs r
+      JOIN effective_inputs e ON e.id = r.effective_input_id WHERE r.id = ?
+    `).get(sessionRunId) as SQLiteRow | undefined;
+    if (!row) return undefined;
+    return (JSON.parse(text(row, "context_projection_json")) as {
+      workflowReport?: { runId: string; workflowId: string; version: number; goalRevision: number };
+    }).workflowReport;
+  }
+
   private assertReportWorkCurrent(report: SQLiteRow): void {
     const current = this.memberWorkScope(text(report, "agent_run_id"));
     if (current?.workItemId && canonicalJSON(JSON.parse(text(report, "body_json")).workAssignment ?? null) !== canonicalJSON(current)) {
@@ -4735,6 +5167,45 @@ export class ProductStore {
     const scope = this.memberWorkScope(agentRunId);
     this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE owner_assignment_id IN (SELECT id FROM agent_assignments WHERE agent_run_id=?) AND (? IS NULL OR id=?)")
       .run(state, now, agentRunId, scope?.workItemId ?? null, scope?.workItemId ?? null);
+  }
+
+  private completeWorkflowVerifierStage(verification: VerificationRecord, now: string): void {
+    if (verification.verdict !== "pass" || verification.evidenceIds.length === 0) return;
+    const assignment = this.database.prepare(`
+      SELECT * FROM agent_assignments WHERE agent_run_id = ? AND assignment_kind = 'member'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(verification.verifierAgentRunId) as SQLiteRow | undefined;
+    if (!assignment) return;
+    const packet = JSON.parse(text(assignment, "task_packet_json")) as {
+      workflowBinding?: { workflowRunId?: string; stageId?: string; workItemId?: string; version?: number;
+        purpose?: string; targetWorkItemId?: string };
+    };
+    const binding = packet.workflowBinding;
+    if (!binding?.workflowRunId || !binding.stageId || !binding.workItemId
+      || binding.purpose !== "verify" || !binding.targetWorkItemId) return;
+    const workflowRunId = binding.workflowRunId;
+    const run = this.database.prepare("SELECT * FROM task_workflow_runs WHERE id = ? AND status IN ('active', 'stopped')")
+      .get(workflowRunId) as SQLiteRow | undefined;
+    if (!run) return;
+    const stage = this.workflowStages(text(run, "workflow_id"), integer(run, "version"))
+      .find(item => item.id === binding.stageId);
+    if (!stage) return;
+    const subjectWorkItemId = verification.workItemId ?? (verification.subjectReportId
+      ? (() => {
+        const report = this.database.prepare("SELECT body_json FROM agent_reports WHERE id = ?")
+          .get(verification.subjectReportId!) as SQLiteRow | undefined;
+        return report ? (JSON.parse(text(report, "body_json")) as { workAssignment?: { workItemId?: string } }).workAssignment?.workItemId : undefined;
+      })()
+      : undefined);
+    const target = this.database.prepare(`
+      SELECT work_item_id FROM task_workflow_work_items WHERE run_id = ? AND stage_id = ?
+    `).get(workflowRunId, binding.stageId) as SQLiteRow | undefined;
+    if (!subjectWorkItemId || subjectWorkItemId !== binding.targetWorkItemId
+      || target?.work_item_id !== subjectWorkItemId) return;
+    this.database.prepare(`
+      UPDATE task_work_items SET state = 'completed', revision = revision + 1, updated_at = ?
+      WHERE id = ? AND owner_assignment_id = ? AND state = 'in_progress'
+    `).run(now, binding.workItemId, text(assignment, "id"));
   }
 
   private invalidateRouteWork(taskId: string, context: TaskRouteContext, now: string): string[] {
@@ -4880,6 +5351,611 @@ export class ProductStore {
       }
       return { value: { context, ...(workItem ? { workItem } : {}), affectedAgentRunIds }, event: { kind: "taskRoute.updated", entityKind: "taskPlan", entityId: planId, taskId: input.taskId, payload: { context, operation, affectedAgentRunIds, ...(workItem ? { workItem } : {}), ...(operation.action === "propose" ? { candidateId: id } : {}) } } };
     });
+  }
+
+  async updateTaskGoal(input: {
+    requestId: string; expectedStoreRevision: number; taskId: string; scope: TaskScope;
+    expectedTaskRevision: number; goal: string; acceptance: string[];
+  }): Promise<{ storeRevision: number; task: TaskRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const expectedTaskRevision = requiredRevision(input.expectedTaskRevision, "expectedTaskRevision");
+    const goal = requiredCredentialFreeString(input.goal.trim(), "goal", 4_000);
+    const acceptance = parseStringArray(input.acceptance, "acceptance").map(item => item.trim()).filter(Boolean);
+    if (acceptance.length > 100) throw new ProductStoreError("INVALID_ARGUMENT", "验收条件最多 100 条");
+    assertCredentialFreeValue(acceptance, "acceptance");
+    return this.mutate("task.goal.update", input.requestId, input.expectedStoreRevision,
+      { taskId, scope, expectedTaskRevision, goal, acceptance }, (_revision, now) => {
+        const previous = this.taskForScope(taskId, scope);
+        if (previous.scope.kind === "user" && previous.scope.userId !== this.currentUser().id
+          || previous.scope.kind === "project" && !this.database.prepare("SELECT id FROM projects WHERE id = ? AND user_id = ?")
+            .get(previous.scope.projectId, this.currentUser().id)) {
+          throw new ProductStoreError("NOT_FOUND", "任务不属于当前用户");
+        }
+        if (!["draft", "active", "waiting"].includes(previous.state)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "请先恢复此任务，再修订目标");
+        }
+        if (previous.revision !== expectedTaskRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "目标已被其他修改更新，请核对新版本");
+        }
+        if (this.database.prepare("SELECT id FROM session_runs WHERE task_id = ? AND status IN ('prepared','running','waiting') LIMIT 1")
+          .get(taskId)) throw new ProductStoreError("REVISION_CONFLICT", "任务已有在途运行，请先停止并等待收尾，再修订目标");
+        if (this.database.prepare("SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1")
+          .get(taskId)) throw new ProductStoreError("REVISION_CONFLICT", "任务还有未收口的团队工作，请先完成或停止并核对结果，再修订目标");
+        if (this.database.prepare("SELECT id FROM task_workflow_runs WHERE task_id = ? AND status = 'active' LIMIT 1")
+          .get(taskId)) throw new ProductStoreError("REVISION_CONFLICT", "任务有活动工作流；请先停止后续推进，再修订目标和安排");
+        if (previous.goal === goal && canonicalJSON(previous.acceptance) === canonicalJSON(acceptance)) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "目标没有变化");
+        }
+        this.database.prepare("UPDATE tasks SET goal = ?, acceptance_json = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?")
+          .run(goal, canonicalJSON(acceptance), now, taskId, expectedTaskRevision);
+        const updated = task(this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow);
+        const revisionOf = (value: TaskRecord, changedAt: string) => ({ taskId, goal: value.goal,
+          acceptance: value.acceptance, taskRevision: value.revision, changedAt });
+        return { value: { task: updated }, event: {
+          kind: "task.goalUpdated", entityKind: "task", entityId: taskId, taskId,
+          payload: { previous: revisionOf(previous, previous.updatedAt), current: revisionOf(updated, now) },
+        } };
+      });
+  }
+
+  private workflowForTask(workflowId: string, taskId: string): TaskWorkflowRecord {
+    const row = this.database.prepare("SELECT * FROM task_workflows WHERE id = ? AND task_id = ?")
+      .get(workflowId, taskId) as SQLiteRow | undefined;
+    if (!row) throw new ProductStoreError("NOT_FOUND", "Workflow does not belong to this Task", { workflowId, taskId });
+    return taskWorkflow(row);
+  }
+
+  private taskGoalRevision(taskId: string): number {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) AS changes FROM store_events WHERE task_id = ? AND kind = 'task.goalUpdated'
+    `).get(taskId) as SQLiteRow;
+    return integer(row, "changes") + 1;
+  }
+
+  private assertWorkflowGoalCurrent(workflowId: string, version: number, taskId: string): void {
+    const row = this.database.prepare(`
+      SELECT goal_revision FROM task_workflow_versions WHERE workflow_id = ? AND version = ?
+    `).get(workflowId, version) as SQLiteRow | undefined;
+    if (!row || integer(row, "goal_revision") !== this.taskGoalRevision(taskId)) {
+      throw new ProductStoreError("REVISION_CONFLICT", "Task Goal changed; revise the Workflow before continuing");
+    }
+  }
+
+  private workflowReportContext(taskId: string, runId: string, agentRunId: string,
+    consumingMessageId?: string): { runId: string; workflowId: string; version: number; goalRevision: number } {
+    const runRow = this.database.prepare(`
+      SELECT * FROM task_workflow_runs WHERE id = ? AND task_id = ? AND status = 'active'
+    `).get(runId, taskId) as SQLiteRow | undefined;
+    const coordinator = this.database.prepare(`
+      SELECT g.id FROM agent_runs g JOIN sessions s ON s.id = g.session_id
+      WHERE g.id = ? AND g.task_id = ? AND g.role = 'coordinator' AND s.kind = 'coordination'
+    `).get(agentRunId, taskId);
+    if (!runRow || !coordinator) throw new ProductStoreError("INVALID_ARGUMENT", "Workflow report must be prepared by its Task Coordinator");
+    const run = taskWorkflowRun(runRow);
+    this.assertWorkflowGoalCurrent(run.workflowId, run.version, taskId);
+    if (this.database.prepare("SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1")
+      .get(taskId)) throw new ProductStoreError("REVISION_CONFLICT", "Settle Team work before preparing the Workflow report");
+    const stages = this.workflowStages(run.workflowId, run.version);
+    const completed = this.database.prepare(`
+      SELECT b.stage_id FROM task_workflow_work_items b
+      JOIN task_work_items i ON i.id = b.work_item_id
+      WHERE b.run_id = ? AND i.task_id = ? AND i.state = 'completed'
+    `).all(runId, taskId) as SQLiteRow[];
+    if (completed.length !== stages.length || stages.some(stage => !completed.some(row => row.stage_id === stage.id))) {
+      throw new ProductStoreError("REVISION_CONFLICT", "Workflow report requires every stage to be verified complete");
+    }
+    const pendingUser = this.collaborationMessages(taskId).find(message =>
+      message.author === "user" && message.id !== consumingMessageId
+      && message.state !== "cancelled" && !this.isCollaborationMessageApplied(message.id));
+    if (pendingUser) throw new ProductStoreError("REVISION_CONFLICT", "Read or resolve current user requirements before preparing the Workflow report");
+    return { runId, workflowId: run.workflowId, version: run.version, goalRevision: this.taskGoalRevision(taskId) };
+  }
+
+  private workflowStages(workflowId: string, version: number): TaskWorkflowStageRecord[] {
+    return (this.database.prepare(`
+      SELECT * FROM task_workflow_stages WHERE workflow_id = ? AND version = ? ORDER BY ordinal
+    `).all(workflowId, version) as SQLiteRow[]).map(taskWorkflowStage);
+  }
+
+  private insertWorkflowVersion(
+    workflowId: string,
+    version: number,
+    originRawInputId: string,
+    goalRevision: number,
+    goal: string,
+    constraints: string[],
+    stages: TaskWorkflowStageInput[],
+    now: string,
+  ): { workflowVersion: TaskWorkflowVersionRecord; stages: TaskWorkflowStageRecord[] } {
+    this.database.prepare(`
+      INSERT INTO task_workflow_versions(workflow_id, version, origin_raw_input_id, goal_revision, goal, constraints_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(workflowId, version, originRawInputId, goalRevision, goal, canonicalJSON(constraints), now);
+    const insert = this.database.prepare(`
+      INSERT INTO task_workflow_stages(
+        workflow_id, version, id, ordinal, title, completion, depends_on_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const records = stages.map((stage, ordinal) => {
+      insert.run(workflowId, version, stage.id, ordinal, stage.title, stage.completion,
+        canonicalJSON(stage.dependsOn));
+      return { ...stage, workflowId, version, ordinal };
+    });
+    return { workflowVersion: { workflowId, version, originRawInputId, goalRevision, goal, constraints, createdAt: now }, stages: records };
+  }
+
+  async createTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    originRawInputId: string;
+    goal: string;
+    constraints?: string[];
+    stages: TaskWorkflowStageInput[];
+  }): Promise<{ storeRevision: number; workflow: TaskWorkflowRecord; workflowVersion: TaskWorkflowVersionRecord; stages: TaskWorkflowStageRecord[] }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const originRawInputId = requiredString(input.originRawInputId, "originRawInputId", 200);
+    const goal = requiredCredentialFreeString(input.goal, "goal", 20_000).trim();
+    const constraints = normalizedWorkflowConstraints(input.constraints ?? []);
+    const stages = normalizedWorkflowStages(input.stages);
+    const params = { taskId, scope, originRawInputId, goal, constraints, stages };
+    return this.mutate("task.workflow.create", input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        const task = this.taskForScope(taskId, scope);
+        if (["completed", "rejected", "archived"].includes(task.state)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow cannot be added to a closed Task");
+        }
+        const raw = this.database.prepare("SELECT id FROM raw_inputs WHERE id = ? AND task_id = ?")
+          .get(originRawInputId, taskId);
+        if (!raw) throw new ProductStoreError("NOT_FOUND", "Workflow source input does not belong to this Task");
+        const workflow: TaskWorkflowRecord = {
+          id: `workflow-${randomUUID()}`, taskId, originRawInputId,
+          currentVersion: 1, revision: 1, createdAt: now, updatedAt: now,
+        };
+        this.database.prepare(`
+          INSERT INTO task_workflows(id, task_id, origin_raw_input_id, current_version, revision, created_at, updated_at)
+          VALUES (?, ?, ?, 1, 1, ?, ?)
+        `).run(workflow.id, taskId, originRawInputId, now, now);
+        const definition = this.insertWorkflowVersion(workflow.id, 1, originRawInputId,
+          this.taskGoalRevision(taskId), goal, constraints, stages, now);
+        return { value: { workflow, ...definition }, event: {
+          kind: "taskWorkflow.created", entityKind: "taskWorkflow", entityId: workflow.id, taskId,
+          payload: { workflowId: workflow.id, version: 1, stageIds: stages.map(stage => stage.id), originRawInputId },
+        } };
+      });
+  }
+
+  async reviseTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    workflowId: string;
+    expectedWorkflowRevision: number;
+    originRawInputId: string;
+    goal: string;
+    constraints?: string[];
+    stages: TaskWorkflowStageInput[];
+  }): Promise<{ storeRevision: number; workflow: TaskWorkflowRecord; workflowVersion: TaskWorkflowVersionRecord; stages: TaskWorkflowStageRecord[]; run?: TaskWorkflowRunRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const workflowId = requiredString(input.workflowId, "workflowId", 200);
+    const expectedWorkflowRevision = requiredRevision(input.expectedWorkflowRevision, "expectedWorkflowRevision");
+    const originRawInputId = requiredString(input.originRawInputId, "originRawInputId", 200);
+    const goal = requiredCredentialFreeString(input.goal, "goal", 20_000).trim();
+    const constraints = normalizedWorkflowConstraints(input.constraints ?? []);
+    const stages = normalizedWorkflowStages(input.stages);
+    const params = { taskId, scope, workflowId, expectedWorkflowRevision, originRawInputId, goal, constraints, stages };
+    return this.mutate("task.workflow.revise", input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const current = this.workflowForTask(workflowId, taskId);
+        if (!this.database.prepare("SELECT id FROM raw_inputs WHERE id = ? AND task_id = ?")
+          .get(originRawInputId, taskId)) {
+          throw new ProductStoreError("NOT_FOUND", "Workflow revision source input does not belong to this Task");
+        }
+        if (current.revision !== expectedWorkflowRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow changed before revision", {
+            expectedWorkflowRevision, currentWorkflowRevision: current.revision,
+          });
+        }
+        const runRow = this.database.prepare(`
+          SELECT * FROM task_workflow_runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
+        `).get(workflowId) as SQLiteRow | undefined;
+        const previousRun = runRow ? taskWorkflowRun(runRow) : undefined;
+        if (previousRun?.status === "completed") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Completed Workflow history is immutable; create a new Workflow round");
+        }
+        if (previousRun) {
+          const previous = new Map(this.workflowStages(workflowId, previousRun.version)
+            .map(stage => [stage.id, stage]));
+          const next = new Map(stages.map(stage => [stage.id, stage]));
+          const bindings = this.database.prepare(`
+            SELECT stage_id FROM task_workflow_work_items WHERE run_id = ?
+          `).all(previousRun.id) as SQLiteRow[];
+          for (const binding of bindings) {
+            const id = text(binding, "stage_id");
+            const oldStage = previous.get(id);
+            const newStage = next.get(id);
+            if (!oldStage || !newStage || oldStage.title !== newStage.title
+              || oldStage.completion !== newStage.completion
+              || canonicalJSON(oldStage.dependsOn) !== canonicalJSON(newStage.dependsOn)) {
+              throw new ProductStoreError("REVISION_CONFLICT", "A bound Workflow stage cannot be rewritten; revise future stages only", { stageId: id });
+            }
+          }
+        }
+        const version = current.currentVersion + 1;
+        const definition = this.insertWorkflowVersion(workflowId, version, originRawInputId,
+          this.taskGoalRevision(taskId), goal, constraints, stages, now);
+        this.database.prepare(`
+          UPDATE task_workflows SET current_version = ?, revision = revision + 1, updated_at = ? WHERE id = ?
+        `).run(version, now, workflowId);
+        const workflow: TaskWorkflowRecord = { ...current, currentVersion: version, revision: current.revision + 1, updatedAt: now };
+        let run: TaskWorkflowRunRecord | undefined;
+        if (previousRun) {
+          this.database.prepare(`
+            UPDATE task_workflow_runs SET version = ?, revision = revision + 1, updated_at = ? WHERE id = ?
+          `).run(version, now, previousRun.id);
+          run = { ...previousRun, version, revision: previousRun.revision + 1, updatedAt: now };
+        }
+        return { value: { workflow, ...definition, ...(run ? { run } : {}) }, event: {
+          kind: "taskWorkflow.revised", entityKind: "taskWorkflow", entityId: workflowId, taskId,
+          payload: { workflowId, previousVersion: current.currentVersion, version, originRawInputId, stageIds: stages.map(stage => stage.id) },
+        } };
+      });
+  }
+
+  async startTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    workflowId: string;
+    expectedWorkflowRevision: number;
+  }): Promise<{ storeRevision: number; run: TaskWorkflowRunRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const workflowId = requiredString(input.workflowId, "workflowId", 200);
+    const expectedWorkflowRevision = requiredRevision(input.expectedWorkflowRevision, "expectedWorkflowRevision");
+    const params = { taskId, scope, workflowId, expectedWorkflowRevision };
+    return this.mutate("task.workflow.start", input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        const task = this.taskForScope(taskId, scope);
+        if (["completed", "rejected", "archived"].includes(task.state)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow cannot start in a closed Task");
+        }
+        const workflow = this.workflowForTask(workflowId, taskId);
+        if (workflow.revision !== expectedWorkflowRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow changed before start");
+        }
+        this.assertWorkflowGoalCurrent(workflowId, workflow.currentVersion, taskId);
+        if (this.workflowStages(workflowId, workflow.currentVersion).length === 0) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Coordinator must define Workflow stages before start");
+        }
+        if (this.database.prepare("SELECT id FROM task_workflow_runs WHERE workflow_id = ? LIMIT 1").get(workflowId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "This Workflow already has a Run; continue its existing Run or create a new round");
+        }
+        if (this.database.prepare("SELECT id FROM task_workflow_runs WHERE task_id = ? AND status = 'active' LIMIT 1").get(taskId)
+          || this.database.prepare("SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1").get(taskId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Another Workflow or Team Run is active in this Task");
+        }
+        const run: TaskWorkflowRunRecord = {
+          id: `workflow-run-${randomUUID()}`, taskId, workflowId, version: workflow.currentVersion,
+          status: "active", revision: 1, createdAt: now, updatedAt: now,
+        };
+        this.database.prepare(`
+          INSERT INTO task_workflow_runs(id, task_id, workflow_id, version, status, revision, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'active', 1, ?, ?)
+        `).run(run.id, taskId, workflowId, run.version, now, now);
+        return { value: { run }, event: {
+          kind: "taskWorkflow.started", entityKind: "taskWorkflowRun", entityId: run.id, taskId,
+          payload: { workflowId, runId: run.id, version: run.version },
+        } };
+      });
+  }
+
+  async bindTaskWorkflowWorkItem(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    runId: string;
+    expectedRunRevision: number;
+    stageId: string;
+    workItemId: string;
+  }): Promise<{ storeRevision: number; binding: TaskWorkflowWorkItemBinding }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const runId = requiredString(input.runId, "runId", 200);
+    const expectedRunRevision = requiredRevision(input.expectedRunRevision, "expectedRunRevision");
+    const stageId = requiredString(input.stageId, "stageId", 100);
+    const workItemId = requiredString(input.workItemId, "workItemId", 200);
+    const params = { taskId, scope, runId, expectedRunRevision, stageId, workItemId };
+    return this.mutate("task.workflow.bindWorkItem", input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const runRow = this.database.prepare("SELECT * FROM task_workflow_runs WHERE id = ? AND task_id = ?")
+          .get(runId, taskId) as SQLiteRow | undefined;
+        if (!runRow) throw new ProductStoreError("NOT_FOUND", "Workflow Run does not belong to this Task");
+        const run = taskWorkflowRun(runRow);
+        if (run.revision !== expectedRunRevision || run.status !== "active") {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow Run is not active at the expected revision");
+        }
+        const stage = this.database.prepare(`
+          SELECT id FROM task_workflow_stages WHERE workflow_id = ? AND version = ? AND id = ?
+        `).get(run.workflowId, run.version, stageId);
+        if (!stage) throw new ProductStoreError("NOT_FOUND", "Workflow stage does not belong to this Run version");
+        const workRow = this.database.prepare("SELECT * FROM task_work_items WHERE id = ? AND task_id = ?")
+          .get(workItemId, taskId) as SQLiteRow | undefined;
+        const work = workRow ? taskWorkItem(workRow) : undefined;
+        if (!work || work.state !== "pending" || work.ownerAssignmentId) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Only a pending, unassigned Work Item in this Task may be bound");
+        }
+        if (readRouteWork(work.details)) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Route Work Items keep their original dependency contract and cannot be rebound as Workflow execution stages");
+        }
+        if (this.database.prepare("SELECT run_id FROM task_workflow_work_items WHERE work_item_id = ? OR (run_id = ? AND stage_id = ?) LIMIT 1")
+          .get(workItemId, runId, stageId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "The Work Item or stage is already bound to a Workflow Run");
+        }
+        const binding: TaskWorkflowWorkItemBinding = { runId, stageId, workItemId, createdAt: now };
+        this.database.prepare(`
+          INSERT INTO task_workflow_work_items(run_id, stage_id, work_item_id, created_at) VALUES (?, ?, ?, ?)
+        `).run(runId, stageId, workItemId, now);
+        return { value: { binding }, event: {
+          kind: "taskWorkflow.workItemBound", entityKind: "taskWorkflowRun", entityId: runId, taskId,
+          payload: { workflowId: run.workflowId, ...binding },
+        } };
+      });
+  }
+
+  async stopTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    runId: string;
+    expectedRunRevision: number;
+    reason: string;
+  }): Promise<{ storeRevision: number; run: TaskWorkflowRunRecord }> {
+    return this.transitionTaskWorkflowRun("task.workflow.stop", input, "active", "stopped");
+  }
+
+  async continueTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    runId: string;
+    expectedRunRevision: number;
+  }): Promise<{ storeRevision: number; run: TaskWorkflowRunRecord }> {
+    return this.transitionTaskWorkflowRun("task.workflow.continue", input, ["stopped", "interrupted"], "active");
+  }
+
+  private async transitionTaskWorkflowRun(inputMethod: "task.workflow.stop" | "task.workflow.continue", input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    runId: string;
+    expectedRunRevision: number;
+    reason?: string;
+  }, from: TaskWorkflowRunRecord["status"] | TaskWorkflowRunRecord["status"][], to: TaskWorkflowRunRecord["status"]): Promise<{ storeRevision: number; run: TaskWorkflowRunRecord }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const runId = requiredString(input.runId, "runId", 200);
+    const expectedRunRevision = requiredRevision(input.expectedRunRevision, "expectedRunRevision");
+    const reason = inputMethod === "task.workflow.stop"
+      ? requiredCredentialFreeString(input.reason, "reason", 2_000).trim()
+      : undefined;
+    const params = { taskId, scope, runId, expectedRunRevision, ...(reason ? { reason } : {}) };
+    return this.mutate(inputMethod, input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        const task = this.taskForScope(taskId, scope);
+        if (to === "active" && ["completed", "rejected", "archived"].includes(task.state)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow cannot continue in a closed Task");
+        }
+        const row = this.database.prepare("SELECT * FROM task_workflow_runs WHERE id = ? AND task_id = ?")
+          .get(runId, taskId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Workflow Run does not belong to this Task");
+        const previous = taskWorkflowRun(row);
+        if (previous.revision !== expectedRunRevision || !(Array.isArray(from) ? from : [from]).includes(previous.status)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow Run changed before transition", {
+            expectedRunRevision, currentRunRevision: previous.revision, currentStatus: previous.status,
+          });
+        }
+        if (to === "active") this.assertWorkflowGoalCurrent(previous.workflowId, previous.version, taskId);
+        if (to === "active") {
+          const team = this.database.prepare("SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1")
+            .get(taskId) as SQLiteRow | undefined;
+          if (team && this.database.prepare(`
+            SELECT id FROM agent_assignments WHERE team_run_id = ? AND assignment_kind = 'member'
+              AND json_extract(task_packet_json, '$.workflowBinding.workflowRunId') IS NOT ? LIMIT 1
+          `).get(text(team,"id"),runId)) {
+            throw new ProductStoreError("REVISION_CONFLICT", "Another Team Run still owns this Task progression");
+          }
+        }
+        if (to === "active" && this.database.prepare("SELECT id FROM task_workflow_runs WHERE task_id = ? AND status = 'active' AND id <> ? LIMIT 1").get(taskId, runId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Another Workflow Run is active in this Task");
+        }
+        const run: TaskWorkflowRunRecord = {
+          ...previous, status: to, ...(reason ? { reason } : { reason: undefined }),
+          revision: previous.revision + 1, updatedAt: now,
+        };
+        this.database.prepare(`
+          UPDATE task_workflow_runs SET status = ?, reason = ?, revision = ?, updated_at = ? WHERE id = ?
+        `).run(to, reason ?? null, run.revision, now, runId);
+        return { value: { run }, event: {
+          kind: to === "active" ? "taskWorkflow.continued" : "taskWorkflow.stopped",
+          entityKind: "taskWorkflowRun", entityId: runId, taskId,
+          payload: { workflowId: run.workflowId, runId, version: run.version, reason: reason ?? null },
+        } };
+      });
+  }
+
+  async completeTaskWorkflow(input: {
+    requestId: string;
+    expectedStoreRevision: number;
+    taskId: string;
+    scope: TaskScope;
+    runId: string;
+    expectedRunRevision: number;
+    coordinatorReportId: string;
+  }): Promise<{ storeRevision: number; run: TaskWorkflowRunRecord; reportBinding: TaskWorkflowReportBinding }> {
+    const taskId = requiredString(input.taskId, "taskId", 200);
+    const scope = normalizedTaskScope(input.scope);
+    const runId = requiredString(input.runId, "runId", 200);
+    const expectedRunRevision = requiredRevision(input.expectedRunRevision, "expectedRunRevision");
+    const coordinatorReportId = requiredString(input.coordinatorReportId, "coordinatorReportId", 200);
+    const params = { taskId, scope, runId, expectedRunRevision, coordinatorReportId };
+    return this.mutate("task.workflow.complete", input.requestId, input.expectedStoreRevision, params,
+      (_storeRevision, now) => {
+        this.taskForScope(taskId, scope);
+        const row = this.database.prepare("SELECT * FROM task_workflow_runs WHERE id = ? AND task_id = ?")
+          .get(runId, taskId) as SQLiteRow | undefined;
+        if (!row) throw new ProductStoreError("NOT_FOUND", "Workflow Run does not belong to this Task");
+        const previous = taskWorkflowRun(row);
+        if (previous.status !== "active" || previous.revision !== expectedRunRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Workflow Run changed before completion");
+        }
+        this.assertWorkflowGoalCurrent(previous.workflowId, previous.version, taskId);
+        if (this.database.prepare("SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared','active','waiting') LIMIT 1")
+          .get(taskId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Team work must settle before Workflow completion");
+        }
+        const report = this.database.prepare(`
+          SELECT p.*, g.role FROM agent_reports p JOIN agent_runs g ON g.id = p.agent_run_id
+          WHERE p.id = ? AND p.task_id = ? AND p.report_kind = 'coordinator'
+        `).get(coordinatorReportId, taskId) as SQLiteRow | undefined;
+        if (!report || text(report, "role") !== "coordinator") {
+          throw new ProductStoreError("NOT_FOUND", "Workflow completion requires a Coordinator report in this Task");
+        }
+        const unconsumedUser = this.collaborationMessages(taskId).find(message =>
+          message.author === "user" && message.state !== "cancelled" && !this.isCollaborationMessageApplied(message.id));
+        if (unconsumedUser) {
+          throw new ProductStoreError("REVISION_CONFLICT", "A submitted user requirement is still waiting to reach its target");
+        }
+        const reportBody = JSON.parse(text(report, "body_json")) as {
+          sessionRunId?: unknown;
+          workflowReport?: { runId?: unknown; workflowId?: unknown; version?: unknown; goalRevision?: unknown };
+        };
+        if (reportBody.workflowReport?.runId !== runId
+          || reportBody.workflowReport.workflowId !== previous.workflowId
+          || reportBody.workflowReport.version !== previous.version
+          || reportBody.workflowReport.goalRevision !== this.taskGoalRevision(taskId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Coordinator report was not prepared for this Workflow Run and version");
+        }
+        const started = this.database.prepare(`
+          SELECT sequence FROM store_events WHERE kind = 'taskWorkflow.started' AND entity_id = ? LIMIT 1
+        `).get(runId) as SQLiteRow | undefined;
+        const reportPrepared = typeof reportBody.sessionRunId === "string" ? this.database.prepare(`
+          SELECT sequence FROM store_events WHERE kind = 'sessionRun.prepared' AND entity_id = ? ORDER BY sequence DESC LIMIT 1
+        `).get(reportBody.sessionRunId) as SQLiteRow | undefined : undefined;
+        const finished = typeof reportBody.sessionRunId === "string" ? this.database.prepare(`
+          SELECT sequence FROM store_events WHERE kind = 'sessionRun.finished' AND entity_id = ? ORDER BY sequence DESC LIMIT 1
+        `).get(reportBody.sessionRunId) as SQLiteRow | undefined : undefined;
+        if (!started || !reportPrepared || !finished
+          || integer(reportPrepared, "sequence") <= integer(started, "sequence")
+          || integer(finished, "sequence") <= integer(reportPrepared, "sequence")) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Coordinator report must come from a finished Run after Workflow start");
+        }
+        const stages = this.workflowStages(previous.workflowId, previous.version);
+        const bindings = (this.database.prepare(`
+          SELECT * FROM task_workflow_work_items WHERE run_id = ?
+        `).all(runId) as SQLiteRow[]).map(taskWorkflowWorkItem);
+        if (bindings.length !== stages.length) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Every Workflow stage needs a real Work Item result");
+        }
+        const byStage = new Map(bindings.map(binding => [binding.stageId, binding]));
+        const verifications = this.verifications();
+        const acceptedReviews = this.coordinatorReviews().filter(review => review.outcome === "accepted");
+        const accepted = new Set(acceptedReviews.map(review => review.verificationId));
+        let finalReviewSequence = 0;
+        for (const stage of stages) {
+          const binding = byStage.get(stage.id);
+          if (!binding) throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage has no bound Work Item", { stageId: stage.id });
+          const work = this.database.prepare("SELECT * FROM task_work_items WHERE id = ? AND task_id = ?")
+            .get(binding.workItemId, taskId) as SQLiteRow | undefined;
+          if (!work || text(work, "state") !== "completed" || typeof work.owner_assignment_id !== "string") {
+            throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage work is not verified complete", { stageId: stage.id });
+          }
+          const owner = this.database.prepare("SELECT agent_run_id FROM agent_assignments WHERE id = ?")
+            .get(work.owner_assignment_id) as SQLiteRow | undefined;
+          const agentRunId = owner?.agent_run_id;
+          const supported = typeof agentRunId === "string" && verifications.find(verification => {
+            if (verification.verdict !== "pass" || verification.evidenceIds.length === 0 || !accepted.has(verification.id)) return false;
+            if (verification.workItemId === binding.workItemId) return true;
+            if (verification.verifierAgentRunId === agentRunId) return true;
+            if (verification.subjectAgentRunId !== agentRunId || !verification.subjectReportId) return false;
+            const subject = this.database.prepare("SELECT body_json FROM agent_reports WHERE id = ?")
+              .get(verification.subjectReportId) as SQLiteRow | undefined;
+            const assigned = subject ? (JSON.parse(text(subject, "body_json")) as { workAssignment?: { workItemId?: string } }).workAssignment : undefined;
+            return assigned?.workItemId === binding.workItemId;
+          });
+          if (!supported) throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage lacks accepted independent evidence", { stageId: stage.id });
+          for (const review of acceptedReviews.filter(item => item.verificationId === supported.id)) {
+            const event = this.database.prepare(`
+              SELECT sequence FROM store_events WHERE kind = 'verification.reviewed' AND entity_id = ? LIMIT 1
+            `).get(review.id) as SQLiteRow | undefined;
+            if (!event) throw new ProductStoreError("PRODUCT_STORE_CORRUPT", "Accepted verification lacks its review event");
+            finalReviewSequence = Math.max(finalReviewSequence, integer(event, "sequence"));
+          }
+        }
+        const latestRunInput = this.database.prepare(`
+          SELECT COALESCE(MAX(sequence), 0) AS sequence FROM store_events
+          WHERE task_id = ? AND kind = 'sessionRun.prepared'
+            AND json_extract(payload_json, '$.rawInputId') IS NOT NULL
+        `).get(taskId) as SQLiteRow;
+        const latestUserSubmission = this.database.prepare(`
+          SELECT COALESCE(MAX(first_sequence), 0) AS sequence FROM (
+            SELECT MIN(sequence) AS first_sequence FROM store_events
+            WHERE task_id = ? AND kind = 'collaboration.messageChanged'
+              AND json_extract(payload_json, '$.author') = 'user'
+            GROUP BY json_extract(payload_json, '$.originRawInputId')
+          )
+        `).get(taskId) as SQLiteRow;
+        const goalChange = this.database.prepare(`
+          SELECT COALESCE(MAX(sequence), 0) AS sequence FROM store_events
+          WHERE task_id = ? AND kind = 'task.goalUpdated'
+        `).get(taskId) as SQLiteRow;
+        const latestInputSequence = Math.max(integer(latestRunInput, "sequence"),
+          integer(latestUserSubmission, "sequence"));
+        const reportPreparedSequence = integer(reportPrepared, "sequence");
+        if (reportPreparedSequence <= finalReviewSequence
+          || reportPreparedSequence < latestInputSequence
+          || reportPreparedSequence <= integer(goalChange, "sequence")) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Coordinator report predates final review, current input, or Task Goal");
+        }
+        const reportBinding: TaskWorkflowReportBinding = {
+          runId, workflowId: previous.workflowId, version: previous.version,
+          coordinatorReportId, goalRevision: this.taskGoalRevision(taskId),
+          latestInputSequence, finalReviewSequence, createdAt: now,
+        };
+        this.database.prepare(`
+          INSERT INTO task_workflow_reports(
+            run_id, workflow_id, version, coordinator_report_id, goal_revision,
+            latest_input_sequence, final_review_sequence, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(runId, previous.workflowId, previous.version, coordinatorReportId,
+          reportBinding.goalRevision, latestInputSequence, finalReviewSequence, now);
+        const run: TaskWorkflowRunRecord = {
+          ...previous, status: "completed", completionReportId: coordinatorReportId,
+          revision: previous.revision + 1, updatedAt: now, completedAt: now,
+        };
+        this.database.prepare(`
+          UPDATE task_workflow_runs
+          SET status = 'completed', completion_report_id = ?, revision = ?, updated_at = ?, completed_at = ?
+          WHERE id = ?
+        `).run(coordinatorReportId, run.revision, now, now, runId);
+        return { value: { run, reportBinding }, event: {
+          kind: "taskWorkflow.completed", entityKind: "taskWorkflowRun", entityId: runId, taskId,
+          payload: { workflowId: run.workflowId, runId, version: run.version, coordinatorReportId,
+            goalRevision: reportBinding.goalRevision, latestInputSequence, finalReviewSequence },
+        } };
+      });
   }
 
   async createTaskPlan(input: {
@@ -5141,6 +6217,10 @@ export class ProductStore {
         `).get(workItemId, taskId) as SQLiteRow | undefined;
         if (!row) throw new ProductStoreError("NOT_FOUND", "Task Work Item does not belong to this Task", { taskId, workItemId });
         const current = taskWorkItem(row);
+        if ((state !== undefined || ownerAssignmentId !== undefined || details !== undefined)
+          && this.database.prepare("SELECT run_id FROM task_workflow_work_items WHERE work_item_id = ? LIMIT 1").get(workItemId)) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Workflow-bound Work Item state and ownership require the Task execution and evidence path");
+        }
         if (readRouteWork(current.details) && (state !== undefined || ownerAssignmentId !== undefined || details !== undefined) || readRouteWork(details)) {
           throw new ProductStoreError("INVALID_ARGUMENT", "路线工作项的状态、依赖和归属由派发与验收流程维护");
         }
@@ -5718,7 +6798,10 @@ export class ProductStore {
 
   async prepareSessionRun(input: {
     requestId: string;
+    clientPromptId?: string;
     collaborationMessageId?: string;
+    workflowReportRunId?: string;
+    workflowDraft?: TaskWorkflowDraftInput;
     pathAction?:NativeSessionPathAction;
     preparedPathId?:string;
     effectiveMessage?:string;
@@ -5739,6 +6822,7 @@ export class ProductStore {
     modelId?: string;
     roleRevision: string;
     contextRevision: number;
+    expectedTaskRevision?: number;
     profileSnapshot: Record<string, unknown>;
     tools: Array<{ name: string; description: string; parameters: unknown }>;
     toolsWritable: boolean;
@@ -5747,6 +6831,7 @@ export class ProductStore {
     importedHistoryReceipt?: ImportedSessionHistoryReceipt;
   }): Promise<PreparedSessionRun> {
     const taskId = requiredString(input.taskId, "taskId", 200);
+    const clientPromptId=input.clientPromptId===undefined?undefined:requiredString(input.clientPromptId,"clientPromptId",128);
     const scope = normalizedTaskScope(input.scope);
     const sessionId = requiredString(input.sessionId, "sessionId", 200);
     const runtimeId = requiredString(input.runtimeId, "runtimeId", 200);
@@ -5755,6 +6840,7 @@ export class ProductStore {
       : requiredString(input.agentRunId, "agentRunId", 200);
     const workspaceId = requiredString(input.workspaceId, "workspaceId", 200);
     const contextRevision = requiredRevision(input.contextRevision, "contextRevision");
+    const expectedTaskRevision=input.expectedTaskRevision===undefined?undefined:requiredRevision(input.expectedTaskRevision,"expectedTaskRevision");
     if (contextRevision < 1) {
       throw new ProductStoreError("INVALID_ARGUMENT", "contextRevision must be at least 1");
     }
@@ -5762,6 +6848,7 @@ export class ProductStore {
     const effectiveMessage=input.effectiveMessage??attachmentPrompt(message,this.attachmentsForIds(input.managedAttachmentIds??[]),this.layout);
     const inputSources=inputSourceReceipts(input.inputSources);
     const summaryReceipt = input.taskSummary === undefined ? undefined : normalizedTaskSummaryReceipt(input.taskSummary);
+    const workflowDraft = input.workflowDraft === undefined ? undefined : normalizedWorkflowDraft(input.workflowDraft);
     if(typeof effectiveMessage!=="string")throw new ProductStoreError("INVALID_ARGUMENT","生效输入无效");
     if(effectiveMessage.length>200_000)throw new ProductStoreError("INVALID_ARGUMENT","本次提交加附件引用超过长度限制。");
     let attachmentRefs=[...input.attachmentRefs];
@@ -5840,7 +6927,10 @@ export class ProductStore {
     const params = {
       taskId,
       scope,
+      clientPromptId: clientPromptId ?? null,
       collaborationMessageId: input.collaborationMessageId ?? null,
+      workflowReportRunId: input.workflowReportRunId ?? null,
+      workflowDraft: workflowDraft ?? null,
       pathAction:input.pathAction??null,preparedPathId:input.preparedPathId??null,
       sessionId,
       runtimeId,
@@ -5851,6 +6941,7 @@ export class ProductStore {
       effectiveMessage,inputSources,
       ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}),
       contextRevision,
+      expectedTaskRevision:expectedTaskRevision??null,
       systemPromptDigest: input.systemPromptDigest,
       toolNames: input.tools.map((tool) => tool.name),
     };
@@ -5862,18 +6953,21 @@ export class ProductStore {
       (_storeRevision, now) => {
         const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
         const sessionRow = this.database.prepare(`
-          SELECT id FROM sessions WHERE id = ? AND task_id = ?
-        `).get(sessionId, taskId);
+          SELECT id, kind FROM sessions WHERE id = ? AND task_id = ?
+        `).get(sessionId, taskId) as SQLiteRow | undefined;
         if (!taskRow || !sessionRow) {
           throw new ProductStoreError("NOT_FOUND", "Session Run target does not exist", { taskId, sessionId });
         }
         if (JSON.stringify(task(taskRow).scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Session Run Task Scope changed before preparation");
         }
+        if (expectedTaskRevision!==undefined && integer(taskRow,"revision")!==expectedTaskRevision) {
+          throw new ProductStoreError("REVISION_CONFLICT","Task Goal or Task metadata changed before this prompt could start");
+        }
         if (summaryReceipt) {
           const saved = this.taskSummaryHistory(taskId).find(item => item.revision === summaryReceipt.revision);
           if (!saved || !saved.current || saved.id !== summaryReceipt.id || saved.digest !== summaryReceipt.digest || saved.taskId !== summaryReceipt.taskId) {
-            throw new ProductStoreError("REVISION_CONFLICT", "任务摘要版本已变化，请重新准备本轮输入");
+            throw new ProductStoreError("REVISION_CONFLICT", "任务摘要版本已变化，请重新准备本轮输入",{reasonCode:"TASK_SUMMARY_STALE"});
           }
         }
         for(const id of input.managedAttachmentIds??[]){
@@ -5940,6 +7034,18 @@ export class ProductStore {
         const toolRevision = typeof toolRevisionRow?.revision === "number" ? toolRevisionRow.revision : 1;
         const collaboration = input.collaborationMessageId ? this.collaborationMessages(taskId).find(item=>item.id===input.collaborationMessageId&&item.targetSessionId===sessionId&&item.targetAgentRunId===agentRunId&&item.state==="delivering"&&item.text===message) : undefined;
         if(input.collaborationMessageId&&!collaboration) throw new ProductStoreError("INVALID_ARGUMENT","协作来源与本次输入不一致");
+        if (workflowDraft && (collaboration || input.pathAction || input.workflowReportRunId
+          || text(sessionRow, "kind") !== "coordination"
+          || !agentRunId || !this.database.prepare(`
+            SELECT id FROM agent_runs WHERE id = ? AND task_id = ? AND session_id = ? AND role = 'coordinator'
+          `).get(agentRunId, taskId, sessionId))) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "Workflow draft must originate from one direct Coordinator prompt");
+        }
+        const workflowReport = input.workflowReportRunId
+          ? this.workflowReportContext(taskId,
+            requiredString(input.workflowReportRunId, "workflowReportRunId", 200),
+            requiredString(agentRunId, "agentRunId", 200), input.collaborationMessageId)
+          : undefined;
         const generatedInput=collaboration&&collaboration.author!=="user";
         const sourceRaw = collaboration ? this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(collaboration.originRawInputId,taskId) as SQLiteRow|undefined : undefined;
         if(collaboration&&!sourceRaw) throw new ProductStoreError("INVALID_ARGUMENT","协作输入缺少发起任务的用户原文");
@@ -5958,6 +7064,17 @@ export class ProductStore {
             attachment_refs_json, source_kind, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(rawInputId, taskId, sessionId, ordinal, message, canonicalJSON(attachmentRefs), input.pathAction?.kind==="editUser"?"edit_and_rerun":input.pathAction?"continue_path":"user_submit", now);
+        let workflow: TaskWorkflowRecord | undefined;
+        if (workflowDraft) {
+          workflow = { id: `workflow-${randomUUID()}`, taskId, originRawInputId: rawInputId,
+            currentVersion: 1, revision: 1, createdAt: now, updatedAt: now };
+          this.database.prepare(`
+            INSERT INTO task_workflows(id,task_id,origin_raw_input_id,current_version,revision,created_at,updated_at)
+            VALUES (?,?,?,1,1,?,?)
+          `).run(workflow.id, taskId, rawInputId, now, now);
+          this.insertWorkflowVersion(workflow.id, 1, rawInputId, this.taskGoalRevision(taskId),
+            workflowDraft.goal, workflowDraft.constraints, [], now);
+        }
         if(input.pathAction){
           if(input.preparedPathId){if(!this.database.prepare("SELECT id FROM session_paths WHERE session_id=? AND id=? AND is_current=1").get(sessionId,input.preparedPathId))throw new ProductStoreError("REVISION_CONFLICT","新路径已改变，输入没有被发送");}
           else this.branchNativePath(sessionId,input.pathAction,now);
@@ -6019,6 +7136,7 @@ export class ProductStore {
             ...(inputSources.length?{inputSources}:{}),
             ...(input.pathAction?{pathAction:input.pathAction}:{}),
             ...(collaboration?{collaborationSource:{messageId:collaboration.id,author:collaboration.author,sourceSessionId:collaboration.sourceSessionId}}:{}),
+            ...(workflowReport ? { workflowReport } : {}),
             taskContextRevision: contextRevision,
             ...(agentRunId && this.memberWorkScope(agentRunId) ? { workAssignment: this.memberWorkScope(agentRunId) } : {}),
             promptSources,
@@ -6138,6 +7256,7 @@ export class ProductStore {
         );
         const value = {
           rawInputId,
+          ...(workflow ? { workflow } : {}),
           userEntryId,
           effectiveInputId,
           runtimeEnvironmentId,
@@ -6153,7 +7272,7 @@ export class ProductStore {
             entityKind: "sessionRun",
             entityId: sessionRunId,
             taskId,
-            payload: { ...value, sessionId, ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}) },
+            payload: { ...value, sessionId, ...(clientPromptId?{clientPromptId}:{}), ...(summaryReceipt ? { taskSummary: summaryReceipt } : {}) },
           },
         };
       },
@@ -6284,8 +7403,8 @@ export class ProductStore {
     );
   }
 
-  async replayAdaptiveTeam(requestId:string,taskId:string,scope:TaskScope,coordinatorAgentRunId:string,members:Array<{profileId:string;title:string;taskPacket:Record<string,unknown>}>):Promise<CreatedTeamRun|undefined> {
-    return this.replayReceipt("teamRun.create",requestId,{taskId,scope,members,coordinatorAgentRunId});
+  async replayAdaptiveTeam(requestId:string,taskId:string,scope:TaskScope,coordinatorAgentRunId:string,members:Array<{profileId:string;title:string;taskPacket:Record<string,unknown>}>,workflowRunId?:string):Promise<CreatedTeamRun|undefined> {
+    return this.replayReceipt("teamRun.create",requestId,{taskId,scope,members,coordinatorAgentRunId,...(workflowRunId?{workflowRunId}:{})});
   }
 
   async createTeamRun(input: {
@@ -6293,6 +7412,8 @@ export class ProductStore {
     expectedStoreRevision?: number;
     /** Internal authority from the bound Coordinator Runtime; not a client parameter. */
     coordinatorAgentRunId?: string;
+    /** Bound Coordinator may attach members to explicit stages of an active Task Workflow. */
+    workflowRunId?: string;
     taskId: string;
     scope: TaskScope;
     members: Array<{
@@ -6311,20 +7432,35 @@ export class ProductStore {
       const title = requiredCredentialFreeString(member.title, `members[${index}].title`, 200).trim();
       stableValue(member.taskPacket);
       assertCredentialFreeValue(member.taskPacket, `members[${index}].taskPacket`);
-      if (["routeBinding", "currentWorkItemId", "currentWorkRevision"].some(key => key in member.taskPacket)) throw new ProductStoreError("INVALID_ARGUMENT", "成员路线和工作项绑定由 Host 根据实际计划生成");
+      if (["routeBinding", "workflowBinding", "currentWorkItemId", "currentWorkRevision"].some(key => key in member.taskPacket)) throw new ProductStoreError("INVALID_ARGUMENT", "成员路线和工作项绑定由 Host 根据实际计划生成");
       return { profileId, title, taskPacket: member.taskPacket };
     });
     return await this.mutate(
       "teamRun.create",
       input.requestId,
       input.expectedStoreRevision,
-      { taskId, scope, members: input.coordinatorAgentRunId ? members.map(member=>{const {modelDecision,resolvedModelCandidates,workspacePolicy,workspaceRootDigest,sourceSessionId,originRawInputId,...packet}=member.taskPacket;return {...member,taskPacket:packet};}) : members, ...(input.coordinatorAgentRunId ? { coordinatorAgentRunId: input.coordinatorAgentRunId } : {}) },
+      { taskId, scope, members: input.coordinatorAgentRunId ? members.map(member=>{const {modelDecision,resolvedModelCandidates,workspacePolicy,workspaceRootDigest,sourceSessionId,originRawInputId,...packet}=member.taskPacket;return {...member,taskPacket:packet};}) : members, ...(input.coordinatorAgentRunId ? { coordinatorAgentRunId: input.coordinatorAgentRunId } : {}), ...(input.workflowRunId ? { workflowRunId: input.workflowRunId } : {}) },
       (_storeRevision, now) => {
         const taskRow = this.database.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as SQLiteRow | undefined;
         if (!taskRow) throw new ProductStoreError("NOT_FOUND", "Team Run Task does not exist", { taskId });
         const taskRecord = task(taskRow);
         if (JSON.stringify(taskRecord.scope) !== JSON.stringify(scope)) {
           throw new ProductStoreError("REVISION_CONFLICT", "Team Run Task Scope changed before creation");
+        }
+        const activeWorkflowRow = this.database.prepare("SELECT * FROM task_workflow_runs WHERE task_id = ? AND status = 'active' LIMIT 1").get(taskId) as SQLiteRow | undefined;
+        const activeWorkflow = activeWorkflowRow ? taskWorkflowRun(activeWorkflowRow) : undefined;
+        if (activeWorkflow) this.assertWorkflowGoalCurrent(activeWorkflow.workflowId, activeWorkflow.version, taskId);
+        if (activeWorkflow?.id !== input.workflowRunId || input.workflowRunId && (!activeWorkflow || !input.coordinatorAgentRunId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "A Workflow stage delegation requires its active Run and bound Coordinator");
+        }
+        if (!activeWorkflow && this.database.prepare(`
+          SELECT t.id FROM team_runs t
+          JOIN agent_assignments a ON a.team_run_id = t.id AND a.assignment_kind = 'member'
+          JOIN task_workflow_runs w ON w.id = json_extract(a.task_packet_json, '$.workflowBinding.workflowRunId')
+          WHERE t.task_id = ? AND t.status IN ('prepared', 'active', 'waiting') AND w.status = 'stopped'
+          LIMIT 1
+        `).get(taskId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Stopped Workflow still has members finishing their stage");
         }
         const coordination = this.database.prepare(`
           SELECT * FROM sessions WHERE task_id = ? AND kind = 'coordination'
@@ -6356,6 +7492,83 @@ export class ProductStore {
           if (!owner) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以创建成员");
           if (memberProfiles.some(profile=>profile.role === "coordinator")) throw new ProductStoreError("INVALID_ARGUMENT", "成员不能创建另一个任务协调者");
         }
+        const workflowAssignments = members.map((member, index) => {
+          if (!activeWorkflow) {
+            if (member.taskPacket.workflowStageId !== undefined || member.taskPacket.workflowPurpose !== undefined) {
+              throw new ProductStoreError("INVALID_ARGUMENT", "No active Workflow Run owns this stage delegation");
+            }
+            return undefined;
+          }
+          const stageId = requiredString(member.taskPacket.workflowStageId, `members[${index}].workflowStageId`, 100);
+          const purpose = member.taskPacket.workflowPurpose ?? "execute";
+          if (purpose !== "execute" && purpose !== "verify") {
+            throw new ProductStoreError("INVALID_ARGUMENT", "Workflow member purpose must be execute or verify");
+          }
+          if (purpose === "verify" && memberProfiles[index]?.role !== "verifier"
+            || purpose === "execute" && memberProfiles[index]?.role === "verifier") {
+            throw new ProductStoreError("INVALID_ARGUMENT", "Workflow verification needs a verifier; stage execution needs an execution member");
+          }
+          if (member.taskPacket.reviewWorkItemId || member.taskPacket.route &&
+            (member.taskPacket.route as { purpose?: string }).purpose !== "independent") {
+            throw new ProductStoreError("INVALID_ARGUMENT", "Workflow stage delegation cannot also claim route execution or unrelated rework");
+          }
+          const stage = this.workflowStages(activeWorkflow.workflowId, activeWorkflow.version)
+            .find(item => item.id === stageId);
+          if (!stage) throw new ProductStoreError("NOT_FOUND", "Workflow stage does not belong to its active Run");
+          const binding = this.database.prepare(`
+            SELECT work_item_id FROM task_workflow_work_items WHERE run_id = ? AND stage_id = ?
+          `).get(activeWorkflow.id, stageId) as SQLiteRow | undefined;
+          const workItemId = typeof binding?.work_item_id === "string" ? binding.work_item_id : undefined;
+          if (purpose === "verify") {
+            if (!workItemId) throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage has no execution result to verify");
+            const subject = this.database.prepare(`
+              SELECT i.state, g.id AS agent_run_id, g.status AS agent_status
+              FROM task_work_items i
+              JOIN agent_assignments a ON a.id = i.owner_assignment_id
+              JOIN agent_runs g ON g.id = a.agent_run_id
+              WHERE i.id = ? AND i.task_id = ?
+            `).get(workItemId, taskId) as SQLiteRow | undefined;
+            if (!subject || text(subject, "state") !== "in_progress" || text(subject, "agent_status") !== "completed"
+              || !this.database.prepare(`
+                SELECT id FROM agent_reports WHERE agent_run_id = ? AND report_kind = 'member' LIMIT 1
+              `).get(subject.agent_run_id as string)) {
+              throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage execution must finish with a report before verification");
+            }
+            return { stageId, purpose, targetWorkItemId: workItemId, version: activeWorkflow.version };
+          }
+          if (workItemId) {
+            const work = this.database.prepare("SELECT state, owner_assignment_id FROM task_work_items WHERE id = ? AND task_id = ?")
+              .get(workItemId, taskId) as SQLiteRow | undefined;
+            const retry = work && text(work, "state") === "blocked" && typeof work.owner_assignment_id === "string"
+              ? this.database.prepare(`
+                SELECT g.id, g.status FROM agent_assignments a JOIN agent_runs g ON g.id = a.agent_run_id
+                WHERE a.id = ? AND g.task_id = ?
+              `).get(work.owner_assignment_id, taskId) as SQLiteRow | undefined
+              : undefined;
+            const safeRetry = !!retry && ["aborted", "failed", "interrupted"].includes(text(retry, "status"))
+              && !this.database.prepare(`
+                SELECT id FROM operation_attempts WHERE agent_run_id = ? AND status = 'unknown' LIMIT 1
+              `).get(text(retry, "id"));
+            if (!work || !(text(work, "state") === "pending" && !work.owner_assignment_id || safeRetry)) {
+              throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage already has work in progress or a completed result");
+            }
+          }
+          for (const dependency of stage.dependsOn) {
+            const previous = this.database.prepare(`
+              SELECT i.state FROM task_workflow_work_items b
+              JOIN task_work_items i ON i.id = b.work_item_id
+              WHERE b.run_id = ? AND b.stage_id = ?
+            `).get(activeWorkflow.id, dependency) as SQLiteRow | undefined;
+            if (!previous || text(previous, "state") !== "completed") {
+              throw new ProductStoreError("REVISION_CONFLICT", "Workflow stage dependency is not verified complete", { stageId, dependency });
+            }
+          }
+          return { stageId, purpose, workItemId, version: activeWorkflow.version };
+        });
+        const stageIds = workflowAssignments.flatMap(item => item ? [item.stageId] : []);
+        if (new Set(stageIds).size !== stageIds.length) {
+          throw new ProductStoreError("INVALID_ARGUMENT", "One Workflow stage may have only one member assignment in this dispatch");
+        }
         const reviewWorkIds = members.map((member,index) => {
           const value = member.taskPacket.reviewWorkItemId;
           if (value === undefined) return undefined;
@@ -6376,12 +7589,43 @@ export class ProductStore {
           return id;
         });
         const routeBindings = members.map((member,index) => reviewWorkIds[index] ? undefined : this.resolveRouteBinding(taskId, member.taskPacket.route));
-        const assignedWork = routeBindings.flatMap(binding => binding?.purpose === "execute" && binding.workItemId ? [binding.workItemId] : []).concat(reviewWorkIds.filter((id): id is string => !!id));
+        const assignedWork = routeBindings.flatMap(binding => binding?.purpose === "execute" && binding.workItemId ? [binding.workItemId] : [])
+          .concat(reviewWorkIds.filter((id): id is string => !!id))
+          .concat(workflowAssignments.flatMap(item => item?.workItemId ? [item.workItemId] : []));
         if (new Set(assignedWork).size !== assignedWork.length) throw new ProductStoreError("INVALID_ARGUMENT", "同一工作项不能在同批派发给多个执行成员");
         let activeTeam = this.database.prepare(`
           SELECT * FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
         `).get(taskId) as SQLiteRow|undefined;
-        if(!activeTeam&&input.coordinatorAgentRunId) activeTeam=this.database.prepare("SELECT t.* FROM team_runs t WHERE t.task_id=? AND t.coordinator_agent_run_id=? AND EXISTS (SELECT 1 FROM agent_assignments a WHERE a.team_run_id=t.id AND a.assignment_kind='coordinator' AND json_extract(a.task_packet_json,'$.adaptive')=1) ORDER BY t.created_at DESC,t.id DESC LIMIT 1").get(taskId,input.coordinatorAgentRunId) as SQLiteRow|undefined;
+        const workflowRunId = activeWorkflow?.id ?? null;
+        const ownsWorkflowRun = (teamRunId: string): boolean => {
+          const ownership = this.database.prepare(`
+            SELECT
+              EXISTS(SELECT 1 FROM agent_assignments a WHERE a.team_run_id = ?
+                AND a.assignment_kind = 'member'
+                AND json_extract(a.task_packet_json, '$.workflowBinding.workflowRunId') = ?) AS matched,
+              EXISTS(SELECT 1 FROM agent_assignments a WHERE a.team_run_id = ?
+                AND a.assignment_kind = 'member'
+                AND json_extract(a.task_packet_json, '$.workflowBinding.workflowRunId') IS NOT ?) AS foreign_member
+          `).get(teamRunId, workflowRunId, teamRunId, workflowRunId) as SQLiteRow;
+          return workflowRunId ? ownership.matched === 1 && ownership.foreign_member === 0
+            : ownership.foreign_member === 0;
+        };
+        if(activeTeam && !ownsWorkflowRun(text(activeTeam,"id")))
+          throw new ProductStoreError("REVISION_CONFLICT","活动团队与当前工作流运行不属于同一轮，不能追加成员");
+        if(!activeTeam&&input.coordinatorAgentRunId) {
+          activeTeam=this.database.prepare(`
+            SELECT t.* FROM team_runs t WHERE t.task_id = ? AND t.coordinator_agent_run_id = ?
+              AND EXISTS (SELECT 1 FROM agent_assignments a WHERE a.team_run_id=t.id
+                AND a.assignment_kind='coordinator' AND json_extract(a.task_packet_json,'$.adaptive')=1)
+              AND NOT EXISTS (SELECT 1 FROM agent_assignments a WHERE a.team_run_id=t.id
+                AND a.assignment_kind='member'
+                AND json_extract(a.task_packet_json,'$.workflowBinding.workflowRunId') IS NOT ?)
+              AND (? IS NULL OR EXISTS (SELECT 1 FROM agent_assignments a WHERE a.team_run_id=t.id
+                AND a.assignment_kind='member'
+                AND json_extract(a.task_packet_json,'$.workflowBinding.workflowRunId') = ?))
+            ORDER BY t.created_at DESC,t.id DESC LIMIT 1
+          `).get(taskId,input.coordinatorAgentRunId,workflowRunId,workflowRunId,workflowRunId) as SQLiteRow|undefined;
+        }
         if (activeTeam && !input.coordinatorAgentRunId) {
           throw new ProductStoreError("REVISION_CONFLICT", "Task already has an active Team Run", { taskId });
         }
@@ -6491,8 +7735,17 @@ export class ProductStore {
           const profile = memberProfiles[index]!;
           const routeBinding = routeBindings[index];
           const reviewWorkItemId = reviewWorkIds[index];
-          const workItemId = reviewWorkItemId ?? (routeBinding?.purpose === "execute" ? routeBinding.workItemId! : `work-item-${randomUUID()}`);
-          const taskPacket = { ...member.taskPacket, ...(member.taskPacket.route || reviewWorkItemId ? { currentWorkItemId: workItemId, currentWorkRevision: 1 } : {}), ...(routeBinding ? { routeBinding } : {}) };
+          const workflowAssignment = workflowAssignments[index];
+          const workItemId = workflowAssignment?.workItemId ?? reviewWorkItemId ?? (routeBinding?.purpose === "execute" ? routeBinding.workItemId! : `work-item-${randomUUID()}`);
+          const workflowBinding = workflowAssignment && activeWorkflow
+            ? { workflowRunId: activeWorkflow.id, workflowId: activeWorkflow.workflowId,
+              version: activeWorkflow.version, stageId: workflowAssignment.stageId, workItemId,
+              purpose: workflowAssignment.purpose,
+              ...(workflowAssignment.purpose === "verify" ? { targetWorkItemId: workflowAssignment.targetWorkItemId } : {}) }
+            : undefined;
+          const taskPacket = { ...member.taskPacket,
+            ...(member.taskPacket.route || reviewWorkItemId || workflowBinding ? { currentWorkItemId: workItemId, currentWorkRevision: 1 } : {}),
+            ...(routeBinding ? { routeBinding } : {}), ...(workflowBinding ? { workflowBinding } : {}) };
           const childSession: DCodeSessionRecord = {
             id: `session-${randomUUID()}`,
             taskId,
@@ -6569,8 +7822,14 @@ export class ProductStore {
             now,
             now,
           );
-          if (routeBinding?.purpose === "execute" && routeBinding.workItemId || reviewWorkItemId) {
+          if (routeBinding?.purpose === "execute" && routeBinding.workItemId || reviewWorkItemId || workflowAssignment?.purpose === "execute" && workflowAssignment.workItemId) {
             this.database.prepare("UPDATE task_work_items SET owner_assignment_id=?,state='in_progress',revision=revision+1,updated_at=? WHERE id=? AND task_id=?").run(assignment.id, now, workItemId, taskId);
+          } else if (workflowBinding) {
+            const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
+            this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)")
+              .run(workItemId,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON({ workflowBinding }),now,now);
+            if (workflowBinding.purpose === "execute") this.database.prepare("INSERT INTO task_workflow_work_items(run_id,stage_id,work_item_id,created_at) VALUES (?,?,?,?)")
+              .run(activeWorkflow!.id,workflowBinding.stageId,workItemId,now);
           } else if(input.coordinatorAgentRunId) {
             const ordinal=this.database.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM task_work_items WHERE task_id=?").get(taskId) as SQLiteRow;
             this.database.prepare("INSERT INTO task_work_items(id,task_id,ordinal,title,state,owner_assignment_id,details_json,revision,created_at,updated_at) VALUES (?,?,?,?,'in_progress',?,?,1,?,?)").run(workItemId,taskId,integer(ordinal,"ordinal"),member.title,assignment.id,canonicalJSON(taskPacket),now,now);
@@ -6607,6 +7866,13 @@ export class ProductStore {
       const owner = this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND task_id=? AND role='coordinator'").get(input.coordinatorAgentRunId, input.taskId);
       const assignment = this.database.prepare("SELECT a.* FROM agent_assignments a JOIN agent_runs g ON g.id=a.agent_run_id WHERE a.agent_run_id=? AND a.task_id=? AND a.assignment_kind='member' AND g.role<>'coordinator' ORDER BY a.created_at DESC,a.rowid DESC LIMIT 1").get(input.agentRunId, input.taskId) as SQLiteRow | undefined;
       if (!owner || !assignment) throw new ProductStoreError("INVALID_ARGUMENT", "只有本任务协调者可以续用已有成员");
+      const latestWorkflow = this.database.prepare(`
+        SELECT status FROM task_workflow_runs WHERE task_id = ?
+        ORDER BY created_at DESC, rowid DESC LIMIT 1
+      `).get(input.taskId) as SQLiteRow | undefined;
+      if (latestWorkflow && ["active", "stopped", "interrupted"].includes(text(latestWorkflow,"status"))) {
+        throw new ProductStoreError("REVISION_CONFLICT", "当前工作流尚未收口；旧普通成员需在收口后明确核对并重新交办");
+      }
       if (!this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(input.originRawInputId,input.taskId)
         || !this.database.prepare("SELECT id FROM agent_runs WHERE id=? AND session_id=?").get(input.coordinatorAgentRunId,input.sourceSessionId)) throw new ProductStoreError("INVALID_ARGUMENT", "继续工作必须保留当前任务原文与协调会话来源");
       if (this.database.prepare("SELECT id FROM session_runs WHERE agent_run_id=? AND status IN ('prepared','running') LIMIT 1").get(input.agentRunId)
@@ -6618,7 +7884,7 @@ export class ProductStore {
       if (this.taskRouteContext(input.taskId)?.inputCurrent === false) throw new ProductStoreError("REVISION_CONFLICT", "请先核对最新用户输入再续用成员");
       const binding = this.resolveRouteBinding(input.taskId, input.route);
       const workItemId = binding?.purpose === "execute" ? binding.workItemId! : `work-item-${randomUUID()}`;
-      const { routeBinding: _oldBinding, ...retained } = previous;
+      const { routeBinding: _oldBinding, workflowBinding: _oldWorkflowBinding, ...retained } = previous;
       const packet = { ...retained, instruction: input.instruction, acceptance: input.acceptance, sourceSessionId: input.sourceSessionId, originRawInputId: input.originRawInputId, route: input.route, currentWorkItemId: workItemId, currentWorkRevision: (previous.currentWorkRevision ?? 1) + 1, ...(binding ? { routeBinding: binding } : {}) };
       const assignmentRevision = integer(assignment,"revision") + 1;
       this.database.prepare("UPDATE agent_assignments SET task_packet_json=?,revision=?,updated_at=? WHERE id=?").run(canonicalJSON(packet), assignmentRevision, now, text(assignment,"id"));
@@ -7122,6 +8388,15 @@ export class ProductStore {
           WHERE (team_run_id = ? OR id = (SELECT coordinator_agent_run_id FROM team_runs WHERE id = ?))
             AND status IN ('prepared', 'running', 'waiting')
         `).run(input.status, now, now, teamRunId, teamRunId);
+        this.database.prepare(`
+          UPDATE task_work_items SET state = 'blocked', revision = revision + 1, updated_at = ?
+          WHERE state = 'in_progress' AND id IN (
+            SELECT b.work_item_id FROM task_workflow_work_items b
+            JOIN task_work_items i ON i.id = b.work_item_id
+            JOIN agent_assignments a ON a.id = i.owner_assignment_id
+            WHERE a.team_run_id = ? AND a.assignment_kind = 'member'
+          )
+        `).run(now, teamRunId);
         this.database.prepare(`
           UPDATE session_runs
           SET status = ?, revision = revision + 1, completed_at = ?, updated_at = ?
@@ -7632,6 +8907,11 @@ export class ProductStore {
           SELECT id FROM team_runs WHERE task_id = ? AND status IN ('prepared', 'active', 'waiting')
         `).get(taskId);
         if (activeTeam) throw new ProductStoreError("REVISION_CONFLICT", "Task still has an active Team Run");
+        if (answer.outcome === "accepted" && this.database.prepare(`
+          SELECT id FROM task_workflow_runs WHERE task_id = ? AND status = 'active' LIMIT 1
+        `).get(taskId)) {
+          throw new ProductStoreError("REVISION_CONFLICT", "Active Workflow must be completed or stopped before Task acceptance");
+        }
 
         this.database.prepare(`
           UPDATE agent_requests
@@ -8341,6 +9621,7 @@ export class ProductStore {
               assistantEntryId,
               sourceEntryId: input.assistantSourceEntryId ?? null,
               ...(this.sessionWorkScope(sessionRunId) ? { workAssignment: this.sessionWorkScope(sessionRunId) } : {}),
+              ...(this.sessionWorkflowReport(sessionRunId) ? { workflowReport: this.sessionWorkflowReport(sessionRunId) } : {}),
             }),
             now,
           );
@@ -8615,6 +9896,7 @@ export class ProductStore {
         const review:CoordinatorReviewRecord={id:`review-${randomUUID()}`,taskId:input.taskId,coordinatorAgentRunId:input.coordinatorAgentRunId,verificationId:verification.id,outcome:input.outcome,reason:input.reason,...(input.strategyChange?{strategyChange:input.strategyChange}:{}),...(input.acknowledgedInputId?{acknowledgedInputId:input.acknowledgedInputId}:{}),createdAt:now};
         const state=input.outcome==="accepted"?"completed":input.outcome==="rework"?(work.owner_assignment_id?"in_progress":"pending"):text(work,"state");
         this.database.prepare("UPDATE task_work_items SET state=?,revision=revision+1,updated_at=? WHERE id=?").run(state,now,verification.workItemId);
+        if (input.outcome === "accepted") this.completeWorkflowVerifierStage(verification, now);
         if(input.outcome==="recheck")this.setAssignedWorkState(verification.verifierAgentRunId,"in_progress",now);
         const affectedAgentRunIds=input.outcome==="rework"&&verification.subjectAgentRunId?this.blockRouteDependents(input.taskId,verification.subjectAgentRunId,input.reason,_revision,now):[];
         return {value:{review,verification,workItemCompleted:input.outcome==="accepted",affectedAgentRunIds},event:{kind:"verification.reviewed",entityKind:"coordinatorReview",entityId:review.id,taskId:input.taskId,payload:review}};
@@ -8645,6 +9927,7 @@ export class ProductStore {
       const reviews=[...this.coordinatorReviews(),review];
       const workItemCompleted=input.outcome==="accepted"&&[...latestByVerifier.values()].every(item=>item.verdict==="pass"&&reviews.some(candidate=>candidate.verificationId===item.id&&candidate.outcome==="accepted"));
       this.setAssignedWorkState(subjectAgentRunId, workItemCompleted ? "completed" : "in_progress", now);
+      if (input.outcome === "accepted" && workItemCompleted) this.completeWorkflowVerifierStage(verification, now);
       if(input.outcome==="recheck") this.setAssignedWorkState(verification.verifierAgentRunId, "in_progress", now);
       const affectedAgentRunIds = input.outcome !== "accepted" ? this.blockRouteDependents(input.taskId, subjectAgentRunId, input.reason, _revision, now) : [];
       if(typeof subjectRun.team_run_id==="string") {
@@ -8660,7 +9943,15 @@ export class ProductStore {
     const rows = this.database.prepare(`SELECT payload_json FROM store_events WHERE sequence IN (
       SELECT MAX(sequence) FROM store_events WHERE kind='collaboration.messageChanged' GROUP BY entity_id
     ) ORDER BY sequence`).all() as SQLiteRow[];
-    const messages=rows.map(row=>JSON.parse(text(row,"payload_json")) as CollaborationMessage).filter(message=>!taskId || message.taskId===taskId);
+    const holds = new Map<string, ReturnType<ProductStore["workflowMessageHold"]>>();
+    const messages=rows.map(row=>JSON.parse(text(row,"payload_json")) as CollaborationMessage)
+      .filter(message=>!taskId || message.taskId===taskId)
+      .map(message=>{
+        if(message.state!=="queued")return message;
+        if(!holds.has(message.targetAgentRunId))holds.set(message.targetAgentRunId,this.workflowMessageHold(message.targetAgentRunId));
+        const hold=holds.get(message.targetAgentRunId);
+        return hold?{...message,state:"paused" as const,error:hold.reason}:message;
+      });
     const orders=this.database.prepare("SELECT payload_json FROM store_events WHERE sequence IN (SELECT MAX(sequence) FROM store_events WHERE kind='collaboration.queueOrdered' GROUP BY entity_id)").all() as SQLiteRow[];
     const ranks=new Map<string,Map<string,number>>();
     for(const row of orders){const order=JSON.parse(text(row,"payload_json")) as {sessionId:string;messageIds:string[]};ranks.set(order.sessionId,new Map(order.messageIds.map((id,index)=>[id,index])));}
@@ -8672,6 +9963,60 @@ export class ProductStore {
       if(pending(a)&&pending(b)){const order=ranks.get(a.targetSessionId);const difference=(order?.get(a.id)??Number.MAX_SAFE_INTEGER)-(order?.get(b.id)??Number.MAX_SAFE_INTEGER);if(difference)return difference;}
       return a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id);
     }));
+  }
+
+  workflowMessageHold(agentRunId: string): { runId: string; reason: string } | undefined {
+    this.assertOpen();
+    const assignment = this.database.prepare(`
+      SELECT id, task_id, team_run_id, task_packet_json FROM agent_assignments
+      WHERE agent_run_id = ? AND assignment_kind = 'member'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(agentRunId) as SQLiteRow | undefined;
+    if (!assignment) return undefined;
+    const binding = (JSON.parse(text(assignment, "task_packet_json")) as {
+      workflowBinding?: { workflowRunId?: string; workItemId?: string };
+    }).workflowBinding;
+    const latest = this.database.prepare(`
+      SELECT id, status FROM task_workflow_runs WHERE task_id = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(text(assignment,"task_id")) as SQLiteRow | undefined;
+    if (!latest) return binding?.workflowRunId
+      ? { runId: binding.workflowRunId, reason: "工作流来源不可用，消息保留待核对" }
+      : undefined;
+    const latestRunId = text(latest,"id"), latestStatus = text(latest,"status");
+    if (binding?.workflowRunId !== latestRunId) {
+      if (latestStatus !== "completed") {
+        return { runId: latestRunId, reason: "本任务工作流正在推进或等待继续，旧成员消息保留待协调者核对" };
+      }
+      const completed = this.database.prepare(`
+        SELECT sequence FROM store_events WHERE kind = 'taskWorkflow.completed' AND entity_id = ?
+        ORDER BY sequence DESC LIMIT 1
+      `).get(latestRunId) as SQLiteRow | undefined;
+      const resumed = this.database.prepare(`
+        SELECT MAX(e.sequence) AS sequence FROM store_events e
+        WHERE (e.kind = 'teamRun.created' AND EXISTS (
+          SELECT 1 FROM json_each(e.payload_json, '$.assignments') item
+          WHERE json_extract(item.value, '$.id') = ?
+        )) OR (e.kind = 'agentAssignment.continued' AND e.entity_id = ?)
+      `).get(text(assignment,"id"),text(assignment,"id")) as SQLiteRow | undefined;
+      if (!completed || !resumed || typeof resumed.sequence !== "number"
+        || integer(resumed,"sequence") <= integer(completed,"sequence")) {
+        return { runId: latestRunId, reason: "旧成员安排早于已结束的工作流，需明确重新交办后再发送" };
+      }
+      return undefined;
+    }
+    if (latestStatus !== "active") {
+      return { runId: latestRunId, reason: "工作流已停止或中断，消息保留至继续后核对" };
+    }
+    const agent = this.database.prepare("SELECT status FROM agent_runs WHERE id = ?")
+      .get(agentRunId) as SQLiteRow | undefined;
+    const work = binding.workItemId ? this.database.prepare("SELECT state FROM task_work_items WHERE id = ?")
+      .get(binding.workItemId) as SQLiteRow | undefined : undefined;
+    if (!agent || ["completed", "failed", "aborted", "interrupted", "unknown"].includes(text(agent, "status"))
+      || !work || ["completed", "blocked", "cancelled"].includes(text(work, "state"))) {
+      return { runId: binding.workflowRunId, reason: "原阶段成员已收口，消息保留待协调者重新指派" };
+    }
+    return undefined;
   }
 
   initialCollaborationMessage(agentRunId:string):CollaborationMessage|undefined{
@@ -8693,9 +10038,11 @@ export class ProductStore {
       const target=this.database.prepare("SELECT * FROM agent_runs WHERE id=? AND task_id=?").get(input.targetAgentRunId,input.taskId) as SQLiteRow|undefined;
       const source=this.database.prepare("SELECT id FROM sessions WHERE id=? AND task_id=?").get(input.sourceSessionId,input.taskId);
       if(!target||!source) throw new ProductStoreError("NOT_FOUND","只能向本任务已创建的成员发送消息");
+      const workflowHold = text(target,"role") === "coordinator" ? undefined : this.workflowMessageHold(input.targetAgentRunId);
       if(input.attachmentIds?.some(id=>!this.attachmentCatalog().some(attachment=>attachment.id===id))) throw new ProductStoreError("NOT_FOUND","附件不存在");
-      if (input.author === "coordinator" && text(target,"role") !== "coordinator") this.assertAgentRouteCurrent(input.targetAgentRunId, true);
-      if(text(target,"role")!=="coordinator" && this.agentRouteIsCurrent(input.targetAgentRunId)) {
+      if (text(target,"role") !== "coordinator" && !workflowHold && (input.author === "coordinator" || input.author === "user"))
+        this.assertAgentRouteCurrent(input.targetAgentRunId, input.author === "coordinator");
+      if(text(target,"role")!=="coordinator" && !workflowHold && this.agentRouteIsCurrent(input.targetAgentRunId)) {
         this.setAssignedWorkState(input.targetAgentRunId, "in_progress", now);
         if(typeof target.team_run_id==="string")this.reopenAdaptiveTeam(target.team_run_id,now);
       }
@@ -8708,8 +10055,9 @@ export class ProductStore {
         const attachments=(input.attachmentIds??[]).map(id=>this.attachmentCatalog().find(item=>item.id===id));
         this.database.prepare("INSERT INTO raw_inputs(id,task_id,session_id,ordinal,submitted_text,attachment_refs_json,source_kind,created_at) VALUES (?,?,?,?,?,?,'user_submit',?)").run(originRawInputId,input.taskId,input.sourceSessionId,integer(ordinal,"ordinal"),input.submittedText??body,canonicalJSON(attachments),now);
       } else if(!originRawInputId||!this.database.prepare("SELECT id FROM raw_inputs WHERE id=? AND task_id=?").get(originRawInputId,input.taskId)) throw new ProductStoreError("INVALID_ARGUMENT","协作消息必须保留发起原文的固定引用");
-      const message:CollaborationMessage={id:`collaboration-${randomUUID()}`,taskId:input.taskId,originRawInputId:originRawInputId!,sourceSessionId:input.sourceSessionId,targetSessionId:text(target,"session_id"),targetAgentRunId:input.targetAgentRunId,author:input.author,text:body,...(input.uiAction?{uiAction:input.uiAction}:{}),...(input.acknowledgedUserMessageId?{acknowledgedUserMessageId:input.acknowledgedUserMessageId}:{}),...(input.deliveryMode?{deliveryMode:input.deliveryMode,targetSessionRunId:input.targetSessionRunId}:{}),...(input.pathAction?{pathAction:input.pathAction}:{}),...(input.attachmentIds?.length?{attachmentIds:input.attachmentIds}:{}),state:"queued",revision:1,createdAt:now,updatedAt:now};
-      return {value:{message},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
+      const message:CollaborationMessage={id:`collaboration-${randomUUID()}`,taskId:input.taskId,originRawInputId:originRawInputId!,sourceSessionId:input.sourceSessionId,targetSessionId:text(target,"session_id"),targetAgentRunId:input.targetAgentRunId,author:input.author,text:body,...(input.uiAction?{uiAction:input.uiAction}:{}),...(input.acknowledgedUserMessageId?{acknowledgedUserMessageId:input.acknowledgedUserMessageId}:{}),...(!workflowHold&&input.deliveryMode?{deliveryMode:input.deliveryMode,targetSessionRunId:input.targetSessionRunId}:{}),...(input.pathAction?{pathAction:input.pathAction}:{}),...(input.attachmentIds?.length?{attachmentIds:input.attachmentIds}:{}),state:"queued",revision:1,createdAt:now,updatedAt:now};
+      const visible=workflowHold?{...message,state:"paused" as const,error:workflowHold.reason}:message;
+      return {value:{message:visible},event:{kind:"collaboration.messageChanged",entityKind:"collaborationMessage",entityId:message.id,taskId:message.taskId,payload:message}};
     });
   }
 
@@ -8786,6 +10134,9 @@ export class ProductStore {
       const previous=this.collaborationMessages().find(message=>message.id===input.id);
       if(!previous) throw new ProductStoreError("NOT_FOUND","协作消息不存在");
       if(previous.revision!==input.expectedRevision) throw new ProductStoreError("REVISION_CONFLICT","消息状态已改变");
+      if(["queued","delivering"].includes(input.state) && this.workflowMessageHold(previous.targetAgentRunId)) {
+        throw new ProductStoreError("REVISION_CONFLICT","工作流或成员尚未恢复，消息保留待核对");
+      }
       const allowed:Record<CollaborationMessageState,CollaborationMessageState[]>={queued:["delivering","paused","cancelled"],delivering:["completed","failed","interrupted"],paused:["queued","cancelled"],interrupted:["cancelled"],completed:[],failed:["cancelled"],cancelled:[]};
       if(!allowed[previous.state].includes(input.state)) throw new ProductStoreError("INVALID_ARGUMENT","不能执行此消息状态变更");
       const message:CollaborationMessage={...previous,state:input.state,revision:previous.revision+1,updatedAt:now,...(input.reply?{reply:requiredCredentialFreeString(input.reply,"reply",200000)}:{}),...(input.error?{error:requiredCredentialFreeString(input.error,"error",2000)}:{})};
@@ -9007,20 +10358,25 @@ export class ProductStore {
   }
 
   async close(): Promise<void> {
+    if (this.closePromise) return await this.closePromise;
     if (this.closed) return;
-    await this.mutationQueue;
-    this.closed = true;
-    let databaseError: unknown;
-    try {
-      this.database.close();
-    } catch (error) {
-      databaseError = error;
-    }
-    try {
-      await this.lease.release();
-    } catch (leaseError) {
-      if (!databaseError) throw leaseError;
-    }
-    if (databaseError) throw databaseError;
+    this.closing = true;
+    this.closePromise = (async () => {
+      await this.mutationQueue;
+      this.closed = true;
+      let databaseError: unknown;
+      try {
+        this.database.close();
+      } catch (error) {
+        databaseError = error;
+      }
+      try {
+        await this.lease.release();
+      } catch (leaseError) {
+        if (!databaseError) throw leaseError;
+      }
+      if (databaseError) throw databaseError;
+    })();
+    await this.closePromise;
   }
 }

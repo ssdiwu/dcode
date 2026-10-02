@@ -2,7 +2,7 @@
 
 状态：Reference Index（参考索引）
 
-既有参考清单上次对齐：2026-08-15；REF-016–021 来源核对：2026-09-24；REF-022–024 论文原文核对及版本借鉴确认：2026-09-26。
+既有参考清单上次对齐：2026-08-15；REF-016–021 来源核对：2026-09-24；REF-022–024 论文原文核对及版本借鉴确认：2026-09-26；ZCode、PI-Desktop、Kimi Code 与 MiniMax Code 的新一轮源码和界面核对：2026-09-28。
 
 ## 权威边界
 
@@ -11,17 +11,21 @@
 - 目标形态以 [`20-产品与交互/`](../20-产品与交互/README.md) 为准。
 - 版本范围与验收以 [`40-版本实施方案/`](../40-版本实施方案/README.md) 为准。
 - 当前实现以源码、测试和 [`10-架构与运行/`](../10-架构与运行/README.md) 为准。
-- “借鉴”默认指学习对象、信息层级和交互机制，不表示接入其运行时、复制其视觉皮肤或增加对应依赖。
+- “借鉴”默认指学习对象、信息层级和交互机制，不表示接入其运行时或新增对应依赖。507 已允许对许可明确的公开共享 React UI 做源码级组件借鉴；实际移植须逐文件核对许可、来源和声明，保留 D Code 的产品语义与品牌资产。
 
 本轮 Web 客户端的代码与 UI 对照见 [ZCode / MiniMax Code 本机对照（2026-09）](ZCode-MiniMax-Code-本机对照-2026-09.md)。
+
+ZCode 可供下一轮逐项选择的用户可见组件见 [ZCode 组件清单与 D Code 对照（2026-09）](ZCode-组件清单与-D-Code-对照-2026-09.md)；这是参考目录，不自动扩大 `0.0.35` 或 `0.0.36` 的需求范围。
+
+2026-10-01 已补[十项候选的源码复核](ZCode-组件清单与-D-Code-对照-2026-09.md#2026-10-01十项候选源码复核)：27 份原文和当前 `0.0.37` 实现对照，校正附件预览／队列已有能力，区分查找与只读文件摘要、历史用量、同 Task 运行历史和需独立运行服务的后续专项。该轮保留研究事实；2026-10-02 507 已确认全部十项与普通 UI／UX 借鉴，正式需求移至 [0.0.38](../40-版本实施方案/0040-0.0.38-工作台体验与-ZCode-共享界面借鉴产品需求.md)和 [0.0.39](../40-版本实施方案/0041-0.0.39-可复用工作流终端与定时自动化产品需求.md)；来源摘要见[清单](assets/zcode-candidate-source-check-2026-10-01.json)。
 
 ## 参考索引
 
 | 编号 | 参考对象 | 类型 | 507 提供的来源 | 当前定位 |
 |---|---|---|---|---|
 | REF-001 | OpenAI Codex 桌面端 | Product UI（产品界面） | 多张界面截图与持续对照反馈 | 工作台主骨架参考 |
-| REF-002 | ZCode | Product UI（产品界面） | [zcode.z.ai/cn](https://zcode.z.ai/cn) | 信息层级参考 |
-| REF-003 | MiniMax Code | Product UI（产品界面） | 本机 `3.0.60` 与[官方本地产品文档](https://agent.minimaxi.com/docs/code/welcome) | 本地工作台、Goal、Agent 与权限交互参考 |
+| REF-002 | ZCode | Product UI + Public Source（产品界面与公开源码） | [zcode.z.ai/cn](https://zcode.z.ai/cn)、[官方仓库](https://github.com/zai-org/ZCode) | “＋”添加面板、共享 React UI、工作台层级与组件级源码借鉴优先来源 |
+| REF-003 | MiniMax Code | Product UI + CLI Source（产品界面与命令行源码） | 本机桌面端、[官方文档](https://agent.minimaxi.com/docs/code/welcome)、[公开 CLI 仓库](https://github.com/MiniMax-AI/minimax-code) | 桌面交互参考；CLI 状态呈现参考，桌面源码未公开于该仓库 |
 | REF-004 | PiDeck | Open-source App（开源应用） | [Skitre/PiDeck](https://github.com/Skitre/PiDeck) | Pi 能力运用与差距检查 |
 | REF-005 | Flue | Agent Harness（智能体宿主） | [withastro/flue](https://github.com/withastro/flue) | 架构参考，不作为 D Code 基座 |
 | REF-006 | Orca | Open-source App（开源应用） | [stablyai/orca](https://github.com/stablyai/orca) | 标签、编辑与预览参考 |
@@ -43,6 +47,8 @@
 | REF-022 | Stellar Colosseum | Research Paper（研究论文） | 507 提供标题截图；[论文 v2](https://arxiv.org/abs/2609.15983v2) | 候选路线、针对性反证、成熟判断与局部回退机制参考 |
 | REF-023 | RRSI | Research Paper（研究论文） | 同一截图；[论文 v2](https://arxiv.org/abs/2609.24972v2) | 有界修改、反证保留及未参与调试任务的评估纪律参考 |
 | REF-024 | Harness-Zero | Research Paper（研究论文） | 同一截图；[论文 v1](https://arxiv.org/abs/2609.24974v1) | 将 Harness 引导行为蒸馏进模型的训练方向参考，未进入版本实施范围 |
+| REF-025 | PI-Desktop | Open-source App（开源桌面应用） | [官网文档](https://pi-docs.aiuo.net/)、[官方仓库](https://github.com/vastsa/PI-Desktop) | Subagent 概览卡、结构化状态与按需过程查看参考 |
+| REF-026 | Kimi Code | Desktop UI + CLI Source（桌面界面与命令行源码） | [桌面端文档](https://www.kimi.com/code/docs/kimi-code-desktop/interface-and-sessions.html)、[公开 CLI 仓库](https://github.com/MoonshotAI/kimi-code) | 后台成员工作条与过程分层参考；公开仓库中的 UI 为 TUI |
 
 ## REF-001 OpenAI Codex 桌面端
 
@@ -55,31 +61,41 @@
 - 把外观、布局等应用级偏好放入独立 Settings（设置）空间；D Code `0.0.1` 先落系统/浅色/深色与真实布局偏好，设置项增长后再引入分类侧栏；
 - 消息下方的继续、重走、复制等就地动作。
 
-**明确不借鉴**：不复制品牌、视觉皮肤、Codex 的 Task（任务）数据模型或任何未由 Pi Session（Pi 会话）支持的隐含语义；不为了像 Codex 而预放权限、账号、语言、插件、环境等尚无真实 D Code 行为的空设置页。
+**明确不借鉴**：不复制品牌或 Codex 的 Task（任务）数据模型，不把其未由 D Code Product Store 支持的状态伪装为已实现；不为了像 Codex 而预放尚无真实 D Code 行为的空设置页。
 
 **证据边界**：507 提供的截图位于会话临时附件中，尚未复制为仓库资产；本条保存已经确认的结构结论，不把截图当成持续可用文件。
 
+**Codex App Server 生图方向（2026-09-28）**：[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)提供 ChatGPT 登录、`turn/start` 和按版本生成协议 Schema；[Codex 图像生成说明](https://learn.chatgpt.com/docs/image-generation)确认内置生图可计入适用订阅的通用用量，[定价说明](https://learn.chatgpt.com/docs/pricing)区分订阅用量与 API Key 计费。本机 `codex-cli 0.157.1` 导出的协议含 `imageGeneration` 事件、图像结果和保存路径；真实订阅认证单图测试已返回[可核对 PNG](assets/codex-app-server-imagegen-poc-2026-09-28.png)，完整边界见 [0.0.37 验证记录](../40-版本实施方案/0036-0.0.37-任务内图像生成与产物归档产品需求.md)。2026-10-01 D Code 本机试验的受管图、预览／附件／导出、重启与固定配置负向检查已通过，见[当前验证](assets/dcode-0.0.37-verification-2026-10-01.md)；精确额度扣减、稳定生产支持、正式分发及 507 本人验收仍须分别成立。它需要独立于现有 Pi SDK 的认证与运行边界；`0.0.36` 仍不加入图像生成。
+
 ## REF-002 ZCode
 
-**D Code 借鉴**：成熟工作台的整体信息层级，包括耐久导航、中央对话、固定输入区，以及靠近工作内容的紧凑活动与进度呈现。
+**D Code 借鉴**：成熟工作台的整体信息层级，包括耐久导航、中央对话、固定输入区，以及靠近工作内容的紧凑活动与进度呈现。2026-09-28 核对官方 `3.14.3` 公布源码 `29628c9`：共享 React UI 中的[成员状态组件](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/components/workflow-timeline/WorkflowAgentPill.tsx)、[工具摘要行](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/ToolCallBlocks/ToolSummaryRow.tsx)、[成员侧边会话](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/app-shell/SubagentSessionSidePane.tsx)与[设计规则](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/DESIGN.md)可供 `0.0.36` 对照和组件级移植选择。本机 ZCode 也显示 `3.14.3`，相同版本号不证明安装包与仓库字节完全一致。
 
-**明确不借鉴**：不复制营销视觉、Web/Electron 外观、不保留中央最小宽度却强行挤入的右栏，也不因参考其界面引入第二套 Agent Runtime（智能体运行时）。D Code 的 Work Inspector 在空间允许时非模态常驻，并通过左栏临时覆盖保留中央宽度。
+**源码与边界**：仓库第一方代码采用 [Apache-2.0](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/LICENSE)，[NOTICE](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/NOTICE.md) 指明第三方软件、字体、图标和素材可能另有条件。组件实现可以在逐文件核对后适配 D Code；ZCode 标志衍生头像、品牌文案、运行时与数据权威不进入 D Code。D Code 保留自己的任务浮层、信息检查器与响应式中央阅读宽度，不整体搬运其多窗口或多面板壳。
+
+**“＋”添加面板专项（507 提供[标注截图](assets/zcode-add-menu-507-annotated-2026-09-28.png)）**：[ChatPromptActionMenu](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/prompt-editor/ChatPromptActionMenu.tsx)以输入区宽度打开非模态 Popover（弹出面板），顶部是附件、目标和工作流，下方按真实提供方列插件、文件与对话，底部保留快捷方式说明；[MentionPanel](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/mentions/components/MentionPanel.tsx)处理分组、长列表及加载／空／失败。附件调用文件选择；目标只在新会话空草稿出现，工作流只在空草稿且命令目录确有 `/workflow` 时出现。选目标或工作流先插入命令标签，发送后才走其真实能力，不是点击菜单即执行。截图是 507 的标注材料，展示某次安装状态，不证明其中插件在 D Code 可用。
+
+**长对话导航专项**：ZCode 的[轮次导航组件](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/ConversationTurnNavigator.tsx)和[条目规则](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/conversationTurnNavigatorHelpers.ts)按用户实际提问建立独立可点、可滚动且虚拟化的条目；同一执行轮里的多次用户补充可各自跳转，悬停显示提问及所属回答摘要。D Code 已有 Conversation Rail 的轮次刻度、预览与键盘跳转；`0.0.36` 借鉴 ZCode 的长列表命中和组件层级来升级现有轨道，不复制其产品数据结构。两者都不按内容高度绘制全文地图，也不直接定位单轮工具输出内部的错误；轮内查找需要独立的搜索或锚点需求。
+
+**输入触发器专项（507 于 2026-09-28 调整 D Code 方向）**：此源码版本的[分组路由](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/mentions/mentionPanelRouting.ts)让 `@` 搜索插件、文件、对话和画板，`$` 搜索技能；[文件候选提供者](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/mentions/providers/fileMentionProvider.ts)调用受工作区身份约束的文件搜索并输出相对路径引用。[子智能体候选映射](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/mentions/providers/subagentsMentionProvider.ts)消费的是 Agent 配置摘要，不能直接作为 D Code 已创建成员的稳定运行身份。D Code 借文件搜索的界面与取消过期查询等机制；`/`、`@`、`$` 各自对应什么，由 D Code 的输入和消息合同决定，不照搬 ZCode 的符号分配。当前 D Code 客户端的 `@` 定向成员，Host 只有文件树／读取与引用核验，尚无对应的工作区搜索接口；`@` 文件引用属于新的产品行为，不因引入组件就宣称已交付。
+
+ZCode 的[目标文档](https://zcode.z.ai/cn/docs/goal)定义会话级多轮自动校验；其内置 [`/workflow` 命令](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/bootstrap/src/builtin-workflow-command.ts)会要求 Agent 设计并启动动态工作流，背后有独立的脚本与多成员运行机制。D Code `0.0.36` 只借入口、分组、信息层级与可核对的状态处理；目标对应 D Code Task Goal，真实任务内工作流由 [PRD 0034](../40-版本实施方案/0034-0.0.36-任务内工作流产品需求.md) 定义，不把 ZCode 命令或脚本 Runtime 当成已有 D Code 能力。
 
 ## REF-003 MiniMax Code
 
-**已核实证据**：本机 `/Applications/MiniMax Code.app` 为 `3.0.60`（build `3.0.60.123`）；版本元数据只证明研究对象，不单独证明具体界面行为。本路线只采用 507 明确采纳的观察，以及 [Tasks](https://agent.minimaxi.com/docs/code/workflows/tasks)、[Panels](https://agent.minimaxi.com/docs/code/desktop/panels)、[Goal](https://agent.minimaxi.com/docs/code/desktop/goal)、[Agent Team](https://agent.minimaxi.com/docs/code/agents/team)、[Custom Agents](https://agent.minimaxi.com/docs/code/agents/custom-agents) 与 [Permissions](https://agent.minimaxi.com/docs/code/workflows/permissions) 可核实的本地产品机制；不反编译应用或复制其代码、文案和视觉资产。具体动态行为仍需在进入版本 PRD 时记录可复现操作路径。
+**已核实证据**：2026-09-06 本机 `/Applications/MiniMax Code.app` 为 `3.0.60`（build `3.0.60.123`）；版本元数据只证明当时的研究对象，不单独证明具体界面行为。当轮采用 507 明确采纳的观察，以及 [Tasks](https://agent.minimaxi.com/docs/code/workflows/tasks)、[Panels](https://agent.minimaxi.com/docs/code/desktop/panels)、[Goal](https://agent.minimaxi.com/docs/code/desktop/goal)、[Agent Team](https://agent.minimaxi.com/docs/code/agents/team)、[Custom Agents](https://agent.minimaxi.com/docs/code/agents/custom-agents) 与 [Permissions](https://agent.minimaxi.com/docs/code/workflows/permissions) 可核实的本地产品机制；未反编译应用或复制其代码、文案和视觉资产。具体动态行为进入版本 PRD 时仍须记录可复现操作路径。
 
 **D Code 借鉴**：
 
 - 对话仍是任务主空间，本机文件、变更与运行信息作为可并行操作的上下文，不用模态蒙版切断左栏和中央对话；
 - Project 文件树和助手正文中的文件、目录、代码行引用可在 D Code 自有 Workspace Tab 中打开并定位；
 - Goal 在输入区附近持续显示阶段、耗时、证据、阻塞与人工控制，但不取代 D Code 的耐久 Work Map；
-- Agent Profile 与 Team Member Run 继续分离，但 Profile / D Team 已移至 `0.3.x` 候选方向；`0.1.0` 前先在 `0.0.7` 建立 Pi 模型目录、启用范围与默认模型设置，在 `0.0.8` 建立独立于 Skill 的动作权限，在 `0.0.12–0.0.13` 建立一次性资源调用与本机 Skill / Prompt / Command / Extension 管理，在 `0.0.14` 建立自定义供应商管理；
-- 权限请求显示动作、目标、风险理由与作用范围；上下文和用量只呈现 Pi 能提供的真实本地数据。
+- Agent Profile 与 Task 内 Agent Run 分离，团队状态由 D Code 的真实交办、运行、报告和验收事实呈现；
+- 上下文和用量只呈现当前 D Code Host 能核对的真实数据。
 
-**明确不借鉴**：不复制 Electron 架构或视觉皮肤，不照搬固定 Coder / Verifier / General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。Remote Control、IM、云端 / 定时任务、账号积分与签到、在线部署、Chrome Cookie 导入、BYOK、Skill 市场和增长反馈入口均不进入 D Code 本机版本路线。
+**明确不借鉴**：不照搬固定 Coder / Verifier / General 角色，不把团队成员提升为独立 Task 层级，也不展示隐藏的原始推理过程。MiniMax 的 Remote Control、IM、云端／定时任务、账号积分与签到、在线部署、Chrome Cookie 导入、Skill 市场和增长反馈入口不随 `0.0.36` 的工作台质感收口进入 D Code。
 
-**产品边界**：MiniMax Code 只提供本地信息层级与交互参考。D Code 继续使用 SwiftUI / AppKit、Pi 配置与 Session 权威、无冗余标签的唯一会话主页面、按需内容标签、耐久 Work Map、显式 Team Run 与主智能体有界中转，不接入 MiniMax Runtime。
+**2026-09-28 补充证据与产品边界**：本机桌面端为 `3.0.70`；公开 `minimax-code@0f6ad52` 的[README](https://github.com/MiniMax-AI/minimax-code/blob/0f6ad5229ff1f144c72dd15a4b2d520feb26cd3d/README.md)明确只发布 TUI、headless CLI 与 ACP 源码，不含桌面应用源码。其中[运行状态行](https://github.com/MiniMax-AI/minimax-code/blob/0f6ad5229ff1f144c72dd15a4b2d520feb26cd3d/packages/tui/src/tui/shell/activity-line.ts)可供状态语义参考；桌面组件只能从官方文档与实机观察核对。D Code 的 Web 客户端继续消费 Product Store 与 Pi Runtime Adapter，不接入 MiniMax Runtime 或将 CLI 组件当作桌面源码。
 
 ## REF-004 PiDeck
 
@@ -91,7 +107,7 @@
 
 **D Code 借鉴**：Agent Harness（智能体宿主）的语义事件、单会话所有权、持久接收和能力分层思想。
 
-**明确不借鉴**：不采用 Flue 的 Runtime（运行时）、会话数据库、HTTP/SSE 协议、React UI 或扩展编写模型。D Code 继续使用 Pi Session 作为会话权威，并通过自己的 Host 与原生 macOS 界面工作。
+**明确不借鉴**：不采用 Flue 的 Runtime（运行时）、会话数据库、HTTP/SSE 协议、React UI 或扩展编写模型。D Code 继续由 Product Store 拥有会话事实，通过自己的 Host 与 Web 客户端工作；Pi 只作为 Runtime Adapter。
 
 **当前结论**：Reference Only（仅作参考）。它适合从零构建 Web/Node Agent 产品，不作为 D Code 第一阶段的开发基础。
 
@@ -209,9 +225,29 @@
 
 这些是原文描述及本项目借鉴判断；本次没有复现论文实验，预印本结果不是 D Code 的实现或验收证据。后续若要引入 Harness 自演化或模型蒸馏，需形成独立目标与范围。
 
+## REF-025 PI-Desktop
+
+507 于 2026-09-28 提供[官网文档](https://pi-docs.aiuo.net/)与[官方仓库](https://github.com/vastsa/PI-Desktop)，明确认可 Subagent 的组件式展示。按仓库 `b516714` 核对：[单层拓扑卡](https://github.com/vastsa/PI-Desktop/blob/b51671458472340c360a6ff39e33aa1caaad3f56/apps/desktop/src/features/chat/transcript/SubagentDetail.tsx)显示主 Agent 与一次 Task 派生的成员，[状态投影](https://github.com/vastsa/PI-Desktop/blob/b51671458472340c360a6ff39e33aa1caaad3f56/apps/desktop/src/lib/subagent-topology.ts)区分开始、运行与终态，点击成员可打开[右侧只读过程](https://github.com/vastsa/PI-Desktop/blob/b51671458472340c360a6ff39e33aa1caaad3f56/apps/desktop/src/components/workpanel/SubagentTranscriptTab.tsx)。[组件规格](https://pi-docs.aiuo.net/spec/04-ux/08-component-spec)与当前代码的详情容器表述有演进差异；共同可借的是“概览、节点、按需详情”的层级，不把一次 `Task` 工具调用当作 D Code 的 Task 或 Agent Run。
+
+PI-Desktop 仓库采用 [LGPL-3.0](https://github.com/vastsa/PI-Desktop/blob/b51671458472340c360a6ff39e33aa1caaad3f56/LICENSE)。本轮没有将其组件源码纳入 D Code，也未安装应用复现实机 Subagent 运行；直接移植前须独立核对具体文件、依赖和分发义务。D Code 的 Task 拥有多轮成员执行，Child Agent Session 允许用户直接交流，所以成员状态与详情必须映射回 D Code 自有事实。
+
+**图像生成补充核对**：PI-Desktop 发布版 [`v0.15.9`](https://github.com/vastsa/PI-Desktop/releases/tag/v0.15.9) 已有[独立生图模型设置与 `GenerateImages` 运行规格](https://pi-docs.aiuo.net/spec/03-runtime/21-image-generation)，可生成、编辑并保存会话图片；[源码](https://github.com/vastsa/PI-Desktop/blob/b684e661797996db3ac64c3c5bdf5764a38fd522/apps/desktop/electron/main/services/image-generation-service.ts)走 OpenAI 兼容 Images API，明确拒绝 OAuth provider，要求 API key 或免认证服务。这是真实图像生成能力，不等于图片输入附件；本轮仅核对文档、发布 tag 和源码，未用真实服务商生成。507 暂不将图像生成纳入 D Code `0.0.36`，参考实现不会自动接入现有 Pi Runtime 或让 ChatGPT 订阅变成 Images API 额度。
+
+## REF-026 Kimi Code
+
+[官方桌面端文档](https://www.kimi.com/code/docs/en/kimi-code-desktop/task-execution-and-review.html)显示输入区上方的后台工作条可查看命令与子智能体的状态、耗时、结果及停止入口，右侧 Agent / Subagent 面板显示当前成员的过程。公开 [Kimi Code 仓库](https://github.com/MoonshotAI/kimi-code)以 CLI / TUI 为主；其中 [AgentGroupComponent](https://github.com/MoonshotAI/kimi-code/blob/be7d5f5fea7800778e4660cd5f36780ba783bddd/apps/kimi-code/src/tui/components/messages/agent-group.ts)按真实成员快照归并多名子智能体，并在阶段变化时立即更新，普通输出更新合并刷新。仓库根为 [MIT 许可](https://github.com/MoonshotAI/kimi-code/blob/be7d5f5fea7800778e4660cd5f36780ba783bddd/LICENSE)。本轮未找到该仓库提供的桌面 React 界面源码，不能把 TUI 组件说成桌面组件。
+
+D Code 借鉴状态词汇、后台工作显著性及“概览可进入过程”的交互；本机安装的 Kimi Code `1.0.4` 仅供界面观察，未核对与公开 CLI 仓库的构建同源。D Code 不直接引入其 TUI 或独立会话所有权。
+
 ## 技术上游，不属于竞品参考
 
 [`earendil-works/pi`](https://github.com/earendil-works/pi) 是 D Code 使用的 Pi SDK 上游技术证据，不是 507 新提供的竞品参考。D Code 使用 `pi-coding-agent` 的程序化接口；`pi-ai` 与 `pi-agent-core` 提供底层运行能力。`pi-tui` 可以作为 `pi-coding-agent` 的传递依赖存在，但 D Code 不直接依赖、调用或用它呈现产品界面。
+
+### 2026-09-30 SDK 升级前置核查
+
+2026-09-30 核对时主树三个 SDK 包锁定 `0.87.1`；npm 官方注册表与[官方 v0.99.1 发布页](https://github.com/earendil-works/pi/releases/tag/v0.99.1)均显示最新已发布版本为 `0.99.1`。该版加入 GPT-6.1 Sol；两版安装包的离线 `getBuiltinModels` 对照确认 OpenAI 与 OpenAI Codex 的 `0.87.1` 目录没有 `gpt-6.1-sol`，`0.99.1` 包含该模型。前一 `0.99.0` 版本调整 OpenAI／ChatGPT 登录入口，并增加新的工具执行上下文和聊天／图像／分类模型类型，见[固定版本变更记录](https://github.com/earendil-works/pi/blob/v0.99.1/packages/coding-agent/CHANGELOG.md)。上游的图像接口可作为后续候选机制研究，不自动取代 PRD 0036 已选的 Codex App Server 生图方向。
+
+隔离临时副本只替换三项 SDK 到 `0.99.1`，安装成功；`tsc --noEmit` 在两个文件出现 12 条类型错误，保留[原始编译结果](assets/pi-0.99.1-compatibility-2026-09-30.txt)：`model-catalog-configuration.ts` 对新的模型配置联合类型缺少聊天类型收窄，`sdk-compatibility.test.ts` 的工具执行上下文需适配 `ExtensionToolContext`。这只证明当前源码无法直接换包通过编译，尚未测试新认证、默认内置工具、进程和会话行为。建议为模型目录、认证、Active Tool Manifest 与安全边界安排独立兼容升级；本轮没有替换主树 SDK，也不因上游更新推断 D Code 的标题栏或成员命名问题会消失。
 
 ## 明确排除
 
@@ -223,3 +259,5 @@
 - 增加参考时记录来源归属、稳定 URL、证据版本、借鉴点和不借鉴边界。
 - 外部项目更新不自动改变 D Code；只有经 507 确认并进入产品契约或版本 PRD 的结论才成为需求。
 - 临时截图如需长期使用，应复制到本目录的 `assets/` 并记录来源；不得长期依赖 `/var/folders/` 等临时路径。
+
+2026-10-01 507 明确要求完成 Pi `0.99.1` 与 `0.0.37`。上述历史调查已进入主树适配与实际包验证：三个 SDK `0.99.1`、App／Host `0.0.37`，模型类型、ExtensionToolContext、登录方式和准备竞态边界均已接通；工程结果与未验收项由 [PRD 0038](../40-版本实施方案/0038-0.0.37-Pi-SDK-升级产品需求.md)及[本轮验证](assets/dcode-0.0.37-verification-2026-10-01.md)拥有。上述“未替换主树”的段落是 2026-09-30 的历史边界，不表示当前仍使用旧 SDK。

@@ -1,3 +1,4 @@
+import { uiText } from "../../shared/ui-language.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import {
@@ -16,6 +17,7 @@ import {
   type AttachmentSource,
   type NativeSessionPathAction,
   type ComposerDraftRecord,
+  type PendingWorkflowSubmissionRecord,
 } from "./types";
 import {
   emptyStream,
@@ -26,6 +28,9 @@ import {
 } from "./workbench";
 
 export interface Draft {
+  goal?: string;
+  acceptance?: string[];
+  pendingWorkflowSubmission?:PendingWorkflowSubmissionRecord;
   pathAction?:NativeSessionPathAction;
   pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"];
   targetAgentRunId?:string;
@@ -33,6 +38,8 @@ export interface Draft {
   images: PromptImageInput[];
   attachments?: ManagedAttachment[];
 }
+export interface WorkflowSubmission {message:string;promptId:string;workflowDraft?:{goal:string;constraints?:string[]};workflowReportRunId?:string}
+export type SubmissionOutcome="accepted"|"rejected"|"unknown";
 const blankDraft = (): Draft => ({ text: "", images: [], attachments:[] });
 export function useWorkbench() {
   const {
@@ -69,8 +76,18 @@ export function useWorkbench() {
   const draftRef = useRef(drafts);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
+  const reloadConfirmed=useCallback(async()=>{
+    // SWR can return its previous cached value when revalidation fails.
+    // A write is confirmed only by a new, successful Host read.
+    const fresh=await fetchSnapshot();
+    if(fresh.storeRevision<(snapshotRef.current?.storeRevision??0))
+      throw new Error(uiText("任务刷新返回了较早的状态；请重新读取并核对刚才的操作"));
+    snapshotRef.current=fresh;
+    await reload(fresh,{revalidate:false});
+    return fresh;
+  },[reload]);
   const saving = useRef(
-    new Map<string, { taskId?: string; scope?: TaskScope; text: string; attachmentIds?:string[];targetAgentRunId?:string|null;pathAction?:NativeSessionPathAction|null;pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"]|null }>(),
+    new Map<string, { taskId?: string; scope?: TaskScope; text: string; goal?:string; acceptance?:string[]; pendingWorkflowSubmission?:PendingWorkflowSubmissionRecord|null; attachmentIds?:string[];targetAgentRunId?:string|null;pathAction?:NativeSessionPathAction|null;pathDraftBackup?:ComposerDraftRecord["pathDraftBackup"]|null }>(),
   );
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
@@ -101,6 +118,9 @@ export function useWorkbench() {
   );
   const draft = drafts[draftKey] ?? {
     text: savedDraft?.text ?? "",
+    goal:savedDraft?.goal,
+    acceptance:savedDraft?.acceptance,
+    pendingWorkflowSubmission:savedDraft?.pendingWorkflowSubmission,
     images: [],
     attachments:savedDraft?.attachments??[],
     targetAgentRunId:savedDraft?.targetAgentRunId,
@@ -219,6 +239,9 @@ export function useWorkbench() {
           await mutateStore("taskDraft.set", {
             scope: value.scope,
             text: value.text,
+            goal:value.goal??"",
+            acceptance:value.acceptance??[],
+            pendingWorkflowSubmission:value.pendingWorkflowSubmission??null,
             attachmentIds:value.attachmentIds,
           });
         else
@@ -227,6 +250,7 @@ export function useWorkbench() {
             dcodeSessionId: id,
             targetAgentRunId:value.targetAgentRunId??null,
             pathAction:value.pathAction??null,pathDraftBackup:value.pathDraftBackup??null,
+            pendingWorkflowSubmission:value.pendingWorkflowSubmission??null,
             text: value.text,
             attachmentIds:value.attachmentIds,
           });
@@ -258,14 +282,14 @@ export function useWorkbench() {
   useEffect(() => () => clearTimeout(readingTimer.current), []);
   const updateDraft = useCallback((key: string, update: Draft | ((previous: Draft) => Draft)) => {
     const saved = snapshotRef.current?.composerDrafts.find(draft => key.startsWith("new:") ? draft.draftKind === "new_task" && (key === "new:user" ? draft.scope?.kind === "user" : draft.scope?.kind === "project" && draft.scope.projectId === key.slice(4)) : draft.sessionId === key);
-    const previous = draftRef.current[key] ?? {text:saved?.text ?? "",images:[],attachments:saved?.attachments??[],targetAgentRunId:saved?.targetAgentRunId,pathAction:saved?.pathAction,pathDraftBackup:saved?.pathDraftBackup};
+    const previous = draftRef.current[key] ?? {text:saved?.text ?? "",goal:saved?.goal,acceptance:saved?.acceptance,pendingWorkflowSubmission:saved?.pendingWorkflowSubmission,images:[],attachments:saved?.attachments??[],targetAgentRunId:saved?.targetAgentRunId,pathAction:saved?.pathAction,pathDraftBackup:saved?.pathDraftBackup};
     const value = typeof update === "function" ? update(previous) : update;
     const next = { ...draftRef.current, [key]: value };
     draftRef.current = next;
     setDrafts(next);
     const owner = snapshotRef.current?.sessions.find((s) => s.id === key);
     if (owner)
-      saving.current.set(key, { taskId: owner.taskId, text: value.text, targetAgentRunId:value.targetAgentRunId??null,pathAction:value.pathAction??null,pathDraftBackup:value.pathDraftBackup??null, attachmentIds:value.attachments?.map(item=>item.id)??[] });
+      saving.current.set(key, { taskId: owner.taskId, text: value.text, pendingWorkflowSubmission:value.pendingWorkflowSubmission??null, targetAgentRunId:value.targetAgentRunId??null,pathAction:value.pathAction??null,pathDraftBackup:value.pathDraftBackup??null, attachmentIds:value.attachments?.map(item=>item.id)??[] });
     else if (key.startsWith("new:") && snapshotRef.current)
       saving.current.set(key, {
         scope:
@@ -273,6 +297,9 @@ export function useWorkbench() {
             ? { kind: "user", userId: snapshotRef.current.currentUser.id }
             : { kind: "project", projectId: key.slice(4) },
         text: value.text,
+        goal:value.goal,
+        acceptance:value.acceptance,
+        pendingWorkflowSubmission:value.pendingWorkflowSubmission??null,
         attachmentIds:value.attachments?.map(item=>item.id)??[],
       });
   }, []);
@@ -319,7 +346,7 @@ export function useWorkbench() {
             );
             api().readyToQuit(
               hasImages
-                ? "文字草稿已保存。还有旧格式图片未暂存，退出后需要重新添加。"
+                ? uiText("文字草稿已保存。还有旧格式图片未暂存，退出后需要重新添加。")
                 : undefined,
             );
           })
@@ -332,7 +359,7 @@ export function useWorkbench() {
         const runtime = data.runtime as { dcodeSessionId?: string } | undefined;
         const sessionId = runtime?.dcodeSessionId;
         const message = String(
-          data.message ?? "本次执行未能完成，请查看运行记录后重试。",
+          data.message ?? uiText("本次执行未能完成，请查看运行记录后重试。"),
         );
         if (sessionId)
           setSessionErrors((previous) => ({
@@ -352,8 +379,8 @@ export function useWorkbench() {
       }
       if(event.event==="extension.notification"){const owner=(data.runtime as {dcodeSessionId?:string})?.dcodeSessionId;if(owner)setRuntimeNotices(previous=>({...previous,[owner]:String(data.message??"")}));}
       if(["extension.request","extension.closed"].includes(event.event)){scheduleSnapshot();schedulePresentation();}
-      if(event.event==="extension.unsupported")fail("这个扩展需要终端界面，D Code 已阻止该交互。");
-      if(event.event==="extension.error")fail(String(data.error??"扩展未能完成当前操作"));
+      if(event.event==="extension.unsupported")fail(uiText("这个扩展需要终端界面，D Code 已阻止该交互。"));
+      if(event.event==="extension.error")fail(String(data.error??uiText("扩展未能完成当前操作")));
       if (event.event === "foundation.changed") {
         scheduleSnapshot();
         if (String(data.kind).startsWith("clientPreferences.") || String(data.kind).includes("model")) void reloadPreferences();
@@ -421,29 +448,38 @@ export function useWorkbench() {
   const restoredPathDraft=(value:Draft):Draft=>value.pathDraftBackup?{text:value.pathDraftBackup.text,images:[],targetAgentRunId:value.pathDraftBackup.targetAgentRunId,attachments:value.pathDraftBackup.attachments??[]}:blankDraft();
   const startPath=(kind:NativeSessionPathAction["kind"],entryId:string,text="")=>{
     if(!session||!presentation||running)return;
-    if(snapshot?.collaborationMessages?.some(message=>message.targetSessionId===session.id&&["queued","paused","delivering"].includes(message.state))){fail("当前对话还有待发送消息或协作更新，请先在对话下方处理后，再从历史继续。");return;}
+    if(snapshot?.collaborationMessages?.some(message=>message.targetSessionId===session.id&&["queued","paused","delivering"].includes(message.state))){fail(uiText("当前对话还有待发送消息或协作更新，请先在对话下方处理后，再从历史继续。"));return;}
     const current=presentation.nativePaths?.find(path=>path.isCurrent);const fromPathId=presentation.selectedNativePathId;
     if(!current||!fromPathId)return;
     const nativeEntry=presentation.nativeEntries?.find(entry=>entry.sourceEntryId===entryId);
-    if(!nativeEntry){fail("这条消息尚未完成来源核对，请等待运行收尾后重试。");return;}
+    if(!nativeEntry){fail(uiText("这条消息尚未完成来源核对，请等待运行收尾后重试。"));return;}
     const pathAction={kind,entryId,fromPathId,expectedCurrentPathId:current.id,expectedCurrentPathRevision:current.revision};
     const original=nativeEntry.content as {text?:string;attachmentRefs?:ManagedAttachment[]};
     const attachments=kind==="editUser"?(original.attachmentRefs??[]).filter(item=>typeof item?.id==="string"&&item.id.startsWith("attachment-")):[];
     updateDraft(draftKey,{text:kind==="editUser"?original.text??text:text,images:[],attachments,pathAction,pathDraftBackup:draft.pathDraftBackup??{text:draft.text,attachmentIds:draft.attachments?.map(item=>item.id)??[],attachments:draft.attachments??[],targetAgentRunId:draft.targetAgentRunId}});
     document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus();
   };
-  const send = async (targetAgentRunId?: string,deliveryMode?:"steer") => {
+  const send = async (targetAgentRunId?: string,deliveryMode?:"steer",workflowSubmission?:WorkflowSubmission):Promise<SubmissionOutcome> => {
+    const originalDraft=draft;
+    const pendingWorkflowSubmission:PendingWorkflowSubmissionRecord|undefined=workflowSubmission?.workflowDraft
+      ? {promptId:workflowSubmission.promptId,kind:"create",sourceDraftKey:draftKey,goal:workflowSubmission.workflowDraft.goal,constraints:workflowSubmission.workflowDraft.constraints??[]}
+      : workflowSubmission?.workflowReportRunId
+        ? {promptId:workflowSubmission.promptId,kind:"report",sourceDraftKey:draftKey,runId:workflowSubmission.workflowReportRunId}
+        : undefined;
+    const submitted:Draft=workflowSubmission?{text:workflowSubmission.message,images:[],attachments:[],goal:draft.goal,acceptance:draft.acceptance,pendingWorkflowSubmission}:draft;
+    const targetDraft:Draft=workflowSubmission?{...blankDraft(),pendingWorkflowSubmission}:submitted;
     if (
       !snapshot ||
-      (!draft.text.trim() && !draft.attachments?.length) ||
+      (!submitted.text.trim() && !submitted.attachments?.length) ||
       hostDead ||
       inFlight.current.has(draftKey)
     )
-      return;
+      return "rejected";
     const sourceKey = draftKey;
-    const submitted = draft;
     targetAgentRunId ??= submitted.targetAgentRunId;
-    if(viewingHistory&&!submitted.pathAction){fail("正在查看历史路径，请选择一条消息的“从这里继续”。输入内容已保留。");return;}
+    if(workflowSubmission&&draft.pendingWorkflowSubmission&&draft.pendingWorkflowSubmission.promptId!==workflowSubmission.promptId){fail(uiText("上一项工作流提交仍待核对，请先重新读取状态，不要重复发送。"));return "unknown";}
+    if(workflowSubmission&&(targetAgentRunId||deliveryMode||session?.kind==="child")){fail(uiText("请回到任务主对话，再提交工作流请求。"));return "rejected";}
+    if(viewingHistory&&!submitted.pathAction){fail(uiText("正在查看历史路径，请选择一条消息的“从这里继续”。输入内容已保留。"));return "rejected";}
     const message = submitted.text;
 
     inFlight.current.add(sourceKey);
@@ -457,32 +493,37 @@ export function useWorkbench() {
       });
     let targetId = session?.id;
     let targetTaskId = task?.id;
+    let attemptedPrompt=false;
     try {
+      if(pendingWorkflowSubmission){updateDraft(sourceKey,previous=>({...previous,pendingWorkflowSubmission}));await flushDrafts();}
       if (!targetId) {
         const scope = newProjectId
           ? { kind: "project", projectId: newProjectId }
           : { kind: "user", userId: snapshot.currentUser.id };
         const created = await mutateStore<TaskBundle>("task.create", {
+          ...(workflowSubmission?{requestId:`workflow-task:${workflowSubmission.promptId}`}:{ }),
           scope,
-          title: (submitted.text.trim() || submitted.attachments?.[0]?.name || "新任务").split("\n")[0].slice(0, 60),
-          goal: (message.trim() || `查看附件：${submitted.attachments?.map(item=>item.name).join("、")}`).slice(0, 4000),
-          acceptance: [],
+          title: (workflowSubmission?.workflowDraft?.goal || submitted.text.trim() || submitted.attachments?.[0]?.name || uiText("新任务")).split("\n")[0].slice(0, 60),
+          goal: (submitted.goal?.trim() || workflowSubmission?.workflowDraft?.goal || message.trim() || uiText("查看附件：{0}", [submitted.attachments?.map(item=>item.name).join("、")])).slice(0, 4000),
+          acceptance: submitted.acceptance??[],
         });
         targetId = created.coordinationSession.id;
         targetTaskId = created.task.id;
         inFlight.current.add(targetId);
         setBusyKeys(new Set(inFlight.current));
-        updateDraft(targetId, submitted);
+        updateDraft(targetId, targetDraft);
+        if (draftKeyRef.current === sourceKey) select(created.task, targetId);
         // A failed provider must leave one recoverable Task, never create a duplicate on retry.
         await mutateStore("dcodeSession.composerDraft.set", {
           taskId: created.task.id,
           dcodeSessionId: targetId,
-          text: submitted.text,
+          text: targetDraft.text,
+          pendingWorkflowSubmission:pendingWorkflowSubmission??null,
           attachmentIds:submitted.attachments?.map(item=>item.id)??[],
         });
-        await reload();
-        if (draftKeyRef.current === sourceKey) select(created.task, targetId);
+        await reloadConfirmed();
       }
+      attemptedPrompt=true;
       await api().request("dcodeSession.prompt", {
         dcodeSessionId: targetId,
         ...(targetAgentRunId?{targetAgentRunId}:{}),
@@ -490,27 +531,43 @@ export function useWorkbench() {
         ...(deliveryMode?{deliveryMode,expectedSessionRunId:snapshot.sessionRuns.filter(run=>run.sessionId===(targetAgentRunId?snapshot.agentRuns.find(agent=>agent.id===targetAgentRunId)?.sessionId:targetId)).at(-1)?.id}:{}),
         message,
         attachmentIds:submitted.attachments?.map(item=>item.id)??[],
-        promptId: crypto.randomUUID(),
+        promptId: workflowSubmission?.promptId??crypto.randomUUID(),
+        ...(workflowSubmission?.workflowDraft?{workflowDraft:workflowSubmission.workflowDraft}:{}),
+        ...(workflowSubmission?.workflowReportRunId?{workflowReportRunId:workflowSubmission.workflowReportRunId}:{}),
         ...(submitted.images.length ? { images: submitted.images } : {}),
       });
 
       const latestSource = draftRef.current[sourceKey];
-      if (!latestSource || latestSource === submitted)
-        updateDraft(sourceKey, restoredPathDraft(submitted));
+      if (!workflowSubmission&&(!latestSource || latestSource === originalDraft))
+        updateDraft(sourceKey, restoredPathDraft(originalDraft));
       const latestTarget = draftRef.current[targetId];
       if (
         sourceKey !== targetId &&
-        (!latestTarget || latestTarget === submitted)
+        !workflowSubmission&&(!latestTarget || latestTarget === submitted)
       )
         updateDraft(targetId, blankDraft());
       if (targetTaskId && !draftRef.current[targetId]?.text && !draftRef.current[targetId]?.attachments?.length)
         saving.current.set(targetId, { taskId: targetTaskId, text: "", attachmentIds:[] });
       if(submitted.pathAction)setSelectedPaths(values=>({...values,[targetId!]:undefined}));
       await flushDrafts();
-      await reload();
+      await reloadConfirmed();
       await refreshPresentation();
+      if(pendingWorkflowSubmission){
+        updateDraft(sourceKey,previous=>({...previous,pendingWorkflowSubmission:undefined}));
+        const latestWorkflowTarget=targetId!==sourceKey?draftRef.current[targetId]:undefined;
+        if(targetId!==sourceKey&&latestWorkflowTarget===targetDraft)updateDraft(targetId,blankDraft());
+        else if(targetId!==sourceKey)updateDraft(targetId,previous=>({...previous,pendingWorkflowSubmission:undefined}));
+        try{await flushDrafts();}
+        catch(error){
+          updateDraft(sourceKey,previous=>({...previous,pendingWorkflowSubmission}));
+          if(targetId!==sourceKey)updateDraft(targetId,previous=>({...previous,pendingWorkflowSubmission}));
+          throw error;
+        }
+      }
+      return "accepted";
     } catch (e) {
       fail(e);
+      return workflowSubmission||attemptedPrompt?"unknown":"rejected";
     } finally {
       inFlight.current.delete(sourceKey);
       if (targetId) inFlight.current.delete(targetId);
@@ -528,7 +585,7 @@ export function useWorkbench() {
   const stop = async () => {
     const runtimeId = presentation?.runtime?.runtimeId ?? run?.runtimeId;
     if (!runtimeId) {
-      fail("当前没有可停止的运行。");
+      fail(uiText("当前没有可停止的运行。"));
       return;
     }
     try {
@@ -560,10 +617,12 @@ export function useWorkbench() {
     dismissNotice:()=>{if(session)setRuntimeNotices(previous=>{const next={...previous};delete next[session.id];return next;});},
     snapshot,
     preferences,
+    reloadPreferences,
     imported:
       presentation?.nativeEntries?.filter(entry=>entry.sourceKind!=="native")??imported?.entries.filter((entry) => entry.sourceKind !== "native") ?? [],
     loadError,
     reload,
+    reloadConfirmed,
     task,
     session,
     select,

@@ -33,7 +33,11 @@ test("coordinator tool dispatches independent members, routes main mentions, and
     const system=body.messages.find((m:{role:string})=>m.role==="system")?.content??"";
     if(system.includes("coordinator Agent")) {
       coordinators++;
-      assert.ok(body.tools.some((tool:{function:{name:string}})=>tool.function.name==="dcode_team"));
+      const teamTool=body.tools.find((tool:{function:{name:string}})=>tool.function.name==="dcode_team");
+      assert.ok(teamTool);
+      assert.match(system,/新成员的 title[\s\S]*按本轮显示与沟通语言/);
+      assert.match(system,/D Code 显示与沟通语言：简体中文/);
+      assert.match(teamTool.function.parameters.properties.members.items.properties.title.description,/跟随本轮 D Code 显示与沟通语言/);
       if(coordinators===1)return completion("",{index:0,id:"simple-write",type:"function",function:{name:"write",arguments:JSON.stringify({path:"result.md",content:"由主智能体完成的小工作"})}});
       if(coordinators===2||coordinators===3)return completion("",{index:0,id:"delegate-first",type:"function",function:{name:"dcode_team",arguments:JSON.stringify({action:"delegate",members:[{profileId:"builtin-explore",title:"调研",instruction:"检查材料",acceptance:"提供证据"},{profileId:"builtin-verifier",title:"核验",instruction:"独立核查",acceptance:"说明验证边界"}]})}});
       if(coordinators===5)return completion("",{index:0,id:"delegate-later",type:"function",function:{name:"dcode_team",arguments:JSON.stringify({action:"delegate",members:[{profileId:"builtin-explore",title:"补充调查",instruction:"另一项独立工作",acceptance:"返回来源"}]})}});

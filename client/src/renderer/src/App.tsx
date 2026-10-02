@@ -1,3 +1,4 @@
+import { uiText, getDisplayLanguage, setDisplayLanguage, subscribeDisplayLanguage } from "../../shared/ui-language.ts";
 import { uiMotion, useMotionReduction } from "./workbench/motion";
 import { LoadingPlaceholder } from "./components/LoadingPlaceholder";
 import {NewTaskScene} from "./components/NewTaskScene";
@@ -8,18 +9,18 @@ import {UsedSourceDetail} from "./components/UsedSourceDetail";
 import { TaskRouteSummary } from "./components/TaskRouteSummary";
 import {ExtensionRequests} from "./components/ExtensionRequests";
 import {WorkspaceFiles,WorkspaceFileNavigation,FileCloseDialog} from "./components/WorkspaceFiles";
+import {useModalFocus} from "./components/modal-focus";
 import {useWorkspaceFiles,FileReferenceContext} from "./workbench/useWorkspaceFiles";
 import { InspirationWorkspace } from "./components/InspirationWorkspace";
 import { useInspiration } from "./workbench/useInspiration";
 import { Transcript } from "./components/conversation/Transcript";
-import { profileName } from "./workbench/presentation";
+import { TeamOverview } from "./components/TeamOverview";
 import { useModels } from "./workbench/useModels";
 import {
   SettingsWorkspace,
   type SettingsPageId,
 } from "./components/SettingsWorkspace";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type {TaskSourceSelector} from "../../../../host/src/product-store.js";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { create } from "zustand";
 import useSWR from "swr";
@@ -51,6 +52,8 @@ import {
   api,
   errorText,
   type TaskRecord,
+  type TaskSourceSelector,
+  type TaskBundle,
   type AgentRequestRecord,
   type ProviderView,
   type TaskWorkbenchInspectorTarget,
@@ -87,35 +90,38 @@ const relativeTime = (iso: string) => {
     Math.floor((Date.now() - Date.parse(iso)) / 60000),
   );
   return minutes < 1
-    ? "刚刚"
+    ? uiText("刚刚")
     : minutes < 60
-      ? `${minutes} 分钟`
+      ? uiText("{0} 分钟", [minutes])
       : minutes < 1440
-        ? `${Math.floor(minutes / 60)} 小时`
-        : `${Math.floor(minutes / 1440)} 天`;
+        ? uiText("{0} 小时", [Math.floor(minutes / 60)])
+        : uiText("{0} 天", [Math.floor(minutes / 1440)]);
 };
 const stateLabel = (state: string) =>
   (
     ({
-      idle: "待开始",
-      active: "进行中",
-      running: "运行中",
-      waiting: "等待处理",
-      completed: "已完成",
-      failed: "失败",
-      aborted: "已停止",
-      interrupted: "已中断",
-      unknown: "状态待核对",
-      prepared: "待开始",
-      cancelled: "已取消",
-      pending: "待开始",
-      in_progress: "进行中",
-      blocked: "阻塞",
+      idle: uiText("待开始"),
+      active: uiText("进行中"),
+      running: uiText("运行中"),
+      waiting: uiText("等待处理"),
+      completed: uiText("已完成"),
+      failed: uiText("失败"),
+      aborted: uiText("已停止"),
+      interrupted: uiText("已中断"),
+      unknown: uiText("状态待核对"),
+      prepared: uiText("待开始"),
+      cancelled: uiText("已取消"),
+      pending: uiText("待开始"),
+      in_progress: uiText("进行中"),
+      blocked: uiText("阻塞"),
     }) as Record<string, string>
   )[state] ?? state;
 
 export function App() {
   const work = useWorkbench();
+  const language=useSyncExternalStore(subscribeDisplayLanguage,getDisplayLanguage);
+  useLayoutEffect(()=>{if(work.preferences)setDisplayLanguage(work.preferences.language??"zh-CN");},[work.preferences?.language]);
+  useLayoutEffect(()=>{document.documentElement.lang=language;},[language]);
   const files=useWorkspaceFiles(work);
   const display = useDisplay();
   useEffect(()=>{if(files.navigationRequest)display.set({nav:true});},[files.navigationRequest,display.set]);
@@ -148,8 +154,14 @@ export function App() {
   const [taskActionError, setTaskActionError] = useState<string | null>(null);
   const [contextOpen,setContextOpen]=useState(false);
   const [commandMenuOpen,setCommandMenuOpen]=useState(false);
+  const [workflowOpenSignal,setWorkflowOpenSignal]=useState(0);
   const [projectEditingId,setProjectEditingId]=useState<string|null>(null);
   const [projectMenuId,setProjectMenuId]=useState<string|null>(null);
+  const projectFormBusy=useRef(false);
+  const pendingSessionCopies=useRef(new Map<string,{requestId:string;bundle?:TaskBundle}>());
+  const closeProjectForm=()=>{if(!projectFormBusy.current)display.set({projectForm:false});};
+  const importBusy=useRef(false);
+  const closeImport=()=>{if(!importBusy.current)display.set({importing:false});};
   const focusDraftAfterMenu=useRef(false);
   useEffect(()=>{if(display.page==="settings"||!display.nav)setProjectMenuId(null);},[display.page,display.nav]);
   const [target, setTarget] = useState<
@@ -282,11 +294,11 @@ export function App() {
       }
     >
       {display.nav && (
-        <nav className="navigation" aria-label="D Code 导航区">
+        <nav className="navigation" aria-label={uiText("D Code 导航区")}>
           <div className="window-band drag-region">
             <button
               className="icon-button nav-toggle"
-              aria-label="收起导航区"
+              aria-label={uiText("收起导航区")}
               onClick={() => display.set({ nav: false })}
             >
               <PanelLeft size={16} />
@@ -299,29 +311,29 @@ export function App() {
           </div>
           <button
             className="nav-row primary-action"
-            aria-label="新建任务"
+            aria-label={uiText("新建任务")}
             aria-keyshortcuts="Meta+N"
             onClick={newTask}
           >
             <Plus size={17} />
-            <span>新建任务</span>
+            <span>{uiText("新建任务")}</span>
             <kbd>⌘N</kbd>
           </button>
           <button
             className="nav-row"
-            aria-label="搜索"
+            aria-label={uiText("搜索")}
             aria-keyshortcuts="Meta+K"
             onClick={() => display.set({ search: true })}
           >
             <Search size={16} />
-            <span>搜索</span>
+            <span>{uiText("搜索")}</span>
             <kbd>⌘K</kbd>
           </button>
-          <button className={`nav-row ${display.page==="inspiration"?"selected":""}`} aria-current={display.page==="inspiration"?"page":undefined} onClick={()=>{setTarget(undefined);display.set({page:"inspiration",search:false});}}><Sparkles size={16}/><span>灵感</span></button>
+          <button className={`nav-row ${display.page==="inspiration"?"selected":""}`} aria-current={display.page==="inspiration"?"page":undefined} onClick={()=>{setTarget(undefined);display.set({page:"inspiration",search:false});}}><Sparkles size={16}/><span>{uiText("灵感")}</span></button>
           <div className="navigation-scroll">
             {tasks.length > 0 && (
               <>
-                <div className="nav-heading">最近工作</div>
+                <div className="nav-heading">{uiText("最近工作")}</div>
                 {tasks.slice(0, 3).map((t) => (
                   <TaskRow
                     key={t.id}
@@ -335,11 +347,11 @@ export function App() {
               </>
             )}
             <div className="nav-heading">
-              <span>项目</span>
+              <span>{uiText("项目")}</span>
               <button
                 className="icon-button"
-                aria-label="新建项目"
-                title="新建项目 ⇧⌘N"
+                aria-label={uiText("新建项目")}
+                title={uiText("新建项目 ⇧⌘N")}
                 onClick={() => {setProjectEditingId(null);display.set({ projectForm: true });}}
               >
                 <Plus size={14} />
@@ -353,13 +365,13 @@ export function App() {
                   <span className="project-title" title={p.title}>{p.title}</span>
                   <span className="project-row-actions" onClick={event=>{event.preventDefault();event.stopPropagation();}}>
                     <Menu.Root open={projectMenuId===p.id} onOpenChange={open=>{if(open)focusDraftAfterMenu.current=false;setProjectMenuId(current=>open?p.id:current===p.id?null:current);}}>
-                      <Menu.Trigger asChild><button type="button" id={`project-actions-${p.id}`} className="icon-button" aria-label={`更多项目操作 ${p.title}`} title="更多"><Ellipsis size={15}/></button></Menu.Trigger>
+                      <Menu.Trigger asChild><button type="button" id={`project-actions-${p.id}`} className="icon-button" aria-label={uiText("更多项目操作 {0}", [p.title])} title={uiText("更多")}><Ellipsis size={15}/></button></Menu.Trigger>
                       <Menu.Portal><Menu.Content className="menu" align="start" sideOffset={4} onCloseAutoFocus={event=>{if(useDisplay.getState().projectForm||focusDraftAfterMenu.current)event.preventDefault();}}>
-                        <Menu.Item className="menu-item" onSelect={()=>{setProjectEditingId(p.id);display.set({projectForm:true});}}>编辑项目</Menu.Item>
+                        <Menu.Item className="menu-item" onSelect={()=>{setProjectEditingId(p.id);display.set({projectForm:true});}}>{uiText("编辑项目")}</Menu.Item>
                       </Menu.Content></Menu.Portal>
                     </Menu.Root>
-                    <button type="button" className="icon-button" aria-label={`查看 ${p.title} 的文件`} title="查看文件" onClick={()=>{setProjectMenuId(null);files.browseProject(p.id);display.set({page:"task"});}}><Folder size={14}/></button>
-                    <button type="button" className="icon-button" aria-label={`在 ${p.title} 中新建任务`} title="新建任务" onClick={()=>projectDraft(p.id)}><SquarePen size={14}/></button>
+                    <button type="button" className="icon-button" aria-label={uiText("查看 {0} 的文件", [p.title])} title={uiText("查看文件")} onClick={()=>{setProjectMenuId(null);files.browseProject(p.id);display.set({page:"task"});}}><Folder size={14}/></button>
+                    <button type="button" className="icon-button" aria-label={uiText("在 {0} 中新建任务", [p.title])} title={uiText("新建任务")} onClick={()=>projectDraft(p.id)}><SquarePen size={14}/></button>
                   </span>
                 </summary>
                 <div className="project-tasks">
@@ -383,7 +395,7 @@ export function App() {
             ))}
             {tasks.some((t) => t.scope.kind === "user") && (
               <>
-                <div className="nav-heading">任务</div>
+                <div className="nav-heading">{uiText("任务")}</div>
                 {tasks
                   .filter((t) => t.scope.kind === "user")
                   .map((t) => (
@@ -396,32 +408,32 @@ export function App() {
           <div className="navigation-footer">
             <button
               className="nav-row"
-              aria-label="设置"
+              aria-label={uiText("设置")}
               onClick={() => display.set({ page: "settings" })}
             >
               <Settings size={16} />
-              <span>设置</span>
+              <span>{uiText("设置")}</span>
             </button>
           </div>
         </nav>
       )}
-      <main className="workspace" aria-label="D Code 工作区">
+      <main className="workspace" aria-label={uiText("D Code 工作区")}>
         <header
           className={`workspace-bar drag-region ${display.nav ? "" : "without-nav"}`}
         >
           {!display.nav && (
             <button
               className="icon-button"
-              aria-label="显示导航区"
+              aria-label={uiText("显示导航区")}
               onClick={() => display.set({ nav: true })}
             >
               <PanelLeft size={16} />
             </button>
           )}
-          <span className="workspace-title">
-            {display.page === "inspiration" ? "灵感" : (work.task?.title ?? "新任务")}
+          <span className="workspace-title" title={display.page === "inspiration" ? uiText("灵感") : (work.task?.title ?? uiText("新任务"))}>
+            {display.page === "inspiration" ? uiText("灵感") : (work.task?.title ?? uiText("新任务"))}
           </span>
-          {display.page==="task"&&work.task&&work.session?.kind==="child"&&<div className="workspace-session" aria-label={`当前成员对话：${work.session.title}`}><button className="text-button" onClick={()=>select(work.task!)} aria-label="返回主对话">主对话</button><ChevronRight size={12}/><strong title={work.session.title}>{work.session.title}</strong></div>}
+          {display.page==="task"&&work.task&&work.session?.kind==="child"&&<div className="workspace-session" aria-label={uiText("当前成员对话：{0}", [work.session.title])}><button className="text-button" onClick={()=>select(work.task!)} aria-label={uiText("返回主对话")}>{uiText("主对话")}</button><ChevronRight size={12}/><strong title={work.session.title}>{work.session.title}</strong></div>}
           {actualProject && display.page === "task" && (
             <span className="workspace-context">
               {actualProject.title}
@@ -430,37 +442,37 @@ export function App() {
           )}
           {work.task && display.page==="task" && (
             <span className="workspace-context" title={work.task.cwd}>
-              {work.task.scope.kind === "user" ? "个人任务" : "工作目录"} · {work.task.cwd}
+              {work.task.scope.kind === "user" ? uiText("个人任务") : uiText("工作目录")} · {work.task.cwd}
             </span>
           )}
-          <span className="spacer" />
-          {display.page === "task" && newTaskDraft && work.snapshot?.tasks.some(task => task.id === previousTask.current?.taskId && task.state !== "archived") && <button className="text-button" onClick={returnFromDraft}>返回任务</button>}
-          {work.presentation?.nativePaths&&work.presentation.nativePaths.length>1&&display.page==="task"&&<Menu.Root><Menu.Trigger asChild><button className="text-button" aria-label="对话路径">{work.viewingHistory?"历史路径":"当前路径"}</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" sideOffset={5}>{work.presentation.nativePaths.map(path=><Menu.Item className="menu-item" key={path.id} onSelect={()=>{work.selectPath(path.isCurrent?undefined:path.id);files.conversation();}}>{path.title}{path.isCurrent?" · 当前":""}<small>{new Date(path.createdAt).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</small></Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
-          {work.task&&display.page==="task"&&<button className="icon-button" aria-label="上下文与运行依据" onClick={()=>setContextOpen(true)}><FileText size={16}/></button>}
-          {files.source&&display.page==="task"&&<button className="icon-button" aria-label="文件与 Git" aria-pressed={files.navigationVisible&&display.nav} onClick={()=>files.navigationVisible&&display.nav?files.returnToTasks():files.show(!display.nav&&files.navigationVisible)}><Folder size={16}/></button>}
-          {!!files.tabs.length&&!files.visible&&display.page==="task"&&<button className="icon-button" aria-label="打开文件详情" onClick={files.showInspector}><FileText size={16}/></button>}
+          {display.page === "task" && newTaskDraft && work.snapshot?.tasks.some(task => task.id === previousTask.current?.taskId && task.state !== "archived") && <button className="text-button" onClick={returnFromDraft}>{uiText("返回任务")}</button>}
+          {work.presentation?.nativePaths&&work.presentation.nativePaths.length>1&&display.page==="task"&&<Menu.Root><Menu.Trigger asChild><button className="text-button" aria-label={uiText("对话路径")}>{work.viewingHistory?uiText("历史路径"):uiText("当前路径")}</button></Menu.Trigger><Menu.Portal><Menu.Content className="menu" sideOffset={5}>{work.presentation.nativePaths.map(path=><Menu.Item className="menu-item" key={path.id} onSelect={()=>{work.selectPath(path.isCurrent?undefined:path.id);files.conversation();}}>{path.title}{path.isCurrent?uiText(" · 当前"):""}<small>{new Date(path.createdAt).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}</small></Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>}
+          {work.task&&display.page==="task"&&<button className="icon-button" aria-label={uiText("上下文与运行依据")} onClick={()=>setContextOpen(true)}><FileText size={16}/></button>}
+          {files.source&&display.page==="task"&&<button className="icon-button" aria-label={uiText("文件与 Git")} aria-pressed={files.navigationVisible&&display.nav} onClick={()=>files.navigationVisible&&display.nav?files.returnToTasks():files.show(!display.nav&&files.navigationVisible)}><Folder size={16}/></button>}
+          {!!files.tabs.length&&!files.visible&&display.page==="task"&&<button className="icon-button" aria-label={uiText("打开文件详情")} onClick={files.showInspector}><FileText size={16}/></button>}
           {work.task && display.page==="task" && (
             <Menu.Root>
               <Menu.Trigger asChild>
-                <button className="icon-button" aria-label="任务操作">
+                <button className="icon-button" aria-label={uiText("任务操作")}>
                   ···
                 </button>
               </Menu.Trigger>
               <Menu.Portal>
                 <Menu.Content className="menu" align="end">
-                  {work.session?.kind === "coordination" && (work.draft.targetAgentRunId||work.draft.pathAction||work.draft.pathDraftBackup||work.draft.images.length ? <Menu.Item className="menu-item" disabled>先处理定向、历史续写或未保存图片草稿，再开始新对话</Menu.Item> : <Menu.Item className="menu-item" disabled={work.running} onSelect={() => {
+                  {work.session?.kind === "coordination" && (work.draft.targetAgentRunId||work.draft.pathAction||work.draft.pathDraftBackup||work.draft.images.length ? <Menu.Item className="menu-item" disabled>{uiText("先处理定向、历史续写或未保存图片草稿，再开始新对话")}</Menu.Item> : <Menu.Item className="menu-item" disabled={work.running} onSelect={() => {
                     void (async()=>{
+                      const sourceSessionId=work.session!.id;
                       await work.flushDrafts();
-                      const bundle=await work.mutateStore<import("./types").TaskBundle>("task.session.continue", { taskId: work.task!.id });
-                      await work.reload();
+                      const bundle=await work.mutateStore<TaskBundle>("task.session.continue", {requestId:`continue-session:${sourceSessionId}`,taskId:work.task!.id });
+                      await work.reloadConfirmed();
                       select(bundle.task,bundle.coordinationSession.id);
                     })().catch(work.fail);
-                  }}>开始新一段对话</Menu.Item>)}
+                  }}>{uiText("开始新一段对话")}</Menu.Item>)}
                   {(
                     [
-                      ["rename", "重命名任务"],
-                      ["archive", "归档任务"],
-                      ["trash", "移入废纸篓（仅空任务）"],
+                      ["rename", uiText("重命名任务")],
+                      ["archive", uiText("归档任务")],
+                      ["trash", uiText("移入废纸篓（仅空任务）")],
                     ] as const
                   ).map(([action, label]) => (
                     <Menu.Item
@@ -478,21 +490,18 @@ export function App() {
                   <Menu.Item
                     className="menu-item"
                     disabled={work.running || !work.session}
-                    onSelect={() =>
-                      void work
-                        .mutateStore<import("./types").TaskBundle>(
-                          "dcodeSession.copy",
-                          { dcodeSessionId: work.session!.id },
-                        )
-                        .then(async (bundle) => {
-                          await work.reload();
-                          select(bundle.task, bundle.coordinationSession.id);
-                        })
-                        .catch(work.fail)
-                    }
+                    onSelect={() => {void (async()=>{
+                      const sourceSessionId=work.session!.id;
+                      let pending=pendingSessionCopies.current.get(sourceSessionId);
+                      if(!pending){pending={requestId:crypto.randomUUID()};pendingSessionCopies.current.set(sourceSessionId,pending);}
+                      const bundle=pending.bundle??await work.mutateStore<TaskBundle>("dcodeSession.copy",{requestId:pending.requestId,dcodeSessionId:sourceSessionId});
+                      pending.bundle=bundle;
+                      await work.reloadConfirmed();
+                      select(bundle.task,bundle.coordinationSession.id);
+                      pendingSessionCopies.current.delete(sourceSessionId);
+                    })().catch(work.fail);}}
                   >
-                    复制完整会话为新任务
-                  </Menu.Item>
+                    {uiText("复制完整会话为新任务")}</Menu.Item>
                 </Menu.Content>
               </Menu.Portal>
             </Menu.Root>
@@ -502,13 +511,12 @@ export function App() {
               className="text-button"
               onClick={() => {setTarget(undefined);display.set({ page: "task" });}}
             >
-              返回任务
-            </button>
+              {uiText("返回任务")}</button>
           ) : (
             work.task && display.page==="task" && (
               <button
                 className="icon-button"
-                aria-label="任务概览"
+                aria-label={uiText("任务概览")}
                 aria-pressed={display.overview&&!inspector&&!sourceTarget&&!files.visible}
                 onClick={() => {
                   if (inspector||sourceTarget||files.visible){setSourceTarget(null);openDetail(null);display.set({overview:true});}
@@ -520,43 +528,44 @@ export function App() {
             )
           )}
         </header>
-        {display.page==="task"&&ideaSources.length>0&&<div className="idea-task-context" aria-label="任务引用的灵感"><Sparkles size={14}/><span>下次运行的灵感</span>{ideaSources.map(source=><button type="button" className="idea-context-tag" key={source.id} onClick={()=>openSource({taskId:work.task!.id,contextSourceId:source.id})}>查看 {source.title} · 第 {source.inspirationVersion!.revision} 版</button>)}</div>}
-        {work.loadError ? (
+        {work.loadError&&work.snapshot&&<div className="workspace-refresh-error" role="alert"><span>{uiText("任务暂时无法刷新，当前内容可能已过期。")}</span><button type="button" className="text-button" onClick={()=>void work.reload()}>{uiText("重新读取")}</button></div>}
+        {display.page==="task"&&ideaSources.length>0&&<div className="idea-task-context" aria-label={uiText("任务引用的灵感")}><Sparkles size={14}/><span>{uiText("下次运行的灵感")}</span>{ideaSources.map(source=><button type="button" className="idea-context-tag" key={source.id} onClick={()=>openSource({taskId:work.task!.id,contextSourceId:source.id})}>{uiText("查看 ")}{source.title} {uiText(" · 第 ")}{source.inspirationVersion!.revision} {uiText(" 版")}</button>)}</div>}
+        {work.loadError&&!work.snapshot ? (
           <div className="workspace-error" role="alert">
             <AlertCircle />
-            <h2>暂时无法读取任务</h2>
+            <h2>{uiText("暂时无法读取任务")}</h2>
             <p>{errorText(work.loadError)}</p>
             <button className="text-button" onClick={() => void work.reload()}>
-              重试
-            </button>
+              {uiText("重试")}</button>
             <button className="text-button" onClick={() => void work.restart()}>
-              重新连接
-            </button>
+              {uiText("重新连接")}</button>
           </div>
         ) : !work.snapshot ? (
-          <LoadingPlaceholder label="正在读取工作台…"/>
+          <LoadingPlaceholder label={uiText("正在读取工作台…")}/>
         ) : display.page==="inspiration" ? <InspirationWorkspace model={inspiration} pathForFile={file=>api().getPathForFile(file)} canSaveFromTask={!!work.task}/> : (
           <div className={`work-area ${inspector||sourceTarget||files.visible ? "with-inspector" : ""} ${showNewTask ? "new-task-stage" : ""} ${files.expanded ? "file-expanded" : ""}`}>
             {showNewTask && !files.expanded && <NewTaskScene />}
             <section className={`conversation-space ${showNewTask ? "new-conversation" : ""}`} inert={files.expanded||undefined} aria-hidden={files.expanded||undefined} onKeyDown={event => {
               if (showNewTask && event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing && !event.currentTarget.querySelector('[role="listbox"]')) returnFromDraft();
             }}>
-              {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onOpenSummarySource={()=>display.set({overview:false})} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||"新灵感",markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
+              {<Transcript key={work.session?.id ?? "new"} work={work} emptyBrand={<Logo />} onOpenSummarySource={()=>display.set({overview:false})} onSaveInspiration={text=>{inspiration.begin("text",{title:text.trim().split("\n")[0]?.slice(0,80)||uiText("新灵感"),markdown:text,...(work.task?{sourceTaskId:work.task.id}:{})});setTarget(undefined);display.set({page:"inspiration"});}} />}
               <div className="reading-lane">
                 <ExtensionRequests work={work}/>
-                {work.session?.kind === "standard" ? <button className="text-button" onClick={() => select(work.task!)}>返回当前主对话</button> : <Composer
+                {work.session?.kind === "standard" ? <button className="text-button" onClick={() => select(work.task!)}>{uiText("返回当前主对话")}</button> : <Composer
                   work={work}
                   models={models}
                   pathForFile={(file)=>api().getPathForFile(file)}
                   onSettings={() => display.set({ page: "settings" })}
                   onCommandMenuChange={setCommandMenuOpen}
+                  workflowOpenSignal={workflowOpenSignal}
+                  onWorkflowSignalConsumed={()=>setWorkflowOpenSignal(0)}
                 />}
               </div>
             </section>
             <AnimatePresence>
               {work.task && display.overview && !inspector && !files.visible && (
                 <motion.aside
-                  aria-label="任务概览"
+                  aria-label={uiText("任务概览")}
                   className="overview"
                   initial={{ opacity: 0, y: reduced ? 0 : -6 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -569,12 +578,14 @@ export function App() {
                     onClose={() => display.set({ overview: false })}
                     onSelect={select}
                     onDetail={openDetail}
+                    onWorkflow={()=>{setWorkflowOpenSignal(value=>value+1);display.set({overview:false});}}
                   />
                 </motion.aside>
               )}
             </AnimatePresence>
-            {(files.tabs.length>0||files.notice)&&<aside className={`inspector file-inspector ${files.expanded?"is-expanded":""}`} aria-label="文件详情" hidden={!files.visible}>
-              <div className="panel-heading"><strong>文件</strong><span className="spacer"/>{files.active&&<button id="file-size-toggle" className={files.expanded?"text-button":"icon-button"} aria-label={files.expanded?"返回对话":"展开文件内容"} aria-expanded={files.expanded} title={files.expanded?"返回对话":"展开文件内容"} onClick={()=>{if(files.expanded){files.collapse();requestAnimationFrame(()=>document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus({preventScroll:true}));}else{files.expand();requestAnimationFrame(()=>document.getElementById("file-size-toggle")?.focus({preventScroll:true}));}}}>{files.expanded?<><Minimize2 size={15}/>返回对话</>:<Maximize2 size={15}/>}</button>}<button className="icon-button" aria-label="收起文件详情" onClick={files.conversation}><X size={15}/></button></div>
+            {files.visible&&!files.expanded&&<button type="button" className="inspector-scrim" aria-label={uiText("关闭文件覆盖层")} onClick={files.conversation}/>}
+            {(files.tabs.length>0||files.notice)&&<aside className={`inspector file-inspector ${files.expanded?"is-expanded":""}`} aria-label={uiText("文件详情")} hidden={!files.visible}>
+              <div className="panel-heading"><strong>{uiText("文件")}</strong><span className="spacer"/>{files.active&&<button id="file-size-toggle" className={files.expanded?"text-button":"icon-button"} aria-label={files.expanded?uiText("返回对话"):uiText("展开文件内容")} aria-expanded={files.expanded} title={files.expanded?uiText("返回对话"):uiText("展开文件内容")} onClick={()=>{if(files.expanded){files.collapse();requestAnimationFrame(()=>document.querySelector<HTMLTextAreaElement>("[data-composer]")?.focus({preventScroll:true}));}else{files.expand();requestAnimationFrame(()=>document.getElementById("file-size-toggle")?.focus({preventScroll:true}));}}}>{files.expanded?<><Minimize2 size={15}/>{uiText("返回对话")}</>:<Maximize2 size={15}/>}</button>}<button className="icon-button" aria-label={uiText("收起文件详情")} onClick={files.conversation}><X size={15}/></button></div>
               <WorkspaceFiles model={files} work={work} overlay={contextOpen||commandMenuOpen||!!projectMenuId||display.search||display.importing||display.projectForm||!!taskAction}/>
             </aside>}
             {sourceTarget&&work.task?.id===sourceTarget.taskId&&!files.visible&&<SourceDetail selector={sourceTarget} onClose={()=>setSourceTarget(null)}/>}
@@ -592,22 +603,22 @@ export function App() {
         {work.hostDead && (
           <div className="recovery" role="alert">
             <AlertCircle size={20} />
-            <strong>运行服务已退出</strong>
-            <p>任务记录已保留。重新连接后可继续工作。</p>
+            <strong>{uiText("运行服务已退出")}</strong>
+            <p>{uiText("任务记录已保留。重新连接后可继续工作。")}</p>
             {work.error && <p>{work.error}</p>}
             <button
               className="primary-button"
               disabled={work.restarting}
               onClick={() => void work.restart()}
             >
-              {work.restarting ? "正在重新连接…" : "重新连接"}
+              {work.restarting ? uiText("正在重新连接…") : uiText("重新连接")}
             </button>
           </div>
         )}
       </main>
       {taskAction && (
         <Overlay
-          label={taskAction.action === "rename" ? "重命名任务" : "归档任务"}
+          label={taskAction.action === "rename" ? uiText("重命名任务") : uiText("归档任务")}
           onClose={() => {
             if (!taskActionBusy) setTaskAction(null);
           }}
@@ -621,26 +632,26 @@ export function App() {
             <div className="panel-heading">
               <strong>
                 {taskAction.action === "rename"
-                  ? "重命名任务"
+                  ? uiText("重命名任务")
                   : taskAction.action === "trash"
-                    ? "将空任务移入废纸篓"
-                    : "归档任务"}
+                    ? uiText("将空任务移入废纸篓")
+                    : uiText("归档任务")}
               </strong>
             </div>
             <div className="form-fields">
               {taskAction.action === "rename" ? (
                 <label>
-                  任务名称
-                  <input
-                    autoFocus
+                  {uiText("任务名称")}<input
+                    data-dialog-initial-focus
                     required
                     maxLength={200}
                     value={taskTitle}
+                    disabled={taskActionBusy}
                     onChange={(e) => setTaskTitle(e.target.value)}
                   />
                 </label>
               ) : (
-                <p>“{taskTitle}”的记录会保留，可从设置中的已归档任务恢复。</p>
+                <p>“{taskTitle}{uiText("”的记录会保留，可从设置中的已归档任务恢复。")}</p>
               )}
               {taskActionError && <p role="alert">{taskActionError}</p>}
             </div>
@@ -651,13 +662,12 @@ export function App() {
                 disabled={taskActionBusy}
                 onClick={() => setTaskAction(null)}
               >
-                取消
-              </button>
+                {uiText("取消")}</button>
               <button
                 className="primary-button"
                 disabled={taskActionBusy || !taskTitle.trim()}
               >
-                {taskActionBusy ? "正在保存…" : "确认"}
+                {taskActionBusy ? uiText("正在保存…") : uiText("确认")}
               </button>
             </div>
           </form>
@@ -672,13 +682,14 @@ export function App() {
       )}
       {display.importing && work.snapshot && (
         <Overlay
-          label="导入 Pi 会话"
-          onClose={() => display.set({ importing: false })}
+          label={uiText("导入 Pi 会话")}
+          onClose={closeImport}
         >
           <ImportPanel
-            onClose={() => display.set({ importing: false })}
+            onClose={closeImport}
+            onBusyChange={busy=>{importBusy.current=busy;}}
             onImported={async (bundle) => {
-              await work.reload();
+              await work.reloadConfirmed();
               select(bundle.task, bundle.coordinationSession.id);
             }}
             userId={work.snapshot.currentUser.id}
@@ -688,9 +699,9 @@ export function App() {
       )}
       {display.projectForm && (
         <Overlay
-          label={projectEditingId?"编辑项目":"新建项目"}
+          label={projectEditingId?uiText("编辑项目"):uiText("新建项目")}
           returnFocus={projectEditingId?()=>document.getElementById(`project-actions-${projectEditingId}`):undefined}
-          onClose={() => display.set({ projectForm: false })}
+          onClose={closeProjectForm}
         >
           <ProjectForm
             key={projectEditingId??"new"}
@@ -698,12 +709,13 @@ export function App() {
             project={work.snapshot?.projects.find(project=>project.id===projectEditingId)}
             beforeDirectoryChange={files.beforeProjectDirectoryChange}
             afterDirectoryChange={files.invalidateProject}
-            onClose={() => display.set({ projectForm: false })}
+            onClose={closeProjectForm}
+            onBusyChange={busy=>{projectFormBusy.current=busy;}}
           />
         </Overlay>
       )}
-      {contextOpen&&work.task&&<Overlay label="上下文与运行依据" onClose={()=>setContextOpen(false)}><div className="panel-heading"><strong>上下文与运行依据</strong><button className="icon-button" aria-label="关闭上下文" onClick={()=>setContextOpen(false)}><X size={15}/></button></div><TaskContext key={work.task.id} work={work}/></Overlay>}
-      {usedSourceId&&work.task&&usedSourceTaskId.current===work.task.id&&<Overlay label="已用来源" onClose={()=>setUsedSourceId(null)}><div className="panel-heading"><strong>已用来源</strong><button className="icon-button" aria-label="关闭来源" onClick={()=>setUsedSourceId(null)}><X size={15}/></button></div><UsedSourceDetail key={`${work.task.id}:${usedSourceId}`} taskId={work.task.id} sourceUseId={usedSourceId} onOpenSession={sessionId=>{setUsedSourceId(null);select(work.task!,sessionId);}}/></Overlay>}
+      {contextOpen&&work.task&&<Overlay label={uiText("上下文与运行依据")} onClose={()=>setContextOpen(false)}><div className="panel-heading"><strong>{uiText("上下文与运行依据")}</strong><button className="icon-button" aria-label={uiText("关闭上下文")} onClick={()=>setContextOpen(false)}><X size={15}/></button></div><TaskContext key={work.task.id} work={work}/></Overlay>}
+      {usedSourceId&&work.task&&usedSourceTaskId.current===work.task.id&&<Overlay label={uiText("已用来源")} onClose={()=>setUsedSourceId(null)}><div className="panel-heading"><strong>{uiText("已用来源")}</strong><button className="icon-button" aria-label={uiText("关闭来源")} onClick={()=>setUsedSourceId(null)}><X size={15}/></button></div><UsedSourceDetail key={`${work.task.id}:${usedSourceId}`} taskId={work.task.id} sourceUseId={usedSourceId} onOpenSession={sessionId=>{setUsedSourceId(null);select(work.task!,sessionId);}}/></Overlay>}
       <FileCloseDialog model={files}/>
     </div></FileReferenceContext.Provider></TaskSourceReferenceContext.Provider>
   );
@@ -747,12 +759,12 @@ function TaskRow({
     <div>
       <button
         className="nav-row task-row"
-        aria-current={active && work.task?.id === task.id && (recent||work.session?.kind!=="child") ? "page" : undefined}
+        aria-current={!recent && active && work.task?.id === task.id && work.session?.kind!=="child" ? "page" : undefined}
         onClick={() => select(task)}
       >
         <span>{task.title}</span>
         {failed && ["failed", "interrupted", "unknown"].includes(failed) && (
-          <AlertCircle size={13} aria-label="执行需要处理" />
+          <AlertCircle size={13} aria-label={uiText("执行需要处理")} />
         )}
         {recent && <small>{relativeTime(task.updatedAt)}</small>}
       </button>
@@ -760,7 +772,7 @@ function TaskRow({
         <details className="child-sessions" ref={childDisclosure}>
           <summary>
             <ChevronRight size={12} />
-            <span>子会话</span>
+            <span>{uiText("子会话")}</span>
             <small>{children.length}</small>
           </summary>
           {children.map((s) => (
@@ -776,7 +788,7 @@ function TaskRow({
           ))}
         </details>
       )}
-      {history.length > 0 && <details className="child-sessions"><summary><ChevronRight size={12}/><span>历史对话</span><small>{history.length}</small></summary>{history.map(session => <button className="nav-row" key={session.id} aria-current={active && work.session?.id === session.id ? "page" : undefined} onClick={() => select(task, session.id)}><MessageSquare size={12}/><span>{session.title}</span></button>)}</details>}
+      {history.length > 0 && <details className="child-sessions"><summary><ChevronRight size={12}/><span>{uiText("历史对话")}</span><small>{history.length}</small></summary>{history.map(session => <button className="nav-row" key={session.id} aria-current={active && work.session?.id === session.id ? "page" : undefined} onClick={() => select(task, session.id)}><MessageSquare size={12}/><span>{session.title}</span></button>)}</details>}
     </div>
   );
 }
@@ -802,10 +814,10 @@ function RunStats({ work }: { work: Workbench }) {
     seconds === null
       ? null
       : seconds >= 3600
-        ? `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`
+        ? uiText("{0} 小时 {1} 分", [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60)])
         : seconds >= 60
-          ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
-          : `${seconds} 秒`;
+          ? uiText("{0} 分 {1} 秒", [Math.floor(seconds / 60), seconds % 60])
+          : uiText("{0} 秒", [seconds]);
   const items =
     work.snapshot?.taskWorkItems.filter(
       (item) => item.taskId === work.task?.id,
@@ -814,16 +826,16 @@ function RunStats({ work }: { work: Workbench }) {
     <p className="run-statistics">
       {elapsed && (
         <span>
-          {work.running ? "运行中" : "本次执行"} · {elapsed}
+          {work.running ? uiText("运行中") : uiText("本次执行")} · {elapsed}
         </span>
       )}
       <span>
-        消息{" "}
+        {uiText("消息")}{" "}
         {work.presentation?.inspection?.context.messageCount ??
           work.imported.length}
       </span>
       <span>
-        工作项 {items.filter((item) => item.state === "completed").length} /{" "}
+        {uiText("工作项 ")}{items.filter((item) => item.state === "completed").length} /{" "}
         {items.length}
       </span>
     </p>
@@ -835,11 +847,13 @@ function Overview({
   onClose,
   onSelect,
   onDetail,
+  onWorkflow,
 }: {
   work: Workbench;
   onClose: () => void;
   onSelect: (task: TaskRecord, sessionId?: string) => void;
   onDetail: (target: TaskWorkbenchInspectorTarget) => void;
+  onWorkflow: () => void;
 }) {
   const snapshot = work.snapshot!;
   const task = work.task!;
@@ -872,19 +886,31 @@ function Overview({
   const reviews = snapshot.taskReviewRequests.filter(review => review.taskId === task.id);
   const reviewRound=(review:(typeof reviews)[number])=>reviews.filter(item=>item.path===review.path&&item.staged===review.staged).findIndex(item=>item.id===review.id)+1;
   const openReview=(review:(typeof reviews)[number])=>{const request=++reviewRequest.current;setReviewDetail(null);setReviewError("");void api().request<{diff:string}>("task.review.read",{taskId:task.id,reviewId:review.id}).then(result=>{if(request===reviewRequest.current)setReviewDetail({id:review.id,path:review.path,digest:review.digest,baseHead:review.baseHead,round:reviewRound(review),diff:result.diff});}).catch(reason=>{if(request===reviewRequest.current)setReviewError(errorText(reason));});};
-  const members = snapshot.agentRuns.filter((r) => r.taskId === task.id);
   const requests = snapshot.agentRequests.filter(
     (r) => r.taskId === task.id && r.status === "open",
   );
   const artifacts = snapshot.artifacts.filter((a) => a.taskId === task.id && a.kind !== "attachment");
   const reports = snapshot.agentReports.filter((r) => r.taskId === task.id);
+  const activeWorkflowRun=snapshot.taskWorkflowRuns.find(run=>run.taskId===task.id&&run.status==="active");
+  const workflow=activeWorkflowRun?snapshot.taskWorkflows.find(item=>item.id===activeWorkflowRun.workflowId):snapshot.taskWorkflows.filter(item=>item.taskId===task.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+  const workflowRun=activeWorkflowRun??snapshot.taskWorkflowRuns.filter(run=>run.workflowId===workflow?.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+  const workflowVersion=workflow?snapshot.taskWorkflowVersions.find(item=>item.workflowId===workflow.id&&item.version===(workflowRun?.version??workflow.currentVersion)):undefined;
+  const workflowStages=workflow?snapshot.taskWorkflowStages.filter(stage=>stage.workflowId===workflow.id&&stage.version===(workflowRun?.version??workflow.currentVersion)).sort((a,b)=>a.ordinal-b.ordinal):[];
+  const stageWork=(stageId:string)=>{const binding=snapshot.taskWorkflowWorkItems.find(item=>item.runId===workflowRun?.id&&item.stageId===stageId);return binding?snapshot.taskWorkItems.find(item=>item.id===binding.workItemId):undefined;};
+  const completedWorkflowStages=workflowStages.filter(stage=>stageWork(stage.id)?.state==="completed").length;
+  const currentWorkflowStage=workflowStages.find(stage=>stageWork(stage.id)?.state!=="completed")??workflowStages.at(-1);
+  const currentWorkflowWork=currentWorkflowStage?stageWork(currentWorkflowStage.id):undefined;
+  const workflowMembers=workflowRun&&currentWorkflowStage?snapshot.agentAssignments.filter(assignment=>{const binding=(assignment.taskPacket as {workflowBinding?:{workflowRunId?:string;stageId?:string}}|undefined)?.workflowBinding;return binding?.workflowRunId===workflowRun.id&&binding.stageId===currentWorkflowStage.id;}).map(assignment=>snapshot.agentRuns.find(run=>run.id===assignment.agentRunId)).filter((run):run is NonNullable<typeof run>=>!!run):[];
+  const workflowMemberNames=workflowMembers.map(run=>snapshot.sessions.find(session=>session.id===run.sessionId)?.title??run.id.slice(-6));
+  const workflowReportCount=workflowRun?snapshot.agentReports.filter(report=>report.taskId===task.id&&workflowMembers.some(run=>run.id===report.agentRunId)).length:0;
+  const workflowNext=workflowRun?.status==="completed"?uiText("查看整体报告；任务仍需单独验收"):workflowRun?.status==="stopped"?uiText("核对在途结果后继续"):workflowRun?.status==="interrupted"?uiText("核对中断结果后继续"):!workflowStages.length?uiText("等待协调者形成阶段"):currentWorkflowWork?.state==="blocked"?uiText("处理阶段阻塞与返工"):completedWorkflowStages===workflowStages.length?uiText("核对证据并形成整体报告"):!currentWorkflowWork?uiText("等待协调者派发当前阶段"):uiText("等待成员结果与独立验收");
   return (
     <>
       <div className="panel-heading">
-        <strong>任务概览</strong>
+        <strong>{uiText("任务概览")}</strong>
         <button
           className="icon-button"
-          aria-label="关闭任务概览"
+          aria-label={uiText("关闭任务概览")}
           onClick={onClose}
         >
           <X size={14} />
@@ -892,10 +918,11 @@ function Overview({
       </div>
       {section(
         "progress",
-        "进度",
+        uiText("进度"),
         <>
           <p>{task.goal}</p>
           <TaskRouteSummary snapshot={snapshot} taskId={task.id} onMember={sessionId => onSelect(task, sessionId)} />
+          {workflow&&<div className="overview-workflow"><div><strong>{uiText("工作流 · ")}{workflowRun?workflowRun.status==="active"?uiText("进行中"):workflowRun.status==="stopped"?uiText("已停止后续推进"):workflowRun.status==="interrupted"?uiText("中断待核对"):uiText("已完成"):uiText("待开始")}</strong><button type="button" className="text-button" onClick={onWorkflow}>{uiText("查看工作流")}</button></div><p>{workflowVersion?.goal??uiText("正在读取安排")}</p><p>{uiText("当前阶段：")}{currentWorkflowStage?.title??uiText("尚未形成")}{currentWorkflowWork?` · ${stateLabel(currentWorkflowWork.state)}`:""}</p>{workflowRun?.reason&&<p>{uiText("原因：")}{workflowRun.reason}</p>}<p>{uiText("成员：")}{workflowMemberNames.length?workflowMemberNames.join("、"):uiText("待派发")}</p><p>{uiText("已验收阶段 ")}{completedWorkflowStages}/{workflowStages.length} {uiText(" · 当前阶段成员报告 ")}{workflowReportCount}</p><p>{uiText("下一步：")}{workflowNext}</p></div>}
           <RunStats work={work} />
           {work.run && (
             <p className="secondary">{stateLabel(work.run.status)}</p>
@@ -919,34 +946,19 @@ function Overview({
               ))}
             </ul>
           ) : (
-            <p className="secondary">尚未制定工作清单</p>
+            <p className="secondary">{uiText("尚未制定工作清单")}</p>
           )}
-          {reviews.length>0&&<div className="task-reviews"><strong>审查</strong><ul>{reviews.map(review=>{const verification=snapshot.verifications?.filter(record=>record.subjectReviewId===review.id).at(-1);const checked=verification&&snapshot.coordinatorReviews?.find(item=>item.verificationId===verification.id);return <li key={review.id}><button className="text-button" onClick={()=>openReview(review)}>{review.path} · 第 {reviewRound(review)} 次 · {review.digest.slice(7,15)}</button><small>{checked?checked.outcome==="accepted"?"协调复核通过":checked.outcome==="rework"?"需要返工":"需要复查":verification?verification.verdict==="pass"?"独立检查通过，待复核":"发现问题，待复核":"待独立检查"}</small></li>;})}</ul>{reviewError&&<p role="alert" className="inline-error">{reviewError}</p>}{reviewDetail&&<div className="task-review-snapshot"><div><strong>{reviewDetail.path} · 第 {reviewDetail.round} 次审查的差异</strong><button className="text-button" onClick={()=>{reviewRequest.current++;setReviewDetail(null);}}>关闭</button></div><pre>{reviewDetail.diff}</pre><details><summary>审查身份</summary><p className="secondary">{reviewDetail.id} · {reviewDetail.digest} · HEAD {reviewDetail.baseHead}</p></details></div>}</div>}
+          {reviews.length>0&&<div className="task-reviews"><strong>{uiText("审查")}</strong><ul>{reviews.map(review=>{const verification=snapshot.verifications?.filter(record=>record.subjectReviewId===review.id).at(-1);const checked=verification&&snapshot.coordinatorReviews?.find(item=>item.verificationId===verification.id);return <li key={review.id}><button className="text-button" onClick={()=>openReview(review)}>{review.path} {uiText(" · 第 ")}{reviewRound(review)} {uiText(" 次 · ")}{review.digest.slice(7,15)}</button><small>{checked?checked.outcome==="accepted"?uiText("协调复核通过"):checked.outcome==="rework"?uiText("需要返工"):uiText("需要复查"):verification?verification.verdict==="pass"?uiText("独立检查通过，待复核"):uiText("发现问题，待复核"):uiText("待独立检查")}</small></li>;})}</ul>{reviewError&&<p role="alert" className="inline-error">{reviewError}</p>}{reviewDetail&&<div className="task-review-snapshot"><div><strong>{reviewDetail.path} {uiText(" · 第 ")}{reviewDetail.round} {uiText(" 次审查的差异")}</strong><button className="text-button" onClick={()=>{reviewRequest.current++;setReviewDetail(null);}}>{uiText("关闭")}</button></div><pre>{reviewDetail.diff}</pre><details><summary>{uiText("审查身份")}</summary><p className="secondary">{reviewDetail.id} · {reviewDetail.digest} · HEAD {reviewDetail.baseHead}</p></details></div>}</div>}
         </>,
       )}
       {section(
         "team",
-        "团队",
-        members.length ? (
-          <><AuxiliaryActivities work={work} taskWide/><ul className="members">
-            {members.map((m) => (
-              <li key={m.id}>
-                <button onClick={() => onSelect(task, m.sessionId)}>
-                  <span>
-                    {snapshot.sessions.find(session=>session.id===m.sessionId)?.title??profileName(snapshot.agentProfiles.find((p) => p.id === m.profileId))}
-                  </span>
-                  <small>{stateLabel(m.status)}</small>
-                </button>
-              </li>
-            ))}
-          </ul></>
-        ) : (
-          <p className="secondary">任务开始后显示执行成员</p>
-        ),
+        uiText("团队"),
+        <><AuxiliaryActivities work={work} taskWide/><TeamOverview snapshot={snapshot} task={task} onSelect={sessionId => onSelect(task, sessionId)} onDetail={onDetail}/></>,
       )}
       {section(
         "waiting",
-        `等待处理${requests.length ? ` · ${requests.length}` : ""}`,
+        uiText("等待处理{0}", [requests.length ? ` · ${requests.length}` : ""]),
         requests.length ? (
           requests.map((request) => (
             <RequestActions
@@ -957,12 +969,12 @@ function Overview({
             />
           ))
         ) : (
-          <p className="secondary">没有等待事项</p>
+          <p className="secondary">{uiText("没有等待事项")}</p>
         ),
       )}
       {section(
         "deliverables",
-        "交付物",
+        uiText("交付物"),
         artifacts.length || reports.length ? (
           <ul className="deliverables">
             {artifacts.map((a) => (
@@ -979,13 +991,13 @@ function Overview({
               <li key={r.id}>
                 <button onClick={() => onDetail({ kind: "report", id: r.id })}>
                   <FileText size={13} />
-                  {r.reportKind==="verification"?"验收报告":r.reportKind==="coordinator"?"综合报告":"成员报告"} · {snapshot.sessions.find(session=>session.id===snapshot.agentRuns.find(run=>run.id===r.agentRunId)?.sessionId)?.title??"成员"}
+                  {r.reportKind==="verification"?uiText("验收报告"):r.reportKind==="coordinator"?uiText("综合报告"):uiText("成员报告")} · {snapshot.sessions.find(session=>session.id===snapshot.agentRuns.find(run=>run.id===r.agentRunId)?.sessionId)?.title??uiText("成员")}
                 </button>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="secondary">尚无交付物</p>
+          <p className="secondary">{uiText("尚无交付物")}</p>
         ),
       )}
     </>
@@ -1052,8 +1064,8 @@ function RequestActions({
         <>
           <textarea
             className="request-feedback"
-            aria-label="验收反馈"
-            placeholder="需要调整的地方（可选）"
+            aria-label={uiText("验收反馈")}
+            placeholder={uiText("需要调整的地方（可选）")}
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             maxLength={20000}
@@ -1063,15 +1075,13 @@ function RequestActions({
             disabled={busy}
             onClick={() => void respond()}
           >
-            验收通过
-          </button>
+            {uiText("验收通过")}</button>
           <button
             className="text-button"
             disabled={busy || !feedback.trim()}
             onClick={() => void respond(undefined, true)}
           >
-            提交反馈
-          </button>
+            {uiText("提交反馈")}</button>
         </>
       )}
     </div>
@@ -1105,14 +1115,14 @@ function Inspector({
               (e) => e.id === target.id && e.taskId === taskId,
             )
           : undefined;
-  const verification=target.kind==="report"?snapshot.verifications?.find(record=>record.id===target.id):undefined;
+  const verification=target.kind==="report"?snapshot.verifications?.find(record=>record.id===target.id&&record.taskId===taskId):undefined;
   const review=verification?snapshot.coordinatorReviews?.find(record=>record.verificationId===verification.id):undefined;
-  const title = verification ? "验收报告" :
+  const title = verification ? uiText("验收报告") :
     item && "title" in item
       ? item.title
       : target.kind === "report"
-        ? "执行报告"
-        : "记录详情";
+        ? uiText("执行报告")
+        : uiText("记录详情");
   const content =
     item && "body" in item
       ? item.body
@@ -1122,36 +1132,36 @@ function Inspector({
           ? item.payload
           : null;
   return (
-    <aside className="inspector" aria-label="对象详情">
+    <aside className="inspector" aria-label={uiText("对象详情")}>
       <div className="panel-heading">
         <strong>{title}</strong>
-        <button className="icon-button" aria-label="关闭详情" onClick={onClose}>
+        <button className="icon-button" aria-label={uiText("关闭详情")} onClick={onClose}>
           <X size={15} />
         </button>
       </div>
       <div className="inspector-content">
-        {item ? (
+        {item || verification ? (
           <>
-            {verification&&<><p>{verification.verdict==="pass"?"独立验收通过":"独立验收未通过"} · {review?({accepted:"协调复核通过",rework:"已安排返工",recheck:"已安排复验"})[review.outcome]:"待协调者复核"}</p><Markdown text={verification.summary}/>{verification.findings.length>0&&<ul>{verification.findings.map((finding,index)=><li key={index}>{finding.kind==="product"?"成果问题":"验收依据"}：{finding.description}</li>)}</ul>}{review&&<Markdown text={review.reason}/>}<p className="secondary">{verification.evidenceIds.length} 项独立检查记录</p></>}
+            {verification&&<><p>{verification.verdict==="pass"?uiText("独立验收通过"):uiText("独立验收未通过")} · {review?({accepted:uiText("协调复核通过"),rework:uiText("已安排返工"),recheck:uiText("已安排复验")})[review.outcome]:uiText("待协调者复核")}</p><Markdown text={verification.summary}/>{verification.findings.length>0&&<ul>{verification.findings.map((finding,index)=><li key={index}>{finding.kind==="product"?uiText("成果问题"):uiText("验收依据")}：{finding.description}</li>)}</ul>}{review&&<Markdown text={review.reason}/>}<p className="secondary">{verification.evidenceIds.length} {uiText(" 项独立检查记录")}</p></>}
             {!verification&&content != null && (
               <Markdown
                 text={
                   typeof content === "string"
                     ? content
-                    : typeof content==="object"&&content!==null&&"text" in content&&typeof content.text==="string"?content.text:"记录已保存，可在相关产物与执行过程查看详情。"
+                    : typeof content==="object"&&content!==null&&"text" in content&&typeof content.text==="string"?content.text:uiText("记录已保存，可在相关产物与执行过程查看详情。")
                 }
               />
             )}{" "}
-            {target.kind==="artifact"&&("managedPath" in item&&item.managedPath||"externalPath" in item&&item.externalPath)&&<button className="primary-button" onClick={()=>onOpenArtifact(item.id)}>打开产物</button>}
-            {"managedPath" in item && item.managedPath && (
+            {target.kind==="artifact"&&item&&("managedPath" in item&&item.managedPath||"externalPath" in item&&item.externalPath)&&<button className="primary-button" onClick={()=>onOpenArtifact(item.id)}>{uiText("打开产物")}</button>}
+            {item && "managedPath" in item && item.managedPath && (
               <p className="source-path">{item.managedPath}</p>
             )}
-            {"externalPath" in item && item.externalPath && (
+            {item && "externalPath" in item && item.externalPath && (
               <p className="source-path">{item.externalPath}</p>
             )}
           </>
         ) : (
-          <p>此记录已不可用。关闭后可选择其他交付物。</p>
+          <p>{uiText("此记录已不可用。关闭后可选择其他交付物。")}</p>
         )}
       </div>
     </aside>
@@ -1168,36 +1178,12 @@ function Overlay({
   children: ReactNode;
   returnFocus?:()=>HTMLElement|null;
 }) {
-  const panel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    panel.current?.querySelector<HTMLElement>("input,button,textarea")?.focus();
-    return () => (returnFocus?.()??previous)?.focus();
-  }, []);
+  const panel=useModalFocus<HTMLDivElement>({onClose,returnFocus});
   return (
     <div
       className="overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-        if (e.key === "Tab") {
-          const elements = [
-            ...(panel.current?.querySelectorAll<HTMLElement>(
-              'button:not(:disabled),input,textarea,[tabindex="0"]',
-            ) ?? []),
-          ];
-          const first = elements[0],
-            last = elements.at(-1);
-          if (e.shiftKey && document.activeElement === first) {
-            e.preventDefault();
-            last?.focus();
-          } else if (!e.shiftKey && document.activeElement === last) {
-            e.preventDefault();
-            first?.focus();
-          }
-        }
       }}
     >
       <div
@@ -1206,6 +1192,7 @@ function Overlay({
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={-1}
       >
         {children}
       </div>
@@ -1307,23 +1294,24 @@ function SearchPanel({
     return [...map.values()];
   }, [query, remote, work.snapshot]);
   return (
-    <Overlay label="搜索任务" onClose={onClose}>
+    <Overlay label={uiText("搜索任务")} onClose={onClose}>
       <div className="panel-heading input-surface">
         <Search size={17} />
         <input
-          aria-label="搜索任务与消息"
+          data-dialog-initial-focus
+          aria-label={uiText("搜索任务与消息")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索任务与消息…"
+          placeholder={uiText("搜索任务与消息…")}
         />
-        <button className="icon-button" aria-label="关闭搜索" onClick={onClose}>
+        <button className="icon-button" aria-label={uiText("关闭搜索")} onClick={onClose}>
           <X size={15} />
         </button>
       </div>
       <div className="search-results">
         {error && (
           <p role="alert" className="inline-error">
-            消息搜索暂不可用：{error}
+            {uiText("消息搜索暂不可用：")}{error}
           </p>
         )}
         {results.map((r) => (
@@ -1341,10 +1329,10 @@ function SearchPanel({
         {!results.length && (
           <p className="secondary" role="status">
             {busy
-              ? "正在搜索…"
+              ? uiText("正在搜索…")
               : query
-                ? "没有匹配结果"
-                : "输入关键词查找任务和消息"}
+                ? uiText("没有匹配结果")
+                : uiText("输入关键词查找任务和消息")}
           </p>
         )}
       </div>
@@ -1353,37 +1341,52 @@ function SearchPanel({
 }
 function ProjectForm({
   work,project,beforeDirectoryChange,afterDirectoryChange,
-  onClose,
+  onClose,onBusyChange,
 }: {
   work: Workbench;
   project?:FoundationSnapshot["projects"][number];
   beforeDirectoryChange:(projectId:string,targetDirectory:string,moveFiles:boolean)=>void;
   afterDirectoryChange:(projectId:string,targetDirectory:string,moveFiles:boolean)=>void;
   onClose: () => void;
+  onBusyChange:(busy:boolean)=>void;
 }) {
   const initial=useRef(project);
   const [title, setTitle] = useState(project?.title??"");
   const [directory, setDirectory] = useState(project?.directory??"");
   const [moveFiles,setMoveFiles]=useState(false);
   const [busy, setBusy] = useState(false);
+  const [savedRemotely,setSavedRemotely]=useState(false);
+  const saving=useRef(false);
+  const pendingWrite=useRef<{requestId:string;project?:{id:string};directoryChangeApplied?:boolean}|null>(null);
   const [error, setError] = useState<string | null>(null);
   const create = async () => {
-    if (!title.trim() || !directory || busy) return;
+    if (!title.trim() || !directory || saving.current) return;
+    saving.current=true;
     setBusy(true);
+    onBusyChange(true);
+    let completed=false;
     try {
       const changed=!!initial.current&&directory!==initial.current.directory;
-      if(changed)beforeDirectoryChange(initial.current!.id,directory,moveFiles);
-      const result = initial.current?await api().request<{project:{id:string}}>("project.update",{requestId:crypto.randomUUID(),projectId:initial.current.id,expectedProjectRevision:initial.current.revision,title:title.trim(),directory,moveFiles:changed&&moveFiles}):await work.mutateStore<{ project: { id: string } }>("project.create",{ title: title.trim(), directory });
-      if(changed)afterDirectoryChange(initial.current!.id,directory,moveFiles);
-      await work.reload();
+      const pending=pendingWrite.current??{requestId:crypto.randomUUID()};
+      pendingWrite.current=pending;
+      if(changed&&!pending.project)beforeDirectoryChange(initial.current!.id,directory,moveFiles);
+      const result=pending.project?{project:pending.project}:initial.current?await api().request<{project:{id:string}}>("project.update",{requestId:pending.requestId,projectId:initial.current.id,expectedProjectRevision:initial.current.revision,title:title.trim(),directory,moveFiles:changed&&moveFiles}):await work.mutateStore<{ project: { id: string } }>("project.create",{requestId:pending.requestId,title:title.trim(),directory});
+      pending.project=result.project;
+      setSavedRemotely(true);
+      if(changed&&!pending.directoryChangeApplied){afterDirectoryChange(initial.current!.id,directory,moveFiles);pending.directoryChangeApplied=true;}
+      await work.reloadConfirmed();
       await work.refreshPresentation();
       if(!initial.current){work.setNewProjectId(result.project.id);work.newTask();}
       useDisplay.getState().set({ page: "task" });
-      onClose();
+      pendingWrite.current=null;
+      completed=true;
     } catch (e) {
-      setError(errorText(e));
+      setError(pendingWrite.current?.project?uiText("项目已保存，但界面尚未确认刷新：{0}。请重新读取，勿重复创建。", [errorText(e)]):errorText(e));
     } finally {
+      saving.current=false;
+      onBusyChange(false);
       setBusy(false);
+      if(completed)onClose();
     }
   };
   return (
@@ -1394,31 +1397,32 @@ function ProjectForm({
       }}
     >
       <div className="panel-heading">
-        <strong>{project?"编辑项目":"新建项目"}</strong>
+        <strong>{project?uiText("编辑项目"):uiText("新建项目")}</strong>
         <button
           type="button"
           className="icon-button"
-          aria-label="关闭"
+          aria-label={uiText("关闭")}
           onClick={onClose}
+          disabled={busy}
         >
           <X size={15} />
         </button>
       </div>
       <div className="form-fields">
         <label>
-          项目名称
-          <input
-            autoFocus
+          {uiText("项目名称")}<input
+            data-dialog-initial-focus
             value={title}
+            disabled={busy||savedRemotely}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={200}
           />
         </label>
         <label>
-          项目文件夹
-          <button
+          {uiText("项目文件夹")}<button
             type="button"
             className="folder-picker"
+            disabled={busy||savedRemotely}
             onClick={() =>
               void api()
                 .chooseDirectory()
@@ -1429,22 +1433,21 @@ function ProjectForm({
             }
           >
             <Folder size={16} />
-            {directory || "选择文件夹…"}
+            {directory || uiText("选择文件夹…")}
           </button>
         </label>
-        {project&&directory!==initial.current?.directory&&<><p className="secondary">任务与对话会保留，后续工作使用新目录。</p><label className="checkbox-label"><input type="checkbox" checked={moveFiles} onChange={event=>setMoveFiles(event.target.checked)}/>同时移动项目文件</label>{moveFiles&&<p className="secondary">目标需为同一磁盘上的空文件夹，已有文件不会被合并或覆盖。</p>}</>}
-        {project&&work.snapshot?.projectDirectoryChanges?.filter(change=>change.projectId===project.id&&["prepared","unknown"].includes(change.status)).map(change=><div role="alert" key={change.id}><p>{change.error??"目录更换尚未完成"}</p><p className="source-path">{change.sourceDirectory} → {change.targetDirectory}</p><button type="button" className="text-button" onClick={()=>void api().request("project.recover",{projectId:project.id}).then(()=>work.reload()).catch(error=>setError(errorText(error)))}>重新核对目录状态</button></div>)}
+        {project&&directory!==initial.current?.directory&&<><p className="secondary">{uiText("任务与对话会保留，后续工作使用新目录。")}</p><label className="checkbox-label"><input type="checkbox" checked={moveFiles} disabled={busy||savedRemotely} onChange={event=>setMoveFiles(event.target.checked)}/>{uiText("同时移动项目文件")}</label>{moveFiles&&<p className="secondary">{uiText("目标需为同一磁盘上的空文件夹，已有文件不会被合并或覆盖。")}</p>}</>}
+        {project&&work.snapshot?.projectDirectoryChanges?.filter(change=>change.projectId===project.id&&["prepared","unknown"].includes(change.status)).map(change=><div role="alert" key={change.id}><p>{change.error??uiText("目录更换尚未完成")}</p><p className="source-path">{change.sourceDirectory} → {change.targetDirectory}</p><button type="button" className="text-button" disabled={busy} onClick={()=>void api().request("project.recover",{projectId:project.id}).then(()=>work.reload()).catch(error=>setError(errorText(error)))}>{uiText("重新核对目录状态")}</button></div>)}
         {error && <p role="alert">{error}</p>}
       </div>
       <div className="dialog-actions">
-        <button type="button" className="text-button" onClick={onClose}>
-          取消
-        </button>
+        <button type="button" className="text-button" onClick={onClose} disabled={busy}>
+          {uiText("取消")}</button>
         <button
           className="primary-button"
           disabled={!title.trim() || !directory || busy}
         >
-          {busy ? "正在保存…" : project?"保存项目":"创建项目"}
+          {busy ? uiText("正在保存…") : savedRemotely?uiText("重新读取已保存项目"):project?uiText("保存项目"):uiText("创建项目")}
         </button>
       </div>
     </form>

@@ -1,0 +1,171 @@
+{
+  "date": "2026-10-01",
+  "repository": "https://github.com/zai-org/ZCode",
+  "revision": "29628c9acdb81b703bbd4080c207a0e7ce5e276e",
+  "remoteMainVerified": "29628c9acdb81b703bbd4080c207a0e7ce5e276e",
+  "evidence": "source inspection only; no ZCode application or scheduler/terminal executed",
+  "files": [
+    {
+      "path": "LICENSE",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/LICENSE",
+      "sha256": "606c36baf38b973227273df12a74930e4b4137280eea835c5cd623aa4553c13b",
+      "bytes": 11344
+    },
+    {
+      "path": "NOTICE.md",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/NOTICE.md",
+      "sha256": "cca8e323ad7f3b12167b58fba7d14faf18a2cdc4fa890818058872f6215912bf",
+      "bytes": 27721
+    },
+    {
+      "path": "THIRD-PARTY-NOTICES.md",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/THIRD-PARTY-NOTICES.md",
+      "sha256": "874bf7c10bdcadd0df0b50fc782f39f077669c6e41bbdbccd868409cd714dec3",
+      "bytes": 1978939
+    },
+    {
+      "path": "packages/ui/package.json",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/package.json",
+      "sha256": "220e916077604008bb6ffea19d6bdf7148c4b09472bea251248a230ba3c69bf5",
+      "bytes": 3129
+    },
+    {
+      "path": "packages/ui/src/ChatMediaAttachmentPreviewDialog.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/ChatMediaAttachmentPreviewDialog.tsx",
+      "sha256": "30cdb306b4cccac05f95b4ee2775656922ca9bd35f098d723c961bb1291f58b5",
+      "bytes": 5955
+    },
+    {
+      "path": "packages/ui/src/SidePaneTerminalPane.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/SidePaneTerminalPane.tsx",
+      "sha256": "4985fee5fec86e78f727cc1a17ad273f76f651b6e8e6b154d048da9f3e844dc3",
+      "bytes": 1721
+    },
+    {
+      "path": "packages/ui/src/WorkspaceGroupedTasksSection.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/WorkspaceGroupedTasksSection.tsx",
+      "sha256": "73189664184f7366898c8023026574d48eb34df6a2eb4137b89f0d269b9d1c3e",
+      "bytes": 61307
+    },
+    {
+      "path": "packages/ui/src/components/ui/pdf-viewer.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/components/ui/pdf-viewer.tsx",
+      "sha256": "19ba82ab97a84599bb99178de85a4d5c6a89da6924ba55a0dc14f33286187fdc",
+      "bytes": 17172
+    },
+    {
+      "path": "packages/ui/src/hooks/useGroupedTaskView.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/hooks/useGroupedTaskView.ts",
+      "sha256": "589972fdb443b7ed1cff98c489e1976211a0ea71f38a284a7c8e5833f48f7f2c",
+      "bytes": 42336
+    },
+    {
+      "path": "packages/ui/src/hooks/useUsageStats.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/hooks/useUsageStats.ts",
+      "sha256": "73b9a0dcc4c9775c77a420284dc20128b3923b3a2743ad8f60f673c9840ada4a",
+      "bytes": 12245
+    },
+    {
+      "path": "packages/ui/src/settings/AutomationsSection.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/AutomationsSection.tsx",
+      "sha256": "84dee6ce8ec0debfbe138f0ff3bc5d9f40b1c2923965522f36a737c91247344d",
+      "bytes": 88194
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/SavedWorkflowGlobalGroup.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/SavedWorkflowGlobalGroup.tsx",
+      "sha256": "d80366cd5c6077d5cd64cf0062b5f3f60616b5092a5ebf8208bbad909aa0394a",
+      "bytes": 9635
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/SavedWorkflowProjectGroup.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/SavedWorkflowProjectGroup.tsx",
+      "sha256": "f2e3373b44b35f2b5050f100b796d3604c6294a2566032d233a8c82c8d815398",
+      "bytes": 16871
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/SavedWorkflowRunHistoryPanel.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/SavedWorkflowRunHistoryPanel.tsx",
+      "sha256": "7468e80bb2b99c29da713edb4d4ef23b9674c5a41f3c829a09cd23064e108502",
+      "bytes": 7930
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/SavedWorkflowsSection.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/SavedWorkflowsSection.tsx",
+      "sha256": "56100c872588aae1e76f225bdb51f18d162d875bd18d848d93293d2dd3ca7c98",
+      "bytes": 14621
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/savedWorkflowContract.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/savedWorkflowContract.ts",
+      "sha256": "deaa014b0c1b0d15d2fc0eaf353b7842610699bed4ac85418a8f9c4da5a3373a",
+      "bytes": 2046
+    },
+    {
+      "path": "packages/ui/src/settings/saved-workflows/useSavedWorkflowLauncher.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/saved-workflows/useSavedWorkflowLauncher.ts",
+      "sha256": "54b13608627898890a16e0919531259f0c15ffd74b3fdc3210cc84d9b87a380f",
+      "bytes": 9750
+    },
+    {
+      "path": "packages/ui/src/settings/usage-stats/AppUsagePanel.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/settings/usage-stats/AppUsagePanel.tsx",
+      "sha256": "88d102c410bc44a357e5b12819b17f452a29d690ab0223d5bda737ecc3139f8b",
+      "bytes": 8807
+    },
+    {
+      "path": "packages/ui/src/store/automationManagementStore.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/store/automationManagementStore.ts",
+      "sha256": "8fecbf958ff3a035e5f7a221de31c1f5a75ddd63e59ee33278d7e1ae9c4a07ab",
+      "bytes": 17463
+    },
+    {
+      "path": "packages/ui/src/terminal/TerminalSession.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/terminal/TerminalSession.tsx",
+      "sha256": "0b8a8fa17f5bda205101f4e215248042735b3185f530c13a6df77fef4fac79e9",
+      "bytes": 46732
+    },
+    {
+      "path": "packages/ui/src/v4/ConversationFileSummaryPanel.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/ConversationFileSummaryPanel.tsx",
+      "sha256": "75f81e184532c5c34a82d2856d9b3f8817bf6896cb0adb3e09a43fd9335dc056",
+      "bytes": 14674
+    },
+    {
+      "path": "packages/ui/src/v4/ConversationQueuePanel.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/ConversationQueuePanel.tsx",
+      "sha256": "5e9a446f981e895add453b765b379ae09b942d56748b6474b9535a489328b213",
+      "bytes": 12929
+    },
+    {
+      "path": "packages/ui/src/v4/conversationFindHighlightDom.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/conversationFindHighlightDom.ts",
+      "sha256": "808c5efa74ca25ad53e4b89fb5d4862c32554b632bacb5d715a7d74887c68ccc",
+      "bytes": 6365
+    },
+    {
+      "path": "packages/ui/src/v4/conversationFindIndex.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/conversationFindIndex.ts",
+      "sha256": "00495249affdae5a31891e26dffe4e362ae357b5cd31b15ebe05687e4295c6dc",
+      "bytes": 5633
+    },
+    {
+      "path": "packages/ui/src/v4/conversationRowContext.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/conversationRowContext.ts",
+      "sha256": "375f1466cb69151f16249cef230fc150ceb4823db8d5a4512f7ecfa3e2ea2ec2",
+      "bytes": 11745
+    },
+    {
+      "path": "packages/ui/src/v4/useConversationTimelineFind.ts",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/v4/useConversationTimelineFind.ts",
+      "sha256": "fb7a5efb52323e2dd947f8c7ddf42e325e1d491e4df263c31e65ad818d64d648",
+      "bytes": 13304
+    },
+    {
+      "path": "packages/ui/src/workspace-grouped-tasks/virtualized-top-level-list.tsx",
+      "source": "https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/ui/src/workspace-grouped-tasks/virtualized-top-level-list.tsx",
+      "sha256": "ab55caee5134cd1faa35a64c6cda8a883ac289bc3aec09a5aab11336165c54f2",
+      "bytes": 7173
+    }
+  ]
+}

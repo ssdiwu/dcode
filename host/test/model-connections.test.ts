@@ -40,7 +40,7 @@ function installFakeOAuth(runtime:ModelRuntime){
 test("built-in methods, safe API setup, duplicate/concurrent starts, restart and external disconnect scope",async()=>{
   const f=await fixture();try{
     const view=await f.manager.get();
-    assert.deepEqual(view.providers.find(p=>p.providerId==="openai")?.methods.map(m=>m.type),["api_key"]);
+    assert.deepEqual(view.providers.find(p=>p.providerId==="openai")?.methods.map(m=>m.type),["api_key","oauth"]);
     assert.deepEqual(view.providers.find(p=>p.providerId==="openai-codex")?.methods.map(m=>m.oauthMode),["browser","device_code"]);
     const first=f.manager.connectApiKey("openai","fixture-private-secret","one");
     const duplicate=f.manager.connectApiKey("openai","fixture-private-secret","one");

@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import { useRef, useState } from "react";
 import useSWR from "swr";
 import type { Workbench } from "../useWorkbench";
@@ -20,7 +21,7 @@ export function useComposerAttachments(work: Workbench, pathForFile:(file:File)=
     const owner = work.draftKey;
     setReading(count=>count+1);
     queue.current = queue.current.then(async()=>{
-      if(files.length>32)throw new Error("一次最多添加 32 个附件。");
+      if(files.length>32)throw new Error(uiText("一次最多添加 32 个附件。"));
       for(const file of files){
         const source=await attachmentSource(file,pathForFile);
         await latest.current.addAttachment(owner,source);

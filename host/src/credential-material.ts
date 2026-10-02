@@ -1,6 +1,8 @@
 const CREDENTIAL_PATTERNS: RegExp[] = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
+  /\b(?:Authorization|Proxy-Authorization)\s*:\s*Basic\s+[A-Za-z0-9+/=]{8,}/gi,
+  /\b(?:Cookie|Set-Cookie|X-API-Key|X-Auth-Token)\s*:\s*[^\r\n]+/gi,
   /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}\b/g,
   /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9_-]{12,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
@@ -43,12 +45,13 @@ export function rememberRequestCredentials(input:RequestInfo|URL,init?:RequestIn
   const headers=new Headers(input instanceof Request?input.headers:undefined);
   new Headers(init?.headers).forEach((value,key)=>headers.set(key,value));
   headers.forEach((value,key)=>{if(/(?:^|-)authorization$|(?:^|-)api[-_]?key$/i.test(key)){rememberCredentialSecret(value);rememberCredentialSecret(value.replace(/^Bearer\s+/i,""));}});
-  try{const url=new URL(input instanceof Request?input.url:String(input));for(const name of ["key","api_key","api-key","access_token"])rememberCredentialSecret(url.searchParams.get(name));}catch{/* Relative or provider-private request objects are not a credential source. */}
+  try{const url=new URL(input instanceof Request?input.url:String(input));for(const name of ["key","api_key","api-key","access_token","refresh_token","id_token","token","code","client_secret"])rememberCredentialSecret(url.searchParams.get(name));}catch{/* Relative or provider-private request objects are not a credential source. */}
 }
 
 export function redactCredentialText(source: string, options: {opaqueTokens?:boolean} = {}): { text: string; redacted: boolean } {
   let text = source;
   for(const secret of orderedSecrets)text=text.split(secret).join("[REDACTED]");
+  text=text.replace(/([?&#](?:api[-_]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|token|code|password)=)[^&#\s"']+/gi,"$1[REDACTED]");
   text = text.replace(/("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client[_-]?secret|secret)"\s*:\s*")((?:\\.|[^"\\]){8,})(")/gi,"$1[REDACTED]$3");
   if(/"type"\s*:\s*"(?:api_key|oauth)"/iu.test(text))text=text.replace(/("(?:key|access|refresh)"\s*:\s*")([^"\\]{16,})(")/g,"$1[REDACTED]$3");
   for (const [index,pattern] of CREDENTIAL_PATTERNS.entries()) {

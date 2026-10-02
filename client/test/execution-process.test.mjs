@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { messageRows, emptyStream, reduceStream } from "../src/renderer/src/workbench.ts";
-import { executionTurns, mergeLiveRows, processPreview } from "../src/renderer/src/workbench/execution-process.ts";
+import { executionTurns, mergeLiveRows, processPreview, toolPresentation } from "../src/renderer/src/workbench/execution-process.ts";
 
 test("empty provider thinking never becomes an empty expandable block", () => {
   const rows = messageRows([{id:"answer",type:"message",message:{role:"assistant",content:[{type:"thinking",thinking:"",thinkingSignature:"opaque"},{type:"text",text:"17 × 19 = 323。"}]}}]);
@@ -35,11 +35,24 @@ test("live tools update the single process row, preserve final results, and only
   assert.equal(stream.messages[0].ended,false);
   const rows=mergeLiveRows(messageRows([{id:"u",type:"message",message:{role:"user",content:"运行"}}]),stream);
   const [turn]=executionTurns(rows,stream,true);
-  assert.match(processPreview(turn),/终端 · 第一行 最新输出/);
+  assert.equal(processPreview(turn),"运行命令 · 进行中");
   assert.equal(turn.steps.filter(step=>step.kind==="tool").length,1);
   stream=reduceStream(stream,event("tool_execution_end",{toolCallId:"t1",result:{content:[{type:"text",text:"终端完整输出"}]},isError:true}),"s");
   assert.equal(stream.tools[0].state,"error");
   assert.equal(stream.tools[0].output,"终端完整输出");
+});
+
+test("known tool actions use their recorded input while unknown tools and failures remain honest", () => {
+  assert.deepEqual(toolPresentation({id:"r",kind:"tool",title:"读取文件",toolName:"read",text:'{"path":"src/example.ts"}',state:"complete"}),
+    {summary:"读取 example.ts",status:"已完成",fileReference:"src/example.ts"});
+  assert.equal(toolPresentation({id:"r-output",kind:"tool",title:"读取文件",toolName:"read",text:'{"path":"src/example.ts"}',output:"文件内容",state:"complete"}).status,"已返回结果");
+  assert.deepEqual(toolPresentation({id:"b",kind:"tool",title:"终端",toolName:"bash",text:'{"command":"echo secret"}',output:"secret",state:"error"}),
+    {summary:"运行命令",status:"失败，查看错误"});
+  assert.deepEqual(toolPresentation({id:"u",kind:"tool",title:"my_tool",toolName:"my_tool",text:"not json",state:"unknown"}),
+    {summary:"my_tool",status:"状态待核对"});
+  const turn={steps:[{id:"r",kind:"tool",title:"读取文件",toolName:"read",text:"{}",state:"complete"}],running:false};
+  assert.equal(processPreview(turn),"读取文件 · 已完成");
+  assert.equal(processPreview({ ...turn, status:"error", steps:[...turn.steps,{id:"b",kind:"tool",title:"终端",toolName:"bash",text:"{}",output:"raw failure",state:"error"},{id:"thought",kind:"thinking",title:"思考",text:"完成"}] }),"运行命令 · 失败，查看错误");
 });
 
 test("repeated answers in older turns do not hide the live reply, and durable identity takes over once", () => {
@@ -95,4 +108,13 @@ test("an image-only tool result proves its paired tool completed",()=>{
   assert.equal(turn.steps.find(step=>step.id==="image-tool").state,"complete");
   assert.equal(turn.steps.filter(step=>step.kind==="image").length,1);
   assert.equal(turn.status,"complete");
+});
+
+test("a tool without output keeps its action and state without a dangling separator",()=>{
+  const base={id:"turn",steps:[],running:false,status:"complete",hasResponse:true};
+  const tool={id:"tool",kind:"tool",title:"终端",text:"",output:""};
+  assert.equal(processPreview({...base,steps:[{...tool,state:"running"}]}),"终端 · 进行中");
+  assert.equal(processPreview({...base,steps:[{...tool,state:"complete"}]}),"终端 · 已完成");
+  assert.equal(processPreview({...base,steps:[{...tool,state:"error"}]}),"终端 · 失败，查看错误");
+  assert.equal(processPreview({...base,steps:[{...tool,state:"unknown"}]}),"终端 · 状态待核对");
 });

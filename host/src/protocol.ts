@@ -1,5 +1,7 @@
 import { MIN_MODEL_QUOTA_THRESHOLD_PERCENT, MAX_MODEL_QUOTA_THRESHOLD_PERCENT } from "./model-quota-policy.js";
 import { agentModelCandidates } from "./model-route.js";
+import { diagnosticError, redactDiagnosticValue, redactFailedRuntimeDetails } from "./diagnostic-safety.js";
+import { sanitizeRuntimeValue } from "./runtime-privacy.js";
 export const PROTOCOL_VERSION = 1 as const;
 
 export const HOST_METHODS = [
@@ -15,6 +17,17 @@ export const HOST_METHODS = [
   "clientPreferences.get",
   "clientPreferences.importLegacy",
   "clientPreferences.set",
+  "imageGeneration.capability",
+  "imageGeneration.connect",
+  "imageGeneration.cancelConnection",
+  "imageGeneration.list",
+  "imageGeneration.reconcile",
+  "imageGeneration.start",
+  "imageGeneration.cancel",
+  "imageGeneration.image",
+  "imageGeneration.attach",
+  "imageGeneration.export",
+  "imageGeneration.exportContext",
   "taskDraft.set",
   "inspiration.get",
   "inspiration.mutate",
@@ -48,8 +61,12 @@ export const HOST_METHODS = [
   "workspace.git",
   "workspace.diff",
   "workspace.reference",
+  "workspace.readReference",
+  "workspace.fileSearch",
   "workspace.describe",
   "task.create",
+  "task.goal.history",
+  "task.goal.update",
   "task.manage",
   "task.session.continue",
   "task.summary.history",
@@ -68,6 +85,13 @@ export const HOST_METHODS = [
   "task.workItem.create",
   "task.workItem.update",
   "task.workItem.reorder",
+  "task.workflow.create",
+  "task.workflow.revise",
+  "task.workflow.start",
+  "task.workflow.bindWorkItem",
+  "task.workflow.stop",
+  "task.workflow.continue",
+  "task.workflow.complete",
   "task.acceptance",
   "team.create",
   "team.start",
@@ -412,6 +436,49 @@ function validateTaskMutationTarget(params: Record<string, unknown>): void {
   requireBoundedString(params, "taskId", 200);
 }
 
+function validateWorkflowDefinition(params: Record<string, unknown>): void {
+  requireBoundedString(params, "goal", 20_000);
+  if (params.constraints !== undefined && (!Array.isArray(params.constraints)
+    || params.constraints.length > 32
+    || params.constraints.some(value => typeof value !== "string" || value.length === 0 || value.length > 2_000))) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "params.constraints must contain at most 32 bounded strings");
+  }
+  if (!Array.isArray(params.stages) || params.stages.length < 1 || params.stages.length > 24) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "params.stages must contain 1…24 stages");
+  }
+  for (const [index, entry] of params.stages.entries()) {
+    if (!isRecord(entry) || Object.keys(entry).some(key => !["id", "title", "completion", "dependsOn"].includes(key))
+      || typeof entry.id !== "string" || entry.id.length < 1 || entry.id.length > 100
+      || typeof entry.title !== "string" || entry.title.trim().length < 1 || entry.title.length > 500
+      || typeof entry.completion !== "string" || entry.completion.trim().length < 1 || entry.completion.length > 10_000
+      || !Array.isArray(entry.dependsOn) || entry.dependsOn.length > 24
+      || entry.dependsOn.some(value => typeof value !== "string" || value.length < 1 || value.length > 100)) {
+      throw new ProtocolValidationError("INVALID_PARAMS", `params.stages[${index}] is invalid`);
+    }
+  }
+}
+
+function validateWorkflowDraft(value: unknown): void {
+  if (!isRecord(value) || Object.keys(value).some(key => !["goal", "constraints"].includes(key))) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "workflowDraft must contain only goal and constraints");
+  }
+  requireBoundedString(value, "goal", 20_000);
+  if (value.constraints !== undefined && (!Array.isArray(value.constraints)
+    || value.constraints.length > 32
+    || value.constraints.some(item => typeof item !== "string" || item.trim().length === 0 || item.length > 2_000))) {
+    throw new ProtocolValidationError("INVALID_PARAMS", "workflowDraft.constraints is invalid");
+  }
+}
+
+function validatePendingWorkflowSubmission(value:unknown):void {
+  if(!isRecord(value)||Object.keys(value).some(key=>!["promptId","kind","sourceDraftKey","goal","constraints","runId"].includes(key)))throw new ProtocolValidationError("INVALID_PARAMS","Invalid pending Workflow submission");
+  requireBoundedString(value,"promptId",128);
+  requireBoundedString(value,"sourceDraftKey",250);
+  if(value.kind==="create")validateWorkflowDraft({goal:value.goal,constraints:value.constraints??[]});
+  else if(value.kind==="report")requireBoundedString(value,"runId",200);
+  else throw new ProtocolValidationError("INVALID_PARAMS","Invalid pending Workflow kind");
+}
+
 function validateTaskPlanState(value: unknown, field: string): void {
   if (!["draft", "active", "paused", "completed", "superseded"].includes(value as string)) {
     throw new ProtocolValidationError("INVALID_PARAMS", `${field} is not a valid Task Plan state`);
@@ -606,6 +673,25 @@ export function parseRequest(value: unknown): HostRequest {
 export function validateMethodParams(method: HostMethod, params: Record<string, unknown>): void {
   if (params.runtimeId !== undefined) requireBoundedString(params, "runtimeId", 128);
   switch (method) {
+    case "imageGeneration.capability":case "imageGeneration.connect":case "imageGeneration.cancelConnection":return;
+    case "imageGeneration.start":
+      requireBoundedString(params,"requestId",128);requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"taskId",200);requireBoundedString(params,"sessionId",200);requireBoundedString(params,"description",8000);return;
+    case "imageGeneration.list":case "imageGeneration.reconcile":requireBoundedString(params,"taskId",200);return;
+    case "imageGeneration.cancel":case "imageGeneration.image":case "imageGeneration.attach":case "imageGeneration.export":case "imageGeneration.exportContext":
+      requireBoundedString(params,"taskId",200);requireBoundedString(params,"generationId",200);
+      if(method==="imageGeneration.attach"){
+        requireBoundedString(params,"requestId",128);requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+        requireBoundedString(params,"sessionId",200);requireBoundedString(params,"draftKey",220);
+      }
+      if(method==="imageGeneration.export"){
+        const destination=requireBoundedString(params,"destination",4096);if(!destination.startsWith("/")||destination.includes("\0"))throw new ProtocolValidationError("INVALID_PARAMS","Expected an absolute export destination");
+        if(!isRecord(params.context)||!isRecord(params.expectedDirectory))throw new ProtocolValidationError('INVALID_PARAMS','Export identity required');
+        requireBoundedString(params.context,'taskId',200);requireBoundedString(params.context,'generationId',200);requireBoundedString(params.context,'mimeType',80);
+        for(const key of ['directory','device','inode'])requireBoundedString(params.expectedDirectory,key,4096);
+        if(params.context.project!==undefined){if(!isRecord(params.context.project))throw new ProtocolValidationError('INVALID_PARAMS','Invalid export Project identity');for(const key of ['id','directory','device','inode'])requireBoundedString(params.context.project,key,4096);requireInteger(params.context.project,'revision',1,Number.MAX_SAFE_INTEGER);}
+      }
+      return;
     case "agentProcess.stopAuxiliary":
       requireBoundedString(params,"taskId",200);requireBoundedString(params,"agentRunId",200);requireBoundedString(params,"processId",200);return;
     case "host.hello":
@@ -652,13 +738,14 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "clientPreferences.set": {
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
+      if(params.language!==undefined&&!['zh-CN','en'].includes(params.language as string))throw new ProtocolValidationError("INVALID_PARAMS","Expected zh-CN or en display language");
       if (params.notificationsEnabled !== undefined && typeof params.notificationsEnabled !== "boolean") throw new ProtocolValidationError("INVALID_PARAMS", "notificationsEnabled must be boolean");
       if (params.readingPosition !== undefined) {
         if (!isRecord(params.readingPosition)) throw new ProtocolValidationError("INVALID_PARAMS", "readingPosition must be an object");
         requireBoundedString(params.readingPosition, "sessionId", 200);
         requireInteger(params.readingPosition, "offset", 0, 100_000_000);
       }
-      const keys = ["notificationsEnabled", "readingPosition", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"];
+      const keys = ["language", "notificationsEnabled", "readingPosition", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"];
       if(params.modelQuotaThresholdPercent!==undefined)requireInteger(params,"modelQuotaThresholdPercent",MIN_MODEL_QUOTA_THRESHOLD_PERCENT,MAX_MODEL_QUOTA_THRESHOLD_PERCENT);
       if (!keys.some(key => params[key] !== undefined)) throw new ProtocolValidationError("INVALID_PARAMS", "Preference change required");
 
@@ -699,6 +786,9 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     case "taskDraft.set": {
       if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
+      if(params.goal!==undefined){const goal=requireString(params,"goal",{allowEmpty:true});if(goal.length>4_000)throw new ProtocolValidationError("INVALID_PARAMS","Task Goal draft exceeds 4000 characters");}
+      if(params.acceptance!==undefined)requireStringArray(params,"acceptance",100);
+      if(params.pendingWorkflowSubmission!=null)validatePendingWorkflowSubmission(params.pendingWorkflowSubmission);
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
       validateTaskScope(params);
@@ -792,6 +882,7 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
     case "dcodeSession.composerDraft.set": {
       if(params.targetAgentRunId!=null)requireBoundedString(params,"targetAgentRunId",200);
       if(params.attachmentIds!==undefined)requireStringArray(params,"attachmentIds",32,true);
+      if(params.pendingWorkflowSubmission!=null)validatePendingWorkflowSubmission(params.pendingWorkflowSubmission);
       requireBoundedString(params, "requestId", 128);
       requireInteger(params, "expectedStoreRevision", 0, Number.MAX_SAFE_INTEGER);
       requireBoundedString(params, "taskId", 200);
@@ -819,6 +910,16 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       if(params.dcodeSessionId!==undefined)requireBoundedString(params,"dcodeSessionId",200);if(params.projectId!==undefined)requireBoundedString(params,"projectId",200);return;
     case "dcodeSession.prompt": {
       if(params.deliveryMode!==undefined&&params.deliveryMode!=="steer")throw new ProtocolValidationError("INVALID_PARAMS","Invalid input delivery mode");if(params.expectedSessionRunId!==undefined)requireBoundedString(params,"expectedSessionRunId",200);
+      if(params.workflowDraft!==undefined){
+        validateWorkflowDraft(params.workflowDraft);
+        if(params.workflowReportRunId!==undefined||params.deliveryMode!==undefined||params.targetAgentRunId!==undefined||params.pathAction!==undefined)
+          throw new ProtocolValidationError("INVALID_PARAMS","Workflow draft must use one direct Coordinator prompt");
+      }
+      if(params.workflowReportRunId!==undefined){
+        requireBoundedString(params,"workflowReportRunId",200);
+        if(params.deliveryMode!==undefined||params.targetAgentRunId!==undefined||params.pathAction!==undefined)
+          throw new ProtocolValidationError("INVALID_PARAMS","Workflow report must use a direct Coordinator prompt");
+      }
       if(params.pathAction!==undefined){const action=params.pathAction;if(!isRecord(action)||!["editUser","continueAssistant","continuePath"].includes(String(action.kind)))throw new ProtocolValidationError("INVALID_PARAMS","Invalid native session path action");requireBoundedString(action,"entryId",200);requireBoundedString(action,"fromPathId",200);requireBoundedString(action,"expectedCurrentPathId",200);requireInteger(action,"expectedCurrentPathRevision",1,Number.MAX_SAFE_INTEGER);}
       if(params.targetAgentRunId!==undefined) requireBoundedString(params,"targetAgentRunId",200);
       requireBoundedString(params, "dcodeSessionId", 200);
@@ -834,6 +935,16 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       validatePromptImages(params, "images");
       return;
     }
+    case "workspace.fileSearch":
+      requireBoundedString(params,"taskId",200);
+      if(typeof params.query!=="string"||params.query.length>128||/[\u0000-\u001f]/u.test(params.query))throw new ProtocolValidationError("INVALID_PARAMS","Invalid file search query");
+      if(params.limit!==undefined)requireInteger(params,"limit",1,50);
+      return;
+    case "workspace.readReference":
+      requireBoundedString(params,"taskId",200);
+      requireBoundedString(params,"reference",4096);
+      if(params.source!==undefined||params.path!==undefined)throw new ProtocolValidationError("INVALID_PARAMS","File reference read derives its authorized source");
+      return;
     case "workspace.reference":
       if(params.source!==undefined){
         if(params.taskId!==undefined)throw new ProtocolValidationError("INVALID_PARAMS","Choose one reference source");
@@ -879,6 +990,18 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       requireBoundedString(params, "title", 200);
       requireBoundedString(params, "goal", 4_000);
       requireStringArray(params, "acceptance", 100, true);
+      return;
+    case "task.goal.history":
+      requireBoundedString(params,"taskId",200);
+      return;
+    case "task.goal.update":
+      requireBoundedString(params,"requestId",128);
+      requireInteger(params,"expectedStoreRevision",0,Number.MAX_SAFE_INTEGER);
+      validateTaskScope(params);
+      requireBoundedString(params,"taskId",200);
+      requireInteger(params,"expectedTaskRevision",1,Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params,"goal",4_000);
+      requireStringArray(params,"acceptance",100);
       return;
     case "task.session.continue":
       requireBoundedString(params, "requestId", 128);
@@ -1006,6 +1129,47 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
           throw new ProtocolValidationError("INVALID_PARAMS", `params.items[${index}] must contain id and expectedRevision`);
         }
       }
+      return;
+    case "task.workflow.create":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "originRawInputId", 200);
+      validateWorkflowDefinition(params);
+      return;
+    case "task.workflow.revise":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "workflowId", 200);
+      requireInteger(params, "expectedWorkflowRevision", 1, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "originRawInputId", 200);
+      validateWorkflowDefinition(params);
+      return;
+    case "task.workflow.start":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "workflowId", 200);
+      requireInteger(params, "expectedWorkflowRevision", 1, Number.MAX_SAFE_INTEGER);
+      return;
+    case "task.workflow.bindWorkItem":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "runId", 200);
+      requireInteger(params, "expectedRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "stageId", 100);
+      requireBoundedString(params, "workItemId", 200);
+      return;
+    case "task.workflow.stop":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "runId", 200);
+      requireInteger(params, "expectedRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "reason", 2_000);
+      return;
+    case "task.workflow.continue":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "runId", 200);
+      requireInteger(params, "expectedRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      return;
+    case "task.workflow.complete":
+      validateTaskMutationTarget(params);
+      requireBoundedString(params, "runId", 200);
+      requireInteger(params, "expectedRunRevision", 1, Number.MAX_SAFE_INTEGER);
+      requireBoundedString(params, "coordinatorReportId", 200);
       return;
     case "task.acceptance":
       requireBoundedString(params, "requestId", 128);
@@ -1362,6 +1526,8 @@ export function validateMethodParams(method: HostMethod, params: Record<string, 
       return;
     }
     case "session.prompt": {
+      if(params.workflowReportRunId!==undefined)requireBoundedString(params,"workflowReportRunId",200);
+      if(params.workflowDraft!==undefined)validateWorkflowDraft(params.workflowDraft);
       const message = requireString(params, "message", { allowEmpty: true });
       if (message.trim().length === 0 && !(Array.isArray(params.attachmentIds)&&params.attachmentIds.length)) {
         throw new ProtocolValidationError("INVALID_PARAMS", "Expected params.message to contain non-whitespace text");
@@ -1538,12 +1704,22 @@ export function errorResponse(
   message: string,
   details?: unknown,
 ): HostErrorResponse {
-  const error: ProtocolErrorBody = details === undefined ? { code, message } : { code, message, details };
-  return { version: PROTOCOL_VERSION, type: "response", id, method, ok: false, error };
+  const error: ProtocolErrorBody = diagnosticError({ code, message, details });
+  return {
+    version: PROTOCOL_VERSION,
+    type: "response",
+    id: redactDiagnosticValue(id),
+    method: redactDiagnosticValue(method),
+    ok: false,
+    error,
+  };
 }
 
 export function protocolEvent(event: string, data?: unknown): HostEvent {
+  const safeData = /(?:error|failed|failure|conflict|restartRequired)$/iu.test(event)
+    ? redactDiagnosticValue(data)
+    : event === "session.event" ? redactFailedRuntimeDetails(sanitizeRuntimeValue(data)) : sanitizeRuntimeValue(data);
   return data === undefined
     ? { version: PROTOCOL_VERSION, type: "event", event }
-    : { version: PROTOCOL_VERSION, type: "event", event, data };
+    : { version: PROTOCOL_VERSION, type: "event", event, data: safeData };
 }

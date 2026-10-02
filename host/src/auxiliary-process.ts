@@ -4,6 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createBashTool,type BashOperations} from '@earendil-works/pi-coding-agent';
 import type {AgentTool} from '@earendil-works/pi-agent-core';
+import {agentShellEnvironment} from './agent-shell-environment.js';
 export interface AuxiliaryProcessInfo {
   id:string;pid:number;cwd:string;shellPid?:number;memberPids:number[];toolCallId:string;commandDigest:string;
   status:'starting'|'running'|'background'|'unknown'|'exited';startedAt:string;endedAt?:string;exitCode?:number|null;reason?:'stopped'|'completed'|'unexpected'|'supervisor_restarted';
@@ -38,7 +39,7 @@ export class AuxiliaryProcesses implements BashOperations {
     child.on('message',(packet:unknown)=>{if(!packet||typeof packet!=='object')return;const message=packet as Record<string,unknown>;
       if(message.kind==='ready'){
         if(ready||message.pid!==child.pid){void this.stop(info.id);return;}ready=true;clearTimeout(startup);
-        void this.changed(entry).then(()=>{if(options.signal?.aborted||this.disposed)return this.stop(info.id);send({kind:'run',command,cwd,env:options.env??process.env});}).catch(rejectResult);
+        void this.changed(entry).then(()=>{if(options.signal?.aborted||this.disposed)return this.stop(info.id);send({kind:'run',command,cwd,env:agentShellEnvironment(options.env??process.env)});}).catch(rejectResult);
       }else if(message.kind==='started'&&Number.isInteger(message.shellPid)){info.shellPid=Number(message.shellPid);info.status='running';void this.changed(entry);}
       else if(message.kind==='data'&&Buffer.isBuffer(message.data)){if(!foregroundDone)options.onData(message.data);}
       else if(message.kind==='settled'){

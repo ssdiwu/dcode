@@ -1,3 +1,4 @@
+import { uiText, localizeUi, setDisplayLanguage } from "../../../shared/ui-language.ts";
 import { MIN_MODEL_QUOTA_THRESHOLD_PERCENT, MAX_MODEL_QUOTA_THRESHOLD_PERCENT, DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT } from "../../../../../host/src/model-quota-policy.js";
 import { ProviderConnection } from "./ProviderConnection";
 import { ModelRouteEditor, type ModelRouteDraft } from "./ModelRouteEditor";
@@ -37,7 +38,7 @@ import type { CatalogProviderInput } from "../../../../../host/src/model-catalog
 import type { ResourcesSnapshot } from "../../../../../host/src/resources.js";
 import logoUrl from "../assets/logo.png";
 
-const pages = [
+const pages = localizeUi([
   ["models", "模型", Cpu],
   ["providers", "自定义供应商", Server],
   ["resources", "本机资源", Package],
@@ -49,7 +50,7 @@ const pages = [
   ["notifications", "通知", Bell],
   ["diagnostics", "Host 诊断", Activity],
   ["about", "关于 D Code", Info],
-] as const;
+] as const);
 export type SettingsPageId = (typeof pages)[number][0];
 type Page = SettingsPageId;
 export function SettingsWorkspace({
@@ -77,7 +78,9 @@ export function SettingsWorkspace({
     setError(null);
     try {
       const save = async () => {
-        await work.mutateStore("clientPreferences.set", patch);
+        const result=await work.mutateStore<{preferences:ClientPreferences}>("clientPreferences.set", patch);
+        await work.reloadPreferences(result.preferences,{revalidate:false});
+        setDisplayLanguage(result.preferences.language??"zh-CN");
         await work.reload();
       };
       if (origin) await changeThemeFromButton(origin, save);
@@ -109,24 +112,24 @@ export function SettingsWorkspace({
         } as React.CSSProperties
       }
     >
-      <nav className="settings-navigation" aria-label="设置分类">
+      <nav className="settings-navigation" aria-label={uiText("设置分类")}>
         <div className="window-band drag-region" />
         <button className="nav-row" onClick={onClose}>
           <ArrowLeft size={16} />
-          <span>返回工作台</span>
+          <span>{uiText("返回工作台")}</span>
         </button>
-        <h1>设置</h1>
+        <h1>{uiText("设置")}</h1>
         {pages.map(([id, label, Icon], i) => (
           <div key={id}>
             {[0, 4, 6, 8].includes(i) && (
               <div className="nav-heading">
                 {i === 0
-                  ? "能力"
+                  ? uiText("能力")
                   : i === 4
-                    ? "偏好"
+                    ? uiText("偏好")
                     : i === 6
-                      ? "任务"
-                      : "应用"}
+                      ? uiText("任务")
+                      : uiText("应用")}
               </div>
             )}
             <button
@@ -147,13 +150,13 @@ export function SettingsWorkspace({
         <div className="window-band drag-region" />
         <div className="settings-content">
           <h1>{pages.find((p) => p[0] === page)?.[1]}</h1>
-          {work.hostDead && <div role="alert" className="inline-error">运行服务已断开。<button className="text-button" disabled={work.restarting} onClick={() => void work.restart()}>重新连接</button></div>}
+          {work.hostDead && <div role="alert" className="inline-error">{uiText("运行服务已断开。")}<button className="text-button" disabled={work.restarting} onClick={() => void work.restart()}>{uiText("重新连接")}</button></div>}
           {error && (
             <div role="alert" className="inline-error">
               {error}
               <button
                 className="icon-button"
-                aria-label="关闭错误"
+                aria-label={uiText("关闭错误")}
                 onClick={() => setError(null)}
               >
                 <X size={14} />
@@ -180,15 +183,19 @@ export function SettingsWorkspace({
           )}
           {page === "appearance" && (
             <>
-              <p className="settings-intro">选择这台 Mac 上的显示方式。</p>
+              <p className="settings-intro">{uiText("选择这台 Mac 上的显示方式。")}</p>
               <Group>
-                <Row title="应用外观" detail="跟随系统，或固定使用浅色、深色。">
+                <Row title={uiText("显示与沟通语言")} detail={uiText("界面、新生成的子会话标题和智能体回复使用所选语言。已有消息与名称保留原文。")}>
+                  <Segments value={work.preferences?.language ?? "zh-CN"} options={[["zh-CN",uiText("中文")],["en","English"]]} disabled={busy}
+                    onChange={language=>void update({language:language as ClientPreferences["language"]})}/>
+                </Row>
+                <Row title={uiText("应用外观")} detail={uiText("跟随系统，或固定使用浅色、深色。")}>
                   <Segments
                     value={work.preferences?.appearance ?? "system"}
                     options={[
-                      ["system", "系统"],
-                      ["light", "浅色"],
-                      ["dark", "深色"],
+                      ["system", uiText("系统")],
+                      ["light", uiText("浅色")],
+                      ["dark", uiText("深色")],
                     ]}
                     disabled={busy}
                     onChange={(appearance, button) =>
@@ -199,13 +206,13 @@ export function SettingsWorkspace({
                     }
                   />
                 </Row>
-                <Row title="界面字号" detail="整体调整文字和控件大小。">
+                <Row title={uiText("界面字号")} detail={uiText("整体调整文字和控件大小。")}>
                   <Segments
                     value={work.preferences?.fontScale ?? "standard"}
                     options={[
-                      ["compact", "紧凑"],
-                      ["standard", "标准"],
-                      ["large", "大"],
+                      ["compact", uiText("紧凑")],
+                      ["standard", uiText("标准")],
+                      ["large", uiText("大")],
                     ]}
                     onChange={(fontScale) =>
                       void update({
@@ -220,33 +227,32 @@ export function SettingsWorkspace({
           {page === "workbench" && (
             <>
               <p className="settings-intro">
-                导航区、设置分类和对象详情共用已保存的栏宽。
-              </p>
+                {uiText("导航区、设置分类和对象详情共用已保存的栏宽。")}</p>
               <Group>
-                <Row title="显示导航区">
+                <Row title={uiText("显示导航区")}>
                   <input
                     type="checkbox"
-                    aria-label="显示导航区"
+                    aria-label={uiText("显示导航区")}
                     checked={work.preferences?.sidebarVisible ?? true}
                     onChange={(e) =>
                       void update({ sidebarVisible: e.target.checked })
                     }
                   />
                 </Row>
-                <Row title="进入任务时显示概览">
+                <Row title={uiText("进入任务时显示概览")}>
                   <input
                     type="checkbox"
-                    aria-label="进入任务时显示概览"
+                    aria-label={uiText("进入任务时显示概览")}
                     checked={work.preferences?.overviewVisible ?? true}
                     onChange={(e) =>
                       void update({ overviewVisible: e.target.checked })
                     }
                   />
                 </Row>
-                <Row title="导航区宽度">
+                <Row title={uiText("导航区宽度")}>
                   <input
                     type="range"
-                    aria-label="导航区宽度"
+                    aria-label={uiText("导航区宽度")}
                     min={200}
                     max={360}
                     value={work.preferences?.sidebarWidth ?? 240}
@@ -255,10 +261,10 @@ export function SettingsWorkspace({
                     }
                   />
                 </Row>
-                <Row title="对象详情宽度">
+                <Row title={uiText("对象详情宽度")}>
                   <input
                     type="range"
-                    aria-label="对象详情宽度"
+                    aria-label={uiText("对象详情宽度")}
                     min={280}
                     max={520}
                     value={work.preferences?.inspectorWidth ?? 340}
@@ -267,7 +273,7 @@ export function SettingsWorkspace({
                     }
                   />
                 </Row>
-                <Row title="恢复默认布局">
+                <Row title={uiText("恢复默认布局")}>
                   <button
                     className="text-button"
                     disabled={busy}
@@ -280,8 +286,7 @@ export function SettingsWorkspace({
                       })
                     }
                   >
-                    恢复默认
-                  </button>
+                    {uiText("恢复默认")}</button>
                 </Row>
               </Group>
             </>
@@ -290,11 +295,9 @@ export function SettingsWorkspace({
             <>
               <div className="settings-toolbar">
                 <p className="settings-intro">
-                  归档保留任务、会话和历史记录，可以随时恢复。
-                </p>
+                  {uiText("归档保留任务、会话和历史记录，可以随时恢复。")}</p>
                 <button className="text-button" onClick={onImport}>
-                  导入 Pi 会话…
-                </button>
+                  {uiText("导入 Pi 会话…")}</button>
               </div>
               <Group>
                 {work.snapshot?.tasks.filter((t) => t.state === "archived")
@@ -318,12 +321,11 @@ export function SettingsWorkspace({
                             })
                           }
                         >
-                          恢复任务
-                        </button>
+                          {uiText("恢复任务")}</button>
                       </Row>
                     ))
                 ) : (
-                  <p className="settings-empty-row">没有已归档任务。</p>
+                  <p className="settings-empty-row">{uiText("没有已归档任务。")}</p>
                 )}
               </Group>
             </>
@@ -334,16 +336,15 @@ export function SettingsWorkspace({
           {page === "notifications" && (
             <>
               <p className="settings-intro">
-                只在一次执行已确认结束时发送通知。
-              </p>
+                {uiText("只在一次执行已确认结束时发送通知。")}</p>
               <Group>
                 <Row
-                  title="任务完成时通知我"
-                  detail="通知只包含任务标题，不包含回答正文。"
+                  title={uiText("任务完成时通知我")}
+                  detail={uiText("通知只包含任务标题，不包含回答正文。")}
                 >
                   <input
                     type="checkbox"
-                    aria-label="任务完成时通知我"
+                    aria-label={uiText("任务完成时通知我")}
                     checked={work.preferences?.notificationsEnabled ?? true}
                     onChange={(e) =>
                       void update({ notificationsEnabled: e.target.checked })
@@ -351,8 +352,8 @@ export function SettingsWorkspace({
                   />
                 </Row>
                 <Row
-                  title="系统通知设置"
-                  detail="提醒方式、声音与专注模式由 macOS 管理。"
+                  title={uiText("系统通知设置")}
+                  detail={uiText("提醒方式、声音与专注模式由 macOS 管理。")}
                 >
                   <button
                     className="text-button"
@@ -360,8 +361,7 @@ export function SettingsWorkspace({
                       void api().openNotificationSettings().catch(setError)
                     }
                   >
-                    打开系统设置
-                  </button>
+                    {uiText("打开系统设置")}</button>
                 </Row>
               </Group>
             </>
@@ -374,8 +374,7 @@ export function SettingsWorkspace({
       </main>
       {work.closing && (
         <div className="app-transition" role="status">
-          正在保存工作台并切换应用…
-        </div>
+          {uiText("正在保存工作台并切换应用…")}</div>
       )}
     </div>
   );
@@ -442,26 +441,26 @@ function Models({models,onProviders}: {models:ModelControls;onProviders:()=>void
   const shown=data?.models.filter(m=>(!connectedOnly||m.available)&&`${m.name} ${m.modelId} ${m.providerName}`.toLowerCase().includes(query.toLowerCase()))??[];
   const levels=data?.models.find(m=>m.key===data.defaultKey)?.thinkingLevels??["off","minimal","low","medium","high","xhigh","max"];
   return <>
-    <div className="settings-toolbar model-settings-toolbar"><p className="settings-intro">选择对话使用的模型，并管理已有连接。</p><button className="text-button" onClick={()=>void models.refresh()} disabled={models.refreshing}><RefreshCw size={14}/>{models.refreshing?"正在刷新…":"刷新目录"}</button></div>
+    <div className="settings-toolbar model-settings-toolbar"><p className="settings-intro">{uiText("选择对话使用的模型，并管理已有连接。")}</p><button className="text-button" onClick={()=>void models.refresh()} disabled={models.refreshing}><RefreshCw size={14}/>{models.refreshing?uiText("正在刷新…"):uiText("刷新目录")}</button></div>
     {models.error&&<p role="alert" className="inline-error">{models.error}</p>}
-    {data?.refresh.failedProviders.length ? <p role="status" className="secondary">部分模型目录未能更新：{data.refresh.failedProviders.map(id=>data.providers.find(provider=>provider.id===id)?.name??id).join("、")}。目录已保留，请检查对应连接状态。</p> : null}
+    {data?.refresh.failedProviders.length ? <p role="status" className="secondary">{uiText("部分模型目录未能更新：")}{data.refresh.failedProviders.map(id=>data.providers.find(provider=>provider.id===id)?.name??id).join("、")}{uiText("。目录已保留，请检查对应连接状态。")}</p> : null}
     <Group>
-      <Row title="默认模型" detail={available.length?"用于新对话，可在输入区随时切换。":"尚无可用连接。请在下方检查连接状态，再选择模型开始对话。"}>
-        {available.length?<ModelPicker label="默认模型" models={data?.models??[]} value={data?.defaultKey??null} onChange={models.chooseDefault} onManage={showConnections} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy}/>:<button className="primary-button" onClick={showConnections}>连接模型</button>}
+      <Row title={uiText("默认模型")} detail={available.length?uiText("用于新对话，可在输入区随时切换。"):uiText("尚无可用连接。请在下方检查连接状态，再选择模型开始对话。")}>
+        {available.length?<ModelPicker label={uiText("默认模型")} models={data?.models??[]} value={data?.defaultKey??null} onChange={models.chooseDefault} onManage={showConnections} onRefresh={()=>models.refresh()} refreshing={models.refreshing} busy={models.busy}/>:<button className="primary-button" onClick={showConnections}>{uiText("连接模型")}</button>}
       </Row>
-      <Row title="默认思考强度" detail="用于新对话。可选范围随模型变化。"><select aria-label="默认思考强度" disabled={models.busy||levels.length===1} value={levels.includes(data?.defaultThinking??"")?data?.defaultThinking:levels.includes("medium")?"medium":levels[0]} onChange={e=>void models.setDefaultThinking(e.target.value)}>{levels.map(level=><option key={level} value={level}>{thinkingLabels[level]??level}</option>)}</select></Row>
-      <Row title="自动选择的剩余额度门槛" detail="剩余额度不高于此值时，沿原有回退顺序选择下一个模型。用于后续自动派发和回退，不中断正在执行的工作。"><select aria-label="自动选择的剩余额度门槛" disabled={models.busy||!data} value={data?.modelQuotaThresholdPercent??DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT} onChange={e=>void models.setQuotaThreshold(Number(e.target.value))}>{Array.from({length:MAX_MODEL_QUOTA_THRESHOLD_PERCENT-MIN_MODEL_QUOTA_THRESHOLD_PERCENT+1},(_,i)=>i+MIN_MODEL_QUOTA_THRESHOLD_PERCENT).map(value=><option key={value} value={value}>{value}%</option>)}</select></Row>
-      <Row title="模型连接" detail={`${data?.providers.filter(p=>p.connected).length??0} 个可用供应商 · ${available.length} 个可选择模型`}><button className="text-button" onClick={onProviders}>管理自定义供应商</button></Row>
+      <Row title={uiText("默认思考强度")} detail={uiText("用于新对话。可选范围随模型变化。")}><select aria-label={uiText("默认思考强度")} disabled={models.busy||levels.length===1} value={levels.includes(data?.defaultThinking??"")?data?.defaultThinking:levels.includes("medium")?"medium":levels[0]} onChange={e=>void models.setDefaultThinking(e.target.value)}>{levels.map(level=><option key={level} value={level}>{thinkingLabels[level]??level}</option>)}</select></Row>
+      <Row title={uiText("自动选择的剩余额度门槛")} detail={uiText("剩余额度不高于此值时，沿原有回退顺序选择下一个模型。用于后续自动派发和回退，不中断正在执行的工作。")}><select aria-label={uiText("自动选择的剩余额度门槛")} disabled={models.busy||!data} value={data?.modelQuotaThresholdPercent??DEFAULT_MODEL_QUOTA_THRESHOLD_PERCENT} onChange={e=>void models.setQuotaThreshold(Number(e.target.value))}>{Array.from({length:MAX_MODEL_QUOTA_THRESHOLD_PERCENT-MIN_MODEL_QUOTA_THRESHOLD_PERCENT+1},(_,i)=>i+MIN_MODEL_QUOTA_THRESHOLD_PERCENT).map(value=><option key={value} value={value}>{value}%</option>)}</select></Row>
+      <Row title={uiText("模型连接")} detail={uiText("{0} 个可用供应商 · {1} 个可选择模型", [data?.providers.filter(p=>p.connected).length??0, available.length])}><button className="text-button" onClick={onProviders}>{uiText("管理自定义供应商")}</button></Row>
     </Group>
-    <div className="settings-toolbar" id="model-connection-list"><h2>模型连接与目录</h2><span className="secondary">{models.refreshing?"正在获取最新目录":data?.refresh.updatedAt?`更新于 ${new Date(data.refresh.updatedAt).toLocaleTimeString()}`:"已缓存的目录"}</span></div>
-    <div className="settings-toolbar"><input className="model-search" aria-label="搜索模型目录" placeholder="搜索模型或供应商…" value={query} onChange={e=>setQuery(e.target.value)}/><label><input type="checkbox" checked={connectedOnly} onChange={e=>setConnectedOnly(e.target.checked)}/>仅看可用连接</label>{data?.models.some(m=>!m.enabled)&&<button className="text-button" disabled={models.busy} onClick={()=>void models.enableAll()}>启用全部模型</button>}</div>
+    <div className="settings-toolbar" id="model-connection-list"><h2>{uiText("模型连接与目录")}</h2><span className="secondary">{models.refreshing?uiText("正在获取最新目录"):data?.refresh.updatedAt?uiText("更新于 {0}", [new Date(data.refresh.updatedAt).toLocaleTimeString()]):uiText("已缓存的目录")}</span></div>
+    <div className="settings-toolbar"><input className="model-search" aria-label={uiText("搜索模型目录")} placeholder={uiText("搜索模型或供应商…")} value={query} onChange={e=>setQuery(e.target.value)}/><label><input type="checkbox" checked={connectedOnly} onChange={e=>setConnectedOnly(e.target.checked)}/>{uiText("仅看可用连接")}</label>{data?.models.some(m=>!m.enabled)&&<button className="text-button" disabled={models.busy} onClick={()=>void models.enableAll()}>{uiText("启用全部模型")}</button>}</div>
     {data?.providers.filter(p=>shown.some(m=>m.providerId===p.id)).map(provider=><details className="model-provider" key={provider.id} open={connectedOnly||!!query||["openai","openai-codex"].includes(provider.id)}>
-      <summary><span>{provider.name}</span><span className="secondary">{provider.connected?"可用":models.connections?.providers.find(connection=>connection.providerId===provider.id)?.managed?"已保存，暂不可用":"未连接"} · {shown.filter(m=>m.providerId===provider.id).length} 个模型</span></summary>
+      <summary><span>{provider.name}</span><span className="secondary">{provider.connected?uiText("可用"):models.connections?.providers.find(connection=>connection.providerId===provider.id)?.managed?uiText("已保存，暂不可用"):uiText("未连接")} · {shown.filter(m=>m.providerId===provider.id).length} {uiText(" 个模型")}</span></summary>
       <ProviderConnection providerId={provider.id} models={models}/>
-      <details className="model-provider-models"><summary>查看模型与启用范围</summary>
-      <Group>{shown.filter(m=>m.providerId===provider.id).map(model=><Row key={model.key} title={model.name} detail={`${model.modelId}${model.contextWindow?` · 上下文 ${model.contextWindow.toLocaleString()}`:""}${model.reasoning?" · 支持思考":""}`}><input type="checkbox" aria-label={`启用模型 ${model.name}`} checked={model.enabled} disabled={models.busy} onChange={e=>void models.setEnabled(model.key,e.target.checked)}/></Row>)}</Group></details>
+      <details className="model-provider-models"><summary>{uiText("查看模型与启用范围")}</summary>
+      <Group>{shown.filter(m=>m.providerId===provider.id).map(model=><Row key={model.key} title={model.name} detail={`${model.modelId}${model.contextWindow?uiText(" · 上下文 {0}", [model.contextWindow.toLocaleString()]):""}${model.reasoning?uiText(" · 支持思考"):""}`}><input type="checkbox" aria-label={uiText("启用模型 {0}", [model.name])} checked={model.enabled} disabled={models.busy} onChange={e=>void models.setEnabled(model.key,e.target.checked)}/></Row>)}</Group></details>
     </details>)}
-    {!shown.length&&<p className="settings-empty-row">{models.loading?"正在读取模型…":query?"没有找到匹配的模型。":connectedOnly?"暂无已连接的模型，可管理供应商或查看全部目录。":"没有模型信息，请刷新目录。"}</p>}
+    {!shown.length&&<p className="settings-empty-row">{models.loading?uiText("正在读取模型…"):query?uiText("没有找到匹配的模型。"):connectedOnly?uiText("暂无已连接的模型，可管理供应商或查看全部目录。"):uiText("没有模型信息，请刷新目录。")}</p>}
   </>;
 }
 function Providers({
@@ -501,12 +500,10 @@ function Providers({
     <>
       <div className="settings-toolbar">
         <p className="settings-intro">
-          自定义 API 地址和模型。保存后可在模型页连接，也可使用已有环境变量。
-        </p>
+          {uiText("自定义 API 地址和模型。保存后可在模型页连接，也可使用已有环境变量。")}</p>
         <button className="primary-button" onClick={() => setEditing(empty())}>
           <Plus size={14} />
-          新建供应商
-        </button>
+          {uiText("新建供应商")}</button>
       </div>
       <Group>
         {custom.length ? (
@@ -553,8 +550,7 @@ function Providers({
                   })
                 }
               >
-                编辑
-              </button>
+                {uiText("编辑")}</button>
               <button
                 className="text-button danger"
                 disabled={busy}
@@ -566,18 +562,17 @@ function Providers({
                   )
                 }
               >
-                删除
-              </button>
+                {uiText("删除")}</button>
             </Row>
           ))
         ) : (
-          <p className="settings-empty-row">尚未添加自定义供应商。</p>
+          <p className="settings-empty-row">{uiText("尚未添加自定义供应商。")}</p>
         )}
       </Group>
       {providers.filter((provider) => !custom.some((p) => p.id === provider.id))
         .length > 0 && (
         <>
-          <h2>既有自定义供应商</h2>
+          <h2>{uiText("既有自定义供应商")}</h2>
           <Group>
             {providers
               .filter((provider) => !custom.some((p) => p.id === provider.id))
@@ -585,7 +580,7 @@ function Providers({
                 <Row
                   key={p.id}
                   title={p.name ?? p.id}
-                  detail={`${p.id} · ${p.authConfigured ? "已配置认证" : "未配置认证"}`}
+                  detail={`${p.id} · ${p.authConfigured ? uiText("已配置认证") : uiText("未配置认证")}`}
                 >
                   <button
                     className="text-button"
@@ -638,8 +633,7 @@ function Providers({
                       })
                     }
                   >
-                    编辑
-                  </button>
+                    {uiText("编辑")}</button>
                 </Row>
               ))}
           </Group>
@@ -655,14 +649,12 @@ function Providers({
         >
           <h2>
             {custom.some((p) => p.id === editing.id)
-              ? "编辑供应商"
-              : "新建供应商"}
+              ? uiText("编辑供应商")
+              : uiText("新建供应商")}
           </h2>
           {editing.adoptExisting && (
             <p className="secondary">
-              保存后由 D Code
-              管理这份供应商配置；既有认证继续引用，旧配置文件保持原样。
-            </p>
+              {uiText("保存后由 D Code 管理这份供应商配置；既有认证继续引用，旧配置文件保持原样。")}</p>
           )}
           {(editing.adoptExisting ||
             providers.some((p) => p.id === editing.id) ||
@@ -680,17 +672,16 @@ function Providers({
                   setEditing({ ...editing, keepExistingAuth: e.target.checked })
                 }
               />
-              使用旧配置的认证引用
-            </label>
+              {uiText("使用旧配置的认证引用")}</label>
           )}
-          {!editing.keepExistingAuth&&<label className="checkbox-row"><input type="checkbox" checked={editing.managedAuth===true} onChange={e=>setEditing({...editing,managedAuth:e.target.checked})}/>保存后通过安全窗口连接密钥</label>}
+          {!editing.keepExistingAuth&&<label className="checkbox-row"><input type="checkbox" checked={editing.managedAuth===true} onChange={e=>setEditing({...editing,managedAuth:e.target.checked})}/>{uiText("保存后通过安全窗口连接密钥")}</label>}
           <div className="form-grid">
             {(
               [
-                ["id", "供应商 ID"],
-                ["name", "显示名称"],
-                ["baseUrl", "API 地址"],
-                ["credentialEnv", "密钥所在环境变量"],
+                ["id", uiText("供应商 ID")],
+                ["name", uiText("显示名称")],
+                ["baseUrl", uiText("API 地址")],
+                ["credentialEnv", uiText("密钥所在环境变量")],
               ] as const
             ).map(([key, label]) => (
               <label key={key}>
@@ -711,15 +702,14 @@ function Providers({
                   }
                   placeholder={
                     key === "credentialEnv"
-                      ? "例如 MY_PROVIDER_API_KEY"
+                      ? uiText("例如 MY_PROVIDER_API_KEY")
                       : undefined
                   }
                 />
               </label>
             ))}
             <label>
-              API 协议
-              <select
+              {uiText("API 协议")}<select
                 value={editing.apiKind}
                 onChange={(e) =>
                   setEditing({ ...editing, apiKind: e.target.value })
@@ -736,12 +726,11 @@ function Providers({
               </select>
             </label>
           </div>
-          <h3>模型</h3>
+          <h3>{uiText("模型")}</h3>
           {editing.models.map((m, i) => (
             <div className="provider-model-editor" key={i}>
               <label>
-                模型 ID
-                <input
+                {uiText("模型 ID")}<input
                   required
                   value={m.modelId}
                   onChange={(e) =>
@@ -755,8 +744,7 @@ function Providers({
                 />
               </label>
               <label>
-                模型名称
-                <input
+                {uiText("模型名称")}<input
                   required
                   value={m.name}
                   onChange={(e) =>
@@ -770,8 +758,7 @@ function Providers({
                 />
               </label>
               <label>
-                上下文长度
-                <input
+                {uiText("上下文长度")}<input
                   type="number"
                   min={1}
                   value={m.contextWindow}
@@ -788,8 +775,7 @@ function Providers({
                 />
               </label>
               <label>
-                最大输出
-                <input
+                {uiText("最大输出")}<input
                   type="number"
                   min={1}
                   value={m.maxTokens}
@@ -806,10 +792,9 @@ function Providers({
                 />
               </label>
               <details className="provider-model-advanced">
-                <summary>模型单独配置</summary>
+                <summary>{uiText("模型单独配置")}</summary>
                 <label>
-                  API 协议（可选）
-                  <input
+                  {uiText("API 协议（可选）")}<input
                     value={m.api ?? ""}
                     onChange={(e) =>
                       setEditing({
@@ -819,12 +804,11 @@ function Providers({
                         ),
                       })
                     }
-                    placeholder="跟随供应商"
+                    placeholder={uiText("跟随供应商")}
                   />
                 </label>
                 <label>
-                  API 地址（可选）
-                  <input
+                  {uiText("API 地址（可选）")}<input
                     value={m.baseUrl ?? ""}
                     onChange={(e) =>
                       setEditing({
@@ -834,7 +818,7 @@ function Providers({
                         ),
                       })
                     }
-                    placeholder="跟随供应商"
+                    placeholder={uiText("跟随供应商")}
                   />
                 </label>
               </details>
@@ -851,12 +835,11 @@ function Providers({
                     })
                   }
                 />
-                支持推理
-              </label>
+                {uiText("支持推理")}</label>
               <button
                 type="button"
                 className="icon-button"
-                aria-label={`删除模型 ${i + 1}`}
+                aria-label={uiText("删除模型 {0}", [i + 1])}
                 disabled={editing.models.length === 1}
                 onClick={() =>
                   setEditing({
@@ -879,13 +862,11 @@ function Providers({
               })
             }
           >
-            添加模型
-          </button>
+            {uiText("添加模型")}</button>
           <details className="settings-advanced">
-            <summary>高级兼容性参数</summary>
+            <summary>{uiText("高级兼容性参数")}</summary>
             <label>
-              兼容性参数 JSON
-              <textarea
+              {uiText("兼容性参数 JSON")}<textarea
                 rows={6}
                 value={editing.compatJson ?? ""}
                 onChange={(e) =>
@@ -901,11 +882,9 @@ function Providers({
               className="text-button"
               onClick={() => setEditing(null)}
             >
-              取消
-            </button>
+              {uiText("取消")}</button>
             <button className="primary-button" disabled={busy}>
-              保存供应商
-            </button>
+              {uiText("保存供应商")}</button>
           </div>
         </form>
       )}
@@ -922,39 +901,36 @@ function Resources({ work, execute, busy }: Controls) {
     <>
       <div className="settings-toolbar">
         <p className="settings-intro">
-          查看当前加载的扩展包、技能、提示模板与命令。
-        </p>
+          {uiText("查看当前加载的扩展包、技能、提示模板与命令。")}</p>
         <button className="text-button" onClick={() => void mutate()}>
-          重新加载
-        </button>
+          {uiText("重新加载")}</button>
       </div>
       {error ? (
         <p role="alert">{errorText(error)}</p>
       ) : !data ? (
-        <p>正在读取资源…</p>
+        <p>{uiText("正在读取资源…")}</p>
       ) : (
         <>
-          <h2>扩展包来源 · {data.packages.length}</h2>
+          <h2>{uiText("扩展包来源 · ")}{data.packages.length}</h2>
           <p className="secondary">
-            保留发现的资源来源。外部扩展代码不在当前任务中加载。
-          </p>
+            {uiText("保留发现的资源来源。外部扩展代码不在当前任务中加载。")}</p>
           <Group>
             {data.packages.length ? (
               data.packages.map((p) => (
                 <Row key={p.source} title={p.source} detail={p.kind}>
-                  <span className="secondary">来源记录</span>
+                  <span className="secondary">{uiText("来源记录")}</span>
                 </Row>
               ))
             ) : (
-              <p className="settings-empty-row">没有配置扩展包。</p>
+              <p className="settings-empty-row">{uiText("没有配置扩展包。")}</p>
             )}
           </Group>
           {(
             [
-              ["extensions", "扩展"],
-              ["skills", "技能"],
-              ["prompts", "提示模板"],
-              ["commands", "命令"],
+              ["extensions", uiText("扩展")],
+              ["skills", uiText("技能")],
+              ["prompts", uiText("提示模板")],
+              ["commands", uiText("命令")],
             ] as const
           ).map(([key, label]) => (
             <section key={key}>
@@ -977,7 +953,7 @@ function Resources({ work, execute, busy }: Controls) {
                         "filePath" in r && (
                           <input
                             type="checkbox"
-                            aria-label={`启用${label} ${r.name}`}
+                            aria-label={uiText("启用{0} {1}", [label, r.name])}
                             checked={
                               !work.preferences?.disabledResources?.includes(
                                 `${key === "skills" ? "skill" : "prompt"}:${r.filePath}`,
@@ -1007,14 +983,14 @@ function Resources({ work, execute, busy }: Controls) {
                     </Row>
                   ))
                 ) : (
-                  <p className="settings-empty-row">没有已加载的{label}。</p>
+                  <p className="settings-empty-row">{uiText("没有已加载的")}{label}。</p>
                 )}
               </Group>
             </section>
           ))}
           {data.diagnostics.length > 0 && (
             <details>
-              <summary>加载诊断</summary>
+              <summary>{uiText("加载诊断")}</summary>
               {data.diagnostics.map((d, i) => (
                 <p key={i}>{d.message}</p>
               ))}
@@ -1054,8 +1030,7 @@ function Profiles({ work, models, execute, busy }: Controls & { models: ModelCon
   return (
     <>
       <p className="settings-intro">
-        保存可复用的智能体职责与行为约定，已有运行保留启动时的档案快照。
-      </p>
+        {uiText("保存可复用的智能体职责与行为约定，已有运行保留启动时的档案快照。")}</p>
       <Group>
         {work.snapshot?.agentProfiles.map((p) => (
           <Row key={p.id} title={profilePresentation(p).name} detail={profilePresentation(p).description}>
@@ -1068,11 +1043,10 @@ function Profiles({ work, models, execute, busy }: Controls & { models: ModelCon
                 setContract(profilePresentation(p).description);
               }}
             >
-              编辑
-            </button>
+              {uiText("编辑")}</button>
             <input
               type="checkbox"
-              aria-label={`启用档案 ${profilePresentation(p).name}`}
+              aria-label={uiText("启用档案 {0}", [profilePresentation(p).name])}
               checked={p.enabled}
               disabled={busy}
               onChange={(e) =>
@@ -1097,10 +1071,9 @@ function Profiles({ work, models, execute, busy }: Controls & { models: ModelCon
           void save();
         }}
       >
-        <h2>{edit ? "编辑档案" : "新建档案"}</h2>
+        <h2>{edit ? uiText("编辑档案") : uiText("新建档案")}</h2>
         <label>
-          名称
-          <input
+          {uiText("名称")}<input
             required
             maxLength={200}
             value={name}
@@ -1108,8 +1081,7 @@ function Profiles({ work, models, execute, busy }: Controls & { models: ModelCon
           />
         </label>
         <label>
-          职责约定
-          <textarea
+          {uiText("职责约定")}<textarea
             required
             rows={6}
             value={contract}
@@ -1129,15 +1101,13 @@ function Profiles({ work, models, execute, busy }: Controls & { models: ModelCon
                 setContract("");
               }}
             >
-              取消
-            </button>
+              {uiText("取消")}</button>
           )}
           <button
             disabled={busy || !name.trim() || !contract.trim() || routes.some((row) => !row.model.providerId || !row.model.modelId)}
             className="primary-button"
           >
-            保存档案
-          </button>
+            {uiText("保存档案")}</button>
         </div>
       </form>
     </>
@@ -1151,22 +1121,22 @@ function Diagnostics({ work, execute, busy }: Controls) {
   );
   return (
     <>
-      <p className="settings-intro">查看运行服务、连接和应用诊断。</p>
+      <p className="settings-intro">{uiText("查看运行服务、连接和应用诊断。")}</p>
       <Group>
-        <Row title="运行服务">
-          <span>{data?.hostReady ? "已连接" : "未连接"}</span>
+        <Row title={uiText("运行服务")}>
+          <span>{data?.hostReady ? uiText("已连接") : uiText("未连接")}</span>
         </Row>
-        <Row title="应用版本">
-          <span>{data?.version ?? "正在读取"}</span>
+        <Row title={uiText("应用版本")}>
+          <span>{data?.version ?? uiText("正在读取")}</span>
         </Row>
         <Row title="Product Store">
           <span>
             {work.snapshot
-              ? `版本 ${work.snapshot.schemaVersion} · 修订 ${work.snapshot.storeRevision}`
-              : "未连接"}
+              ? uiText("版本 {0} · 修订 {1}", [work.snapshot.schemaVersion, work.snapshot.storeRevision])
+              : uiText("未连接")}
           </span>
         </Row>
-        <Row title="重启运行服务" detail="重新连接前先停止正在执行的任务。">
+        <Row title={uiText("重启运行服务")} detail={uiText("重新连接前先停止正在执行的任务。")}>
           <button
             className="text-button"
             disabled={
@@ -1180,12 +1150,11 @@ function Diagnostics({ work, execute, busy }: Controls) {
             }
             onClick={() => void execute(() => work.restart())}
           >
-            重新连接
-          </button>
+            {uiText("重新连接")}</button>
         </Row>
       </Group>
       <div className="settings-toolbar">
-        <h2>诊断记录</h2>
+        <h2>{uiText("诊断记录")}</h2>
         <button
           className="text-button"
           onClick={() =>
@@ -1194,8 +1163,7 @@ function Diagnostics({ work, execute, busy }: Controls) {
               .then(() => mutate())
           }
         >
-          清空记录
-        </button>
+          {uiText("清空记录")}</button>
       </div>
       <Group>
         {data?.events.length ? (
@@ -1203,7 +1171,7 @@ function Diagnostics({ work, execute, busy }: Controls) {
             <Row key={i} title={e.message} detail={e.time} />
           ))
         ) : (
-          <p className="settings-empty-row">暂无诊断记录。</p>
+          <p className="settings-empty-row">{uiText("暂无诊断记录。")}</p>
         )}
       </Group>
     </>
@@ -1237,13 +1205,12 @@ function Evolution({ work, execute, busy }: Controls) {
   return (
     <>
       <p className="settings-intro">
-        验证与构建隔离候选，受控重启后恢复工作台，再由你验收或回滚。
-      </p>
+        {uiText("验证与构建隔离候选，受控重启后恢复工作台，再由你验收或回滚。")}</p>
       {pending && (
         <Group>
           <Row
-            title="候选已恢复原工作台"
-            detail="确认可以继续工作后，记录本次人工验收。"
+            title={uiText("候选已恢复原工作台")}
+            detail={uiText("确认可以继续工作后，记录本次人工验收。")}
           >
             <button
               className="primary-button"
@@ -1260,24 +1227,22 @@ function Evolution({ work, execute, busy }: Controls) {
                 })
               }
             >
-              确认可继续使用
-            </button>
+              {uiText("确认可继续使用")}</button>
           </Row>
-          <Row title="发现问题">
+          <Row title={uiText("发现问题")}>
             <button
               className="text-button danger"
               disabled={busy || active}
               onClick={() => void transition("rollback")}
             >
-              回滚上一构建
-            </button>
+              {uiText("回滚上一构建")}</button>
           </Row>
         </Group>
       )}
       <Group>
         <Row
-          title="D Code 源码目录"
-          detail={sourceDirectory || "选择 D Code 项目文件夹"}
+          title={uiText("D Code 源码目录")}
+          detail={sourceDirectory || uiText("选择 D Code 项目文件夹")}
         >
           <button
             className="text-button"
@@ -1290,10 +1255,9 @@ function Evolution({ work, execute, busy }: Controls) {
                 })
             }
           >
-            选择…
-          </button>
+            {uiText("选择…")}</button>
         </Row>
-        <Row title="自动检查" detail="运行 Host 和 Web 客户端的检查与测试。">
+        <Row title={uiText("自动检查")} detail={uiText("运行 Host 和 Web 客户端的检查与测试。")}>
           <button
             disabled={busy || working || !sourceDirectory}
             className="text-button"
@@ -1307,10 +1271,9 @@ function Evolution({ work, execute, busy }: Controls) {
               })
             }
           >
-            运行检查
-          </button>
+            {uiText("运行检查")}</button>
         </Row>
-        <Row title="准备下一构建" detail="生成独立的本地候选，不替换当前应用。">
+        <Row title={uiText("准备下一构建")} detail={uiText("生成独立的本地候选，不替换当前应用。")}>
           <button
             disabled={busy || working || !sourceDirectory}
             className="text-button"
@@ -1324,29 +1287,27 @@ function Evolution({ work, execute, busy }: Controls) {
               })
             }
           >
-            构建候选
-          </button>
+            {uiText("构建候选")}</button>
         </Row>
       </Group>
       {data && data.status !== "idle" && (
         <>
           <h2>
             {working
-              ? "正在执行"
+              ? uiText("正在执行")
               : data.status === "succeeded"
-                ? "执行完成"
-                : "需要处理"}
+                ? uiText("执行完成")
+                : uiText("需要处理")}
           </h2>
           <p>{data.summary}</p>
-          <details><summary>查看构建输出</summary><pre className="maintenance-output">{data.output.join("\n")}</pre></details>
+          <details><summary>{uiText("查看构建输出")}</summary><pre className="maintenance-output">{data.output.join("\n")}</pre></details>
           {data.candidatePath && (
             <div className="dialog-actions">
               <button
                 className="text-button"
                 onClick={() => void api().revealCandidate(data.candidatePath!)}
               >
-                在访达中查看
-              </button>
+                {uiText("在访达中查看")}</button>
               <button
                 className="primary-button"
                 disabled={
@@ -1354,13 +1315,12 @@ function Evolution({ work, execute, busy }: Controls) {
                 }
                 onClick={() => void transition("candidate")}
               >
-                重启到候选并恢复任务
-              </button>
+                {uiText("重启到候选并恢复任务")}</button>
             </div>
           )}
         </>
       )}
-      <h2>自进化记录</h2>
+      <h2>{uiText("自进化记录")}</h2>
       <Group>
         {history?.receipts.length ? (
           history.receipts.map((r) => (
@@ -1369,12 +1329,12 @@ function Evolution({ work, execute, busy }: Controls) {
               title={
                 (
                   {
-                    restart_requested: "已记录重启请求",
-                    session_restored: "原任务已恢复，待验收",
-                    manual_accepted: "已人工验收",
-                    rolled_back: "已回滚",
-                    cancelled: "切换未完成，原应用仍在运行",
-                    recovery_required: "需要恢复",
+                    restart_requested: uiText("已记录重启请求"),
+                    session_restored: uiText("原任务已恢复，待验收"),
+                    manual_accepted: uiText("已人工验收"),
+                    rolled_back: uiText("已回滚"),
+                    cancelled: uiText("切换未完成，原应用仍在运行"),
+                    recovery_required: uiText("需要恢复"),
                   } as Record<string, string>
                 )[r.state] ?? r.state
               }
@@ -1382,7 +1342,7 @@ function Evolution({ work, execute, busy }: Controls) {
                 <>
                   {new Date(r.updatedAt).toLocaleString()}
                   <details>
-                    <summary>事件记录</summary>
+                    <summary>{uiText("事件记录")}</summary>
                     {r.events.map((e, i) => (
                       <p key={i}>
                         {e.kind} · {new Date(e.occurredAt).toLocaleString()}
@@ -1394,7 +1354,7 @@ function Evolution({ work, execute, busy }: Controls) {
             />
           ))
         ) : (
-          <p className="settings-empty-row">尚无 Web 客户端自进化记录。</p>
+          <p className="settings-empty-row">{uiText("尚无 Web 客户端自进化记录。")}</p>
         )}
       </Group>
     </>
@@ -1429,23 +1389,23 @@ function About() {
         />
         <div>
           <h2>D Code</h2>
-          <p>版本 {data?.version ?? "—"}</p>
+          <p>{uiText("版本 ")}{data?.version ?? "—"}</p>
         </div>
       </div>
       <Group>
-        <Row title="作者 GitHub" detail="ssdiwu">
+        <Row title={uiText("作者 GitHub")} detail="ssdiwu">
           <button
             className="icon-button"
-            aria-label="打开作者 GitHub"
+            aria-label={uiText("打开作者 GitHub")}
             onClick={() => void api().openExternal("https://github.com/ssdiwu")}
           >
             <ExternalLink size={16} />
           </button>
         </Row>
-        <Row title="项目 GitHub" detail="ssdiwu/dcode">
+        <Row title={uiText("项目 GitHub")} detail="ssdiwu/dcode">
           <button
             className="icon-button"
-            aria-label="打开项目 GitHub"
+            aria-label={uiText("打开项目 GitHub")}
             onClick={() =>
               void api().openExternal("https://github.com/ssdiwu/dcode")
             }

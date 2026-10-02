@@ -20,14 +20,16 @@ npm run test:canvas # 检查不同图片比例下的完整显示与节点自适�
 npm run test:preview # 隔离 Electron 中验证 HTML 脚本、资源和网络边界
 npm run test:source-detail # 隔离 Electron 中核对旧灵感版本、深浅主题与窄窗口来源面板
 npm run smoke:host  # 不开窗口的 Host 启动、握手、查询、停机
-npm run dist        # 本地未签名候选；不是正式发布
+DCODE_EXPECTED_VERSION=<目标号> npm run dist # 本地未签名候选；不是正式发布
 ```
+
+命令中的 `<目标号>` 是占位符；执行前按[版本实施方案](../doc/40-版本实施方案/README.md)替换为当前实现版本。未声明目标号或与 App／Host 版本不符时，打包在构建前失败。
 
 `npm test` 的 UI 回归在 jsdom 中运行真实 React 控制器与 App，接入真实 PiHost / Product Store，只有模型网络响应被隔离替换。覆盖创建、流式消息、停止、草稿隔离与重启恢复、搜索连续输入、创建入口和中文输入法确认。不接触真实账户、真实 `~/.dcode` 或供应商额度。候选摘要另有真实 Electron 子进程回归；字体、窗口行为与视觉验收仍另行成立。
 
 `npm run test:source-detail`、`npm run test:task-continuation` 和 `npm run test:review-diff` 使用独立数据根启动真实 Electron 窗口，分别核对旧灵感版本、同任务续接与摘要修订、Project Git 差异审查；输出临时截图和结果，不修改当前用户任务。三者仍不代替 507 本人验收。
 
-包内 Host 冒烟可用 `DCODE_SMOKE_APP="/绝对路径/D Code.app" DCODE_EXPECT_PI_VERSION=0.87.1 node scripts/smoke-host.mjs`。脚本显式使用 Electron 的 Node 模式，并同时隔离 Agent、Product Store 与 Electron 用户目录；核对握手、三项内置 SDK 版本及对应模型目录，不向真实模型发请求。
+包内 Host 冒烟可用 `DCODE_SMOKE_APP="/绝对路径/D Code.app" DCODE_EXPECT_PI_VERSION=0.99.1 node scripts/smoke-host.mjs`。脚本显式使用 Electron 的 Node 模式，并同时隔离 Agent、Product Store 与 Electron 用户目录；核对握手、三项内置 SDK 版本及对应模型目录，不向真实模型发请求。
 
 隔离窗口和截图：
 
@@ -40,6 +42,9 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 已有构建截图可使用 `node scripts/dev.mjs --capture /tmp/dcode.png`，并传同样的隔离变量。所有图片 / 内容都来自实际隔离 Store；生产界面没有样式样例开关。`DCODE_WIDTH` 与 `DCODE_THEME` 用于检查宽度和深浅色。
 
 ## 当前修复范围
+
+- 设置 → 外观提供中文／English 的显示与沟通语言。保存后界面和原生菜单立即改变，新一轮协调者、成员回复和自动子会话标题遵循所选语言；已有消息和自定义名称保留原文。共享词表位于 `src/shared/ui-language.ts`、`ui-catalog.ts`，不翻译用户数据。
+- Task 主对话“＋”提供“生成图片（试验）”：只提交当次描述，经独立 Codex App Server 使用适用订阅，成功图由 D Code 保存、预览、显式附为输入或导出。当前需本机安装精确 `codex-cli 0.157.1`，运行前核对账号和隔离边界；不能保证一次扣量，额度与实际消耗显示未知。稳定分发门槛及验收见 [PRD 0036](../doc/40-版本实施方案/0036-0.0.37-任务内图像生成与产物归档产品需求.md)。
 
 - 项目行可编辑名称与文件夹，可选择同时移动项目文件；原对话、任务和已保存结果保留。未保存文件按所属项目与实际移动路径共同保护，从独立任务打开的同一文件也不会被漏过；仅改项目关联不清理无关任务的编辑缓冲。提交后失效标签重新从登记来源读取。
 
@@ -69,6 +74,9 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 ## 结构
 
+- `src/shared/ui-language.ts` / `ui-catalog.ts`：显式产品文案、静态选项与动态占位符的中英呈现；原生主进程与 renderer 复用同一词表。
+- `components/ImageGenerationPanel.tsx`：当前 Task 的生图表单、隔离状态、历史与已确认结果操作；导出只经可信 native Save Dialog 通道。
+
 - `components/conversation/CollaborationFeed.tsx` / `workbench/conversation-origins.ts`：成员定向交流、队列操作、进展来源与输入边界。
 - `components/TaskContext.tsx` / `ModelRouteEditor.tsx` / `ExtensionRequests.tsx` / `AuxiliaryActivities.tsx`：资料与运行依据、候选顺序、结构化决定和后台活动。
 
@@ -92,7 +100,7 @@ DCODE_AGENT_DIR=/tmp/dcode-web-acceptance/agent npm run start
 
 任务概览的进度区可读取当前 Task Plan 已保存的路线状态、采用依据、候选及检查历史，实际检查成员可返回其原对话；上下文与新用户输入的适用性由 Host 投影，未核对的新输入和过期路线不呈现为当前已采用；停止、失效与投入上限调整均显示真实记录。`TaskRouteSummary` 不自行写计划或判断路线是否正确。`test/task-routes-ui.test.mjs` 覆盖来源导航、跨任务隔离与过期状态；构建后运行 `node test/main/task-routes.mjs`，用隔离 Product Store 与隐藏 Electron 验证双主题、窄窗口及 Chromium 键盘展开。该检查使用受控记录与焦点模拟，不证明真实模型选路收益或用户人工验收。
 
-507 已于 2026-09-07 确认当前基础工作台与灵感流程验收通过。正式验证记录、候选路径与迁移遗留由 PRD 0028 维护。源码提交、推送与正式发布分别成立；`npm run dist` 生成本机未签名候选。
+507 已于 2026-09-07 确认当前基础工作台与灵感流程验收通过。正式验证记录、候选路径与迁移遗留由 PRD 0028 维护。源码提交、推送与正式发布分别成立；`DCODE_EXPECTED_VERSION=<目标号> npm run dist` 生成本机未签名候选，缺少目标号会拒绝打包。
 
 ## 0.0.32 UI/UX 候选
 

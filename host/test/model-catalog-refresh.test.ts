@@ -20,7 +20,9 @@ test("online model refresh reaches native selection and survives restart without
   const priorKey=process.env.DCODE_UNUSED_CATALOG_FIXTURE;process.env.DCODE_UNUSED_CATALOG_FIXTURE="fixture-only";
   globalThis.fetch=async input=>{
     assert.match(String(input),/^https:\/\/pi.dev\/api\/models\/providers\//);
-    const models=String(input).endsWith("/openai")?[{id:"catalog-update-fixture",name:"Updated catalog model",provider:"openai",api:"openai-responses",baseUrl:"https://api.openai.com/v1",contextWindow:372000,maxTokens:128000,reasoning:true,input:["text","image"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]:[];
+    const endpoint=new URL(String(input));
+    assert.equal(endpoint.searchParams.get("types"),"chat,image,classifier");
+    const models=endpoint.pathname.endsWith("/openai")?[{type:"chat",id:"catalog-update-fixture",name:"Updated catalog model",provider:"openai",api:"openai-responses",baseUrl:"https://api.openai.com/v1",contextWindow:372000,maxTokens:128000,reasoning:true,input:["text","image"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]:[];
     return new Response(JSON.stringify(models),{headers:{"content-type":"application/json","last-modified":new Date((getBuiltinModelDataGeneratedAt()??Date.now())+1000).toUTCString()}});
   };
   try {

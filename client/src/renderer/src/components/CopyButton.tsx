@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, CircleAlert } from "lucide-react";
 
@@ -25,7 +26,7 @@ export function CopyButton({ text, onError }: { text: string; onError: (error: u
       if (alive.current) { setState("failed"); onError(error); }
     } finally { pending.current = false; }
   };
-  const label = state === "copied" ? "已复制" : state === "failed" ? "复制失败，点击重试" : state === "copying" ? "正在复制" : "复制消息";
+  const label = state === "copied" ? uiText("已复制") : state === "failed" ? uiText("复制失败，点击重试") : state === "copying" ? uiText("正在复制") : uiText("复制消息");
   return <button type="button" className="icon-button copy-feedback" data-state={state} aria-label={label} title={label} disabled={state === "copying"} onClick={() => void copy()}>
     {state === "copied" ? <Check size={13}/> : state === "failed" ? <CircleAlert size={13}/> : <Copy size={13}/>}
     <span className="sr-only" role="status">{state === "copied" || state === "failed" ? label : ""}</span>

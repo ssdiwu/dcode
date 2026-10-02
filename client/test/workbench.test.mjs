@@ -111,6 +111,8 @@ test("Store writes serialize, refresh revisions, and retain a request identity o
   assert.equal(calls[0].requestId, calls[1].requestId);
   assert.notEqual(calls[1].requestId, calls[2].requestId);
   assert.equal(revision, 4);
+  await mutate("task.create",{requestId:"workflow-task:stable-id",title:"same Task retry"});
+  assert.equal(calls.at(-1).requestId,"workflow-task:stable-id");
 });
 test("packaged lookup agrees with Host resource layout and original icon", () => {
   const paths = resolveClientPaths(

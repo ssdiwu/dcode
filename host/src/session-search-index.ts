@@ -139,7 +139,7 @@ export class SessionSearchIndex {
       if (this.worker === worker) {
         this.worker = undefined;
         if (this.closed) return;
-        if (code !== 0 && !this.workerFailure) this.failWorker(new Error(`Search worker exited with code ${code}`));
+        this.failWorker(new Error(`Search worker exited unexpectedly with code ${code}`));
       }
     });
     this.worker = worker;

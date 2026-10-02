@@ -1,3 +1,4 @@
+import { uiText } from "../../../shared/ui-language.ts";
 import {FileReferenceContext} from "../workbench/useWorkspaceFiles";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -28,7 +29,7 @@ function MermaidView({ code }: { code: string }) {
         if (result.rendered && Array.isArray(result.lines)) {
           setLines(result.lines);
         } else {
-          setError(result.error ?? "渲染失败");
+          setError(result.error ?? uiText("渲染失败"));
         }
       })
       .catch((reason: unknown) => {
@@ -51,7 +52,7 @@ function MermaidView({ code }: { code: string }) {
   }
   return (
     <div className="my-2 rounded-lg border border-line bg-nav/60 px-3 py-2 text-[11.5px] text-hint">
-      {error ? `Mermaid：${error}` : "Mermaid 渲染中…"}
+      {error ? `Mermaid：${error}` : uiText("Mermaid 渲染中…")}
       <pre className="mt-1 overflow-x-auto whitespace-pre font-mono text-[11px]">
         {code}
       </pre>
@@ -99,7 +100,7 @@ function MarkdownInner({ text }: { text: string }) {
     <div className="space-y-2 break-words text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-3 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-ink/8 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_h1]:text-[16px] [&_h1]:font-semibold [&_h2]:text-[15px] [&_h2]:font-semibold [&_h3]:text-[14px] [&_h3]:font-semibold [&_hr]:border-line [&_li]:marker:text-hint [&_ol]:list-decimal [&_ol]:pl-5 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-line [&_pre]:p-3 [&_pre]:text-[12px] [&_table]:w-full [&_table]:text-[12px] [&_td]:border [&_td]:border-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-line [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        urlTransform={url=>/^(https?:|file:|dcode-source:)/iu.test(url)||!/^\w[\w+.-]*:/u.test(url)||/^[^/]+\.[a-z0-9]+:\d+$/iu.test(url)?url:""}
+        urlTransform={url=>/^(https?:|file:|dcode-source:|dcode-file:)/iu.test(url)||!/^\w[\w+.-]*:/u.test(url)||/^[^/]+\.[a-z0-9]+:\d+$/iu.test(url)?url:""}
         components={{
           pre: (props) => <>{props.children}</>,
           a: (props) =>
@@ -122,7 +123,7 @@ function MarkdownInner({ text }: { text: string }) {
               </a>
             ),
           img: (props) => (
-            <span className="text-hint">{props.alt || "图片链接"}</span>
+            <span className="text-hint">{props.alt || uiText("图片链接")}</span>
           ),
           code: (props) => {
             const { className, children } = props as {

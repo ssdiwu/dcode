@@ -54,9 +54,11 @@ try {
       versions[name] = manifest.version;
     }
     const catalog = await bridge.request("dcodeModels.get", {});
-    const found = catalog.models.filter(model => ["openai", "openai-codex"].includes(model.providerId) && ["gpt-6-sol", "gpt-6-luna"].includes(model.modelId)).map(model => `${model.providerId}::${model.modelId}`);
+    const expectedIds=hello.piVersion==="0.99.1"?["gpt-6-sol","gpt-6-luna","gpt-6.1-sol"]:["gpt-6-sol","gpt-6-luna"];
+    const found = catalog.models.filter(model => ["openai", "openai-codex"].includes(model.providerId) && expectedIds.includes(model.modelId)).map(model => `${model.providerId}::${model.modelId}`);
     console.log(JSON.stringify({ embeddedVersions: versions, currentCatalogModels: found, realModelRequests: false }));
     if (hello.piVersion === "0.87.1" && found.length !== 4) throw new Error("Expected built-in model entries are missing");
+    if (hello.piVersion === "0.99.1" && found.length !== 6) throw new Error("Expected GPT-6.1 Sol and existing model entries are missing");
   }
   const capabilities = hello.capabilities ?? {};
   console.log(`host.hello ok · productStore=${String(capabilities.productStore)} nativeTasks=${String(capabilities.nativeTasks)} foundationSnapshot=${String(capabilities.foundationSnapshot)}`);

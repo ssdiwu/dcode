@@ -18,7 +18,9 @@ export class MaintenanceController {
   private state: MaintenanceState = { status: "idle", summary: "", output: [] };
   private child: ChildProcess | null = null;
   private flight: Promise<void> | null = null;
+  private starting: Promise<MaintenanceState> | null = null;
   private cancelled = false;
+  private stopped = false;
   private termination: Promise<void> | null = null;
   private blocked = false;
   constructor(
@@ -26,7 +28,7 @@ export class MaintenanceController {
     private emit: (event: string, data: unknown) => void,
   ) {}
   async status() {
-    if (!this.flight) {
+    if (!this.flight && !this.starting) {
       const saved = this.store.maintenanceState();
       if (saved)
         this.state =
@@ -41,8 +43,18 @@ export class MaintenanceController {
     return this.state;
   }
   async start(source: string, action: "verify" | "build") {
-    if (this.flight || this.blocked)
+    if (this.flight || this.starting || this.blocked || this.stopped)
       throw new Error("已有检查或构建仍未结束，不能重复启动");
+    this.cancelled = false;
+    const starting = this.prepareStart(source, action);
+    this.starting = starting;
+    try {
+      return await starting;
+    } finally {
+      if (this.starting === starting) this.starting = null;
+    }
+  }
+  private async prepareStart(source: string, action: "verify" | "build") {
     const root = await realpath(source);
     if (!(await stat(root)).isDirectory()) throw new Error("请选择文件夹");
     const client = JSON.parse(
@@ -68,7 +80,7 @@ export class MaintenanceController {
     }
     if (!npm)
       throw new Error("没有找到 npm。请安装 Node.js 并重新打开 D Code。");
-    this.cancelled = false;
+    if (this.cancelled || this.stopped) throw new Error("操作已停止。");
     const id = `web-${randomUUID()}`;
     const output = join(root, "dist-candidate", id);
     this.state = {
@@ -84,6 +96,11 @@ export class MaintenanceController {
       updatedAt: new Date().toISOString(),
     };
     await this.publish();
+    if (this.cancelled || this.stopped) {
+      this.state = {...this.state, status:"failed", summary:"操作已停止。"};
+      await this.publish();
+      return this.state;
+    }
     this.flight = (async () => {
       try {
         const env: NodeJS.ProcessEnv = {
@@ -239,7 +256,9 @@ export class MaintenanceController {
     return this.termination;
   }
   async close() {
+    this.stopped = true;
     this.cancelled = true;
+    if (this.starting) await this.starting.catch(() => undefined);
     await this.stopChild();
     if (this.flight) await this.flight;
   }

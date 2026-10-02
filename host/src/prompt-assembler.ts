@@ -34,11 +34,14 @@ export interface DCodePromptContextSelection {
 }
 
 export interface DCodePromptEnvironment {
+  responseLanguage?: "zh-CN" | "en";
   runtimeId: string;
   scope: { kind: "user"; userId: string } | { kind: "project"; projectId: string };
   taskId: string;
   taskTitle: string;
   taskGoal: string;
+  /** Product Store Task revision captured with the Goal in this prompt. */
+  taskRevision?: number;
   sessionId: string;
   sessionKind: string;
   workspaceId: string;
@@ -96,6 +99,13 @@ function escapePromptText(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+function escapePromptAttribute(value: string): string {
+  return escapePromptText(value)
+    .replaceAll("\r", "&#13;")
+    .replaceAll("\n", "&#10;")
+    .replaceAll("\t", "&#9;");
 }
 
 export async function loadDCodePromptDocuments(
@@ -169,7 +179,7 @@ export function assembleDCodeSystemPrompt(input: {
   const documents = input.documents.length === 0
     ? "（本轮没有加载一等项目文档正文。）"
     : input.documents.map((document) => (
-      `\n<dcode_document path="${document.receipt.path}" digest="${document.receipt.digest}">\n`
+      `\n<dcode_document path="${escapePromptAttribute(document.receipt.path)}" digest="${document.receipt.digest}">\n`
       + `${document.content}\n</dcode_document>`
     )).join("\n");
   const importedHistory = input.importedHistory
@@ -188,6 +198,7 @@ export function assembleDCodeSystemPrompt(input: {
     : "";
   const collaborationRules=tools.some(tool=>tool.name==="dcode_team")?`
 任务内协作：简单、可立即收口的工作直接处理；需要持续后台执行、可独立分工或独立验收时，用 dcode_team 查看档案后按需派发。成员运行期间继续承接用户，不等所有成员完成才回应。创建权属于你，不能让成员创建新成员。用户的定向要求要同步到对应工作，停止过期方向，不扩大范围。
+新成员的 title 是用户在侧栏与子对话顶部看到的工作名称；按本轮显示与沟通语言写简短、具体的名称，用户明确指定的名称保持原样。保留 NDJSON、文件名等技术标识原文，不把整段 instruction 复制为名称，也不改写已有成员名称。
 执行报告不是验收通过。收到成果后按需安排独立验收成员，使用 dcode_verification 查看真实验收证据并进行二次复核。产品问题用 rework 回到执行者，证据不足用 recheck 回到验收者；连续两次无新证据时改变方法或重新分工，不重复空转。复核通过后才进入用户任务验收。
 `:"";
   const routeRules = tools.some(tool => tool.name === "dcode_route") ? `
@@ -236,6 +247,10 @@ ${toolManifest}
 
 强制规则与本任务显式选择的 Context Projection（上下文投影）：
 ${documents}${importedHistory}${taskAcceptanceFeedback}
+
+${input.environment.responseLanguage === "en"
+  ? "D Code display and communication language: English. Write user-facing replies, status explanations, and new automatically generated member/session titles in English, even when the task instructions, project documents, or internal tool descriptions use Chinese. Preserve user-provided names, quoted source text, paths, code identifiers, and existing history. Deliver requested writing/translation artifacts in the language explicitly requested for that artifact. If the user explicitly requests a different reply language for this turn, honor that request for the reply only; keep the preference and new automatic titles unchanged. This language choice is captured for this run; a settings change applies to subsequent runs."
+  : "D Code 显示与沟通语言：简体中文。面向用户的回复、状态说明与新自动生成的成员／子会话标题使用简体中文，即使交办指令、项目文档或内部工具说明使用英文。用户提供的名称、引用原文、路径、代码标识与已有历史保持原样；用户明确要求特定语言的写作／翻译产物按该产物要求交付。本轮用户明确要求另一种回复语言时，仅该回复服从明确要求，不修改设置或新自动标题的语言。本语言选择固定于本轮运行，设置变更从后续运行生效。"}
 `;
   return {
     text,

@@ -1,11 +1,15 @@
 import {WorkspaceWriteGuard,workspacePathsOverlap} from "./workspace-write-guard.js";
 import {verificationContext} from "./verification-context.js";
 import {AuxiliaryProcesses} from "./auxiliary-process.js";
+import {agentShellEnvironment} from "./agent-shell-environment.js";
 import type {ProviderRouteControl,ProviderModel} from "./provider-route-stream.js";
 import {sanitizeRuntimeValue} from "./runtime-privacy.js";
 import {directoryChangeTargets,directoryPosition,swapProjectDirectories,privateSessionDigest,type ProjectDirectoryChange} from "./project-directory-change.js";
 import {expandDCodeInput} from "./input-expansion.js";
 import {WorkspaceAccess} from "./workspace-access.js";
+import {ImageGenerationController} from "./image-generation.js";
+import {ImageGenerationError} from "./image-generation-types.js";
+import type {ImageBackendFactory} from "./image-app-server.js";
 import {safeWorkspaceRelativePath} from "./workspace-files.js";
 import { InspirationError } from "./inspiration.js";
 import {createVerificationExtension,DCODE_VERIFICATION_TOOL_NAME,type VerificationAction} from "./collaboration-verification.js";
@@ -46,6 +50,8 @@ import {
   buildSessionContext,
   collectEntriesForBranchSummary,
   createAgentSession,
+  createBashTool,
+  createBashToolDefinition,
   estimateTokens,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
@@ -106,12 +112,15 @@ import {
   type TaskSummaryReceipt,
   type TaskScope,
   type TaskWorkItemState,
+  type TaskWorkflowStageInput,
+  type TaskWorkflowDraftInput,
 } from "./product-store.js";
 import {
   listPiImportCandidates,
   preparePiSessionImport,
 } from "./pi-session-import.js";
 import { redactCredentialText } from "./credential-material.js";
+import { diagnosticError } from "./diagnostic-safety.js";
 import {
   ManagedWorkerWorktreeError,
   assertManagedWorkerWorktreeContextSourcesMaterialize,
@@ -175,7 +184,12 @@ const SHARED_READ_ONLY_TOOL_NAMES = new Set([
 function ownerRuntimeModel(owner:AgentRunRecord):AgentModelCandidate|undefined{return owner.modelProvider&&owner.modelId?{providerId:owner.modelProvider,modelId:owner.modelId}:undefined;}
 
 type Emit = (event: string, data?: unknown) => void;
-const HOST_VERSION = "0.0.34";
+const HOST_VERSION = "0.0.37";
+
+/** Only a rejected, rolled-back Store preparation can retry a prompt. */
+class StaleTaskSummaryInput extends Error {
+  constructor(readonly original:ProductStoreError){super(original.message);}
+}
 
 const RUNTIME_SCOPED_METHODS = new Set<HostMethod>([
   "runtime.start",
@@ -270,6 +284,8 @@ export interface PiHostOptions {
   dataRoot?: string;
   /** Host-owned adapter injection for isolated tests; never accepted through IPC. */
   modelCredentialAdapter?: CredentialVault & ConfidentialInteraction;
+  /** Test seam for the independent image capability; production uses the verified Codex CLI. */
+  imageBackendFactory?:ImageBackendFactory;
   userHome?: string;
   legacyUserDefaults?: Record<string, unknown>;
   legacySourcePaths?: Partial<Record<LegacyStoreKind, string>>;
@@ -541,20 +557,7 @@ function sessionDirectoryName(cwd: string): string {
 }
 
 function errorRecord(error: unknown): { code: string; message: string; details?: unknown } {
-  if (error instanceof PiHostError) {
-    return error.details === undefined
-      ? { code: error.code, message: error.message }
-      : { code: error.code, message: error.message, details: error.details };
-  }
-  if (typeof error === "object" && error !== null) {
-    const record = error as { code?: unknown; message?: unknown; details?: unknown };
-    if (typeof record.code === "string" && typeof record.message === "string") {
-      return record.details === undefined
-        ? { code: record.code, message: record.message }
-        : { code: record.code, message: record.message, details: record.details };
-    }
-  }
-  return { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
+  return diagnosticError(error);
 }
 
 
@@ -600,6 +603,7 @@ export class PiHost {
   private readonly conflictPollMs: number;
   private readonly promptCall = new AsyncLocalStorage<PromptCallContext | undefined>();
   private connectionsPromise: Promise<ModelConnections> | undefined;
+  private imageGenerationPromise?:Promise<ImageGenerationController>;
   private credentialStorePromise: Promise<DCodeCredentialStore> | undefined;
   private productStore?: ProductStore;
   private productStoreOpening?: Promise<ProductStore>;
@@ -1208,10 +1212,12 @@ export class PiHost {
     return {
       environment: {
         runtimeId: identity.runtimeId,
+        responseLanguage: store.clientPreferences().language ?? "zh-CN",
         scope: identity.scope,
         taskId: task.id,
         taskTitle: task.title,
         taskGoal: task.goal,
+        taskRevision: task.revision,
         sessionId: session.id,
         sessionKind: session.kind,
         workspaceId: identity.workspace.workspaceId,
@@ -1390,7 +1396,40 @@ export class PiHost {
     try{return await this.workspaceFileWrites.run(key,save);}finally{this.wakeCollaboration();}
   });
 
+  private imageGeneration():Promise<ImageGenerationController>{
+    return this.imageGenerationPromise??=this.getProductStore().then(async store=>{
+      const native=this.options.modelCredentialAdapter??new MacCredentialAdapter(store.layout.root);
+      const controller=new ImageGenerationController(store,(kind,taskId)=>this.options.emit('foundation.changed',{kind,taskId}),this.options.imageBackendFactory,
+        (url,signal)=>native.browser(url,signal),(destination,bytes,context,expected)=>this.workspaceAccess.exportImage(destination,bytes,context,expected),
+        (taskId,id,mimeType)=>this.workspaceAccess.imageExportContext(taskId,id,mimeType));
+      await controller.recover();return controller;
+    });
+  }
+  private async handleImageRequest(method:HostMethod,params:Record<string,unknown>):Promise<unknown>{
+    try{
+      const controller=await this.imageGeneration(),taskId=params.taskId as string,id=params.generationId as string;
+      switch(method){
+        case 'imageGeneration.capability':return await controller.capability();
+        case 'imageGeneration.connect':return await controller.connect();
+        case 'imageGeneration.cancelConnection':return await controller.cancelConnection();
+        case 'imageGeneration.list':return controller.list(taskId);
+        case 'imageGeneration.reconcile':return await controller.reconcile(taskId);
+        case 'imageGeneration.start':return await controller.start(params as unknown as Parameters<ImageGenerationController['start']>[0]);
+        case 'imageGeneration.cancel':return await controller.cancel(taskId,id);
+        case 'imageGeneration.image':return await controller.image(taskId,id);
+        case 'imageGeneration.exportContext':return await controller.context(taskId,id);
+        case 'imageGeneration.attach':return await controller.attach(params as unknown as Parameters<ImageGenerationController['attach']>[0]);
+        case 'imageGeneration.export':return await controller.export(taskId,id,params.destination as string,params.context as import('./image-generation-types.js').ImageExportContext,params.expectedDirectory as import('./image-generation-types.js').ImageExportDestination);
+        default:throw new PiHostError('METHOD_NOT_FOUND','Unknown image method');
+      }
+    }catch(error){if(error instanceof ImageGenerationError)throw new PiHostError(error.code,error.code,{uncertain:error.uncertain});throw error;}
+  }
+
   async handle(method: HostMethod, params: Record<string, unknown>): Promise<unknown> {
+    if(method.startsWith('imageGeneration.')){
+      if(params.runtimeId!==undefined)throw new PiHostError('RUNTIME_METHOD_NOT_SCOPED','Image capability is not an Agent Runtime method');
+      return this.handleImageRequest(method,params);
+    }
     if(method==="project.update")return this.updateNativeProject(params);
     if(method==="project.recover"){if([...this.projectChangeFlights.values()].some(flight=>flight.projectId===params.projectId))throw new PiHostError("PROJECT_DIRECTORY_BUSY","项目目录更换仍在进行，请等待收尾");await this.recoverProjectDirectoryChanges(params.projectId as string);return this.foundationSnapshot(0);}
     if(method.startsWith("workspace."))return this.workspaceAccess.handle(method,params);
@@ -1468,6 +1507,7 @@ export class PiHost {
     await Promise.allSettled([...this.projectChangeFlights.values()].map(flight=>flight.promise));
     this.collaborationClosing = true;
     clearInterval(this.attachmentSweep);
+    if(this.imageGenerationPromise)await (await this.imageGenerationPromise).close();
     await this.maintenance?.close();
     if(this.connectionsPromise)await (await this.connectionsPromise).close();
     const searchClose = this.searchShutdown ?? this.searchIndex.close();
@@ -1602,7 +1642,7 @@ export class PiHost {
         const result = await (await this.getProductStore()).setClientPreferences({
           requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number,
           ...(typeof params.notificationsEnabled === "boolean" ? { notificationsEnabled: params.notificationsEnabled } : {}),
-          ...Object.fromEntries(["appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"].filter(key => params[key] !== undefined).map(key => [key, params[key]])),
+          ...Object.fromEntries(["language", "appearance", "fontScale", "sidebarVisible", "overviewVisible", "sidebarWidth", "inspectorWidth", "defaultThinking", "modelQuotaThresholdPercent", "enabledModels", "disabledResources"].filter(key => params[key] !== undefined).map(key => [key, params[key]])),
           ...(params.readingPosition ? { readingPosition: params.readingPosition as { sessionId: string; offset: number } } : {}),
         });
         this.options.emit("foundation.changed", { kind: "clientPreferences.updated", storeRevision: result.storeRevision });
@@ -1635,7 +1675,7 @@ export class PiHost {
         return {path:value.path,name:value.attachment.name};
       }
       case "taskDraft.set": {
-        const result = await (await this.getProductStore()).setTaskDraft({ requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number, scope: params.scope as TaskScope, text: params.text as string, attachmentIds:params.attachmentIds as string[]|undefined });
+        const result = await (await this.getProductStore()).setTaskDraft({ requestId: params.requestId as string, expectedStoreRevision: params.expectedStoreRevision as number, scope: params.scope as TaskScope, text: params.text as string, goal:params.goal as string|undefined, acceptance:params.acceptance as string[]|undefined, pendingWorkflowSubmission:params.pendingWorkflowSubmission as import("./product-store.js").PendingWorkflowSubmissionRecord|null|undefined, attachmentIds:params.attachmentIds as string[]|undefined });
         this.options.emit("foundation.changed", { kind: "taskDraft.updated", storeRevision: result.storeRevision });
         return result;
       }
@@ -1720,6 +1760,7 @@ export class PiHost {
           targetAgentRunId: params.targetAgentRunId as string|null|undefined,
           pathAction:params.pathAction as import("./product-store.js").NativeSessionPathAction|null|undefined,
           pathDraftBackup:params.pathDraftBackup as import("./product-store.js").ComposerDraftRecord["pathDraftBackup"]|null|undefined,
+          pendingWorkflowSubmission:params.pendingWorkflowSubmission as import("./product-store.js").PendingWorkflowSubmissionRecord|null|undefined,
           attachmentIds:params.attachmentIds as string[]|undefined,
         });
         this.options.emit("foundation.changed", {
@@ -1732,7 +1773,10 @@ export class PiHost {
         return result;
       }
       case "collaboration.messageEdit": {
-        const result=await (await this.getProductStore()).editCollaborationMessage(params as Parameters<ProductStore["editCollaborationMessage"]>[0]);
+        const store=await this.getProductStore();
+        const original=store.collaborationMessages().find(message=>message.id===params.id);
+        if(original)await this.workspaceAccess.validateFileMentions(original.taskId,params.text as string);
+        const result=await store.editCollaborationMessage(params as Parameters<ProductStore["editCollaborationMessage"]>[0]);
         this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",storeRevision:result.storeRevision,taskId:result.message.taskId});return result;
       }
       case "collaboration.queueReorder": {
@@ -1748,6 +1792,8 @@ export class PiHost {
       case "dcodeSession.prompt":
         return await this.promptDCodeSession({
           dcodeSessionId: params.dcodeSessionId as string,
+          workflowReportRunId: params.workflowReportRunId as string|undefined,
+          workflowDraft: params.workflowDraft as TaskWorkflowDraftInput|undefined,
           targetAgentRunId: params.targetAgentRunId as string|undefined,
           deliveryMode:params.deliveryMode as "steer"|undefined,
           expectedSessionRunId:params.expectedSessionRunId as string|undefined,
@@ -1772,7 +1818,7 @@ export class PiHost {
         });
         return result;
       }
-      case "workspace.describe": case "workspace.tree": case "workspace.read": case "workspace.asset": case "workspace.preview": case "workspace.save": case "workspace.git": case "workspace.diff": case "workspace.reference": return this.workspaceAccess.handle(method,params);
+      case "workspace.describe": case "workspace.tree": case "workspace.read": case "workspace.asset": case "workspace.preview": case "workspace.save": case "workspace.git": case "workspace.diff": case "workspace.reference": case "workspace.readReference": case "workspace.fileSearch": return this.workspaceAccess.handle(method,params);
       case "project.gitBranch":
         return await this.projectGitBranch(params.projectId as string);
       case "task.manage": {
@@ -1799,6 +1845,19 @@ export class PiHost {
           taskId: result.task.id,
           scope: result.task.scope,
         });
+        return result;
+      }
+      case "task.goal.history": return (await this.getProductStore()).taskGoalHistory(params.taskId as string);
+      case "task.goal.update": {
+        const store=await this.getProductStore();
+        const snapshot=await store.snapshot();
+        const taskSessions=new Set(snapshot.sessions.filter(session=>session.taskId===params.taskId).map(session=>session.id));
+        if ([...this.runtimes.values()].some(runtime=>runtime.runtimeIdentity?.taskId===params.taskId&&runtime.currentRun)
+          || [...this.openingDCodeSessionIds.keys()].some(id=>taskSessions.has(id))
+          || [...this.collaborationDrains].some(id=>taskSessions.has(id))
+          || snapshot.sessionRuns.some(run=>run.taskId===params.taskId&&["prepared","running","waiting"].includes(run.status))) throw new PiHostError("TASK_BUSY","任务仍在启动或执行，请先停止并等待收尾，再修订目标");
+        const result=await store.updateTaskGoal({requestId:params.requestId as string,expectedStoreRevision:params.expectedStoreRevision as number,taskId:params.taskId as string,scope:params.scope as TaskScope,expectedTaskRevision:params.expectedTaskRevision as number,goal:params.goal as string,acceptance:params.acceptance as string[]});
+        this.options.emit("foundation.changed",{kind:"task.goalUpdated",storeRevision:result.storeRevision,entityKind:"task",entityId:result.task.id,taskId:result.task.id});
         return result;
       }
       case "task.session.continue": {
@@ -2003,6 +2062,111 @@ export class PiHost {
           entityKind: "task",
           entityId: params.taskId as string,
           taskId: params.taskId as string,
+        });
+        return result;
+      }
+      case "task.workflow.create": {
+        const result = await (await this.getProductStore()).createTaskWorkflow({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          originRawInputId: params.originRawInputId as string,
+          goal: params.goal as string,
+          constraints: params.constraints as string[] | undefined,
+          stages: params.stages as TaskWorkflowStageInput[],
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision, kind: "taskWorkflow.created",
+          entityKind: "taskWorkflow", entityId: result.workflow.id, taskId: result.workflow.taskId,
+        });
+        return result;
+      }
+      case "task.workflow.revise": {
+        const result = await (await this.getProductStore()).reviseTaskWorkflow({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          workflowId: params.workflowId as string,
+          expectedWorkflowRevision: params.expectedWorkflowRevision as number,
+          originRawInputId: params.originRawInputId as string,
+          goal: params.goal as string,
+          constraints: params.constraints as string[] | undefined,
+          stages: params.stages as TaskWorkflowStageInput[],
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision, kind: "taskWorkflow.revised",
+          entityKind: "taskWorkflow", entityId: result.workflow.id, taskId: result.workflow.taskId,
+        });
+        return result;
+      }
+      case "task.workflow.start": {
+        const result = await (await this.getProductStore()).startTaskWorkflow({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          workflowId: params.workflowId as string,
+          expectedWorkflowRevision: params.expectedWorkflowRevision as number,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision, kind: "taskWorkflow.started",
+          entityKind: "taskWorkflowRun", entityId: result.run.id, taskId: result.run.taskId,
+        });
+        return result;
+      }
+      case "task.workflow.bindWorkItem": {
+        const result = await (await this.getProductStore()).bindTaskWorkflowWorkItem({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          runId: params.runId as string,
+          expectedRunRevision: params.expectedRunRevision as number,
+          stageId: params.stageId as string,
+          workItemId: params.workItemId as string,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision, kind: "taskWorkflow.workItemBound",
+          entityKind: "taskWorkflowRun", entityId: result.binding.runId, taskId: params.taskId as string,
+        });
+        return result;
+      }
+      case "task.workflow.stop":
+      case "task.workflow.continue": {
+        const common = {
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          runId: params.runId as string,
+          expectedRunRevision: params.expectedRunRevision as number,
+        };
+        const result = method === "task.workflow.stop"
+          ? await (await this.getProductStore()).stopTaskWorkflow({ ...common, reason: params.reason as string })
+          : await (await this.getProductStore()).continueTaskWorkflow(common);
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision,
+          kind: method === "task.workflow.stop" ? "taskWorkflow.stopped" : "taskWorkflow.continued",
+          entityKind: "taskWorkflowRun", entityId: result.run.id, taskId: result.run.taskId,
+        });
+        if(method==="task.workflow.continue")this.wakeCollaboration();
+        return result;
+      }
+      case "task.workflow.complete": {
+        const result = await (await this.getProductStore()).completeTaskWorkflow({
+          requestId: params.requestId as string,
+          expectedStoreRevision: params.expectedStoreRevision as number,
+          taskId: params.taskId as string,
+          scope: params.scope as TaskScope,
+          runId: params.runId as string,
+          expectedRunRevision: params.expectedRunRevision as number,
+          coordinatorReportId: params.coordinatorReportId as string,
+        });
+        this.options.emit("foundation.changed", {
+          storeRevision: result.storeRevision, kind: "taskWorkflow.completed",
+          entityKind: "taskWorkflowRun", entityId: result.run.id, taskId: result.run.taskId,
         });
         return result;
       }
@@ -2311,6 +2475,8 @@ export class PiHost {
             : undefined,
           params.images as PromptImageInput[] | undefined,
           params.attachmentIds as string[] | undefined,
+          params.workflowReportRunId as string | undefined,
+          params.workflowDraft as TaskWorkflowDraftInput | undefined,
         );
       case "session.steer":
         return await this.steer(
@@ -2991,7 +3157,44 @@ export class PiHost {
     const originRawInputId=ownerRun?.latestRawInputId??ownerRun?.rawInputId;
     callId=createHash("sha256").update(`${identity.taskId}\0${identity.agentRunId}\0${originRawInputId}\0${callId}`).digest("hex").slice(0,48);
     if(!owner||!task) throw new PiHostError("COORDINATOR_REQUIRED","只有本任务协调者可以创建与安排成员");
-    if(action.action==="list") return {profiles:snapshot.agentProfiles.filter(profile=>profile.enabled&&profile.role!=="coordinator"),members:snapshot.agentRuns.filter(run=>run.taskId===task.id&&run.role!=="coordinator").map(run=>({...run,title:snapshot.sessions.find(session=>session.id===run.sessionId)?.title})),messages:store.collaborationMessages(task.id).slice(-50).map(message=>({...message,text:message.text.slice(0,1200),complete:message.text.length<=1200})),artifacts:snapshot.artifacts.filter(artifact=>artifact.taskId===task.id)};
+    if(action.action==="list") return {profiles:snapshot.agentProfiles.filter(profile=>profile.enabled&&profile.role!=="coordinator"),members:snapshot.agentRuns.filter(run=>run.taskId===task.id&&run.role!=="coordinator").map(run=>({...run,title:snapshot.sessions.find(session=>session.id===run.sessionId)?.title})),messages:store.collaborationMessages(task.id).slice(-50).map(message=>({...message,text:message.text.slice(0,1200),complete:message.text.length<=1200})),artifacts:snapshot.artifacts.filter(artifact=>artifact.taskId===task.id),workflows:snapshot.taskWorkflows.filter(workflow=>workflow.taskId===task.id),workflowVersions:snapshot.taskWorkflowVersions.filter(version=>snapshot.taskWorkflows.some(workflow=>workflow.id===version.workflowId&&workflow.taskId===task.id)),workflowRuns:snapshot.taskWorkflowRuns.filter(run=>run.taskId===task.id),workflowStages:snapshot.taskWorkflowStages.filter(stage=>snapshot.taskWorkflows.some(workflow=>workflow.id===stage.workflowId&&workflow.taskId===task.id)),workflowWorkItems:snapshot.taskWorkflowWorkItems.filter(binding=>snapshot.taskWorkflowRuns.some(run=>run.id===binding.runId&&run.taskId===task.id))};
+    if(action.action==="workflow_revise") {
+      const workflow=snapshot.taskWorkflows.find(item=>item.id===action.workflowId&&item.taskId===task.id);
+      if(!workflow||!action.workflowGoal||!action.workflowStages?.length||action.expectedWorkflowRevision===undefined||!originRawInputId)
+        throw new PiHostError("INVALID_ARGUMENT","修订工作流需要本任务 Workflow、版本、来源原文和有界阶段");
+      const result=await store.reviseTaskWorkflow({requestId:`workflow-revise:${callId}`,expectedStoreRevision:snapshot.storeRevision,
+        taskId:task.id,scope:task.scope,workflowId:workflow.id,expectedWorkflowRevision:action.expectedWorkflowRevision,
+        originRawInputId,goal:action.workflowGoal,constraints:action.workflowConstraints??[],stages:action.workflowStages});
+      this.options.emit("foundation.changed",{kind:"taskWorkflow.revised",storeRevision:result.storeRevision,taskId:task.id,
+        entityKind:"taskWorkflow",entityId:workflow.id});
+      return result;
+    }
+    if(action.action==="workflow_start") {
+      const workflow=snapshot.taskWorkflows.find(item=>item.id===action.workflowId&&item.taskId===task.id);
+      if(!workflow||action.expectedWorkflowRevision===undefined)
+        throw new PiHostError("INVALID_ARGUMENT","启动工作流需要本任务 Workflow 和当前版本");
+      const result=await store.startTaskWorkflow({requestId:`workflow-start:${callId}`,expectedStoreRevision:snapshot.storeRevision,
+        taskId:task.id,scope:task.scope,workflowId:workflow.id,expectedWorkflowRevision:action.expectedWorkflowRevision});
+      this.options.emit("foundation.changed",{kind:"taskWorkflow.started",storeRevision:result.storeRevision,taskId:task.id,
+        entityKind:"taskWorkflowRun",entityId:result.run.id});
+      return result;
+    }
+    if(action.action==="workflow_stop"||action.action==="workflow_continue") {
+      const workflowRun=snapshot.taskWorkflowRuns.find(item=>item.id===action.workflowRunId&&item.taskId===task.id);
+      if(!workflowRun||action.expectedWorkflowRunRevision===undefined
+        || action.action==="workflow_stop"&&!action.reason?.trim())
+        throw new PiHostError("INVALID_ARGUMENT","停止或继续工作流需要本任务 Run、当前版本及停止原因");
+      const common={requestId:`workflow-${action.action}:${callId}`,expectedStoreRevision:snapshot.storeRevision,
+        taskId:task.id,scope:task.scope,runId:workflowRun.id,
+        expectedRunRevision:action.expectedWorkflowRunRevision};
+      const result=action.action==="workflow_stop"
+        ? await store.stopTaskWorkflow({...common,reason:action.reason!})
+        : await store.continueTaskWorkflow(common);
+      this.options.emit("foundation.changed",{kind:action.action==="workflow_stop"?"taskWorkflow.stopped":"taskWorkflow.continued",
+        storeRevision:result.storeRevision,taskId:task.id,entityKind:"taskWorkflowRun",entityId:workflowRun.id});
+      if(action.action==="workflow_continue")this.wakeCollaboration();
+      return result;
+    }
     if(action.action==="read_message"){
       const message=store.collaborationMessages(task.id).find(message=>message.id===action.messageId);if(!message)throw new PiHostError("MESSAGE_NOT_FOUND","消息不属于当前任务");
       const offset=action.offset??0,end=Math.min(message.text.length,offset+(action.limit??20000));
@@ -3006,6 +3209,9 @@ export class PiHost {
       this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",taskId:task.id,storeRevision:result.storeRevision});return result;
     }
     if (action.action === "continue_member") {
+      if (snapshot.taskWorkflowRuns.some(run => run.taskId === task.id && run.status === "active")) {
+        throw new PiHostError("WORKFLOW_STAGE_REQUIRED", "活动工作流内请按阶段重新派发，保留旧成员结果与工作项来源");
+      }
       const target = snapshot.agentRuns.find(run => run.id === action.agentRunId && run.taskId === task.id && run.role !== "coordinator");
       if (!target || !action.message?.trim() || !action.acceptance?.trim() || !action.route || !originRawInputId) throw new PiHostError("INVALID_ARGUMENT", "续用成员需要指定已有成员、新工作、验收要求和路线关系");
       const runtimeId = this.runtimeByDCodeSessionId.get(target.sessionId), runtime = runtimeId ? this.runtimes.get(runtimeId) : undefined;
@@ -3040,7 +3246,7 @@ export class PiHost {
       return this.enqueueCollaboration({requestId:`team-send:${callId}`,taskId:task.id,sourceSessionId:identity.dcodeSessionId,targetAgentRunId:target.id,author:"coordinator",originRawInputId,text:action.message});
     }
     if(!action.members?.length) throw new PiHostError("INVALID_ARGUMENT","需要有边界的成员工作说明");
-    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{})}})));
+    const original=await store.replayAdaptiveTeam(`team-delegate:${callId}`,task.id,task.scope,owner.id,action.members.map(member=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{}),...(member.workflowStageId?{workflowStageId:member.workflowStageId}:{}),...(member.workflowPurpose?{workflowPurpose:member.workflowPurpose}:{})}})),action.workflowRunId);
     if(original){
       try { for (const run of original.childAgentRuns) store.assertAgentRouteCurrent(run.id, true); }
       catch (error) { return { created: true, scheduled: false, replayed: true, teamRunId: original.teamRun.id, members: original.childAgentRuns, reason: errorRecord(error).message }; }
@@ -3073,7 +3279,7 @@ export class PiHost {
     }
     const workspacePolicy=action.members.some(member=>snapshot.agentProfiles.find(profile=>profile.id===member.profileId)?.role==="worker")?await this.adaptiveWorkspacePolicy(task,snapshot):"managed_worktree";
     const workspaceRootDigest=createHash("sha256").update(await realpath(task.cwd)).digest("hex");
-    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{}),sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
+    const created=await store.createTeamRun({requestId:`team-delegate:${callId}`,taskId:task.id,scope:task.scope,coordinatorAgentRunId:owner.id,...(action.workflowRunId?{workflowRunId:action.workflowRunId}:{}),members:action.members.map((member,index)=>({profileId:member.profileId,title:member.title,taskPacket:{instruction:member.instruction,acceptance:member.acceptance,...(member.route?{route:member.route}:{}),...(member.reviewWorkItemId?{reviewWorkItemId:member.reviewWorkItemId}:{}),...(member.workflowStageId?{workflowStageId:member.workflowStageId}:{}),...(member.workflowPurpose?{workflowPurpose:member.workflowPurpose}:{}),sourceSessionId:identity.dcodeSessionId,originRawInputId,workspacePolicy,workspaceRootDigest,modelDecision:decisions[index],resolvedModelCandidates:resolvedChains[index]}}))});
     const members=[];
     for(const [index,run] of created.childAgentRuns.entries()) {
       const queued=await this.ensureAdaptiveInitialInput(store,run.id);
@@ -3165,14 +3371,21 @@ export class PiHost {
   }
 
   private async queueSteering(input:Parameters<ProductStore["queueCollaborationMessage"]>[0],expectedSessionRunId?:string):Promise<{message:CollaborationMessage;queued:boolean}> {
-    const id=this.runtimeByDCodeSessionId.get((await (await this.getProductStore()).snapshot()).agentRuns.find(run=>run.id===input.targetAgentRunId)?.sessionId??"");
+    const store=await this.getProductStore();
+    if(store.workflowMessageHold(input.targetAgentRunId)) {
+      const held=await store.queueCollaborationMessage({...input,deliveryMode:undefined,targetSessionRunId:undefined});
+      this.options.emit("foundation.changed",{kind:"collaboration.messageChanged",storeRevision:held.storeRevision,taskId:input.taskId});
+      return {message:held.message,queued:true};
+    }
+    const id=this.runtimeByDCodeSessionId.get((await store.snapshot()).agentRuns.find(run=>run.id===input.targetAgentRunId)?.sessionId??"");
     const runtime=id?this.runtimes.get(id):undefined,run=runtime?.currentRun;
     if(!runtime||!run?.sessionRunId||run.state.phase!=="running"||!runtime.session.isStreaming||runtime.ui.hasPendingDialogs||expectedSessionRunId&&expectedSessionRunId!==run.sessionRunId)throw new PiHostError("SESSION_NOT_RUNNING","当前工作已结束或正在等待回答，输入内容已保留");
     const expansion=await expandDCodeInput(input.text,runtime.session);if(expansion.command)throw new PiHostError("STEER_COMMAND_UNSUPPORTED","命令需要单独执行，请选择排到后面");
-    const store=await this.getProductStore();const managed=await Promise.all((input.attachmentIds??[]).map(id=>store.resolveAttachment(id)));
+    const managed=await Promise.all((input.attachmentIds??[]).map(id=>store.resolveAttachment(id)));
     const projected=await this.coordinatorUpdates(runtime,attachmentPrompt(expansion.text,managed.map(item=>item.attachment),store.layout));
     const effectiveText=projected.text;
     input=this.acknowledgedCoordinatorInput(store,input);
+    await this.workspaceAccess.validateFileMentions(input.taskId,input.text);
     const result=await store.queueCollaborationMessage({...input,deliveryMode:"steer",targetSessionRunId:run.sessionRunId});
     const latest=store.collaborationMessages().find(message=>message.id===result.message.id)!;
     if(latest.state!=="queued")return {message:latest,queued:false};
@@ -3228,6 +3441,8 @@ export class PiHost {
       const snapshot=await store.snapshot();
       const target=snapshot.agentRuns.find(run=>run.id===message.targetAgentRunId)!;
       const task=snapshot.tasks.find(task=>task.id===message.taskId)!;
+      await this.workspaceAccess.validateFileMentions(task.id,message.text);
+      if(target.role!=="coordinator"&&store.workflowMessageHold(target.id)){this.collaborationDrains.delete(sessionId);return;}
       const newer=message.author==="coordinator"&&target.role!=="coordinator"?this.unacknowledgedMemberInput(store,message):undefined;
       if(newer){
         await store.transitionCollaborationMessage({requestId:`stale-input:${message.id}`,id:message.id,expectedRevision:message.revision,state:"paused",error:"这条安排早于用户已生效的新要求，需由协调者核对后重新交办"});
@@ -3253,8 +3468,10 @@ export class PiHost {
       }
       const selected=store.sessionModelSelection(target.sessionId);
       if(target.role==="coordinator"&&selected){target.modelProvider=selected.providerId;target.modelId=selected.modelId;}
+      if(target.role!=="coordinator"&&store.workflowMessageHold(target.id)){this.collaborationDrains.delete(sessionId);return;}
       const targetRuntimeId=await this.openMemberRuntime(target,task);
       if(target.role!=="coordinator"&&target.modelProvider&&target.modelId) await this.handleRuntimeRequest("session.setModel",{runtimeId:targetRuntimeId,provider:target.modelProvider,modelId:target.modelId});
+      await this.workspaceAccess.validateFileMentions(task.id,message.text);
       delivered=(await store.transitionCollaborationMessage({requestId:`deliver:${message.id}`,id:message.id,expectedRevision:message.revision,state:"delivering"})).message;
       await this.handleRuntimeRequest("session.prompt",{runtimeId:targetRuntimeId,promptId:`collab:${message.id}`,message:message.text,...(message.pathAction?{pathAction:message.pathAction}:{}),...(message.attachmentIds?.length?{attachmentIds:message.attachmentIds}:{})});
     } catch(error) {
@@ -3374,6 +3591,8 @@ export class PiHost {
 
   private async promptDCodeSession(input: {
     dcodeSessionId: string;
+    workflowReportRunId?: string;
+    workflowDraft?: TaskWorkflowDraftInput;
     targetAgentRunId?: string;
     deliveryMode?:"steer";
     expectedSessionRunId?:string;
@@ -3392,8 +3611,18 @@ export class PiHost {
         dcodeSessionId: input.dcodeSessionId,
       });
     }
+    if(input.workflowReportRunId||input.workflowDraft){
+      if(dcodeSession.kind!=="coordination"||input.targetAgentRunId||input.deliveryMode||input.pathAction)
+        throw new PiHostError("INVALID_ARGUMENT","工作流草稿和汇总报告须在任务主对话单独提交");
+      if(input.workflowReportRunId&&input.workflowDraft)
+        throw new PiHostError("INVALID_ARGUMENT","一次输入不能同时创建和完成工作流");
+      const currentId=this.runtimeByDCodeSessionId.get(dcodeSession.id),current=currentId?this.runtimes.get(currentId):undefined;
+      if(current?.currentRun||current?.closing||this.openingDCodeSessionIds.has(dcodeSession.id)||this.collaborationDrains.has(dcodeSession.id))
+        throw new PiHostError("SESSION_BUSY","请等待主对话当前运行收尾，再生成工作流报告");
+    }
     this.assertProjectAvailable(task.scope);
     if(task.state==="archived")throw new PiHostError("TASK_ARCHIVED","请先恢复归档任务，再发送消息");
+    await this.workspaceAccess.validateFileMentions(task.id,input.message);
     if(input.pathAction){
       if(input.targetAgentRunId)throw new PiHostError("INVALID_PATH_ACTION","历史路径操作只能在消息所属会话中进行");
       const runningId=this.runtimeByDCodeSessionId.get(dcodeSession.id);
@@ -3419,6 +3648,8 @@ export class PiHost {
     const busyId=this.runtimeByDCodeSessionId.get(dcodeSession.id);
     const busyRuntime=busyId?this.runtimes.get(busyId):undefined;
     if((busyRuntime?.currentRun||busyRuntime?.closing||this.collaborationDrains.has(dcodeSession.id))&&busyRuntime?.runtimeIdentity?.agentRunId) {
+      if(input.workflowDraft||input.workflowReportRunId)
+        throw new PiHostError("SESSION_BUSY","工作流请求需要主对话空闲；当前运行已开始，请稍后重新读取并提交");
       const queued=await this.enqueueCollaboration({requestId:`user-queued:${input.promptId}`,taskId:task.id,sourceSessionId:dcodeSession.id,targetAgentRunId:busyRuntime.runtimeIdentity.agentRunId,author:"user",text:input.message,attachmentIds:input.attachmentIds});
       return {accepted:true,queued:true,message:queued.message};
     }
@@ -3501,6 +3732,12 @@ export class PiHost {
     if (settledThinking) await this.handleRuntimeRequest("session.setThinking", { runtimeId, level: settledThinking });
     const coordinatorRuntime=this.runtimes.get(runtimeId);
     if(coordinatorRuntime)await this.prepareCoordinatorDirectWork(coordinatorRuntime);
+    await this.workspaceAccess.validateFileMentions(task.id,input.message);
+    if(input.workflowDraft||input.workflowReportRunId){
+      const current=this.runtimes.get(runtimeId);
+      if(current?.currentRun||current?.closing||this.collaborationDrains.has(dcodeSession.id))
+        throw new PiHostError("SESSION_BUSY","工作流请求需要主对话空闲；请核对当前运行后再提交");
+    }
     const result = await this.handleRuntimeRequest("session.prompt", {
       runtimeId,
       promptId: input.promptId,
@@ -3508,8 +3745,12 @@ export class PiHost {
       ...(input.pathAction?{pathAction:input.pathAction}:{}),
       ...(input.attachmentIds?.length ? {attachmentIds:input.attachmentIds} : {}),
       ...(input.images ? { images: input.images } : {}),
+      ...(input.workflowReportRunId ? { workflowReportRunId: input.workflowReportRunId } : {}),
+      ...(input.workflowDraft ? { workflowDraft: input.workflowDraft } : {}),
     });
-    return { runtimeId, started, result };
+    const prepared=result as {workflow?:{id:string};rawInputId?:string}|undefined;
+    return { runtimeId, started, result,
+      ...(prepared?.workflow ? {workflow:prepared.workflow,rawInputId:prepared.rawInputId}: {}) };
   }
 
   private async startDCodeRuntime(params: Record<string, unknown>): Promise<unknown> {
@@ -4526,7 +4767,12 @@ export class PiHost {
           ...sessionOptions,
           modelRuntime: await this.createCredentialRuntime(),
           providerControl:this.providerRouteControl(runtimeIdentity,()=>activeForFacts),
-          ...(auxiliary?{baseToolsOverride:{bash:auxiliary.tool(manager.getCwd())}}:{}),
+          baseToolsOverride:{bash:auxiliary?.tool(manager.getCwd())??createBashTool(manager.getCwd(),{
+            exposeSessionEnvironment:false,
+            commandPrefix:sourceSettingsManager.getShellCommandPrefix(),
+            shellPath:sourceSettingsManager.getShellPath(),
+            spawnHook:context=>({...context,env:agentShellEnvironment(context.env)}),
+          })},
           processOptions: {
             idleTimeoutMs: this.options.agentIdleTimeoutMs,
             onProcessChanged: async (processInfo) => {
@@ -4538,7 +4784,17 @@ export class PiHost {
             },
           },
         })
-        : await createAgentSession(sessionOptions);
+        : await createAgentSession({
+          ...sessionOptions,
+          // Pi's public session factory has no base-tool override. A same-name
+          // SDK custom tool replaces its default bash definition on this path.
+          customTools:[createBashToolDefinition(manager.getCwd(),{
+            commandPrefix:sourceSettingsManager.getShellCommandPrefix(),
+            shellPath:sourceSettingsManager.getShellPath(),
+            exposeSessionEnvironment:false,
+            spawnHook:context=>({...context,env:agentShellEnvironment(context.env)}),
+          }) as unknown as NonNullable<CreateAgentSessionOptions["customTools"]>[number]],
+        });
       session = created.session;
       if(promptContext?.environment.role==="coordinator" && runtimeIdentity?.workspace.access==="sharedReadOnly") session.setActiveToolsByName(session.getAllTools().filter(tool=>SHARED_READ_ONLY_TOOL_NAMES.has(tool.name)).map(tool=>tool.name));
       if (promptContext) {
@@ -5129,6 +5385,27 @@ export class PiHost {
     pathAction?: SessionPathAction,
     images?: PromptImageInput[],
     attachmentIds?: string[],
+    workflowReportRunId?: string,
+    workflowDraft?: TaskWorkflowDraftInput,
+  ): Promise<unknown> {
+    for(let attempt=0;;attempt++){
+      try{return await this.promptOnce(message,promptId,pathAction,images,attachmentIds,workflowReportRunId,workflowDraft,attempt);}
+      catch(error){
+        if(!(error instanceof StaleTaskSummaryInput))throw error;
+        if(attempt>=2||pathAction)throw error.original;
+      }
+    }
+  }
+
+  private async promptOnce(
+    message: string,
+    promptId: string,
+    pathAction?: SessionPathAction,
+    images?: PromptImageInput[],
+    attachmentIds?: string[],
+    workflowReportRunId?: string,
+    workflowDraft?: TaskWorkflowDraftInput,
+    preparationAttempt=0,
   ): Promise<unknown> {
     const attachmentStore=attachmentIds?.length?await this.getProductStore():undefined;
     const managed = attachmentStore?await Promise.all((attachmentIds??[]).map(id=>attachmentStore.resolveAttachment(id))):[];
@@ -5146,6 +5423,9 @@ export class PiHost {
       );
     }
     const active = this.requireWritable();
+    if((workflowDraft||workflowReportRunId)&&active.currentRun)
+      throw new PiHostError("SESSION_BUSY","工作流请求需要主对话空闲；请核对当前运行后再提交");
+    if(active.runtimeIdentity?.taskId)await this.workspaceAccess.validateFileMentions(active.runtimeIdentity.taskId,rawMessage);
     const seenRunId = active.seenPromptIds.get(promptId);
     if (seenRunId !== undefined) {
       throw new PiHostError(
@@ -5179,7 +5459,7 @@ export class PiHost {
           let summary = store.taskSummaryHistory(runtimeIdentity.taskId).at(-1);
           if (!summary?.current || trigger !== "new_session") {
             const prepared = await store.prepareTaskSummary({
-              requestId: `summary-run-${createHash("sha256").update(`${runtimeIdentity.dcodeSessionId}\0${promptId}`).digest("hex").slice(0, 44)}`,
+              requestId: `summary-run-${createHash("sha256").update(`${runtimeIdentity.dcodeSessionId}\0${promptId}\0${preparationAttempt}`).digest("hex").slice(0, 44)}`,
               taskId: runtimeIdentity.taskId,
               trigger,
             });
@@ -5225,6 +5505,7 @@ export class PiHost {
       if (!assembledPrompt || !promptEnvironment) {
         throw new PiHostError("PROMPT_ASSEMBLY_FAILED", "Runtime has no D Code Prompt Receipt source");
       }
+      if (!promptEnvironment.taskRevision) throw new PiHostError("PROMPT_ASSEMBLY_FAILED","Task Goal 缺少可核对版本，未启动本轮运行");
       const attachmentRefs: unknown[] = [...managed.map(item=>item.attachment),...(images ?? []).filter(image=>!managed.some(item=>item.data===image.data)).map((image) => ({
         type: "image",
         mimeType: image.mimeType,
@@ -5236,10 +5517,13 @@ export class PiHost {
           .update(`${runtimeIdentity.runtimeId}\0${promptId}`)
           .digest("hex")
           .slice(0, 48)}`,
+        clientPromptId:promptId,
         taskId: runtimeIdentity.taskId,
         scope: runtimeIdentity.scope,
         ...(pathAction?{pathAction:pathAction as import("./product-store.js").NativeSessionPathAction,...(call.nativePath?{preparedPathId:call.nativePath.id}:{})}:{}),
         ...(promptId.startsWith("collab:")?{collaborationMessageId:promptId.slice(7)}:{}),
+        ...(workflowReportRunId?{workflowReportRunId}:{}),
+        ...(workflowDraft?{workflowDraft}:{}),
         sessionId: runtimeIdentity.dcodeSessionId,
         runtimeId: runtimeIdentity.runtimeId,
         ...(runtimeIdentity.agentRunId ? { agentRunId: runtimeIdentity.agentRunId } : {}),
@@ -5257,17 +5541,26 @@ export class PiHost {
           : {}),
         roleRevision: promptEnvironment.roleRevision,
         contextRevision: promptEnvironment.contextRevision,
+        expectedTaskRevision: promptEnvironment.taskRevision,
         profileSnapshot: {
           role: promptEnvironment.role,
           roleRevision: promptEnvironment.roleRevision,
           roleContract: promptEnvironment.roleContract,
+          responseLanguage: promptEnvironment.responseLanguage??"zh-CN",
         },
         tools: active.activePromptTools,
         toolsWritable: active.toolsWritable,
         systemPromptDigest: assembledPrompt.digest,
         promptSources: assembledPrompt.sources,
         ...(assembledPrompt.importedHistory ? { importedHistoryReceipt: assembledPrompt.importedHistory } : {}),
-      }); }catch(error){await this.rollbackPromptPath(call);throw error;}
+      }); }catch(error){
+        await this.rollbackPromptPath(call);
+        const reason=error instanceof ProductStoreError&&error.details&&typeof error.details==="object"
+          ?(error.details as Record<string,unknown>).reasonCode:undefined;
+        if(error instanceof ProductStoreError&&error.code==="REVISION_CONFLICT"&&reason==="TASK_SUMMARY_STALE")
+          throw new StaleTaskSummaryInput(error);
+        throw error;
+      }
       if (taskSummaryReceipt) active.resumeSummaryTrigger = undefined;
       active.memberResumeHandled = true;
       this.options.emit("foundation.changed", {
@@ -5311,7 +5604,8 @@ export class PiHost {
       const accept = (completed = false) => {
         if (responded) return;
         responded = true;
-        resolve({ accepted: true, completed });
+        resolve({ accepted: true, completed,
+          ...(preparedRun?.workflow ? { workflow: preparedRun.workflow, rawInputId: preparedRun.rawInputId } : {}) });
       };
       const operation = this.promptCall.run(call, async () => {
         if (run.sessionRunId) {
@@ -5436,6 +5730,7 @@ export class PiHost {
     images?: PromptImageInput[],
   ): Promise<unknown> {
     const active = this.requireWritable();
+    if(active.runtimeIdentity?.taskId)await this.workspaceAccess.validateFileMentions(active.runtimeIdentity.taskId,message);
     const seenSteerRunId = active.seenSteerIds.get(steerId);
     if (seenSteerRunId !== undefined) {
       throw new PiHostError(

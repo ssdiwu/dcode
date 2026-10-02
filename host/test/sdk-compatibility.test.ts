@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,realpath,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {zstdDecompressSync} from 'node:zlib';
-import {createReadToolDefinition,createWriteToolDefinition,createEditToolDefinition,createBashToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition,SessionManager,ModelRuntime,type ExtensionContext} from '@earendil-works/pi-coding-agent';
+import {createReadToolDefinition,createWriteToolDefinition,createEditToolDefinition,createBashToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition,SessionManager,ModelRuntime,type ExtensionToolContext} from '@earendil-works/pi-coding-agent';
 import type {AgentSession} from '@earendil-works/pi-coding-agent';
 import {PiHost} from '../src/pi-host.js';
 import {ProductStore,type FoundationSnapshot,type TaskBundle} from '../src/product-store.js';
@@ -16,15 +16,15 @@ import {getBuiltinModels} from '@earendil-works/pi-ai/providers/all';
 const until=async(check:()=>boolean|Promise<boolean>,label:string)=>{const end=Date.now()+12000;while(!await check()){if(Date.now()>end)throw new Error(label);await new Promise(resolve=>setTimeout(resolve,10));}};
 const output=(value:{content:Array<{type:string;text?:string}>})=>value.content.filter(part=>part.type==='text').map(part=>part.text).join('\n');
 
-test('pinned SDK provides GPT-6 Sol and Luna offline for API and Codex connections',()=>{
+test('pinned SDK provides GPT-6.1 Sol plus GPT-6 Sol and Luna offline for API and Codex connections',()=>{
  for(const provider of ['openai','openai-codex'] as const){
   const models=getBuiltinModels(provider);
-  for(const id of ['gpt-6-sol','gpt-6-luna'])assert.ok(models.some(model=>model.id===id&&model.provider===provider));
+  for(const id of ['gpt-6-sol','gpt-6-luna','gpt-6.1-sol'])assert.ok(models.some(model=>model.id===id&&model.provider===provider));
  }
 });
 
 test('SDK built-in tools obey the current context cwd when it differs from their construction directory',async()=>{
- const root=await mkdtemp(join(tmpdir(),'dcode-sdk-cwd-')),a=join(root,'a'),b=join(root,'b');const oldAgentDir=process.env.PI_CODING_AGENT_DIR;process.env.PI_CODING_AGENT_DIR=join(root,'agent');await mkdir(a);await mkdir(b);await writeFile(join(a,'seed.txt'),'from A');await writeFile(join(b,'seed.txt'),'from B');const ctx={cwd:await realpath(b),sessionManager:SessionManager.inMemory(b)} as unknown as ExtensionContext;
+ const root=await mkdtemp(join(tmpdir(),'dcode-sdk-cwd-')),a=join(root,'a'),b=join(root,'b');const oldAgentDir=process.env.PI_CODING_AGENT_DIR;process.env.PI_CODING_AGENT_DIR=join(root,'agent');await mkdir(a);await mkdir(b);await writeFile(join(a,'seed.txt'),'from A');await writeFile(join(b,'seed.txt'),'from B');const ctx={cwd:await realpath(b),sessionManager:SessionManager.inMemory(b),tools:[],executeTool:async()=>{throw new Error('Nested calls are outside this direct built-in tool test');}} as unknown as ExtensionToolContext;
  try{
   assert.match(output(await createReadToolDefinition(a).execute('read',{path:'seed.txt'},undefined,undefined,ctx)),/from B/);
   await createWriteToolDefinition(a).execute('write',{path:'new.md',content:'before edit'},undefined,undefined,ctx);
@@ -55,6 +55,137 @@ async function fixture(fetcher:(body:any,init?:RequestInit)=>Promise<Response>){
  const store=(host as unknown as {productStore:ProductStore}).productStore,owner=await store.ensureCoordinatorAgentRun({requestId:'owner',taskId:task.task.id,scope:task.task.scope});const runtimeId='sdk-contract-runtime';await host.handle('runtime.start',{runtimeId,taskId:task.task.id,dcodeSessionId:task.coordinationSession.id,agentRunId:owner.agentRun.id,scope:task.task.scope,workspace:{workspaceId:'sdk-contract-workspace',cwd:home,access:'exclusiveWrite'}});const session=(host as unknown as {runtimes:Map<string,{session:AgentSession}>}).runtimes.get(runtimeId)!.session;session.agent.toolExecution='sequential';
  return {root,home,host,events,task,runtimeId,session,store,snapshot,close:async()=>{await host.close();globalThis.fetch=previous;await rm(root,{recursive:true,force:true});}};
 }
+
+test('display language follows each new run without rewriting earlier replies or titles',async()=>{
+ const bodies:any[]=[];
+ const f=await fixture(async body=>{bodies.push(body);return completion(body.messages[0].content.includes('D Code display and communication language: English.')?'English reply':'中文回复');});
+ try{
+  assert.equal(f.store.clientPreferences().language,'zh-CN');
+  await f.host.handle('clientPreferences.set',{requestId:'language-en',expectedStoreRevision:(await f.snapshot()).storeRevision,language:'en'});
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'english-run',message:'保留这一份中文提交原文'});
+  await until(async()=>(await f.snapshot()).sessionRuns.some(run=>run.status==='completed'),'English run completed');
+  const before=await f.snapshot();
+  assert.match(bodies[0].messages[0].content,/new automatically generated member\/session titles in English/);
+  const language=(snapshot:FoundationSnapshot,index:number)=>(snapshot.runtimeEnvironments.find(environment=>environment.id===snapshot.promptReceipts[index]!.runtimeEnvironmentId)!.environment as {profileSnapshot:{responseLanguage:string}}).profileSnapshot.responseLanguage;
+  assert.equal(language(before,0),'en');
+  await f.host.handle('clientPreferences.set',{requestId:'language-zh',expectedStoreRevision:before.storeRevision,language:'zh-CN'});
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'chinese-run',message:'Continue while keeping the original English request'});
+  await until(async()=>(await f.snapshot()).sessionRuns.filter(run=>run.status==='completed').length===2,'Chinese run completed');
+  const after=await f.snapshot();
+  assert.match(bodies.at(-1).messages[0].content,/D Code 显示与沟通语言：简体中文/);
+  assert.equal(language(after,after.promptReceipts.length-1),'zh-CN');
+  assert.equal(language(after,0),'en');
+  assert.deepEqual(after.tasks.map(task=>task.title),before.tasks.map(task=>task.title));
+  assert.equal(f.store.sessionRunInputs(f.task.task.id,before.sessionRuns[0]!.id).rawText,'保留这一份中文提交原文');
+  assert.equal(f.store.sessionRunInputs(f.task.task.id,after.sessionRuns.at(-1)!.id).rawText,'Continue while keeping the original English request');
+  const presentation=await f.host.handle('dcodeSession.presentation',{dcodeSessionId:f.task.coordinationSession.id}) as {inspection:{entries:any[]}};
+  assert.ok(JSON.stringify(presentation).includes('English reply'));
+  assert.ok(JSON.stringify(presentation).includes('中文回复'));
+ }finally{await f.close();}
+});
+
+test('a newly dispatched independent member receives the selected English communication language',async()=>{
+ let coordinatorCalls=0,memberCalls=0;
+ const f=await fixture(async body=>{
+  const system=body.messages[0].content;
+  assert.match(system,/D Code display and communication language: English\./);
+  if(system.includes('coordinator Agent')){
+   if(++coordinatorCalls===1){
+    const chunk={id:'language-member',object:'chat.completion.chunk',model:'fixture',choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:'language-delegate',type:'function',function:{name:'dcode_team',arguments:JSON.stringify({action:'delegate',members:[{profileId:'builtin-explore',title:'Check source evidence',instruction:'核对语言传递，不读其他资料',acceptance:'返回验证依据'}]})}}]},finish_reason:null}]};
+    const end={...chunk,choices:[{index:0,delta:{},finish_reason:'tool_calls'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}};
+    return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}});
+   }
+   return completion('Coordinator remains available');
+  }
+  memberCalls++;return completion('Member evidence returned in English');
+ });
+ try{
+  let snap=await f.snapshot();const profile=snap.agentProfiles.find(profile=>profile.id==='builtin-explore')!;
+  await f.host.handle('agentProfile.update',{requestId:'language-member-model',expectedStoreRevision:snap.storeRevision,profileId:profile.id,expectedProfileRevision:profile.revision,name:profile.name,roleContract:profile.roleContract,enabled:true,modelCandidates:[{providerId:'zai-coding-cn',modelId:'fixture'}]});
+  await f.host.handle('clientPreferences.set',{requestId:'language-member-en',expectedStoreRevision:(await f.snapshot()).storeRevision,language:'en'});
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'dispatch-language-member',message:'请分工，保持中文提交原文'});
+  await until(async()=>(await f.snapshot()).agentReports.some(report=>JSON.stringify(report.body).includes('Member evidence returned in English')),'independent member report');
+  snap=await f.snapshot();assert.equal(memberCalls,1);
+  const child=snap.sessions.find(session=>session.kind==='child')!;assert.equal(child.title,'Check source evidence');
+  const receipt=snap.promptReceipts.find(receipt=>receipt.sessionId===child.id)!;
+  const environment=snap.runtimeEnvironments.find(environment=>environment.id===receipt.runtimeEnvironmentId)!.environment as {profileSnapshot:{responseLanguage:string}};
+  assert.equal(environment.profileSnapshot.responseLanguage,'en');
+  const execution=snap.agentProcesses?.find(execution=>execution.agentRunId===snap.agentRuns.find(run=>run.sessionId===child.id)!.id);
+  assert.ok(execution);assert.notEqual(execution.process.pid,process.pid);
+ }finally{await f.close();}
+});
+
+test('a summary conflict before Provider startup rebuilds input once without duplicate user or model calls',async()=>{
+ let modelCalls=0;
+ const f=await fixture(async()=>{modelCalls++;return completion('使用当前摘要继续');});
+ try{
+  await f.store.prepareTaskSummary({requestId:'summary-before-start',taskId:f.task.task.id,trigger:'new_session'});
+  const runtime=(f.host as unknown as {runtimes:Map<string,{resumeSummaryTrigger?:string}>}).runtimes.get(f.runtimeId)!;
+  runtime.resumeSummaryTrigger='compaction';
+  const prepare=f.store.prepareSessionRun.bind(f.store);let attempts=0;
+  f.store.prepareSessionRun=async input=>{
+   attempts++;
+   assert.ok(input.taskSummary,JSON.stringify({inputRuntimeId:input.runtimeId,expected:f.runtimeId,events:f.events.filter(event=>event.event==='session.cleanupError')}));
+   if(attempts===1&&input.taskSummary){
+    await f.store.createTaskWorkItem({requestId:'summary-concurrent-result',expectedStoreRevision:(await f.store.snapshot()).storeRevision,taskId:f.task.task.id,scope:f.task.task.scope,title:'并行结果需要核对'});
+    await f.store.prepareTaskSummary({requestId:'summary-concurrent-change',taskId:f.task.task.id,trigger:'new_session'});
+   }
+   return await prepare(input);
+  };
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'summary-conflict-input',message:'保留这一份提交原文'});
+  await until(async()=>(await f.snapshot()).sessionRuns.some(run=>run.status==='completed'),'summary conflict run completed');
+  const snapshot=await f.snapshot(),run=snapshot.sessionRuns[0]!;
+  assert.equal(attempts,2);assert.equal(modelCalls,1);assert.equal(snapshot.sessionRuns.length,1);
+  assert.equal(f.store.sessionRunInputs(f.task.task.id,run.id).rawText,'保留这一份提交原文');
+  assert.match(f.store.sessionRunInputs(f.task.task.id,run.id).effectiveText,/并行结果需要核对/);
+  assert.equal(snapshot.promptReceipts.find(receipt=>receipt.sessionRunId===run.id)?.taskSummary?.revision,f.store.taskSummaryHistory(f.task.task.id).at(-1)?.revision);
+ }finally{await f.close();}
+});
+
+test('continuous summary changes stop after bounded preparation without sending to a Provider',async()=>{
+ let modelCalls=0;
+ const f=await fixture(async()=>{modelCalls++;return completion('不应调用');});
+ try{
+  const runtime=(f.host as unknown as {runtimes:Map<string,{resumeSummaryTrigger?:string}>}).runtimes.get(f.runtimeId)!;
+  runtime.resumeSummaryTrigger='compaction';
+  const prepare=f.store.prepareSessionRun.bind(f.store);let attempts=0;
+  f.store.prepareSessionRun=async input=>{
+   attempts++;
+   await f.store.createTaskWorkItem({requestId:'continuous-result-'+attempts,expectedStoreRevision:(await f.store.snapshot()).storeRevision,taskId:f.task.task.id,scope:f.task.task.scope,title:'尚在变化的结果 '+attempts});
+   return await prepare(input);
+  };
+  await assert.rejects(f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'continuous-summary-input',message:'本次输入保留，待结果稳定后重试'}),{code:'REVISION_CONFLICT'});
+  assert.equal(attempts,3);assert.equal(modelCalls,0);assert.equal((await f.snapshot()).sessionRuns.length,0);
+ }finally{await f.close();}
+});
+
+test('historical-path summary conflicts roll back once and preserve the saved edit without automatic rebranching',async()=>{
+ let modelCalls=0;
+ const f=await fixture(async()=>{modelCalls++;return completion('原始路径回复');});
+ try{
+  await f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'path-summary-original',message:'原始路径问题'});
+  await until(async()=>(await f.snapshot()).sessionRuns[0]?.status==='completed','original path reply completed');
+  const original=(await f.snapshot()).sessionPaths.find(path=>path.isCurrent)!;
+  const presented=await f.host.handle('dcodeSession.presentation',{dcodeSessionId:f.task.coordinationSession.id}) as {nativeEntries:Array<{messageRole?:string;sourceEntryId?:string}>};
+  const firstUser=presented.nativeEntries.find(entry=>entry.messageRole==='user')!;
+  assert.ok(firstUser.sourceEntryId);
+  const pathAction={kind:'editUser' as const,entryId:firstUser.sourceEntryId,fromPathId:original.id,expectedCurrentPathId:original.id,expectedCurrentPathRevision:original.revision};
+  await f.host.handle('dcodeSession.composerDraft.set',{requestId:'path-summary-edit-draft',expectedStoreRevision:(await f.snapshot()).storeRevision,taskId:f.task.task.id,dcodeSessionId:f.task.coordinationSession.id,text:'保留这份编辑草稿',pathAction,pathDraftBackup:{text:'此前未提交草稿',attachmentIds:[]}});
+  const runtime=(f.host as unknown as {runtimes:Map<string,{resumeSummaryTrigger?:string}>}).runtimes.get(f.runtimeId)!;
+  runtime.resumeSummaryTrigger='compaction';
+  const prepare=f.store.prepareSessionRun.bind(f.store);let attempts=0;
+  f.store.prepareSessionRun=async input=>{
+   attempts++;
+   await f.store.createTaskWorkItem({requestId:'path-summary-concurrent-result',expectedStoreRevision:(await f.store.snapshot()).storeRevision,taskId:f.task.task.id,scope:f.task.task.scope,title:'摘要准备期间出现的新结果'});
+   return await prepare(input);
+  };
+  await assert.rejects(f.host.handle('dcodeSession.prompt',{dcodeSessionId:f.task.coordinationSession.id,promptId:'path-summary-edit',message:'保留这份编辑草稿',pathAction}),{code:'REVISION_CONFLICT'});
+  const after=await f.snapshot();
+  assert.equal(attempts,1);assert.equal(modelCalls,1);assert.equal(after.sessionRuns.length,1);
+  assert.equal(after.sessionPaths.find(path=>path.isCurrent)?.id,original.id);
+  assert.equal(after.composerDrafts.find(draft=>draft.sessionId===f.task.coordinationSession.id)?.text,'保留这份编辑草稿');
+ }finally{await f.close();}
+});
 
 test('fragmented two-tool output finishes the whole batch before consecutive steering inputs reach the next provider call',async()=>{
  const bodies:any[]=[];const f=await fixture(async body=>{bodies.push(body);return bodies.length===1?completion('',["printf first > first.txt","touch second-started; while [ ! -f release ]; do sleep 0.02; done; printf second > second.txt"]):completion('已纳入两项补充');});

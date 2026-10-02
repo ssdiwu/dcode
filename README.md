@@ -1,5 +1,7 @@
 # D Code
 
+> 历史封档：本分支保存 2026-10-03 的 `0.0.37` 开发快照。下文保留当时的项目说明；封档状态、检查和未完成边界见 [ARCHIVE.md](ARCHIVE.md)。这些旧实现与规划不自动成为重启设计的要求。
+
 `D Code` 是面向 macOS 的原生 `ADE（智能体开发环境）`。D Code 自己拥有 Project、Task、D Code Session、上下文、一等项目文档、Agent Team、能力模块、模型资源、产物、证据和自进化；Pi SDK 是首个 Agent Runtime，为模型循环和工具执行提供运行基座，但不定义 D Code 的产品身份、数据格式、界面或品牌。名称中的 `D` 取自创作者长期使用的网名 `diwu`。
 
 ## 面向谁
@@ -14,7 +16,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 发布、实现候选、本地回归基线、人工验收与各版本自动验证记录统一由[版本实施方案](doc/40-版本实施方案/README.md)路由；根 README 不复制这些会随交付推进而变化的状态。
 
-开发入口：先执行 `npm --prefix host run build`，再执行 `npm --prefix client run dev`。验证入口为 `npm --prefix host test`、`npm --prefix client test`；Web 客户端的布局、输入、打包与隔离运行方式见 [client/README](client/README.md)。本机未签名候选使用 `npm --prefix client run dist`；原生文件辅助程序仍随 Host 构建。`PiDCode`、`pi-dcode` 只保留为既有兼容标识。
+开发入口：先执行 `npm --prefix host run build`，再执行 `npm --prefix client run dev`。验证入口为 `npm --prefix host test`、`npm --prefix client test`；Web 客户端的布局、输入、打包与隔离运行方式见 [client/README](client/README.md)。本机未签名候选使用 `DCODE_EXPECTED_VERSION=<目标号> npm --prefix client run dist`，目标号由[版本实施方案](doc/40-版本实施方案/README.md)确定；原生文件辅助程序仍随 Host 构建。`PiDCode`、`pi-dcode` 只保留为既有兼容标识。
 
 ## 文档入口
 
@@ -32,7 +34,7 @@ D Code 由 D Code Product Store 持久化项目、任务、会话、模型与能
 
 ## 目录
 
-- `host/`：固定 Pi 0.87.1 的 Node 运行宿主、Protocol v1 与测试。
+- `host/`：固定 Pi 0.99.1 的 Node 运行宿主、Protocol v1 与测试。
 - `client/`：当前 Web 客户端（Electron 平台壳 + React 呈现层），经 Protocol v1 消费 D Code Host；入口和结构见其 README。
 - `app/Resources/`：品牌 SVG 母版、系统图标及统一导出脚本；不含另一套客户端或打包入口。
 - `PRODUCT.md`：稳定产品宪章；`DESIGN.md`：设计性格、体验原则与详细设计权威入口。

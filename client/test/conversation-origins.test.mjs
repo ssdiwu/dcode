@@ -11,7 +11,7 @@ test('main progress updates do not replace the previous human answer or its navi
 });
 test('child conversations show attributed work instructions while direct human input remains human',()=>{
   const rows=projectConversationOrigins([row('generated','user','请独立检查文件'),row('report','assistant','已检查'),row('human','user','新增要求'),row('answer','assistant','已更新')],[{...inputs[0],author:'coordinator'}],true);
-  assert.equal(rows[0].role,'coordination');assert.equal(rows[2].role,'user');assert.equal(rows[2].collaborationGroupId,undefined);const turns=executionTurns(rows,{messages:[]},false);assert.equal(turns.length,2);assert.equal(turns[0].user.role,'coordination');assert.equal(turns[1].user.role,'user');assert.equal(conversationTurns(rows).length,2);
+  assert.equal(rows[0].role,'coordination');assert.equal(rows[2].role,'user');assert.equal(rows[2].collaborationGroupId,undefined);const turns=executionTurns(rows,{messages:[]},false);assert.equal(turns.length,2);assert.equal(turns[0].user.role,'coordination');assert.equal(turns[1].user.role,'user');assert.deepEqual(conversationTurns(rows),[{id:'human',question:'新增要求',answer:'已更新'}]);
 });
 
 test('streaming progress retains its input group through deltas and durable handoff',()=>{

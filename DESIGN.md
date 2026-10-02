@@ -18,6 +18,12 @@ Each structural rail owns one Shared Rail Geometry（共享栏位几何）across
 
 507 于 2026-09-06 选定 C-A 黑白变色龙作为 D Code 标志：头部保持空心，卷尾承担实心视觉分量，`</>` 与四肢共用造型。系统图标使用浅色底板，界面内使用随主题变色的透明标志。母版、导出命令与全端消费入口由 [品牌资源](app/Resources/README.md) 维护。
 
+## 外部 UI／UX 借鉴
+
+507 于 2026-10-02 明确允许对 ZCode 的普通工作台布局、共享 React 组件和交互大量借鉴，包含可核许可的源码级移植。借鉴应在导航、输入菜单、对话结果、过程、预览、对象详情、列表与设置中形成统一可见的体验，逐文件适配 D Code 的事实、回调、中文／English、样式与来源／许可；精确范围及验收由 [0.0.38](doc/40-版本实施方案/0040-0.0.38-工作台体验与-ZCode-共享界面借鉴产品需求.md)和 [0.0.39](doc/40-版本实施方案/0041-0.0.39-可复用工作流终端与定时自动化产品需求.md)拥有。
+
+D Code 的品牌、Project／Task 主干、成员创建与沟通、原文与来源、产品数据、macOS 焦点及运行权限继续由自身合同定义。ZCode 的账户、收费／闲时服务、增长、远程／Windows 运行和产品持久化属于特有部分；它们不因视觉组件移植被接入。既有共享栏位与概览／检查职责保持一个权威，普通组件可用成熟参考的排版、间距、层级、状态反馈和微交互来打磨。
+
 ## Principles
 
 - **Hierarchy before decoration**：先用布局、排版和渐进披露建立层级，再考虑表面效果。
@@ -51,9 +57,9 @@ The design document defines semantic rules and observable results. Shared code o
 
 ## Reference boundary
 
-Codex informs workbench structure and self-hosting workflow, MiniMax Code informs visible local Goal / Agent Team and activity hierarchy, Curio informs design-document governance and container-driven geometry, ZCode informs information density, and Orca informs tabs and previews. D Code translates useful patterns into its own client components and D Code-owned product model; Pi SDK remains a runtime reference, not a visual or data authority.
+Codex informs workbench structure and self-hosting workflow, MiniMax Code informs visible local Goal / Agent Team and activity hierarchy, Curio informs design-document governance and container-driven geometry, ZCode informs information density, the Composer add panel, and shared React UI components, and Orca informs tabs and previews. D Code translates useful patterns into its own client components and D Code-owned product model; Pi SDK remains a runtime reference, not a visual or data authority.
 
-References never authorize copying another product's brand, visual skin, assets, runtime, cloud authority, account system, remote control, or hidden implementation. Confirmed future behavior remains in `doc/20-产品与交互/`; it does not enter the current design-system document until the native component is implemented and verified.
+References never authorize copying another product's brand, trademarked assets, runtime, cloud authority, account system, remote control, or hidden implementation. Public UI source may be adapted at component level after its applicable license and provenance are checked, while D Code keeps its own identity, product facts, and shared design rules. Confirmed future behavior remains in `doc/20-产品与交互/` or a version PRD; it does not enter the current design-system document until the D Code component is implemented and verified.
 
 ## Change discipline
 
