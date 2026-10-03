@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "sourceRoot": "src",
+  "excludedDirectories": ["node_modules", ".git", "tools", "test", "dist", "out", "coverage"],
+  "configurationFiles": ["vite.config.ts", "electron.vite.config.ts", "electron-builder.config.ts", "eslint.config.mjs", "postcss.config.mjs", "tailwind.config.ts"],
+  "modules": [
+    { "id": "contracts", "root": "src/contracts", "entrypoints": ["index.ts"], "allows": [], "externals": [] },
+    { "id": "renderer", "root": "src/renderer", "entrypoints": ["index.tsx"], "allows": ["contracts"], "externals": ["react", "react-dom"] },
+    { "id": "preload", "root": "src/preload", "entrypoints": ["index.ts"], "allows": ["contracts"], "externals": ["electron"] },
+    { "id": "main", "root": "src/main", "entrypoints": ["index.ts"], "allows": ["contracts", "application", "mock", "pi", "storage"], "externals": ["electron", "node:*"] },
+    { "id": "application", "root": "src/application", "entrypoints": ["index.ts"], "allows": ["contracts"], "externals": [] },
+    { "id": "mock", "root": "src/adapters/mock", "entrypoints": ["index.ts"], "allows": ["contracts", "application"], "externals": [] },
+    { "id": "pi", "root": "src/adapters/pi", "entrypoints": ["index.ts"], "allows": ["contracts", "application"], "externals": ["@earendil-works/pi-*", "@earendil-works/chord", "node:*"] },
+    { "id": "storage", "root": "src/adapters/storage", "entrypoints": ["index.ts"], "allows": ["contracts", "application"], "externals": ["node:*"] }
+  ]
+}

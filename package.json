@@ -1,0 +1,12 @@
+{
+  "name": "dcode-redesign",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "architecture:check": "node tools/architecture/check.mjs",
+    "architecture:test": "node --test tools/architecture/check.test.mjs",
+    "verify:architecture": "npm run architecture:test && npm run architecture:check"
+  },
+  "devDependencies": { "typescript": "5.9.3" }
+}
