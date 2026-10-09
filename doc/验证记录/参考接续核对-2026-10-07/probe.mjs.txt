@@ -1,0 +1,107 @@
+// 从项目根目录运行：node --import tsx doc/验证记录/参考接续核对-2026-10-07/probe.mjs
+// 只读诊断：应用层使用内存替身，组件只做静态渲染；不启动窗口、Pi 或真实账户。
+// 这些断言用于保留本轮发现的故障信号；修复后应更新正式行为测试，不把本文件加入通过门槛。
+import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { DCodeApplication } from '../../../src/application/index.ts';
+import { Composer } from '../../../src/renderer/components/Composer.tsx';
+
+const waitFor = async (predicate, message) => {
+  const deadline = Date.now() + 3000;
+  while (!await predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+};
+const result = { kind: 'in-memory application and static React rendering; no Electron, Pi SDK, real storage, or network' };
+
+let failSave = false, saves = 0;
+const configApp = new DCodeApplication(
+  { kind: 'mock', async open() { throw new Error('unexpected execution'); } },
+  {
+    async load() { return { status: 'missing' }; },
+    async save() { saves++; if (failSave) throw new Error('injected-config-save-failure'); }
+  }
+);
+try {
+  await configApp.init();
+  const savesBefore = saves;
+  failSave = true;
+  const returned = await configApp.configureModel({ label: 'synthetic-config-label' });
+  const immediate = await configApp.getSnapshot();
+  assert.equal(returned.configured, true);
+  assert.equal(saves, savesBefore);
+  await waitFor(async () => (await configApp.getSnapshot()).closeError?.includes('injected-config-save-failure'), 'save failure was not observed');
+  const afterFailure = await configApp.getSnapshot();
+  assert.equal(afterFailure.model.configured, true);
+  result.configuration = {
+    returnedBeforeSaveAttempt: true,
+    configuredImmediately: immediate.model.configured,
+    configuredAfterSaveFailure: afterFailure.model.configured,
+    failureBannerPresent: Boolean(afterFailure.closeError)
+  };
+} finally { failSave = false; await configApp.flush(); }
+
+let target, phase = 'ready', entries = [], pendingInputs = 0, observation = 0;
+let processing = 'queued', reads = 0, lookups = 0, submissions = 0;
+const control = { instanceId: 'in-memory-probe', revision: 0 };
+const view = () => ({ target, control, observation: ++observation, phase, execution: 'pi-durable-1.0.0', model: { provider: 'probe', modelId: 'controlled-port' }, entries, pendingInputs });
+const port = {
+  get target() { return target; },
+  async read() { reads++; return view(); },
+  async submit(input) { submissions++; phase = 'running'; pendingInputs = 1; return { status: 'accepted', operationId: input.operationId, submissionId: 1, processing }; },
+  async lookupReceipt(input) { lookups++; return { status: 'accepted', operationId: input.operationId, submissionId: 1, processing }; },
+  async pause() { phase = 'paused'; return view(); },
+  async resume() { phase = 'running'; return view(); },
+  async close() {}
+};
+const receiptApp = new DCodeApplication(
+  { kind: 'pi', async open(context) { target = context.target; return port; } },
+  { async load() { return { status: 'missing' }; }, async save() {} }
+);
+try {
+  await receiptApp.init();
+  await receiptApp.configureModel({ label: 'synthetic-config-label' });
+  const first = await receiptApp.sendMessage({ taskId: 'task-home-default', text: 'synthetic receipt observation', mode: 'steer', operationId: 'controlled-observation-1' });
+  assert.equal(first.receipt.status, 'accepted');
+  phase = 'ready'; pendingInputs = 0; processing = 'done';
+  entries = [{ id: 1, kind: 'pi.assistant', data: {}, assistantText: 'synthetic completed answer' }];
+  const readsBefore = reads;
+  await waitFor(() => reads >= readsBefore + 2, 'two regular observations were not reached');
+  const snapshot = await receiptApp.getSnapshot();
+  const input = snapshot.timelines[first.sessionId].find(b => b.kind === 'message' && b.role === 'user' && b.operationId === 'controlled-observation-1');
+  const answer = snapshot.timelines[first.sessionId].find(b => b.kind === 'message' && b.role === 'assistant' && b.text === 'synthetic completed answer');
+  assert.ok(answer);
+  assert.equal(snapshot.runs[first.sessionId].status, 'ready');
+  assert.equal(input.receipt.processing, 'queued');
+  assert.equal(lookups, 0);
+  const afterExplicit = await receiptApp.checkReceipt({ sessionId: first.sessionId, blockId: input.id });
+  assert.equal(afterExplicit.receipt.processing, 'done');
+  result.receipt = {
+    ordinaryObservationsAfterCompletion: reads - readsBefore,
+    answerProjected: Boolean(answer),
+    executionPhase: snapshot.runs[first.sessionId].status,
+    executionPendingInputs: snapshot.runs[first.sessionId].pendingInputs,
+    storedReceiptProcessingBeforeExplicitLookup: input.receipt.processing,
+    receiptProcessingAfterExplicitLookup: afterExplicit.receipt.processing,
+    extraSubmissionCount: submissions - 1
+  };
+} finally { await receiptApp.flush(); }
+
+result.composer = [];
+for (const mode of ['steer', 'follow-up']) {
+  for (const status of ['ready', 'running']) {
+    const html = renderToStaticMarkup(React.createElement(Composer, {
+      draft: 'synthetic correction', onDraftChange() {}, onSend() {}, disabled: false, sending: false,
+      placeholder: 'probe', mode, onModeChange() {},
+      run: { sessionId: 'probe', status, note: '', pendingInputs: 0, updatedAt: 0 }
+    }));
+    const sendTag = [...html.matchAll(/<button\b[^>]*>/g)].map(m => m[0]).find(tag => tag.includes('aria-label="发送"'));
+    assert.ok(sendTag, 'send button exists');
+    const disabled = /\sdisabled(?:=|\s|>)/.test(sendTag);
+    assert.equal(disabled, status === 'running');
+    result.composer.push({ mode, status, sendDisabled: disabled });
+  }
+}
+console.log(JSON.stringify(result, null, 2));

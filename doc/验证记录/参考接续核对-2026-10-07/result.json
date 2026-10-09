@@ -1,0 +1,40 @@
+{
+  "kind": "in-memory application and static React rendering; no Electron, Pi SDK, real storage, or network",
+  "configuration": {
+    "returnedBeforeSaveAttempt": true,
+    "configuredImmediately": true,
+    "configuredAfterSaveFailure": true,
+    "failureBannerPresent": true
+  },
+  "receipt": {
+    "ordinaryObservationsAfterCompletion": 2,
+    "answerProjected": true,
+    "executionPhase": "ready",
+    "executionPendingInputs": 0,
+    "storedReceiptProcessingBeforeExplicitLookup": "queued",
+    "receiptProcessingAfterExplicitLookup": "done",
+    "extraSubmissionCount": 0
+  },
+  "composer": [
+    {
+      "mode": "steer",
+      "status": "ready",
+      "sendDisabled": false
+    },
+    {
+      "mode": "steer",
+      "status": "running",
+      "sendDisabled": true
+    },
+    {
+      "mode": "follow-up",
+      "status": "ready",
+      "sendDisabled": false
+    },
+    {
+      "mode": "follow-up",
+      "status": "running",
+      "sendDisabled": true
+    }
+  ]
+}

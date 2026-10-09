@@ -1,0 +1,12 @@
+{
+ "stateDir": "/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-msetup-pybEFr",
+ "origin": "http://127.0.0.1:56290",
+ "steps": [
+  "home-no-model",
+  "setup-saved",
+  "send-complete",
+  "credential-encrypted",
+  "first-run-closed",
+  "reopen-send-complete"
+ ]
+}

@@ -1,0 +1,154 @@
+{
+  "phases": [
+    {
+      "phase": "snapshot",
+      "at": "2026-10-08T18:53:05.080Z",
+      "executionKind": "unavailable",
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "settingsKeys": [
+        "coldStart",
+        "fontSize",
+        "language",
+        "theme"
+      ],
+      "initialTheme": "system",
+      "bridgeKeys": [
+        "checkReceipt",
+        "createSession",
+        "createTask",
+        "getSnapshot",
+        "moveTask",
+        "onSnapshot",
+        "pauseRun",
+        "resumeRun",
+        "retrySend",
+        "sendMessage",
+        "updateSettings"
+      ],
+      "configureModelTypeof": "undefined"
+    },
+    {
+      "phase": "model-page",
+      "at": "2026-10-08T18:53:36.010Z",
+      "sectionsInteractiveCounts": {
+        "外观": 14,
+        "启动": 7,
+        "模型": 5,
+        "关于": 5
+      },
+      "modelSectionInteractive": [
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "name": "外观",
+          "disabled": false
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "name": "启动",
+          "disabled": false
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "name": "模型",
+          "disabled": false
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "name": "关于",
+          "disabled": false
+        },
+        {
+          "tag": "button",
+          "type": null,
+          "role": null,
+          "name": "返回",
+          "disabled": false
+        }
+      ],
+      "passwordInputsAnywhere": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "modelEntryProbe": {
+        "semanticHits": [],
+        "allMainButtons": [
+          "外观",
+          "启动",
+          "模型",
+          "关于",
+          "返回"
+        ]
+      }
+    },
+    {
+      "phase": "composer-unavailable",
+      "at": "2026-10-08T18:53:36.330Z",
+      "draftRetained": "对抗审计：这条草稿在不可用态必须保留",
+      "sendState": {
+        "label": "发送",
+        "disabled": true,
+        "note": "模型不可用；文字保留为草稿"
+      }
+    },
+    {
+      "phase": "focus-rule-attribution",
+      "at": "2026-10-08T18:53:36.347Z",
+      "matched": [],
+      "allFocusRules": 0
+    },
+    {
+      "phase": "persisted-state",
+      "at": "2026-10-08T18:53:36.657Z",
+      "stateFileExists": true,
+      "persistedKeys": [
+        "pendingFirstSends",
+        "runs",
+        "sessions",
+        "settings",
+        "tasks",
+        "timelines",
+        "workspaces"
+      ],
+      "stateDirFiles": [
+        "dcode-prototype-state.json",
+        "userdata/DIPS",
+        "userdata/Network Persistent State",
+        "userdata/Preferences",
+        "userdata/Trust Tokens",
+        "userdata/Trust Tokens-journal"
+      ]
+    },
+    {
+      "phase": "reopen",
+      "at": "2026-10-08T18:53:37.283Z",
+      "restoredSceneBody": "D Code\nHome\n默认\n默认任务\n设置\n设置\n外观\n启动\n模型\n关于\n返回\nEsc 也可返回；会话草稿已保留\n主题\n跟随系统，或固定浅色／深色\n系统\n浅色\n深色\n界面字号\n同时调整文字和控件大小\n14px\n界面语言\n切换不影响当前工作",
+      "draft": "对抗审计：这条草稿在不可用态必须保留",
+      "executionKind": "unavailable",
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelPageInputs": 0,
+      "modelPageButtons": 5
+    }
+  ],
+  "notes": [],
+  "baseline": {
+    "before": "4ec4bc0041f3376484dd52c50f89c4df4d46e11a  /Users/diwu/Workspace/Codes/Apps/dcode/out/main/index.js",
+    "after": "81a3331bc0c46eac93dca1640f2cd89c2d7f047b  /Users/diwu/Workspace/Codes/Apps/dcode/out/main/index.js",
+    "stable": false
+  }
+}

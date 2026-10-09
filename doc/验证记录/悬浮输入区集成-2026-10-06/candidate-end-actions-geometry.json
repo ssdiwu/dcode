@@ -1,0 +1,112 @@
+[
+ {
+  "round": "font14-default-window",
+  "action": "回查",
+  "canScroll": true,
+  "bodyFound": true,
+  "scrollerTop": 48,
+  "scrollerBottom": 874,
+  "cardTop": 730,
+  "lineTop": 637,
+  "lineBottom": 653,
+  "lineText": "末段标记：末尾文字行与操作按钮在",
+  "btnFound": true,
+  "btnTop": 663,
+  "btnBottom": 691,
+  "btnHit": true,
+  "win": {
+   "w": 1440,
+   "h": 874
+  }
+ },
+ {
+  "round": "font13",
+  "action": "回查",
+  "canScroll": true,
+  "bodyFound": true,
+  "scrollerTop": 48,
+  "scrollerBottom": 874,
+  "cardTop": 740,
+  "lineTop": 654,
+  "lineBottom": 669,
+  "lineText": "末段标记：末尾文字行与操作按钮在",
+  "btnFound": true,
+  "btnTop": 677,
+  "btnBottom": 703,
+  "btnHit": true,
+  "win": {
+   "w": 1440,
+   "h": 874
+  }
+ },
+ {
+  "round": "font16",
+  "action": "回查",
+  "canScroll": true,
+  "bodyFound": true,
+  "scrollerTop": 48,
+  "scrollerBottom": 874,
+  "cardTop": 709,
+  "lineTop": 604,
+  "lineBottom": 623,
+  "lineText": "末段标记：末尾文字行与操作按钮在",
+  "btnFound": true,
+  "btnTop": 633,
+  "btnBottom": 665,
+  "btnHit": true,
+  "win": {
+   "w": 1440,
+   "h": 874
+  }
+ },
+ {
+  "round": "font16-720x480",
+  "action": "回查",
+  "canScroll": true,
+  "bodyFound": true,
+  "scrollerTop": 48,
+  "scrollerBottom": 480,
+  "cardTop": 315,
+  "lineTop": 210,
+  "lineBottom": 229,
+  "lineText": "末段标记：末尾文字行与操作按钮在",
+  "btnFound": true,
+  "btnTop": 239,
+  "btnBottom": 271,
+  "btnHit": true,
+  "win": {
+   "w": 720,
+   "h": 480
+  }
+ },
+ {
+  "round": "lookup",
+  "result": "未找到提交记录已显示"
+ },
+ {
+  "round": "font16-720x480",
+  "action": "重试",
+  "canScroll": true,
+  "bodyFound": true,
+  "scrollerTop": 48,
+  "scrollerBottom": 480,
+  "cardTop": 315,
+  "lineTop": 210,
+  "lineBottom": 229,
+  "lineText": "末段标记：末尾文字行与操作按钮在",
+  "btnFound": true,
+  "btnTop": 239,
+  "btnBottom": 271,
+  "btnHit": true,
+  "win": {
+   "w": 720,
+   "h": 480
+  }
+ },
+ {
+  "round": "final",
+  "operationId": "op-muwng5ae-0-badw5s",
+  "sameOperationIdCount": 1,
+  "receipt": "accepted"
+ }
+]

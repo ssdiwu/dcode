@@ -1,0 +1,90 @@
+[
+  {
+    "language": "zh",
+    "width": 720,
+    "host": {
+      "platform": "darwin",
+      "visible": false,
+      "focusable": false,
+      "focused": false,
+      "title": "D Code",
+      "nativeButtons": null
+    },
+    "rect": {
+      "x": 116,
+      "y": 13.5,
+      "right": 163.1015625,
+      "bottom": 34.5,
+      "width": 47.1015625,
+      "height": 21,
+      "sidebarRight": 216,
+      "platform": "darwin"
+    }
+  },
+  {
+    "language": "zh",
+    "width": 1440,
+    "host": {
+      "platform": "darwin",
+      "visible": false,
+      "focusable": false,
+      "focused": false,
+      "title": "D Code",
+      "nativeButtons": null
+    },
+    "rect": {
+      "x": 116,
+      "y": 13.5,
+      "right": 163.1015625,
+      "bottom": 34.5,
+      "width": 47.1015625,
+      "height": 21,
+      "sidebarRight": 264,
+      "platform": "darwin"
+    }
+  },
+  {
+    "language": "en",
+    "width": 720,
+    "host": {
+      "platform": "darwin",
+      "visible": false,
+      "focusable": false,
+      "focused": false,
+      "title": "D Code",
+      "nativeButtons": null
+    },
+    "rect": {
+      "x": 116,
+      "y": 13.5,
+      "right": 163.1015625,
+      "bottom": 34.5,
+      "width": 47.1015625,
+      "height": 21,
+      "sidebarRight": 216,
+      "platform": "darwin"
+    }
+  },
+  {
+    "language": "en",
+    "width": 1440,
+    "host": {
+      "platform": "darwin",
+      "visible": false,
+      "focusable": false,
+      "focused": false,
+      "title": "D Code",
+      "nativeButtons": null
+    },
+    "rect": {
+      "x": 116,
+      "y": 13.5,
+      "right": 163.1015625,
+      "bottom": 34.5,
+      "width": 47.1015625,
+      "height": 21,
+      "sidebarRight": 264,
+      "platform": "darwin"
+    }
+  }
+]

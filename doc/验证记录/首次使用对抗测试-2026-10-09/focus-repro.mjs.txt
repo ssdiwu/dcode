@@ -1,0 +1,146 @@
+// 对抗性实测 1：正常启动（无受控装配）→ Composer textarea 焦点双框复现。
+// 独立测量：mouse click 与真实 Tab 两种进入方式；深/浅主题 × 14/13px；
+// 记录 textarea 与外壳的 computed boxShadow/outline/border/radius、:focus-visible 匹配、
+// focus-ring 变量，并用样式表规则归因探针定位是哪条 CSS 画出的框。全部只读观测。
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
+import { launchApp, ready, cleanup } from "/Users/diwu/Workspace/Codes/Apps/dcode/test/e2e/helpers.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT = join(HERE, "evidence", "focus");
+mkdirSync(OUT, { recursive: true });
+const REPO = "/Users/diwu/Workspace/Codes/Apps/dcode";
+const hashOut = () => execSync(`shasum ${REPO}/out/main/index.js ${REPO}/out/renderer/assets/index-*.js`, { encoding: "utf8" }).trim();
+
+const observations = [];
+const baselineBefore = hashOut();
+
+const measureInPage = () => {
+  const el = document.querySelector(".input-surface textarea");
+  if (!el) return null;
+  const shell = el.closest(".input-surface");
+  const cs = getComputedStyle(el);
+  const sh = getComputedStyle(shell);
+  // 规则归因：遍历样式表，找出同时满足「匹配该元素」且「声明了 boxShadow」的选择器
+  const attributions = [];
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = sheet.cssRules; } catch { continue; }
+    if (!rules) continue;
+    const walk = (list) => {
+      for (const rule of list) {
+        if (rule.cssRules) { walk(rule.cssRules); continue; }
+        if (!rule.selectorText || !rule.style?.boxShadow) continue;
+        let hit = false;
+        try { hit = el.matches(rule.selectorText); } catch { continue; }
+        if (hit) attributions.push({ selector: rule.selectorText, boxShadow: rule.style.boxShadow });
+      }
+    };
+    walk(rules);
+  }
+  return {
+    active: document.activeElement === el,
+    focusVisible: el.matches(":focus-visible"),
+    inner: {
+      boxShadow: cs.boxShadow, outline: `${cs.outlineWidth} ${cs.outlineStyle} ${cs.outlineColor}`,
+      border: `${cs.borderWidth} ${cs.borderStyle} ${cs.borderColor}`,
+      radius: cs.borderTopLeftRadius, background: cs.backgroundColor,
+    },
+    shell: {
+      tag: shell.tagName, cls: String(shell.className),
+      focusWithin: shell.matches(":focus-within"), focusVisibleSelf: (() => { try { return shell.matches(":focus-visible"); } catch { return "n/a"; } })(),
+      boxShadow: sh.boxShadow, borderColor: sh.borderColor,
+      radius: sh.borderTopLeftRadius, background: sh.backgroundColor,
+    },
+    focusRingVar: getComputedStyle(document.documentElement).getPropertyValue("--focus-ring").trim(),
+    uiScaleVar: getComputedStyle(document.documentElement).getPropertyValue("--ui-scale").trim(),
+    attributions,
+  };
+};
+
+const { page, stateDir, close } = await launchApp(undefined, {
+  DCODE_VALIDATION_ASSEMBLY: "",
+  DCODE_VALIDATION_SAMPLE: "0",
+});
+let failed = null;
+try {
+  await ready(page);
+  await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+
+  // 第一步先经真实设置 UI 切一次深色（正常入口验证），其余组合走同一桥通道（App.tsx:431 同源）
+  await page.getByRole("button", { name: /^设置/ }).click();
+  await page.getByRole("radio", { name: "深色" }).click();
+  await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+  await page.keyboard.press("Escape");
+  await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+
+  const composer = page.getByPlaceholder("写下需求，保存为草稿…");
+  for (const theme of ["dark", "light"]) {
+    for (const fontSize of [14, 13]) {
+      await page.evaluate((input) => window.dcode.updateSettings(input), { theme, fontSize });
+      await page.waitForFunction(
+        (input) => document.documentElement.classList.contains("dark") === (input.theme === "dark") && getComputedStyle(document.body).fontSize === `${input.fontSize}px`,
+        { theme, fontSize },
+      );
+      const combo = { theme, fontSize };
+      const shot = (name) => page.screenshot({ path: join(OUT, `${theme}-${fontSize}-${name}.png`) });
+
+      // —— 未聚焦基线 ——
+      await page.getByRole("heading", { name: "开始一项新工作" }).click();
+      const idle = await page.evaluate(measureInPage);
+      observations.push({ ...combo, action: "idle-baseline", ...idle });
+
+      // —— 鼠标点击 ——
+      await composer.click();
+      await page.waitForTimeout(120); // 过渡落定
+      const click = await page.evaluate(measureInPage);
+      observations.push({ ...combo, action: "mouse-click", ...click });
+      await shot("click");
+
+      // —— 真实 Tab：从正文标题处开始逐次 Tab 直到 textarea 持焦 ——
+      await page.getByRole("heading", { name: "开始一项新工作" }).click();
+      let tabs = 0;
+      for (; tabs < 40; tabs++) {
+        await page.keyboard.press("Tab");
+        const isArea = await page.evaluate(() => {
+          const el = document.activeElement;
+          return el?.tagName === "TEXTAREA" && !!el.closest(".input-surface");
+        });
+        if (isArea) break;
+      }
+      const keyboard = await page.evaluate(measureInPage);
+      observations.push({ ...combo, action: `real-tab(x${tabs + 1})`, tabCount: tabs + 1, ...keyboard });
+      await shot("tab");
+
+      // —— textarea 之后的下一个 Tab 目标（壳内子按钮对照）——
+      await page.keyboard.press("Tab");
+      const next = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) return null;
+        const cs = getComputedStyle(el);
+        return { role: el.getAttribute("role") ?? el.tagName.toLowerCase(), label: (el.getAttribute("aria-label") ?? "").slice(0, 24), focusVisible: el.matches(":focus-visible"), boxShadow: cs.boxShadow };
+      });
+      observations.push({ ...combo, action: "tab-next-in-shell", next });
+      await shot("tab-next");
+    }
+  }
+  writeFileSync(join(OUT, "focus-observations.json"), JSON.stringify(observations, null, 2));
+  console.log("FOCUS OBSERVATIONS WRITTEN");
+  for (const o of observations) {
+    if (o.action === "idle-baseline" || !o.inner) continue;
+    console.log(
+      `${o.theme}/${o.fontSize}px ${o.action}: active=${o.active} fv=${o.focusVisible} innerShadow=${JSON.stringify(o.inner.boxShadow)} innerOutline=${o.inner.outline} innerRadius=${o.inner.radius} | shellShadow=${JSON.stringify(o.shell.boxShadow)} shellFV=${o.shell.focusVisibleSelf} | ring=${o.focusRingVar} scale=${o.uiScaleVar}`,
+    );
+  }
+} catch (error) {
+  failed = error;
+  console.error("FOCUS REPRO FAILED:", error);
+} finally {
+  try { await close(); } finally { cleanup(stateDir); }
+  const baselineAfter = hashOut();
+  writeFileSync(join(OUT, "baseline.txt"), `before:\n${baselineBefore}\nafter:\n${baselineAfter}\nstable=${baselineBefore === baselineAfter}\n`);
+  console.log(`BASELINE STABLE=${baselineBefore === baselineAfter}`);
+  if (failed) process.exitCode = 1;
+}

@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+not ok 1 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 100.109458
+  type: 'test'
+  location: '/Users/diwu/Workspace/Codes/Apps/dcode/test/runtime/session.test.ts:1:1823'
+  failureType: 'testCodeFailure'
+  error: |-
+    正式读取必须带回已提交助手正文，仅有条目种类不能证明回答可展示
+    + actual - expected
+    
+    + undefined
+    - '已完成这次修改。\n中文与 English 正文均保留。'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: |-
+    已完成这次修改。
+    中文与 English 正文均保留。
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/Users/diwu/Workspace/Codes/Apps/dcode/test/runtime/session.test.ts:46:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+    async <anonymous> (/Users/diwu/Workspace/Codes/Apps/dcode/test/runtime/session.test.ts:34:1)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 657.300583

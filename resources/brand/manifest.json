@@ -1,0 +1,45 @@
+{
+  "name": "D Code",
+  "selected_candidate": "D2-R2",
+  "status": "approved",
+  "approved_by": "507",
+  "approved_at": "2026-10-08",
+  "approval": "可以，就用这个吧",
+  "master": "dcode-owl-master.png",
+  "dimensions": [
+    1254,
+    1254
+  ],
+  "sha256": "331e48812128520406aa8ef624da6e9b594dfe480e654080d7a605d0111c45e8",
+  "source": "/Users/diwu/Workspace/Codes/Apps/dcode/output/ip-as-logo-2026-10-08-d2-brand/D2-R2.png",
+  "provider": "built-in OpenAI image_gen",
+  "model_identifier": "not exposed",
+  "defining_elements": [
+    "猫头鹰",
+    "D 形外轮廓",
+    "</> 代码符号",
+    "两侧可见的短圆翅膀"
+  ],
+  "background": "选定原图的雾蓝背景；提示词目标 #C7D7E2",
+  "derived_assets": [
+    {
+      "path": "dcode-macos.png",
+      "purpose": "macOS Dock and window icon",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "4e587b69b74aac2c14ebc0607e58a5e77d530c6b6538f9b0beb6b98b3ba6e101",
+      "source_master_sha256": "331e48812128520406aa8ef624da6e9b594dfe480e654080d7a605d0111c45e8",
+      "method": "built-in OpenAI image_gen referenced-image edit; rounded tile with transparent outer margin; not a deterministic pixel mask",
+      "source": "/Users/diwu/.codex/generated_images/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/exec-7a58c3df-570a-4d26-9fdc-eac367dbe875.png",
+      "requested_by": "507",
+      "requested_at": "2026-10-09",
+      "request": "其他都是圆角，为什么你是直角"
+    }
+  ],
+  "prompt_character_colors": [
+    "#171918",
+    "#F5F2EA"
+  ]
+}

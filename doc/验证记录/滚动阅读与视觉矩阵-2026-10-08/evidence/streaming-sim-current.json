@@ -1,0 +1,115 @@
+{
+ "variant": "current",
+ "buildMeta": {
+  "variant": "current",
+  "timelinePath": "/Users/diwu/Workspace/Codes/Apps/dcode/src/renderer/views/Timeline.tsx",
+  "timelineSHA256": "6bce61dc55edb199325d29b5e2fbed5a25569c7b40085cc4bb4c728e0eabfd9b",
+  "bundleSHA256": "991d0f047f3868db3dfdb6f11fab7148308b08ccd3fc9ccd9ffad8f3ee706480",
+  "cssSource": "/Users/diwu/Workspace/Codes/Apps/dcode/out/renderer/assets/index-Dj6zlGBZ.css",
+  "cssSourceSHA256": "889ab0e115308f6e2bb4342a1db218fc29b1dbabe868156c1847009e12fa1e5f",
+  "cssCopySHA256": "889ab0e115308f6e2bb4342a1db218fc29b1dbabe868156c1847009e12fa1e5f",
+  "nodeVersion": "v22.22.3"
+ },
+ "scenarios": [
+  {
+   "name": "A-bottom-growth-follows",
+   "before": {
+    "scrollTop": 1310,
+    "scrollHeight": 1990,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 1815.09375
+   },
+   "after": {
+    "scrollTop": 3135,
+    "scrollHeight": 3815,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 3639.46875
+   }
+  },
+  {
+   "name": "B-reading-growth-keeps",
+   "before": {
+    "scrollTop": 0,
+    "scrollHeight": 3815,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 3639.46875
+   },
+   "after": {
+    "scrollTop": 0,
+    "scrollHeight": 5639,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 5463.84375
+   }
+  },
+  {
+   "name": "C-resume-growth-follows",
+   "before": {
+    "scrollTop": 4959,
+    "scrollHeight": 5639,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 5463.84375
+   },
+   "after": {
+    "scrollTop": 6784,
+    "scrollHeight": 7463,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 7288.21875
+   }
+  },
+  {
+   "name": "E-reading-new-block-keeps",
+   "before": {
+    "scrollTop": 0,
+    "scrollHeight": 1990,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2
+   },
+   "after": {
+    "scrollTop": 0,
+    "scrollHeight": 2600,
+    "clientHeight": 680,
+    "messageCount": 2,
+    "rowCount": 3
+   }
+  },
+  {
+   "name": "D-initial-short-growth-follows",
+   "before": {
+    "scrollTop": 0,
+    "scrollHeight": 680,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 21.125
+   },
+   "after": {
+    "scrollTop": 1332,
+    "scrollHeight": 2011,
+    "clientHeight": 680,
+    "messageCount": 1,
+    "rowCount": 2,
+    "h": 1836.21875
+   }
+  }
+ ],
+ "host": [
+  {
+   "visible": false,
+   "focusable": false,
+   "focused": false
+  }
+ ]
+}

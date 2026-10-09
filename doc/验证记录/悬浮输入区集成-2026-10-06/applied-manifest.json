@@ -1,0 +1,32 @@
+[
+  {
+    "path": "src/renderer/views/Timeline.tsx",
+    "before": "01a736a62fd1eee8dbae37b5b0e8d802d9d07194b8d63df44d88c441bc9a2f18",
+    "after": "528ce8b600c152554dc4fe03d0a8ce052b68feedb4c532a6277c37b5ee865d63"
+  },
+  {
+    "path": "src/renderer/components/Composer.tsx",
+    "before": "d159f90416b6de95ec66576f288562bf9590d35a78661a41d1c8e1a83eb40a4c",
+    "after": "55f753ae8025b7ca7b35b975d52b849e417d2cd58e3d8b5b307624e043b1c56c"
+  },
+  {
+    "path": "src/renderer/components/Menu.tsx",
+    "before": "eaea2decfeaac9e14286add416372a5a5698cc4d01f4664d6782f9187d703ea3",
+    "after": "3724935a56ff9ef746f2a9db0102c236b89a6abcc5c934000cfa97a8d53a1bf2"
+  },
+  {
+    "path": "test/e2e/scroll.test.mjs",
+    "before": "03fc2b54b2e70a4c128087e09330fbec9a9f0caf338ebf402b93b504ae03d236",
+    "after": "6ae465a02b138e2e3e3fdd00b92d302ae2cda3edcabbba912b8b28140ee0b745"
+  },
+  {
+    "path": "test/e2e/keyboard-tree.test.mjs",
+    "before": "4072676cfe6ac38e4ea003f0d552f049173d971e30e80e8faddd51ce20646832",
+    "after": "45655ec10730af663b026c605667b2f962f4ba7df6dd6c2b1a56a51a670bf4b8"
+  },
+  {
+    "path": "test/e2e/send-receipts.test.mjs",
+    "before": "a8fead11b47e0506789357520d848b63d2e99c6ced8d1ee740ebb00d0b0800bc",
+    "after": "531c1c6d0ae501f582f9cdf85159b04d0fd782a4b40dc38df42304af8bb9eab5"
+  }
+]

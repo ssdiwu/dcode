@@ -1,0 +1,32 @@
+{
+ "steps": [
+  {
+   "step": "off-bottom",
+   "geo": {
+    "scrollTop": 0,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "rows": 11
+   }
+  },
+  {
+   "step": "back-to-bottom",
+   "geo": {
+    "scrollTop": 318,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "rows": 11
+   }
+  },
+  {
+   "step": "after-follow",
+   "geo": {
+    "scrollTop": 403,
+    "scrollHeight": 1254,
+    "clientHeight": 852,
+    "rows": 12
+   }
+  }
+ ],
+ "verdict": "pass"
+}

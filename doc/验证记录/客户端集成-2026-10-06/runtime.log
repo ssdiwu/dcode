@@ -1,0 +1,92 @@
+
+> test:runtime
+> node --import tsx --test test/runtime/*.test.ts
+
+TAP version 13
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 1 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 1051.22525
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 2 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 10.920042
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 3 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 55.609458
+  type: 'test'
+  ...
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 4 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 117.369042
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 5 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 140.434041
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 6 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 97.156792
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 7 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 330.83275
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 8 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 232.002709
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 9 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 139.220042
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 10 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 69.712584
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 11 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 14.113917
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 12 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 158.681917
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 13 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 159.330958
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2458.927584

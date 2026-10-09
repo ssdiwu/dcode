@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+ok 1 - 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+  ---
+  duration_ms: 5946.4885
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6168.363042

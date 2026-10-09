@@ -1,0 +1,30 @@
+{
+  "identity": {
+    "sessionId": "session-mv0gqi8u-1",
+    "blockId": "msg-mv0gqi9x-2",
+    "operationId": "op-mv0gqi8t-0-wbf699"
+  },
+  "beforeResume": {
+    "status": "accepted",
+    "operationId": "op-mv0gqi8t-0-wbf699",
+    "processing": "placed"
+  },
+  "gateHeldAfterResume": {
+    "status": "accepted",
+    "operationId": "op-mv0gqi8t-0-wbf699",
+    "processing": "placed"
+  },
+  "naturalDoneBeforeExplicitLookup": {
+    "status": "accepted",
+    "operationId": "op-mv0gqi8t-0-wbf699",
+    "processing": "done"
+  },
+  "explicitReadAfterDone": {
+    "status": "accepted",
+    "operationId": "op-mv0gqi8t-0-wbf699",
+    "processing": "done"
+  },
+  "requestsAtPause": 2,
+  "requestsBeforeLookup": 3,
+  "requestsAfterLookup": 3
+}

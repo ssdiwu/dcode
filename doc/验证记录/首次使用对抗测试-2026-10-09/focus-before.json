@@ -1,0 +1,14 @@
+[
+  {
+    "theme": "dark",
+    "fontSize": 14,
+    "action": "click",
+    "active": true,
+    "focusVisible": true,
+    "innerShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset",
+    "innerOutline": "0px",
+    "outerShadow": "rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset",
+    "outerRadius": "16px",
+    "focusColor": "#ececee"
+  }
+]

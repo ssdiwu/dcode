@@ -1,0 +1,1023 @@
+
+> dcode-redesign@0.1.0-dev verify
+> npm run verify:runtime && npm run test:contracts && npm run test:e2e
+
+
+> dcode-redesign@0.1.0-dev verify:runtime
+> npm run verify:architecture && npm run typecheck && npm run lint && npm run test:runtime
+
+
+> dcode-redesign@0.1.0-dev verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> dcode-redesign@0.1.0-dev architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 19.525333
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 180.175791
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 6.080042
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 3.061459
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 3.0925
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 3.429042
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.960333
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 2.652541
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 3.617625
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.233125
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 3.658542
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.369334
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.186708
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 3.192792
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.419625
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 2.701084
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 2.942792
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.527125
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.504708
+  type: 'test'
+  ...
+# Subtest: root tool snapshots are excluded without skipping product sources
+ok 20 - root tool snapshots are excluded without skipping product sources
+  ---
+  duration_ms: 3.127375
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach tool snapshots
+ok 21 - product imports cannot reach tool snapshots
+  ---
+  duration_ms: 2.5445
+  type: 'test'
+  ...
+# Subtest: a nested directory named delta does not hide renderer dependencies
+ok 22 - a nested directory named delta does not hide renderer dependencies
+  ---
+  duration_ms: 2.328791
+  type: 'test'
+  ...
+# Subtest: ordinary documentation scripts remain subject to ownership checks
+ok 23 - ordinary documentation scripts remain subject to ownership checks
+  ---
+  duration_ms: 2.332625
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 24 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.994667
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 25 - missing internal imports fail
+  ---
+  duration_ms: 2.860291
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 26 - syntax errors fail
+  ---
+  duration_ms: 3.565292
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 27 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.985625
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 28 - module policy cannot exclude the source root
+  ---
+  duration_ms: 1.182417
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 29 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 1.36525
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 30 - policy dependencies must name real modules
+  ---
+  duration_ms: 0.936084
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 31 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 3.229167
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 32 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 175.354833
+  type: 'test'
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 32
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 653.524167
+
+> dcode-redesign@0.1.0-dev architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 42; modules: application, contracts, main, mock, pi, preload, renderer, storage
+
+> dcode-redesign@0.1.0-dev typecheck
+> tsc --noEmit
+
+
+> dcode-redesign@0.1.0-dev lint
+> eslint .
+
+
+> dcode-redesign@0.1.0-dev test:runtime
+> node --import tsx --test test/runtime/*.test.ts test/runtime/*.test.mjs
+
+TAP version 13
+# Subtest: 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+ok 1 - 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+  ---
+  duration_ms: 1.777541
+  type: 'test'
+  ...
+# Subtest: updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+ok 2 - updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+  ---
+  duration_ms: 402.75175
+  type: 'test'
+  ...
+# Subtest: updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+ok 3 - updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+  ---
+  duration_ms: 0.370625
+  type: 'test'
+  ...
+# Subtest: updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+ok 4 - updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+  ---
+  duration_ms: 0.50025
+  type: 'test'
+  ...
+# Subtest: updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+ok 5 - updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+  ---
+  duration_ms: 400.652958
+  type: 'test'
+  ...
+# Subtest: updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 6 - updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 1.932
+  type: 'test'
+  ...
+# Subtest: updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 7 - updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 0.784084
+  type: 'test'
+  ...
+# Subtest: 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+ok 8 - 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+  ---
+  duration_ms: 1.78375
+  type: 'test'
+  ...
+# Subtest: 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+ok 9 - 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+  ---
+  duration_ms: 1016.327458
+  type: 'test'
+  ...
+# Subtest: 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+ok 10 - 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+  ---
+  duration_ms: 502.851459
+  type: 'test'
+  ...
+# Subtest: accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+ok 11 - accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+  ---
+  duration_ms: 1007.678166
+  type: 'test'
+  ...
+# Subtest: C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+ok 12 - C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+  ---
+  duration_ms: 0.557083
+  type: 'test'
+  ...
+# Subtest: C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+ok 13 - C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+  ---
+  duration_ms: 16.766208
+  type: 'test'
+  ...
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 14 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 755.30575
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 15 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 22.357458
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 16 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 48.16925
+  type: 'test'
+  ...
+# Subtest: 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+ok 17 - 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+  ---
+  duration_ms: 1.188833
+  type: 'test'
+  ...
+# Subtest: 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+ok 18 - 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+  ---
+  duration_ms: 1.274667
+  type: 'test'
+  ...
+# Subtest: 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+ok 19 - 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+  ---
+  duration_ms: 0.152542
+  type: 'test'
+  ...
+# Subtest: 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+ok 20 - 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+  ---
+  duration_ms: 0.63525
+  type: 'test'
+  ...
+# Subtest: 没有模型消费者的标签配置公开路径退出，而不是改名继续解锁
+ok 21 - 没有模型消费者的标签配置公开路径退出，而不是改名继续解锁
+  ---
+  duration_ms: 0.091875
+  type: 'test'
+  ...
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 22 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 123.610375
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 23 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 140.379833
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 24 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 77.13775
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 25 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 188.159958
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 26 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 213.23375
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 27 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 110.249042
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 28 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 59.30825
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 29 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 44.633917
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 30 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 182.501667
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 31 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 173.315459
+  type: 'test'
+  ...
+1..31
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4074.973208
+
+> dcode-redesign@0.1.0-dev test:contracts
+> node --test test/contracts-validation.test.mjs
+
+TAP version 13
+# Subtest: 快照校验：合法快照通过；畸形样本逐项拒绝
+ok 1 - 快照校验：合法快照通过；畸形样本逐项拒绝
+  ---
+  duration_ms: 1.02225
+  type: 'test'
+  ...
+# Subtest: 设置部分更新：合法通路保留，畸形逐项拒绝
+ok 2 - 设置部分更新：合法通路保留，畸形逐项拒绝
+  ---
+  duration_ms: 0.135666
+  type: 'test'
+  ...
+# Subtest: 操作载荷校验：白名单 + 逐操作形状
+ok 3 - 操作载荷校验：白名单 + 逐操作形状
+  ---
+  duration_ms: 0.07375
+  type: 'test'
+  ...
+# Subtest: 操作返回契约校验：逐操作核对，畸形返回拒绝
+ok 4 - 操作返回契约校验：逐操作核对，畸形返回拒绝
+  ---
+  duration_ms: 0.061542
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 69.114
+
+> dcode-redesign@0.1.0-dev test:e2e
+> npm run build && node --test --test-concurrency=1 test/e2e/*.test.mjs
+
+
+> dcode-redesign@0.1.0-dev build
+> electron-vite build
+
+vite v7.1.9 building SSR bundle for production...
+transforming...
+✓ 788 modules transformed.
+rendering chunks...
+out/main/index.js  887.48 kB
+✓ built in 712ms
+vite v7.1.9 building SSR bundle for production...
+transforming...
+✓ 4 modules transformed.
+rendering chunks...
+out/preload/index.cjs  7.21 kB
+✓ built in 12ms
+vite v7.1.9 building for production...
+transforming...
+✓ 1763 modules transformed.
+rendering chunks...
+../../out/renderer/index.html                         0.57 kB
+../../out/renderer/assets/dcode-owl-ihryIdtS.png  1,584.64 kB
+../../out/renderer/assets/index-DZw8DmEc.css         33.78 kB
+../../out/renderer/assets/index-DAeKNkeE.js         922.40 kB
+✓ built in 1.37s
+TAP version 13
+# Subtest: 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+ok 1 - 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+  ---
+  duration_ms: 2662.128792
+  type: 'test'
+  ...
+# Subtest: 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+ok 2 - 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+  ---
+  duration_ms: 1116.595416
+  type: 'test'
+  ...
+# Subtest: 品牌猫头鹰：侧栏与关于页同源图像可辨，几何从字号派生，边界/名称保留
+ok 3 - 品牌猫头鹰：侧栏与关于页同源图像可辨，几何从字号派生，边界/名称保留
+  ---
+  duration_ms: 2015.026125
+  type: 'test'
+  ...
+# Subtest: 首次进入：真实不可用状态、设置无假表单、草稿往返与重开保留
+ok 4 - 首次进入：真实不可用状态、设置无假表单、草稿往返与重开保留
+  ---
+  duration_ms: 1090.51275
+  type: 'test'
+  ...
+# Subtest: 恢复目标失效与被移动：回退说明与归属定位
+ok 5 - 恢复目标失效与被移动：回退说明与归属定位
+  ---
+  duration_ms: 2089.791583
+  type: 'test'
+  ...
+# Subtest: 主题、字号旋钮与启动档位生效
+ok 6 - 主题、字号旋钮与启动档位生效
+  ---
+  duration_ms: 1758.951625
+  type: 'test'
+  ...
+# Subtest: C01–C06 单主按钮、输入选项菜单与工具错误复制（连续场景）
+ok 7 - C01–C06 单主按钮、输入选项菜单与工具错误复制（连续场景）
+  ---
+  duration_ms: 6526.399917
+  type: 'test'
+  ...
+# Subtest: C01 发送身份 A→B→A：第一次 A 迟到完成不释放第三次 A 的在途标记
+ok 8 - C01 发送身份 A→B→A：第一次 A 迟到完成不释放第三次 A 的在途标记
+  ---
+  duration_ms: 613.714958
+  type: 'test'
+  ...
+# Subtest: T08/C01 恢复共用会话 Promise：同帧交错、A 完成时 B 仍在途均不重复
+ok 9 - T08/C01 恢复共用会话 Promise：同帧交错、A 完成时 B 仍在途均不重复
+  ---
+  duration_ms: 5168.094708
+  type: 'test'
+  ...
+# Subtest: 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+ok 10 - 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+  ---
+  duration_ms: 1300.360375
+  type: 'test'
+  ...
+# [trap] Tab3: {"role":"input","label":"","shadow":"rgb(28, 25, 23) 0px 0px 0px 2px inset"}
+# [trap] panel buttons: [ '取消', '创建' ]
+# Subtest: 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+ok 11 - 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+  ---
+  duration_ms: 872.643417
+  type: 'test'
+  ...
+# Subtest: 输入卡片输入选项菜单：会话页向上展开完整可见、可选；草稿首屏保持向下
+ok 12 - 输入卡片输入选项菜单：会话页向上展开完整可见、可选；草稿首屏保持向下
+  ---
+  duration_ms: 1946.71825
+  type: 'test'
+  ...
+# Subtest: 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+not ok 13 - 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+  ---
+  duration_ms: 1620.933583
+  type: 'test'
+  location: '/Users/diwu/Workspace/Codes/Apps/dcode/test/e2e/pi-execution.test.mjs:19:1'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, open '/Users/diwu/Workspace/Codes/Apps/dcode/doc/验证记录/产品自有内容错误补修-2026-10-07/integration-observations/pi-natural-observation.json'"
+  code: 'ENOENT'
+  stack: |-
+    writeFileSync (node:fs:2430:20)
+    TestContext.<anonymous> (file:///Users/diwu/Workspace/Codes/Apps/dcode/test/e2e/pi-execution.test.mjs:114:7)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: 正常入口双语内容与标题干净；隐藏不解锁；macOS 标题避开原生窗控
+ok 14 - 正常入口双语内容与标题干净；隐藏不解锁；macOS 标题避开原生窗控
+  ---
+  duration_ms: 893.835125
+  type: 'test'
+  ...
+# Subtest: 旧数据、草稿关联、用户/工具原文跨双语及真实重开完整；旧假配置不能执行
+ok 15 - 旧数据、草稿关联、用户/工具原文跨双语及真实重开完整；旧假配置不能执行
+  ---
+  duration_ms: 1313.048417
+  type: 'test'
+  ...
+# Subtest: 渲染失败页双语说明真实影响和下一步，不展示底层错误正文
+ok 16 - 渲染失败页双语说明真实影响和下一步，不展示底层错误正文
+  ---
+  duration_ms: 622.769375
+  type: 'test'
+  ...
+# Subtest: 阅读意图：上翻阅读时新块到达保持位置（真实长会话 + 真实发送新输入）
+ok 17 - 阅读意图：上翻阅读时新块到达保持位置（真实长会话 + 真实发送新输入）
+  ---
+  duration_ms: 718.353083
+  type: 'test'
+  ...
+# Subtest: 阅读意图（长会话真实滚轮路径）：离底-回底-发送后跟随恢复
+ok 18 - 阅读意图（长会话真实滚轮路径）：离底-回底-发送后跟随恢复
+  ---
+  duration_ms: 1532.831084
+  type: 'test'
+  ...
+# Subtest: 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+ok 19 - 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+  ---
+  duration_ms: 2324.30575
+  type: 'test'
+  ...
+# Subtest: 滚动边界四组合：中文/英文 × 13px/14px
+ok 20 - 滚动边界四组合：中文/英文 × 13px/14px
+  ---
+  duration_ms: 3859.688834
+  type: 'test'
+  ...
+# Subtest: 新内容追加自动定位：末尾文字行在可视区且在卡片上方（不手动滚动）
+ok 21 - 新内容追加自动定位：末尾文字行在可视区且在卡片上方（不手动滚动）
+  ---
+  duration_ms: 1808.2365
+  type: 'test'
+  ...
+# Subtest: 短会话不多出滚动空间：消息列与 dock 共用自然高度
+ok 22 - 短会话不多出滚动空间：消息列与 dock 共用自然高度
+  ---
+  duration_ms: 554.988875
+  type: 'test'
+  ...
+# Subtest: 悬浮卡片留白真实交互与卡片高度变化（字号/窗口/检查器）
+ok 23 - 悬浮卡片留白真实交互与卡片高度变化（字号/窗口/检查器）
+  ---
+  duration_ms: 1952.9675
+  type: 'test'
+  ...
+# Subtest: 贴底跟随：纯高度缩窗与检查器开闭自动重钉，上翻后不被几何变化拉回
+ok 24 - 贴底跟随：纯高度缩窗与检查器开闭自动重钉，上翻后不被几何变化拉回
+  ---
+  duration_ms: 3448.418083
+  type: 'test'
+  ...
+# Subtest: 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+ok 25 - 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+  ---
+  duration_ms: 653.678792
+  type: 'test'
+  ...
+# Subtest: 回执丢失但实际已接收：只读回查找回，不盲目重投
+ok 26 - 回执丢失但实际已接收：只读回查找回，不盲目重投
+  ---
+  duration_ms: 1885.898
+  type: 'test'
+  ...
+# Subtest: 外层回包丢失但已 accepted：快照确认清原稿与身份，不把旧稿换 mode 后新投
+ok 27 - 外层回包丢失但已 accepted：快照确认清原稿与身份，不把旧稿换 mode 后新投
+  ---
+  duration_ms: 604.897958
+  type: 'test'
+  ...
+# Subtest: 外层回包与接收均未知：Enter 和换 mode 不重试旧文；T02 回查后 T03 同身份重试
+ok 28 - 外层回包与接收均未知：Enter 和换 mode 不重试旧文；T02 回查后 T03 同身份重试
+  ---
+  duration_ms: 715.486125
+  type: 'test'
+  ...
+# Subtest: 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+ok 29 - 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+  ---
+  duration_ms: 10436.138
+  type: 'test'
+  ...
+# Subtest: 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+ok 30 - 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+  ---
+  duration_ms: 3758.566875
+  type: 'test'
+  ...
+# [main:kjNWQ9] [dcode] resume-failed {
+#   name: 'StaleControlError',
+#   code: undefined,
+#   frames: [ { function: 'file', line: 1289, column: 54 } ]
+# }
+# Subtest: stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+ok 31 - stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+  ---
+  duration_ms: 3927.708792
+  type: 'test'
+  ...
+# Subtest: 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+ok 32 - 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+  ---
+  duration_ms: 4657.620375
+  type: 'test'
+  ...
+# [main:UHfWdD] [dcode] session-close-failed {
+#   name: 'Error',
+#   code: undefined,
+#   frames: [ { function: 'file', line: 1311, column: 37 } ]
+# }
+# Subtest: 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+ok 33 - 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+  ---
+  duration_ms: 533.528667
+  type: 'test'
+  ...
+# Subtest: 首发未知：草稿 Enter 不重投，回查后同身份重试复用原任务与主会话
+ok 34 - 首发未知：草稿 Enter 不重投，回查后同身份重试复用原任务与主会话
+  ---
+  duration_ms: 821.857958
+  type: 'test'
+  ...
+# Subtest: 首发接收未确认后重开：复用同一任务、主会话与操作身份
+ok 35 - 首发接收未确认后重开：复用同一任务、主会话与操作身份
+  ---
+  duration_ms: 1354.080583
+  type: 'test'
+  ...
+# Subtest: 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+ok 36 - 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+  ---
+  duration_ms: 633.313708
+  type: 'test'
+  ...
+# Subtest: 等待回执期间原地改写且外层回包丢失：accepted 快照不清新稿、不离开当前草稿
+ok 37 - 等待回执期间原地改写且外层回包丢失：accepted 快照不清新稿、不离开当前草稿
+  ---
+  duration_ms: 532.784041
+  type: 'test'
+  ...
+# Subtest: 末尾操作验收：长消息待核对→字号/窗口变化后末尾文字行与回查/重试按钮在卡片上方可点
+ok 38 - 末尾操作验收：长消息待核对→字号/窗口变化后末尾文字行与回查/重试按钮在卡片上方可点
+  ---
+  duration_ms: 653.287792
+  type: 'test'
+  ...
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:PcZihR] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# Subtest: 设置新失败不能沿用旧忽略：失败→忽略→同类失败，含中间真实成功与无成功的中英连续路径
+ok 39 - 设置新失败不能沿用旧忽略：失败→忽略→同类失败，含中间真实成功与无成功的中英连续路径
+  ---
+  duration_ms: 1676.6705
+  type: 'test'
+  ...
+# Subtest: 损坏的状态文件：成功保全后从空白开始并如实说明
+ok 40 - 损坏的状态文件：成功保全后从空白开始并如实说明
+  ---
+  duration_ms: 500.274959
+  type: 'test'
+  ...
+# [main:YwuHuC] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: undefined,
+#   frames: [
+#     { function: 'JsonFileStorage.save', line: 22069, column: 29 },
+#     {
+#       function: 'DCodeApplication.applySavedSettings',
+#       line: 460,
+#       column: 26
+#     },
+#     {
+#       function: 'DCodeApplication.updateSettings',
+#       line: 446,
+#       column: 25
+#     },
+#     { function: 'file', line: 22186, column: 33 },
+#     { function: 'Session.', line: 2, column: 116807 },
+#     { function: 'Session.emit', line: 508, column: 28 }
+#   ]
+# }
+# Subtest: 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+ok 41 - 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+  ---
+  duration_ms: 533.042542
+  type: 'test'
+  ...
+# [main:ZO5KFn] [dcode] state-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# [main:ZO5KFn] [dcode] settings-save-failed {
+#   name: 'Error',
+#   code: 'EACCES',
+#   frames: [
+#     { function: 'open', line: 637, column: 25 },
+#     { function: 'writeFile', line: 1239, column: 14 },
+#     { function: 'JsonFileStorage.write', line: 22079, column: 7 }
+#   ]
+# }
+# Subtest: 保存失败进入可见通路：banner 出现，不伪报成功
+ok 42 - 保存失败进入可见通路：banner 出现，不伪报成功
+  ---
+  duration_ms: 529.539583
+  type: 'test'
+  ...
+# Subtest: 同块流式五组（current）：底部增高跟随 / 上翻保持 / 回底恢复 / 短起点增高仍跟随 / 上翻新块保持
+ok 43 - 同块流式五组（current）：底部增高跟随 / 上翻保持 / 回底恢复 / 短起点增高仍跟随 / 上翻新块保持
+  ---
+  duration_ms: 635.543834
+  type: 'test'
+  ...
+# Subtest: 真实子进程：信号送达 ≠ 终止，终态仅由真实 exit 确认
+ok 44 - 真实子进程：信号送达 ≠ 终止，终态仅由真实 exit 确认
+  ---
+  duration_ms: 23.38875
+  type: 'test'
+  ...
+# Subtest: 资源清理反例（current）：窗口已建、就绪未成立时失败路径退出并清理自身资源
+ok 45 - 资源清理反例（current）：窗口已建、就绪未成立时失败路径退出并清理自身资源
+  ---
+  duration_ms: 15308.450083
+  type: 'test'
+  ...
+# Subtest: 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+ok 46 - 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+  ---
+  duration_ms: 641.814917
+  type: 'test'
+  ...
+# Subtest: 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+ok 47 - 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+  ---
+  duration_ms: 818.577542
+  type: 'test'
+  ...
+# Subtest: 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+ok 48 - 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+  ---
+  duration_ms: 597.0115
+  type: 'test'
+  ...
+# Subtest: 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+ok 49 - 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+  ---
+  duration_ms: 983.948417
+  type: 'test'
+  ...
+# Subtest: 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+ok 50 - 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+  ---
+  duration_ms: 618.6895
+  type: 'test'
+  ...
+# Subtest: 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+ok 51 - 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+  ---
+  duration_ms: 2361.266459
+  type: 'test'
+  ...
+# Subtest: 暂停与重开：恢复条显式接续，不自动继续执行
+ok 52 - 暂停与重开：恢复条显式接续，不自动继续执行
+  ---
+  duration_ms: 4232.285875
+  type: 'test'
+  ...
+1..52
+# tests 52
+# suites 0
+# pass 51
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 110758.824

@@ -3,3 +3,11 @@ node_modules/
 dist/
 out/
 coverage/
+# 本机协作工具状态与未采用的设计探索保留在本地。
+.mimosa/
+/.delta/
+/output/
+# 实际凭据不得进入版本控制；可维护不含秘密的配置示例。
+.env
+.env.*
+!.env.example

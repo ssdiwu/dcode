@@ -1,0 +1,27 @@
+{
+  "npmVerifyExitCode": 0,
+  "architectureCases": 32,
+  "productSourceFiles": 44,
+  "runtimeTests": 40,
+  "contractTests": 4,
+  "e2eTests": 65,
+  "modelE2eTests": 11,
+  "productAndAuthoredTestSourcesUnchanged": true,
+  "rawRunnerExitCode": 1,
+  "rawRunnerNote": "The fingerprint included generated ignored test dist CSS. Only that declared output changed; authored source remained byte-identical.",
+  "generatedArtifactChanges": [
+    "test/e2e/streaming-sim/dist/current/product.css"
+  ],
+  "producer": "test/e2e/streaming-sim/build-sim.mjs:58",
+  "protectedMainFilesUnchanged": true,
+  "startedAt": "2026-10-09T12:25:16.046666+08:00",
+  "endedAt": "2026-10-09T12:27:37.673091+08:00",
+  "rawLogSHA256": "35b4fb5d389cc967f9cd9a77b481a8e886592ec394c83fbb7940cacc22358bb6",
+  "currentDesktop": {
+    "pid": 33464,
+    "source": "/Users/diwu/Workspace/Codes/Apps/dcode",
+    "version": "0.1.0-dev"
+  },
+  "currentWindowURL": "file:///Users/diwu/Workspace/Codes/Apps/dcode/out/renderer/index.html",
+  "currentModelConfigured": false
+}

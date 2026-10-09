@@ -1,0 +1,121 @@
+TAP version 13
+# Subtest: 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+ok 1 - 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+  ---
+  duration_ms: 2113.859125
+  type: 'test'
+  ...
+# Subtest: 滚动边界四组合：中文/英文 × 13px/14px
+ok 2 - 滚动边界四组合：中文/英文 × 13px/14px
+  ---
+  duration_ms: 4843.535125
+  type: 'test'
+  ...
+# Subtest: 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+ok 3 - 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+  ---
+  duration_ms: 850.52275
+  type: 'test'
+  ...
+# Subtest: 回执丢失但实际已接收：只读回查找回，不盲目重投
+ok 4 - 回执丢失但实际已接收：只读回查找回，不盲目重投
+  ---
+  duration_ms: 2647.869666
+  type: 'test'
+  ...
+# Subtest: 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+ok 5 - 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+  ---
+  duration_ms: 698.003833
+  type: 'test'
+  ...
+# Subtest: 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+ok 6 - 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+  ---
+  duration_ms: 11058.658833
+  type: 'test'
+  ...
+# Subtest: 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+ok 7 - 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+  ---
+  duration_ms: 3990.351208
+  type: 'test'
+  ...
+# Subtest: stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+ok 8 - stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+  ---
+  duration_ms: 5259.039958
+  type: 'test'
+  ...
+# Subtest: 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+ok 9 - 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+  ---
+  duration_ms: 4970.285458
+  type: 'test'
+  ...
+# Subtest: 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+ok 10 - 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+  ---
+  duration_ms: 824.225541
+  type: 'test'
+  ...
+# Subtest: 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+ok 11 - 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+  ---
+  duration_ms: 992.592792
+  type: 'test'
+  ...
+# Subtest: 首发接收未确认后重开：复用同一任务、主会话与操作身份
+ok 12 - 首发接收未确认后重开：复用同一任务、主会话与操作身份
+  ---
+  duration_ms: 1354.361208
+  type: 'test'
+  ...
+# Subtest: 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+ok 13 - 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+  ---
+  duration_ms: 1016.700167
+  type: 'test'
+  ...
+# Subtest: 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+ok 14 - 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+  ---
+  duration_ms: 776.287708
+  type: 'test'
+  ...
+# Subtest: 损坏的状态文件：成功保全后从空白开始并如实说明
+ok 15 - 损坏的状态文件：成功保全后从空白开始并如实说明
+  ---
+  duration_ms: 492.432167
+  type: 'test'
+  ...
+# Subtest: 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+ok 16 - 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+  ---
+  duration_ms: 543.497292
+  type: 'test'
+  ...
+# [main:viOpCy] [storage] 保存失败: Error: EACCES: permission denied, open '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-viOpCy/dcode-prototype-state.json.tmp-28180'
+#     at async open (node:internal/fs/promises:637:25)
+#     at async writeFile (node:internal/fs/promises:1239:14)
+#     at async JsonFileStorage.write (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/out/main/index.js:21959:7) {
+#   errno: -13,
+#   code: 'EACCES',
+#   syscall: 'open',
+#   path: '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-viOpCy/dcode-prototype-state.json.tmp-28180'
+# }
+# Subtest: 保存失败进入可见通路：banner 出现，不伪报成功
+ok 17 - 保存失败进入可见通路：banner 出现，不伪报成功
+  ---
+  duration_ms: 675.860375
+  type: 'test'
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43547.061208

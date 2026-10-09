@@ -1,0 +1,183 @@
+// 对抗性实测 2：正常设置 → 模型页的「添加/保存/凭据」入口审计 + 首次完整路径判定。
+// 全部真实 UI 驱动（点击设置/分区/控件），只读观测；重开场景复用同一 stateDir。
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
+import { launchApp, ready, cleanup } from "/Users/diwu/Workspace/Codes/Apps/dcode/test/e2e/helpers.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT = join(HERE, "evidence", "settings");
+mkdirSync(OUT, { recursive: true });
+const REPO = "/Users/diwu/Workspace/Codes/Apps/dcode";
+const hashOut = () => execSync(`shasum ${REPO}/out/main/index.js`, { encoding: "utf8" }).trim();
+const baselineBefore = hashOut();
+
+const audit = { phases: [], notes: [] };
+const record = (phase, data) => { audit.phases.push({ phase, at: new Date().toISOString(), ...data }); console.log(`[${phase}]`, JSON.stringify(data).slice(0, 400)); };
+
+// 枚举一个容器内的全部可交互元素（真实 DOM 查询，非快照）
+const enumerateInteractive = (pg, scopeSelector) =>
+  pg.evaluate((sel) => {
+    const root = document.querySelector(sel) ?? document;
+    const els = root.querySelectorAll('button, input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])');
+    return Array.from(els).map((el) => ({
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute("type"),
+      role: el.getAttribute("role"),
+      name: (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 40),
+      disabled: el.disabled === true || el.getAttribute("aria-disabled") === "true",
+    }));
+  }, scopeSelector);
+
+let failed = null;
+let first = null;
+try {
+  first = await launchApp(undefined, { DCODE_VALIDATION_ASSEMBLY: "", DCODE_VALIDATION_SAMPLE: "0" });
+  const { page, stateDir, close } = first;
+  await ready(page);
+  await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+
+  // —— 快照事实 ——
+  const snap = await page.evaluate(() => {
+    const s = window.dcode.getSnapshot ? undefined : undefined;
+    return window.dcode.getSnapshot();
+  });
+  record("snapshot", {
+    executionKind: snap.execution.kind,
+    model: snap.model,
+    settingsKeys: Object.keys(snap.settings).sort(),
+    initialTheme: snap.settings.theme,
+    ...(await page.evaluate(() => ({ bridgeKeys: Object.keys(window.dcode).sort(), configureModelTypeof: typeof window.dcode.configureModel }))),
+  });
+
+  // —— 打开设置：真实点击（先固定深色，保证截图主题确定）——
+  await page.evaluate(() => window.dcode.updateSettings({ theme: "dark" }));
+  await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+  await page.getByRole("button", { name: /^设置/ }).click();
+  await page.getByRole("heading", { name: "设置", exact: false }).waitFor?.().catch(() => {});
+  await page.getByText("模型", { exact: true }).waitFor();
+
+  // 四个分区逐个点开，枚举整页可交互元素与输入框
+  const sections = {};
+  for (const name of ["外观", "启动", "模型", "关于"]) {
+    await page.getByRole("button", { name: new RegExp(`^${name}`) }).click();
+    await page.waitForTimeout(150);
+    sections[name] = {
+      interactive: await enumerateInteractive(page, "main"),
+      passwordInputs: await page.locator('input[type="password"]').count(),
+      anyInputs: await page.locator("main input").count(),
+      text: (await page.locator("main").innerText()).slice(0, 800),
+    };
+  }
+  await page.getByRole("button", { name: /^模型/ }).click();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(OUT, "settings-model-dark.png") });
+
+  // 模型页内按「添加/保存/密钥/连接/测试」语义查找入口（中英都不放过）
+  const modelEntryProbe = await page.evaluate(() => {
+    const patterns = /添加|新增|配置|保存|连接|测试|密钥|令牌|api|key|token|credential|provider|base.?url/i;
+    const hits = [];
+    for (const el of document.querySelectorAll("main button, main [role=button], main input, main a, main [tabindex]")) {
+      const label = (el.getAttribute("aria-label") ?? el.getAttribute("placeholder") ?? el.textContent ?? "").trim();
+      if (label && patterns.test(label)) hits.push({ tag: el.tagName.toLowerCase(), name: label.slice(0, 60) });
+    }
+    const allButtons = Array.from(document.querySelectorAll("main button")).map((b) => (b.getAttribute("aria-label") ?? b.textContent ?? "").trim());
+    return { semanticHits: hits, allMainButtons: allButtons };
+  });
+  record("model-page", {
+    sectionsInteractiveCounts: Object.fromEntries(Object.entries(sections).map(([k, v]) => [k, v.interactive.length])),
+    modelSectionInteractive: sections["模型"].interactive,
+    passwordInputsAnywhere: Object.values(sections).map((s) => s.passwordInputs),
+    modelEntryProbe,
+  });
+
+  // —— 草稿行为：输入 + Enter（不可用态下必须保草稿、不发送）——
+  await page.keyboard.press("Escape");
+  await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+  const composer = page.getByPlaceholder("写下需求，保存为草稿…");
+  await composer.fill("对抗审计：这条草稿在不可用态必须保留");
+  await composer.press("Enter");
+  await page.waitForTimeout(300);
+  const sendState = await page.evaluate(() => {
+    const btn = document.querySelector('[data-slot="composer-primary"]');
+    return { label: btn?.getAttribute("aria-label"), disabled: btn?.disabled, note: document.querySelector(".input-surface .text-ui-xs")?.textContent };
+  });
+  record("composer-unavailable", { draftRetained: await composer.inputValue(), sendState });
+
+  // —— 焦点规则归因（补探针）：列出所有含 focus-visible 且匹配持焦 textarea 的规则 ——
+  await composer.click();
+  const ruleAttribution = await page.evaluate(() => {
+    const el = document.activeElement;
+    const out = [];
+    document.querySelectorAll("style").forEach((st, i) => {
+      let rules; try { rules = st.sheet?.cssRules; } catch { return; }
+      if (!rules) return;
+      const walk = (list, layer) => {
+        for (const r of list) {
+          if (r.cssRules && r.selectorText === undefined) { walk(r.cssRules, r.name ?? layer); continue; }
+          if (!r.selectorText) continue;
+          if (!r.selectorText.includes("focus")) continue;
+          let hit = false; try { hit = el.matches(r.selectorText); } catch { continue; }
+          out.push({ sheet: i, layer: layer ?? null, selector: r.selectorText, matches: hit, boxShadow: r.style?.boxShadow ?? null, cssText: r.cssText?.slice(0, 220) ?? null });
+        }
+      };
+      walk(rules, null);
+    });
+    return out;
+  });
+  record("focus-rule-attribution", { matched: ruleAttribution.filter((r) => r.matches), allFocusRules: ruleAttribution.length });
+
+  // —— 切浅色再截一张模型页 ——
+  await page.evaluate(() => window.dcode.updateSettings({ theme: "light" }));
+  await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
+  await page.getByRole("button", { name: /^设置/ }).click();
+  await page.getByRole("button", { name: /^模型/ }).click();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: join(OUT, "settings-model-light.png") });
+
+  // —— 关闭 → 检查持久化状态文件（凭据/模型字段有无）→ 重开 ——
+  await close();
+  const stateFile = join(stateDir, "dcode-prototype-state.json");
+  let persistedKeys = null;
+  if (existsSync(stateFile)) {
+    persistedKeys = Object.keys(JSON.parse(readFileSync(stateFile, "utf8"))).sort();
+  }
+  const files = execSync(`find ${stateDir} -maxdepth 2 -type f | sed 's|${stateDir}/||' | sort | head -20`, { encoding: "utf8" }).trim().split("\n");
+  record("persisted-state", { stateFileExists: existsSync(stateFile), persistedKeys, stateDirFiles: files });
+
+  const second = await launchApp(stateDir, { DCODE_VALIDATION_ASSEMBLY: "", DCODE_VALIDATION_SAMPLE: "0" });
+  try {
+    await ready(second.page);
+    const sceneBody = await second.page.evaluate(() => document.body.innerText.slice(0, 200));
+    await second.page.keyboard.press("Escape").catch(() => {});
+    await second.page.getByRole("heading", { name: "开始一项新工作" }).waitFor({ timeout: 10_000 }).catch(async (e) => {
+      throw new Error(`reopen scene unexpected: ${sceneBody}`);
+    });
+    const reopened = { restoredSceneBody: sceneBody.slice(0, 120),
+      draft: await second.page.getByPlaceholder("写下需求，保存为草稿…").inputValue(),
+      executionKind: (await second.page.evaluate(() => window.dcode.getSnapshot())).execution.kind,
+      model: (await second.page.evaluate(() => window.dcode.getSnapshot())).model,
+    };
+    await second.page.getByRole("button", { name: /^设置/ }).click();
+    await second.page.getByRole("button", { name: /^模型/ }).click();
+    await second.page.waitForTimeout(150);
+    reopened.modelPageInputs = await second.page.locator("main input").count();
+    reopened.modelPageButtons = await second.page.locator("main button").count();
+    record("reopen", reopened);
+    await second.close();
+  } catch (e) {
+    failed = e; await second.close().catch(() => {}); await cleanup(stateDir); throw e;
+  }
+  await cleanup(stateDir);
+} catch (error) {
+  failed = error;
+  console.error("SETTINGS AUDIT FAILED:", error);
+} finally {
+  if (first) { try { await first.close(); } catch {} try { cleanup(first.stateDir); } catch {} }
+  const baselineAfter = hashOut();
+  audit.baseline = { before: baselineBefore, after: baselineAfter, stable: baselineBefore === baselineAfter };
+  writeFileSync(join(OUT, "settings-observations.json"), JSON.stringify(audit, null, 2));
+  console.log(`BASELINE STABLE=${baselineBefore === baselineAfter}`);
+  if (failed) process.exitCode = 1;
+}

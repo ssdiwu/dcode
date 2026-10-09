@@ -1,0 +1,19 @@
+{
+  "received": true,
+  "width": 1254,
+  "height": 1254,
+  "matchesPlatform": true,
+  "corners": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "center": 253,
+  "bounds": {
+    "minX": 112,
+    "minY": 128,
+    "maxX": 1140,
+    "maxY": 1127
+  }
+}

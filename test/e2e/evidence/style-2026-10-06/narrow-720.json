@@ -1,0 +1,68 @@
+{
+  "13": {
+    "actual": {
+      "sidebar": 216,
+      "inspector": 288.5703125,
+      "main": 215.4296875,
+      "overlap": false
+    },
+    "want": {
+      "S": 216,
+      "I": 288.57142857142856,
+      "M": 215.42857142857144
+    },
+    "diffScroll": {
+      "scrollWidth": 397,
+      "clientWidth": 252,
+      "before": 0,
+      "after": 144,
+      "max": 145,
+      "atEnd": true,
+      "path": "src/renderer/views/SettingsPage.tsx"
+    }
+  },
+  "14": {
+    "actual": {
+      "sidebar": 216,
+      "inspector": 272,
+      "main": 232,
+      "overlap": false
+    },
+    "want": {
+      "S": 216,
+      "I": 272,
+      "M": 232
+    },
+    "diffScroll": {
+      "scrollWidth": 427,
+      "clientWidth": 234,
+      "before": 0,
+      "after": 193,
+      "max": 193,
+      "atEnd": true,
+      "path": "src/renderer/views/SettingsPage.tsx"
+    }
+  },
+  "16": {
+    "actual": {
+      "sidebar": 216,
+      "inspector": 238.8515625,
+      "main": 265.1484375,
+      "overlap": false
+    },
+    "want": {
+      "S": 216,
+      "I": 238.8571428571429,
+      "M": 265.1428571428571
+    },
+    "diffScroll": {
+      "scrollWidth": 488,
+      "clientWidth": 197,
+      "before": 0,
+      "after": 290.5,
+      "max": 291,
+      "atEnd": true,
+      "path": "src/renderer/views/SettingsPage.tsx"
+    }
+  }
+}

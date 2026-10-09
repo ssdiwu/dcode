@@ -1,0 +1,253 @@
+TAP version 13
+# Subtest: 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+ok 1 - 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+  ---
+  duration_ms: 2976.746583
+  type: 'test'
+  ...
+# Subtest: 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+ok 2 - 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+  ---
+  duration_ms: 1266.573292
+  type: 'test'
+  ...
+# Subtest: 首次进入：缺模型配置的草稿态、设置往返与草稿保留
+ok 3 - 首次进入：缺模型配置的草稿态、设置往返与草稿保留
+  ---
+  duration_ms: 967.470916
+  type: 'test'
+  ...
+# Subtest: 恢复目标失效与被移动：回退说明与归属定位
+ok 4 - 恢复目标失效与被移动：回退说明与归属定位
+  ---
+  duration_ms: 2840.565917
+  type: 'test'
+  ...
+# Subtest: 主题、字号旋钮与启动档位生效
+ok 5 - 主题、字号旋钮与启动档位生效
+  ---
+  duration_ms: 2560.127708
+  type: 'test'
+  ...
+# Subtest: 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+ok 6 - 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+  ---
+  duration_ms: 1826.676041
+  type: 'test'
+  ...
+# [trap] Tab3: {"role":"input","label":"","shadow":"rgb(28, 25, 23) 0px 0px 0px 2px inset"}
+# [trap] panel buttons: [ '取消', '创建' ]
+# Subtest: 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+ok 7 - 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+  ---
+  duration_ms: 1410.111042
+  type: 'test'
+  ...
+# Subtest: 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+ok 8 - 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+  ---
+  duration_ms: 3857.809958
+  type: 'test'
+  ...
+# Subtest: 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+not ok 9 - 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+  ---
+  duration_ms: 1003.645
+  type: 'test'
+  location: '/Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/scroll.test.mjs:50:1'
+  failureType: 'testCodeFailure'
+  error: '时间线自身滚动'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/scroll.test.mjs:69:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: 滚动边界四组合：中文/英文 × 13px/14px
+ok 10 - 滚动边界四组合：中文/英文 × 13px/14px
+  ---
+  duration_ms: 4948.563209
+  type: 'test'
+  ...
+# Subtest: 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+ok 11 - 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+  ---
+  duration_ms: 913.168583
+  type: 'test'
+  ...
+# Subtest: 回执丢失但实际已接收：只读回查找回，不盲目重投
+ok 12 - 回执丢失但实际已接收：只读回查找回，不盲目重投
+  ---
+  duration_ms: 2699.363584
+  type: 'test'
+  ...
+# Subtest: 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+ok 13 - 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+  ---
+  duration_ms: 872.506375
+  type: 'test'
+  ...
+# Subtest: 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+ok 14 - 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+  ---
+  duration_ms: 11270.966917
+  type: 'test'
+  ...
+# Subtest: 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+ok 15 - 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+  ---
+  duration_ms: 4060.179041
+  type: 'test'
+  ...
+# Subtest: stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+ok 16 - stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+  ---
+  duration_ms: 5303.876958
+  type: 'test'
+  ...
+# Subtest: 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+ok 17 - 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+  ---
+  duration_ms: 5373.962417
+  type: 'test'
+  ...
+# Subtest: 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+ok 18 - 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+  ---
+  duration_ms: 1095.267
+  type: 'test'
+  ...
+# Subtest: 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+ok 19 - 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+  ---
+  duration_ms: 1096.627875
+  type: 'test'
+  ...
+# Subtest: 首发接收未确认后重开：复用同一任务、主会话与操作身份
+ok 20 - 首发接收未确认后重开：复用同一任务、主会话与操作身份
+  ---
+  duration_ms: 1523.882417
+  type: 'test'
+  ...
+# Subtest: 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+not ok 21 - 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+  ---
+  duration_ms: 932.084
+  type: 'test'
+  location: '/Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/send-receipts.test.mjs:424:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    切走后的新草稿不得被旧回执覆盖
+    + actual - expected
+    
+    + '另一草稿里的新稿丙（同样不应被覆盖'
+    - '另一草稿里的新稿丙（同样不应被覆盖）'
+                        ^
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: '另一草稿里的新稿丙（同样不应被覆盖）'
+  actual: '另一草稿里的新稿丙（同样不应被覆盖'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/send-receipts.test.mjs:470:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+ok 22 - 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+  ---
+  duration_ms: 856.463125
+  type: 'test'
+  ...
+# Subtest: 损坏的状态文件：成功保全后从空白开始并如实说明
+not ok 23 - 损坏的状态文件：成功保全后从空白开始并如实说明
+  ---
+  duration_ms: 448.29575
+  type: 'test'
+  location: '/Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/storage-protection.test.mjs:13:1'
+  failureType: 'testCodeFailure'
+  error: 'app is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/test/e2e/storage-protection.test.mjs:27:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+ok 24 - 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+  ---
+  duration_ms: 1127.412041
+  type: 'test'
+  ...
+# [main:FA9Hiu] [storage] 保存失败: Error: EACCES: permission denied, open '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-FA9Hiu/dcode-prototype-state.json.tmp-25413'
+#     at async open (node:internal/fs/promises:637:25)
+#     at async writeFile (node:internal/fs/promises:1239:14)
+#     at async JsonFileStorage.write (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/out/main/index.js:21959:7) {
+#   errno: -13,
+#   code: 'EACCES',
+#   syscall: 'open',
+#   path: '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-FA9Hiu/dcode-prototype-state.json.tmp-25413'
+# }
+# Subtest: 保存失败进入可见通路：banner 出现，不伪报成功
+ok 25 - 保存失败进入可见通路：banner 出现，不伪报成功
+  ---
+  duration_ms: 775.870458
+  type: 'test'
+  ...
+# Subtest: 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+ok 26 - 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+  ---
+  duration_ms: 1185.24625
+  type: 'test'
+  ...
+# Subtest: 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+ok 27 - 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+  ---
+  duration_ms: 893.611
+  type: 'test'
+  ...
+# Subtest: 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+ok 28 - 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+  ---
+  duration_ms: 630.589333
+  type: 'test'
+  ...
+# Subtest: 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+ok 29 - 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+  ---
+  duration_ms: 3909.518
+  type: 'test'
+  ...
+# Subtest: 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+ok 30 - 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+  ---
+  duration_ms: 767.680708
+  type: 'test'
+  ...
+# Subtest: 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+ok 31 - 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+  ---
+  duration_ms: 2496.970375
+  type: 'test'
+  ...
+# Subtest: 暂停与重开：恢复条显式接续，不自动继续执行
+ok 32 - 暂停与重开：恢复条显式接续，不自动继续执行
+  ---
+  duration_ms: 4631.614958
+  type: 'test'
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 29
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 821252.022916

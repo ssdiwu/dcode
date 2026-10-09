@@ -1,0 +1,11 @@
+{
+  "src/main/assembly.ts": "5d072133a97bacfb8e3bd646306c56fd53da48ad17101b78bc0e2290ee9c6fa8",
+  "src/renderer/styles.css": "6381d5d3e5aa19a9e0ebeaafdc5985cf33e589d8a43077ee20ef2cd5b5683f1f",
+  "src/renderer/components/Composer.tsx": "01e9e1bc48e5cc9751c2408f7f4b1de80dffe6337b376f712339581d802ea822",
+  "src/renderer/views/SettingsPage.tsx": "e8ec40e1b719f7bb95309a08044bbf29523cda5c97799ae3af7b083d18cf60d6",
+  "test/e2e/style-geometry.test.mjs": "4f7c2b13607ff0c02799c59efc717dc2f255e389e0819264ad7b4a7fe143e0f7",
+  "test/e2e/product-owned-content.test.mjs": "b4782de457f464eb1cbda972f042b78973a7d66053dd941cc7e3a293bf24b1c3",
+  "test/e2e/helpers.mjs": "a42f8dd8ca1210a95e743a66bde12fbb0d733c777cf731f5a53a9fe258cefe2a",
+  "spec/\u51b7\u542f\u52a8\u4e0e\u8349\u7a3f\u6001.md": "be83a643adb636f94cdd30617ff31e45a0f933139cd70cf1c68d3ff61b796565",
+  "spec/\u9875\u9762\u4e0e\u4ea4\u4e92\u7ec4\u4ef6.md": "a24d3d9298488549db58d40cba7ca34590b5b689e6961cec9f154c40829e52d2"
+}

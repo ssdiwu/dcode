@@ -1,0 +1,104 @@
+{
+  "candidate": "/Users/diwu/Workspace/Archives/dcode-scroll-and-matrix-candidate-2026-10-08-r5",
+  "checked_source_files": 447,
+  "mismatches": [],
+  "exit_records": {
+    "r5-architecture-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 28",
+        "# pass 28",
+        "# fail 0"
+      ],
+      "tail": []
+    },
+    "r5-build-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [],
+      "tail": [
+        "../../out/renderer/index.html                   0.57 kB",
+        "../../out/renderer/assets/index-CaSuZiTe.css   33.64 kB",
+        "../../out/renderer/assets/index-Co2KslSt.js   921.54 kB",
+        "✓ built in 1.51s"
+      ]
+    },
+    "r5-contracts-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 4",
+        "# pass 4",
+        "# fail 0"
+      ],
+      "tail": []
+    },
+    "r5-lint-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [],
+      "tail": [
+        "",
+        "> lint",
+        "> eslint .",
+        ""
+      ]
+    },
+    "r5-ri-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 2",
+        "# pass 2",
+        "# fail 0"
+      ],
+      "tail": []
+    },
+    "r5-runtime-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 31",
+        "# pass 31",
+        "# fail 0"
+      ],
+      "tail": []
+    },
+    "r5-sim-baseline-exit": {
+      "returncode": 1,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 3",
+        "# pass 2",
+        "# fail 1"
+      ],
+      "tail": []
+    },
+    "r5-sim-current-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [
+        "# tests 3",
+        "# pass 3",
+        "# fail 0"
+      ],
+      "tail": []
+    },
+    "r5-typecheck-exit": {
+      "returncode": 0,
+      "log_exists": true,
+      "test_summary": [],
+      "tail": [
+        "",
+        "> typecheck",
+        "> tsc --noEmit",
+        ""
+      ]
+    }
+  },
+  "review_sha256": "cc4928b696fae6d67c6feaca9be48a514a1f7e93d941a0dff5a8160506ab388e",
+  "verification_scope": "file integrity and raw exit records; no main-tree execution or integration performed",
+  "matrix_shots_checked": 36,
+  "matrix_mismatches": []
+}

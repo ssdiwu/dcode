@@ -1,0 +1,9 @@
+{
+  "sourceAppSHA256": "12337cef38ec81f656a01b6d9974da10133757f71e817338e54c1005a9fcf21d",
+  "sourceMatchesFrozenOriginal": true,
+  "temporaryProbe": "/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-model-gate-red-367w4rf_",
+  "commandExitCode": 1,
+  "expectedFailure": true,
+  "failures": 2,
+  "timestamp": "2026-10-09T12:21:35.424463+08:00"
+}

@@ -1,0 +1,1315 @@
+{
+  "scope": "Only mathematical checks of declared sRGB colour composites and width allocation; not browser measurements, UI operation or visual acceptance. selected-hover includes both overlays as a conservative additional combination. Layout cases verify only the default allocation without stored user sizes; user dragging and restored geometry are not validated here.",
+  "textThreshold": 4.5,
+  "focusThreshold": 3,
+  "textChecks": [
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.58821640287442
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.611543036875798
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.085888440417314
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.385399299729387
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.682889056293738
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.198503386625156
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 7.224365540471217
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.979556212981342
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.152111977809005
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.415624978830595
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 7.670301139093602
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.192572920359578
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.284674598514204
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.008741114673704
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 6.846911854021591
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.793975446106669
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.36879150467626
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.513650688806204
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 7.876652007094578
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.288979826445229
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.482294894033841
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.1035567823193215
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 7.034115740185187
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.886633030029043
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.58821640287442
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.611543036875798
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.085888440417314
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.385399299729387
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.682889056293738
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.198503386625156
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 7.224365540471217
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.979556212981342
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.58821640287442
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.611543036875798
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.085888440417314
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.385399299729387
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.682889056293738
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.198503386625156
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 7.224365540471217
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.979556212981342
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 8.36879150467626
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 5.513650688806204
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 7.876652007094578
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 5.288979826445229
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.482294894033841
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.1035567823193215
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 7.034115740185187
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.886633030029043
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 10.034323747401402
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 8.015963808135414
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.771464931529207
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 7.123497252771101
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.460135032480347
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 6.156916054579749
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 6.3896986108356275
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 5.34718475711447
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 10.620813343757934
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 8.407512967675205
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 9.436525538358447
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 7.599701737177515
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 8.081923589794068
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 6.619164169640304
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 6.922611492902768
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 5.752386736685613
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 9.568117006548404
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 7.692419663194027
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.293154021972512
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 6.7746472094045345
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.035276106239954
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.837528656099958
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 6.033676357563434
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 5.074301516394885
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 9.373365205249312
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 7.554973049513702
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.1022983046263
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 6.634187964298568
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 6.869709472465213
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.712337724020093
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 5.896327883584821
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.968570063275537
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 9.075145024470777
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 7.342352080406873
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 7.818059072874239
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 6.423788956832681
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 6.626607713612237
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.527808345379168
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 5.69583610824818
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 4.813777992464486
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "normal",
+      "role": "subtle",
+      "ratio": 9.758597051834105
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "normal",
+      "role": "subtlest",
+      "ratio": 7.825627903365283
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "hover",
+      "role": "subtle",
+      "ratio": 8.484543381855975
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "hover",
+      "role": "subtlest",
+      "ratio": 6.914799048742506
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected",
+      "role": "subtle",
+      "ratio": 7.203445203791312
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected",
+      "role": "subtlest",
+      "ratio": 5.964275692662001
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "subtle",
+      "ratio": 6.173939619627895
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "subtlest",
+      "ratio": 5.182015188902868
+    }
+  ],
+  "focusChecks": [
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 17.48834208978778
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 15.816466705028054
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 14.55265696145194
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 13.193396503482003
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "background",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.553064701454515
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 16.030804798012483
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 14.514416165700203
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 13.367721892311128
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 12.133956796652155
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "sidebar",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.735959309004448
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 15.152156929055074
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 13.948150014585169
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 12.652967615932562
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "panel",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.644992902776986
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 17.48834208978778
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 15.816466705028054
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 14.55265696145194
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 13.193396503482003
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "card",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.553064701454515
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 17.48834208978778
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 15.816466705028054
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 14.55265696145194
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 13.193396503482003
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "popover",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.553064701454515
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 15.152156929055074
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 13.948150014585169
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 12.652967615932562
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 16.744631340033816
+    },
+    {
+      "theme": "light",
+      "surface": "input",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.644992902776986
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 14.421498179747507
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 12.305407714450356
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 10.217965277838768
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 8.570693927193485
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "background",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.19192919638525
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 15.467787688615124
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 13.402653807896627
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 11.196976284661368
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 9.385107670196435
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "sidebar",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.108044223320881
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 13.623918322116234
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 11.533809967945588
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 9.558710556522469
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 8.032541428573113
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "panel",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.251447552114922
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 13.297079336252363
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 11.229394049540451
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 9.303783828097442
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 7.82616974665564
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "card",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.275305711628006
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 12.802540621555801
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 10.779364977049218
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 8.93141391436008
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 7.5261495012892645
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "popover",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.311147429503276
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "normal",
+      "role": "focus-ring",
+      "ratio": 13.946973371532142
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "hover",
+      "role": "focus-ring",
+      "ratio": 11.84100105348978
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected",
+      "role": "focus-ring",
+      "ratio": 9.818768109147014
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "selected-hover",
+      "role": "focus-ring",
+      "ratio": 8.244002466460943
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "primary",
+      "role": "focus-ring-inverse",
+      "ratio": 14.822922043094989
+    },
+    {
+      "theme": "dark",
+      "surface": "input",
+      "state": "primary-hover",
+      "role": "focus-ring-inverse",
+      "ratio": 12.227618436069527
+    }
+  ],
+  "layoutChecks": [
+    {
+      "width": 720,
+      "fontSize": 13,
+      "sidebar": 216.0,
+      "main": 215.42857142857144,
+      "inspector": 288.57142857142856,
+      "mainMinimum": 215.42857142857142
+    },
+    {
+      "width": 720,
+      "fontSize": 14,
+      "sidebar": 216.0,
+      "main": 232.0,
+      "inspector": 272.0,
+      "mainMinimum": 232.0
+    },
+    {
+      "width": 720,
+      "fontSize": 15,
+      "sidebar": 216.0,
+      "main": 248.57142857142858,
+      "inspector": 255.42857142857142,
+      "mainMinimum": 248.57142857142858
+    },
+    {
+      "width": 720,
+      "fontSize": 16,
+      "sidebar": 216.0,
+      "main": 265.14285714285717,
+      "inspector": 238.85714285714283,
+      "mainMinimum": 265.14285714285717
+    },
+    {
+      "width": 860,
+      "fontSize": 13,
+      "sidebar": 245.14285714285714,
+      "main": 215.42857142857144,
+      "inspector": 399.42857142857144,
+      "mainMinimum": 215.42857142857142
+    },
+    {
+      "width": 860,
+      "fontSize": 14,
+      "sidebar": 258.0,
+      "main": 232.0,
+      "inspector": 370.0,
+      "mainMinimum": 232.0
+    },
+    {
+      "width": 860,
+      "fontSize": 15,
+      "sidebar": 258.0,
+      "main": 248.57142857142856,
+      "inspector": 353.42857142857144,
+      "mainMinimum": 248.57142857142858
+    },
+    {
+      "width": 860,
+      "fontSize": 16,
+      "sidebar": 258.0,
+      "main": 265.14285714285717,
+      "inspector": 336.85714285714283,
+      "mainMinimum": 265.14285714285717
+    },
+    {
+      "width": 1100,
+      "fontSize": 13,
+      "sidebar": 245.14285714285714,
+      "main": 446.28571428571433,
+      "inspector": 408.57142857142856,
+      "mainMinimum": 215.42857142857142
+    },
+    {
+      "width": 1100,
+      "fontSize": 14,
+      "sidebar": 264.0,
+      "main": 396.0,
+      "inspector": 440.0,
+      "mainMinimum": 232.0
+    },
+    {
+      "width": 1100,
+      "fontSize": 15,
+      "sidebar": 282.85714285714283,
+      "main": 345.71428571428567,
+      "inspector": 471.42857142857144,
+      "mainMinimum": 248.57142857142858
+    },
+    {
+      "width": 1100,
+      "fontSize": 16,
+      "sidebar": 301.7142857142857,
+      "main": 295.4285714285714,
+      "inspector": 502.85714285714283,
+      "mainMinimum": 265.14285714285717
+    },
+    {
+      "width": 1440,
+      "fontSize": 13,
+      "sidebar": 245.14285714285714,
+      "main": 786.2857142857143,
+      "inspector": 408.57142857142856,
+      "mainMinimum": 215.42857142857142
+    },
+    {
+      "width": 1440,
+      "fontSize": 14,
+      "sidebar": 264.0,
+      "main": 736.0,
+      "inspector": 440.0,
+      "mainMinimum": 232.0
+    },
+    {
+      "width": 1440,
+      "fontSize": 15,
+      "sidebar": 282.85714285714283,
+      "main": 685.7142857142857,
+      "inspector": 471.42857142857144,
+      "mainMinimum": 248.57142857142858
+    },
+    {
+      "width": 1440,
+      "fontSize": 16,
+      "sidebar": 301.7142857142857,
+      "main": 635.4285714285713,
+      "inspector": 502.85714285714283,
+      "mainMinimum": 265.14285714285717
+    }
+  ]
+}

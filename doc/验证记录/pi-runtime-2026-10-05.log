@@ -1,0 +1,295 @@
+
+> verify:runtime
+> npm run verify:architecture && npm run typecheck && npm run lint && npm run test:runtime
+
+
+> verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 21.003333
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 196.086667
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 4.717208
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 3.074833
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 3.832459
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 2.933834
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.803291
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 3.730625
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 4.093042
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 4.281958
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 2.369708
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 3.380459
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 3.175333
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.902667
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.989417
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 3.37175
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 2.618417
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.624417
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.666917
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 20 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.958083
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 21 - missing internal imports fail
+  ---
+  duration_ms: 3.776625
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 22 - syntax errors fail
+  ---
+  duration_ms: 2.721375
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 23 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.965375
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 24 - module policy cannot exclude the source root
+  ---
+  duration_ms: 1.040541
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 25 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 1.173334
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 26 - policy dependencies must name real modules
+  ---
+  duration_ms: 1.664958
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 27 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 3.408042
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 28 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 190.989875
+  type: 'test'
+  ...
+1..28
+# tests 28
+# suites 0
+# pass 28
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 685.311
+
+> architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 4; modules: application, contracts, pi
+
+> typecheck
+> tsc --noEmit
+
+
+> lint
+> eslint .
+
+
+> test:runtime
+> node --import tsx --test test/runtime/*.test.ts
+
+TAP version 13
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 1 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 412.923875
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 2 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 22.733625
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 3 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 50.576917
+  type: 'test'
+  ...
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 4 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 123.021917
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 5 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 147.856041
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 6 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 133.543125
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 7 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 208.603
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 8 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 228.131625
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 9 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 157.952833
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 10 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 70.729834
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 11 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 31.865166
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 12 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 191.636708
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 13 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 166.147167
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1794.008625

@@ -1,0 +1,402 @@
+{
+  "source": "/Users/diwu/.codex/worktrees/dcode-client-integration/dcode",
+  "target": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "baseHead": "15917d1b58f6f7b244043911aa2457205308ddc3",
+  "files": [
+    {
+      "path": "README.md",
+      "before": "58214cdfb2c1709d7d74b3309c1768964f6f93438625cd9f7902d33642e23fe1",
+      "after": "af0553b4eecef768b3ba8e375186826b7f08869b6a1638b16b13b7499a21a435"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "before": "2800c15437838bb7399387a7fa0cded7b59175a31e1333549025bc03c8e9d3ad",
+      "after": "61afacaaeff660a6c2c3beabbdd4ee64ff552e2b500b41c23cdbd9221738e98f"
+    },
+    {
+      "path": "architecture-policy.json",
+      "before": "203da9a60fc23c6d6531f2138a56c566d5d7a85db5234bb54f68f642ff16d3f7",
+      "after": "03e996eaca22f3f6bebf78694d7f992895d95bf81f9dd5e7b61208f27ee30af4"
+    },
+    {
+      "path": "doc/README.md",
+      "before": "51c850ede23150b10e7da6d3c79b66109ba2c0bbf8a23e3cc3337651879e7593",
+      "after": "7f0da180fefa8b5d6b497d8ce10f680f5d30936ed28bd21b49c38451635ed07b"
+    },
+    {
+      "path": "doc/协作约定.md",
+      "before": "ee22ba433470b712c4620780dd784dbec38d432e85fb48ecc163491d2452d18d",
+      "after": "cea26d7e1ed4d7549e3a45dfd70ccaf264179fa4a7f89e105a0519474c7afa04"
+    },
+    {
+      "path": "doc/架构约定.md",
+      "before": "e86a544a057fb78c8092332d53c0c64369fa5241858254df6157b753cd211bba",
+      "after": "aabde401905d1e81e99cd23ae56f0ce6c5bab6378230cda8137286a1aaa54d98"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/README.md",
+      "before": null,
+      "after": "93240512e004c4742887f9d4a818db9aea7773d64f50fc879079ae1ba80a7fa1"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/build-after-fix.log",
+      "before": null,
+      "after": "341fd73c6d15ce01de989ac99aebbfc0cde01e58e62fab87ca8b70da5513bb85"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/build.log",
+      "before": null,
+      "after": "78b8cb31db6773030bd9a4c3479c46a056e5c8c6ed15a411c5c470b20f40fd62"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/contracts.log",
+      "before": null,
+      "after": "79a84b718b1a1d18f394e8cda293ebf316d8942a1ded2f77553e6b389c6d728b"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/e2e-after-fix.log",
+      "before": null,
+      "after": "7b7a678b4b87f7629bbca5d72b5d8e28e6b99c807f7c01c71f02e440cdd123d5"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/e2e-initial.log",
+      "before": null,
+      "after": "1e1f0a7b66a155d97e90aa63f5a17e84eedc8c8263997137b30229e706459faf"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/e2e.log",
+      "before": null,
+      "after": "1e1f0a7b66a155d97e90aa63f5a17e84eedc8c8263997137b30229e706459faf"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/failure-isolation-before-fix.log",
+      "before": null,
+      "after": "e60c8abcdb224da14bec6c024062202f4b6ed7d2c023e0527a6564501c6d527c"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/lint.log",
+      "before": null,
+      "after": "6ba41d3386946f3480608c0bcb80bb893d785c187db4178012a840ea9081d89b"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/runtime.log",
+      "before": null,
+      "after": "f8495eabebaf4a6fdf10b34ad77db1dd18a9aea9a2f2d05da020c607a2ef7486"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/source-before-checks.json",
+      "before": null,
+      "after": "7468c476d1ccd192d4587e3de0fff2e3831d6ceeeb505a05eb151833c59628d5"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/source-verified.json",
+      "before": null,
+      "after": "05d113122cbf49b30fca49eef8b044a4bc61c74a0af51d3626c5a7b2a8042ed5"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/typecheck.log",
+      "before": null,
+      "after": "8fa1cf5506304e8abac55868e7f1a136c9b1dde57a3981a382da4c21ea129a6f"
+    },
+    {
+      "path": "doc/验证记录/客户端集成-2026-10-06/verify-final.log",
+      "before": null,
+      "after": "4d2b8b74aecc68489d55ce2bcc1d6fd94e813218315ce0d2426e2f3509fb54f7"
+    },
+    {
+      "path": "electron.vite.config.ts",
+      "before": null,
+      "after": "9f7a5a229793448a6a9d695d5301fe3ed59def8483e860142f93b9d87c234cfb"
+    },
+    {
+      "path": "eslint.config.mjs",
+      "before": "7ca8139c420e3509802b1d85051e1311a8aea680f1b894200dba408d0650d9b9",
+      "after": "7aaff74a2e5a6989ff9bf6ea1298a28f474f86aca2e8d4cf27c88ddc35832ff9"
+    },
+    {
+      "path": "package-lock.json",
+      "before": "c164ece6ea70c9c7f44298f615231f22681f17e37ff4c1960b61434b2666fba2",
+      "after": "ee4a4c9c3260edb5503573eed63c9fa4aea40a0fb97c4982bfb374521de79107"
+    },
+    {
+      "path": "package.json",
+      "before": "66cda8bfef1c909e228733855bcf333643798ef38d4b7d6261aa9508ab50e780",
+      "after": "f3ebc19cf0e97444b4703450d425e58b4231243f0ce7c0243d68741397adb27e"
+    },
+    {
+      "path": "src/adapters/mock/index.ts",
+      "before": null,
+      "after": "880d8976054ce6bf393b65cb13abe4446019f6706a87013614b9315c4895248b"
+    },
+    {
+      "path": "src/adapters/pi/backend.ts",
+      "before": null,
+      "after": "c1b63e4e871a51b52f19547f9ddcb639f9cca297ff877bf5c3ee1a0e1791fed3"
+    },
+    {
+      "path": "src/adapters/pi/controlled-models.ts",
+      "before": null,
+      "after": "5f752dea5236d508f71b7f49f849cc0c224918a7fccc95315f97de9894b37ff9"
+    },
+    {
+      "path": "src/adapters/pi/index.ts",
+      "before": "1306fa07137bd1ecd9b45145fd8c83c7b70e46d54c1a0f6b46568bb80aeb70c0",
+      "after": "df106db04d7ac6f11677cfa823d8bb8e4179490aa13ff64098f9abbdf16228d8"
+    },
+    {
+      "path": "src/adapters/pi/session.ts",
+      "before": null,
+      "after": "1306fa07137bd1ecd9b45145fd8c83c7b70e46d54c1a0f6b46568bb80aeb70c0"
+    },
+    {
+      "path": "src/adapters/storage/index.ts",
+      "before": null,
+      "after": "2c3c4df11b703358752e7575010d2864ca6bfb54bffcdee6e41b00990a073786"
+    },
+    {
+      "path": "src/application/app.ts",
+      "before": null,
+      "after": "50851c96738ac872f6e6b7feb41f0c0efb6c5506565369dd444428fdbc4134ab"
+    },
+    {
+      "path": "src/application/index.ts",
+      "before": "8ff4434894c44c58c9fc08796bbf66fc54ea9c920f239d749708fd95c6c5cf79",
+      "after": "0191f8036711e9da4703f8bdfe1d6a5cc5b3d8695264ae3f49c4966944dab206"
+    },
+    {
+      "path": "src/application/ports.ts",
+      "before": null,
+      "after": "8ff4434894c44c58c9fc08796bbf66fc54ea9c920f239d749708fd95c6c5cf79"
+    },
+    {
+      "path": "src/application/seed.ts",
+      "before": null,
+      "after": "bf83089b5199cd393aa3fec9f0b6750165b7d6e4c50fe9a9084a0294f7960b7e"
+    },
+    {
+      "path": "src/application/types.ts",
+      "before": null,
+      "after": "40c6ee0877f7762478389b354c6a7c419ec0c5f995677efc4f6a2e02e76a6add"
+    },
+    {
+      "path": "src/contracts/execution.ts",
+      "before": null,
+      "after": "794685cbebb20aefc056f3df6ad9398ce98a06a6b605101b0bcd2225af9d74b8"
+    },
+    {
+      "path": "src/contracts/index.ts",
+      "before": "ff3294a9baa59796568d2dd529b43a9687b696d2e64db61cef9818db4bcce05c",
+      "after": "d99ad20a9ddc648049e316a93d06398d2eed593fdbcc49d5fc762ef576e268ae"
+    },
+    {
+      "path": "src/contracts/ui.ts",
+      "before": null,
+      "after": "1112644d00b89b62cc84d874cf7cda711436fbfae4aec1401eb84c2ec7ad3186"
+    },
+    {
+      "path": "src/main/index.ts",
+      "before": null,
+      "after": "355ee9d3e9c217655efe47080e7a3c53b8b159a14ca80f8cf474644348862c25"
+    },
+    {
+      "path": "src/preload/index.ts",
+      "before": null,
+      "after": "6fd293c3ac5c3d3ef477f83918034192738dd59892ed39e1f577893856b65e06"
+    },
+    {
+      "path": "src/renderer/App.tsx",
+      "before": null,
+      "after": "d2f09742979400387fc7454a18ffeb6648f8091363b5d8108a382b47bcdd5ebe"
+    },
+    {
+      "path": "src/renderer/components/Badge.tsx",
+      "before": null,
+      "after": "bf3b30f0459c72798377335d14fef9ca8423991a5b719e4738c9db83a3a64dc3"
+    },
+    {
+      "path": "src/renderer/components/Banner.tsx",
+      "before": null,
+      "after": "a16a0e51ef65c96f99c07c2a331ee284ac5c7c67f1d01459ddbfe606223ece17"
+    },
+    {
+      "path": "src/renderer/components/Button.tsx",
+      "before": null,
+      "after": "bf6d11e758f460afd258aa6e24a79a2479a15f19de65fd02fcbb365b81b77eb7"
+    },
+    {
+      "path": "src/renderer/components/ChangeSummaryCard.tsx",
+      "before": null,
+      "after": "7bdbba358017ef7b2d3772b3cc6ce962097a5526a63d3bc1489e921e73d07136"
+    },
+    {
+      "path": "src/renderer/components/Composer.tsx",
+      "before": null,
+      "after": "d159f90416b6de95ec66576f288562bf9590d35a78661a41d1c8e1a83eb40a4c"
+    },
+    {
+      "path": "src/renderer/components/Controls.tsx",
+      "before": null,
+      "after": "86af22c65b5bd929c125ef397b4156a39dd229e8b6b23d805f27aace50cbde5d"
+    },
+    {
+      "path": "src/renderer/components/DiffView.tsx",
+      "before": null,
+      "after": "7d89d03c51d75c21109462cd538f243a25927165a65a3d93821268626aaf5789"
+    },
+    {
+      "path": "src/renderer/components/MarkdownLite.tsx",
+      "before": null,
+      "after": "64b555f7362321064f217b3aa46cae64eb409d741ca0748f358de5f98466e2cf"
+    },
+    {
+      "path": "src/renderer/components/Menu.tsx",
+      "before": null,
+      "after": "eaea2decfeaac9e14286add416372a5a5698cc4d01f4664d6782f9187d703ea3"
+    },
+    {
+      "path": "src/renderer/components/RootBoundary.tsx",
+      "before": null,
+      "after": "a1d3126df78ef097694da9313c1a7fc3eef3333683f29384eddb0cfa27cf4b03"
+    },
+    {
+      "path": "src/renderer/components/ToolCallBlock.tsx",
+      "before": null,
+      "after": "b0142b4d7ab91dbb099bbd67c6fae7411b9e986b41ba80532f1f0ccf944877d6"
+    },
+    {
+      "path": "src/renderer/i18n.ts",
+      "before": null,
+      "after": "459cba3b43aee330da513bf8d0d2fa5c1d9e97d2b56303cb7f5bd0214a910cb7"
+    },
+    {
+      "path": "src/renderer/index.html",
+      "before": null,
+      "after": "fe67add065b2d88071e569ae55d8338784a50bd0b1b618ba8a4e9f9b2c962c77"
+    },
+    {
+      "path": "src/renderer/index.tsx",
+      "before": null,
+      "after": "32c871781b113662a754b1cfe16d8f076a105c083a3b2827ecd699661fcd2e21"
+    },
+    {
+      "path": "src/renderer/store.ts",
+      "before": null,
+      "after": "af1e6abd42e2f673cf9118b42bef4abf81edc146a9d833eddc0ea2fa4453d4b2"
+    },
+    {
+      "path": "src/renderer/styles.css",
+      "before": null,
+      "after": "062da2600d97fbb39c13c270af2ca71607656e656322595415817b83b375dbba"
+    },
+    {
+      "path": "src/renderer/views/DraftState.tsx",
+      "before": null,
+      "after": "b88f3207ebb1068bf0711eac8a69ecfecca4aa9a579f2fcb11b330d292f7158a"
+    },
+    {
+      "path": "src/renderer/views/Inspector.tsx",
+      "before": null,
+      "after": "086d9c5f72a021a209fd6d25960a4f3311a420daed49cc673cac0e39e891ae97"
+    },
+    {
+      "path": "src/renderer/views/SettingsPage.tsx",
+      "before": null,
+      "after": "790ddf7ffb0a5463d064f3934b350957b31157d77342434461bd8eab9e12786a"
+    },
+    {
+      "path": "src/renderer/views/Sidebar.tsx",
+      "before": null,
+      "after": "735576101806095987d108c88440d0c5aaeca87888646d4f88bcf4589699cd04"
+    },
+    {
+      "path": "src/renderer/views/Timeline.tsx",
+      "before": null,
+      "after": "01a736a62fd1eee8dbae37b5b0e8d802d9d07194b8d63df44d88c441bc9a2f18"
+    },
+    {
+      "path": "test/contracts-validation.test.mjs",
+      "before": null,
+      "after": "7d5c6ebb06e6f651fb5e7ca991db76fa51d3557e44788c6f5c895c62f6ab150d"
+    },
+    {
+      "path": "test/e2e/boundary.test.mjs",
+      "before": null,
+      "after": "ea23c06d6e67110e57c267bc983b537a6704e81ddce0319914ad96270444cb50"
+    },
+    {
+      "path": "test/e2e/cold-start.test.mjs",
+      "before": null,
+      "after": "4e190cf6263150dd770fb2ab5a8df4687c9f7bf374f4d8ce984abea1f0bfd239"
+    },
+    {
+      "path": "test/e2e/focus-frames.mjs",
+      "before": null,
+      "after": "be475089a2e65af3d7dd36affc43f4845e62015a6fb00e65860bf599b3a33d47"
+    },
+    {
+      "path": "test/e2e/helpers.mjs",
+      "before": null,
+      "after": "d90e4f28618ff1acdd2afeb264a88c44c0ff003733fb8653e963f13d0d529c9e"
+    },
+    {
+      "path": "test/e2e/i18n.test.mjs",
+      "before": null,
+      "after": "038fae692745849c5a9e9c41ecbf26925bb9a307842c979a5a737429742effe2"
+    },
+    {
+      "path": "test/e2e/keyboard-tree.test.mjs",
+      "before": null,
+      "after": "4072676cfe6ac38e4ea003f0d552f049173d971e30e80e8faddd51ce20646832"
+    },
+    {
+      "path": "test/e2e/menu-720-frames.mjs",
+      "before": null,
+      "after": "da0909d2e4f5f13fc4b4ffb9790e11751075c0da4a672fe9a05a1a2b3b365e55"
+    },
+    {
+      "path": "test/e2e/pi-execution.test.mjs",
+      "before": null,
+      "after": "3e89fcf73c77dfc822fdcdc387dd3da8e52ea9ff680f056f9db075df33fc82c5"
+    },
+    {
+      "path": "test/e2e/scroll-repro.mjs",
+      "before": null,
+      "after": "f12c917fde134e023c420cf7024fa1b007a8b38291f4967db8e6243a811eb5d6"
+    },
+    {
+      "path": "test/e2e/scroll.test.mjs",
+      "before": null,
+      "after": "03fc2b54b2e70a4c128087e09330fbec9a9f0caf338ebf402b93b504ae03d236"
+    },
+    {
+      "path": "test/e2e/send-receipts.test.mjs",
+      "before": null,
+      "after": "a8fead11b47e0506789357520d848b63d2e99c6ced8d1ee740ebb00d0b0800bc"
+    },
+    {
+      "path": "test/e2e/storage-protection.test.mjs",
+      "before": null,
+      "after": "e5ceb635490a0ddb83e7e50ee57f23b0b8c453bd30433a7d94e6a48e8ae64a4b"
+    },
+    {
+      "path": "test/e2e/style-geometry.test.mjs",
+      "before": null,
+      "after": "76918241c320ff2347c91450936ad08d46d2154fceb311603aec907534e4b535"
+    },
+    {
+      "path": "test/e2e/visual-matrix.mjs",
+      "before": null,
+      "after": "4f2225ccc5fea238b589d7c474e625bf6205d8f20b5ce2318d755701a04de4d8"
+    },
+    {
+      "path": "test/e2e/workbench.test.mjs",
+      "before": null,
+      "after": "6ac25f88496f1f6d8c49606c26abb5ce66d899f8dd6cf1336e5c821b29f296f3"
+    },
+    {
+      "path": "tsconfig.json",
+      "before": "ad05008442d0c40e34bf0c4f08b86bca3612fbc1e26b2f0a12c2454e17c93a6f",
+      "after": "51cd417dfb4163d229f475e4ff7b311f7933a85eed7dc55601b48f46ded6a4f5"
+    }
+  ]
+}

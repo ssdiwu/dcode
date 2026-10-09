@@ -1,0 +1,72 @@
+TAP version 13
+# Subtest: 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+ok 1 - 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+  ---
+  duration_ms: 4.191083
+  type: 'test'
+  ...
+# Subtest: 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+ok 2 - 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+  ---
+  duration_ms: 1.825458
+  type: 'test'
+  ...
+# Subtest: accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+not ok 3 - accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+  ---
+  duration_ms: 2.300375
+  type: 'test'
+  location: '/private/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-model-gate-red-367w4rf_/test/runtime/model-setup-concurrent.test.mjs:212:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///private/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-model-gate-red-367w4rf_/test/runtime/model-setup-concurrent.test.mjs:240:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+ok 4 - 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+  ---
+  duration_ms: 2.284333
+  type: 'test'
+  ...
+# Subtest: 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+not ok 5 - 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+  ---
+  duration_ms: 3.0605
+  type: 'test'
+  location: '/private/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-model-gate-red-367w4rf_/test/runtime/model-setup-concurrent.test.mjs:286:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///private/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-model-gate-red-367w4rf_/test/runtime/model-setup-concurrent.test.mjs:297:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 3
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 311.736416

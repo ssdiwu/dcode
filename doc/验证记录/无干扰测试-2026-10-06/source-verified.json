@@ -1,0 +1,6 @@
+{
+  "src/main/index.ts": "b6995780d247205faaa34f0de876b82dfe8de8f63652727e014ecf1aa6f1e7c3",
+  "test/e2e/helpers.mjs": "65dc88e748ab120d8e7903881f1502bc7db31c7a9109110c136f57d1e7c0ac6e",
+  "test/e2e/scroll.test.mjs": "5db3d75e007f66ab818649e69528c5e564a95e5e41c7aee50548f9b538658da6",
+  "test/e2e/send-receipts.test.mjs": "2cb9fe05c1128739a64f6dfeb5356b0ee0c709573ff888f8d761dcd6337e6608"
+}

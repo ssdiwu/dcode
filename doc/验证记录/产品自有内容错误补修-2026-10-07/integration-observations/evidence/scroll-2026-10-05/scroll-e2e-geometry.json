@@ -1,0 +1,406 @@
+[
+ {
+  "step": "timeline-start",
+  "scrollTop": 121,
+  "max": 318
+ },
+ {
+  "step": "timeline-scroll",
+  "before": {
+   "win": {
+    "w": 1440,
+    "h": 900,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 900,
+    "clientHeight": 900,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 0,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 0,
+    "scrollHeight": 807,
+    "clientHeight": 807,
+    "canScroll": false
+   },
+   "inspector": null,
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 900
+   },
+   "settingsBar": {
+    "top": 855,
+    "bottom": 900
+   },
+   "composer": {
+    "top": 756,
+    "bottom": 888
+   },
+   "composerControl": {
+    "top": 769,
+    "bottom": 832
+   },
+   "settingsControl": {
+    "top": 864,
+    "bottom": 892
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 900
+   }
+  },
+  "after": {
+   "win": {
+    "w": 1440,
+    "h": 900,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 900,
+    "clientHeight": 900,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 318,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 0,
+    "scrollHeight": 807,
+    "clientHeight": 807,
+    "canScroll": false
+   },
+   "inspector": null,
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 900
+   },
+   "settingsBar": {
+    "top": 855,
+    "bottom": 900
+   },
+   "composer": {
+    "top": 756,
+    "bottom": 888
+   },
+   "composerControl": {
+    "top": 769,
+    "bottom": 832
+   },
+   "settingsControl": {
+    "top": 864,
+    "bottom": 892
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 900
+   }
+  }
+ },
+ {
+  "step": "sidebar-scroll",
+  "before": {
+   "win": {
+    "w": 1440,
+    "h": 900,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 900,
+    "clientHeight": 900,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 318,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 0,
+    "scrollHeight": 946,
+    "clientHeight": 807,
+    "canScroll": true
+   },
+   "inspector": null,
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 900
+   },
+   "settingsBar": {
+    "top": 855,
+    "bottom": 900
+   },
+   "composer": {
+    "top": 756,
+    "bottom": 888
+   },
+   "composerControl": {
+    "top": 769,
+    "bottom": 832
+   },
+   "settingsControl": {
+    "top": 864,
+    "bottom": 892
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 900
+   }
+  },
+  "after": {
+   "win": {
+    "w": 1440,
+    "h": 900,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 900,
+    "clientHeight": 900,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 318,
+    "scrollHeight": 1170,
+    "clientHeight": 852,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 139,
+    "scrollHeight": 946,
+    "clientHeight": 807,
+    "canScroll": true
+   },
+   "inspector": null,
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 900
+   },
+   "settingsBar": {
+    "top": 855,
+    "bottom": 900
+   },
+   "composer": {
+    "top": 756,
+    "bottom": 888
+   },
+   "composerControl": {
+    "top": 769,
+    "bottom": 832
+   },
+   "settingsControl": {
+    "top": 864,
+    "bottom": 892
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 900
+   }
+  }
+ },
+ {
+  "step": "inspector-scroll",
+  "before": {
+   "win": {
+    "w": 1100,
+    "h": 480,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 480,
+    "clientHeight": 480,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 896,
+    "scrollHeight": 1328,
+    "clientHeight": 432,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 139,
+    "scrollHeight": 946,
+    "clientHeight": 387,
+    "canScroll": true
+   },
+   "inspector": {
+    "scrollTop": 0,
+    "scrollHeight": 448,
+    "clientHeight": 393,
+    "canScroll": true
+   },
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 480
+   },
+   "settingsBar": {
+    "top": 435,
+    "bottom": 480
+   },
+   "composer": {
+    "top": 336,
+    "bottom": 468
+   },
+   "composerControl": {
+    "top": 349,
+    "bottom": 412
+   },
+   "settingsControl": {
+    "top": 444,
+    "bottom": 472
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 480
+   }
+  },
+  "after": {
+   "win": {
+    "w": 1100,
+    "h": 480,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 480,
+    "clientHeight": 480,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 896,
+    "scrollHeight": 1328,
+    "clientHeight": 432,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 139,
+    "scrollHeight": 946,
+    "clientHeight": 387,
+    "canScroll": true
+   },
+   "inspector": {
+    "scrollTop": 55,
+    "scrollHeight": 448,
+    "clientHeight": 393,
+    "canScroll": true
+   },
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 480
+   },
+   "settingsBar": {
+    "top": 435,
+    "bottom": 480
+   },
+   "composer": {
+    "top": 336,
+    "bottom": 468
+   },
+   "composerControl": {
+    "top": 349,
+    "bottom": 412
+   },
+   "settingsControl": {
+    "top": 444,
+    "bottom": 472
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 480
+   }
+  }
+ },
+ {
+  "step": "end-reachability",
+  "endGeo": {
+   "endText": "你可以打开设置页实际调一下字号，所有列表和行高应该一起缩放。",
+   "lineBottom": 304.3046875,
+   "lineTop": 287.8046875,
+   "cardTop": 335.5,
+   "scrollerTop": 48,
+   "actionBottom": null
+  }
+ },
+ {
+  "step": "margin-pass-through",
+  "strip": {
+   "x": 272,
+   "y": 339.5
+  },
+  "hit": {
+   "tag": "DIV",
+   "inWrapper": false
+  }
+ },
+ {
+  "step": "geometry",
+  "geo": {
+   "win": {
+    "w": 1100,
+    "h": 480,
+    "scrollY": 0
+   },
+   "doc": {
+    "scrollTop": 0,
+    "scrollHeight": 480,
+    "clientHeight": 480,
+    "canScroll": false
+   },
+   "timeline": {
+    "scrollTop": 496,
+    "scrollHeight": 1328,
+    "clientHeight": 432,
+    "canScroll": true
+   },
+   "sidebar": {
+    "scrollTop": 139,
+    "scrollHeight": 946,
+    "clientHeight": 387,
+    "canScroll": true
+   },
+   "inspector": {
+    "scrollTop": 55,
+    "scrollHeight": 448,
+    "clientHeight": 393,
+    "canScroll": true
+   },
+   "sidebarRect": {
+    "top": 0,
+    "bottom": 480
+   },
+   "settingsBar": {
+    "top": 435,
+    "bottom": 480
+   },
+   "composer": {
+    "top": 336,
+    "bottom": 468
+   },
+   "composerControl": {
+    "top": 349,
+    "bottom": 412
+   },
+   "settingsControl": {
+    "top": 444,
+    "bottom": 472
+   },
+   "mainRect": {
+    "top": 0,
+    "bottom": 480
+   }
+  }
+ }
+]

@@ -1,0 +1,1 @@
+[snapshot] {"executionKind":"unavailable","model":{"available":false,"name":null},"settingsKeys":["coldStart","fontSize","language","theme"],"initialTheme":"system","bridgeKeys":["checkReceipt","createSession","createTask","getSnapshot","moveTask","onSnapshot","pauseRun","resumeRun","retrySend","sendMessage","updateSettings"],"configureModelTypeof":"undefined"}

@@ -1,0 +1,561 @@
+
+> dcode-redesign@0.1.0-dev verify
+> npm run verify:runtime && npm run test:contracts && npm run test:e2e
+
+
+> dcode-redesign@0.1.0-dev verify:runtime
+> npm run verify:architecture && npm run typecheck && npm run lint && npm run test:runtime
+
+
+> dcode-redesign@0.1.0-dev verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> dcode-redesign@0.1.0-dev architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 19.123709
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 183.147875
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 4.114416
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 3.388833
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 2.984083
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 3.316042
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.707292
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 2.426125
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 2.829042
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.535583
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 3.079042
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.088
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.32225
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.714625
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.588959
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 2.592833
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 2.610958
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.276166
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.366458
+  type: 'test'
+  ...
+# Subtest: root tool snapshots are excluded without skipping product sources
+ok 20 - root tool snapshots are excluded without skipping product sources
+  ---
+  duration_ms: 2.825417
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach tool snapshots
+ok 21 - product imports cannot reach tool snapshots
+  ---
+  duration_ms: 2.71275
+  type: 'test'
+  ...
+# Subtest: a nested directory named delta does not hide renderer dependencies
+ok 22 - a nested directory named delta does not hide renderer dependencies
+  ---
+  duration_ms: 2.473583
+  type: 'test'
+  ...
+# Subtest: ordinary documentation scripts remain subject to ownership checks
+ok 23 - ordinary documentation scripts remain subject to ownership checks
+  ---
+  duration_ms: 2.199083
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 24 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.495792
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 25 - missing internal imports fail
+  ---
+  duration_ms: 2.540333
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 26 - syntax errors fail
+  ---
+  duration_ms: 2.993459
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 27 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.616333
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 28 - module policy cannot exclude the source root
+  ---
+  duration_ms: 0.949292
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 29 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 0.887541
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 30 - policy dependencies must name real modules
+  ---
+  duration_ms: 0.927458
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 31 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 2.805042
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 32 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 175.924541
+  type: 'test'
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 32
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 658.032709
+
+> dcode-redesign@0.1.0-dev architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 44; modules: application, contracts, main, mock, pi, preload, renderer, storage
+
+> dcode-redesign@0.1.0-dev typecheck
+> tsc --noEmit
+
+
+> dcode-redesign@0.1.0-dev lint
+> eslint .
+
+
+> dcode-redesign@0.1.0-dev test:runtime
+> node --import tsx --test test/runtime/*.test.ts test/runtime/*.test.mjs
+
+TAP version 13
+# Subtest: 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+ok 1 - 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+  ---
+  duration_ms: 1.876542
+  type: 'test'
+  ...
+# Subtest: updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+ok 2 - updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+  ---
+  duration_ms: 402.433708
+  type: 'test'
+  ...
+# Subtest: updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+ok 3 - updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+  ---
+  duration_ms: 0.766875
+  type: 'test'
+  ...
+# Subtest: updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+ok 4 - updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+  ---
+  duration_ms: 0.526375
+  type: 'test'
+  ...
+# Subtest: updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+ok 5 - updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+  ---
+  duration_ms: 402.310791
+  type: 'test'
+  ...
+# Subtest: updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 6 - updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 1.889583
+  type: 'test'
+  ...
+# Subtest: updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 7 - updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 0.459125
+  type: 'test'
+  ...
+# Subtest: 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+ok 8 - 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+  ---
+  duration_ms: 1.202
+  type: 'test'
+  ...
+# Subtest: 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+ok 9 - 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+  ---
+  duration_ms: 1018.3545
+  type: 'test'
+  ...
+# Subtest: 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+ok 10 - 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+  ---
+  duration_ms: 507.787083
+  type: 'test'
+  ...
+# Subtest: accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+ok 11 - accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+  ---
+  duration_ms: 1007.283375
+  type: 'test'
+  ...
+# Subtest: C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+ok 12 - C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+  ---
+  duration_ms: 1.518958
+  type: 'test'
+  ...
+# Subtest: C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+ok 13 - C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+  ---
+  duration_ms: 23.249625
+  type: 'test'
+  ...
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 14 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 929.699625
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 15 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 21.751375
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 16 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 54.277541
+  type: 'test'
+  ...
+# Subtest: 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+ok 17 - 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+  ---
+  duration_ms: 7.147583
+  type: 'test'
+  ...
+# Subtest: 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+ok 18 - 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+  ---
+  duration_ms: 3.3365
+  type: 'test'
+  ...
+# Subtest: accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+ok 19 - accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+  ---
+  duration_ms: 5.3805
+  type: 'test'
+  ...
+# Subtest: 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+ok 20 - 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+  ---
+  duration_ms: 3.0015
+  type: 'test'
+  ...
+# Subtest: 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+ok 21 - 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+  ---
+  duration_ms: 4.164833
+  type: 'test'
+  ...
+# Subtest: 401 事件：errorMessage 中的完整短凭据（ab）被替换，其他身份字段/正文完整
+ok 22 - 401 事件：errorMessage 中的完整短凭据（ab）被替换，其他身份字段/正文完整
+  ---
+  duration_ms: 0.77475
+  type: 'test'
+  ...
+# Subtest: 正常 text/done 事件完全不变（即使其字符串与 key 同字符）
+ok 23 - 正常 text/done 事件完全不变（即使其字符串与 key 同字符）
+  ---
+  duration_ms: 0.139958
+  type: 'test'
+  ...
+# Subtest: inner 同步迭代失败（stream.push 后 throw）：cleaned error 事件 + 不保留含秘密的 message
+ok 24 - inner 同步迭代失败（stream.push 后 throw）：cleaned error 事件 + 不保留含秘密的 message
+  ---
+  duration_ms: 0.150959
+  type: 'test'
+  ...
+# Subtest: result() 的最终 AssistantMessage 也净化 errorMessage（result() 转出独立 promise 同样安全）
+ok 25 - result() 的最终 AssistantMessage 也净化 errorMessage（result() 转出独立 promise 同样安全）
+  ---
+  duration_ms: 0.226375
+  type: 'test'
+  ...
+# Subtest: 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+ok 26 - 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+  ---
+  duration_ms: 1.179625
+  type: 'test'
+  ...
+# Subtest: 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+ok 27 - 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+  ---
+  duration_ms: 1.06675
+  type: 'test'
+  ...
+# Subtest: 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+ok 28 - 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+  ---
+  duration_ms: 0.128625
+  type: 'test'
+  ...
+# Subtest: 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+ok 29 - 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+  ---
+  duration_ms: 0.652917
+  type: 'test'
+  ...
+# Subtest: 正常启动不带真实配置入口；只有明确写入 model-setup 才推进（凭据不回显）
+ok 30 - 正常启动不带真实配置入口；只有明确写入 model-setup 才推进（凭据不回显）
+  ---
+  duration_ms: 0.158375
+  type: 'test'
+  ...
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 31 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 123.998333
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 32 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 136.728625
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 33 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 68.397583
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 34 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 179.710666
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 35 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 206.18875
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 36 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 151.86325
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 37 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 65.282209
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 38 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 25.826542
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 39 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 156.599041
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 40 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 157.925917
+  type: 'test'
+  ...
+1..40
+# tests 40
+# suites 0
+# pass 40
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3638.852625
+
+> dcode-redesign@0.1.0-dev test:contracts
+> node --test test/contracts-validation.test.mjs
+
+TAP version 13
+# Subtest: 快照校验：合法快照通过；畸形样本逐项拒绝
+not ok 1 - 快照校验：合法快照通过；畸形样本逐项拒绝
+  ---
+  duration_ms: 0.8035
+  type: 'test'
+  location: '/Users/diwu/Workspace/Codes/Apps/dcode/test/contracts-validation.test.mjs:79:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/diwu/Workspace/Codes/Apps/dcode/test/contracts-validation.test.mjs:80:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: 设置部分更新：合法通路保留，畸形逐项拒绝
+ok 2 - 设置部分更新：合法通路保留，畸形逐项拒绝
+  ---
+  duration_ms: 0.147458
+  type: 'test'
+  ...
+# Subtest: 操作载荷校验：白名单 + 逐操作形状
+ok 3 - 操作载荷校验：白名单 + 逐操作形状
+  ---
+  duration_ms: 0.227375
+  type: 'test'
+  ...
+# Subtest: 操作返回契约校验：逐操作核对，畸形返回拒绝
+not ok 4 - 操作返回契约校验：逐操作核对，畸形返回拒绝
+  ---
+  duration_ms: 0.141458
+  type: 'test'
+  location: '/Users/diwu/Workspace/Codes/Apps/dcode/test/contracts-validation.test.mjs:159:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/diwu/Workspace/Codes/Apps/dcode/test/contracts-validation.test.mjs:160:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 71.826833

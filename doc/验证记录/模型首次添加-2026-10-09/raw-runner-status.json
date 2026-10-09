@@ -1,0 +1,18 @@
+{
+  "state": "completed",
+  "cwd": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "command": [
+    "npm",
+    "run",
+    "verify"
+  ],
+  "startedAt": "2026-10-09T12:25:16.046666+08:00",
+  "pid": 23535,
+  "exitCode": 0,
+  "endedAt": "2026-10-09T12:27:37.673091+08:00",
+  "sourceUnchanged": false,
+  "changedCode": [
+    "test/e2e/streaming-sim/dist/current/product.css"
+  ],
+  "logSHA256": "35b4fb5d389cc967f9cd9a77b481a8e886592ec394c83fbb7940cacc22358bb6"
+}

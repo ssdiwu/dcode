@@ -1,0 +1,215 @@
+
+> dcode-redesign@0.1.0-dev verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> dcode-redesign@0.1.0-dev architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 19.847417
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 172.412791
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 5.5595
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 2.9495
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 3.508167
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 3.019792
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.507084
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 3.226667
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 3.52325
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.598417
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 2.606583
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 3.262666
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.413917
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.6635
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.324708
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 3.066167
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 2.71175
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.163709
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.18275
+  type: 'test'
+  ...
+# Subtest: root tool snapshots are excluded without skipping product sources
+ok 20 - root tool snapshots are excluded without skipping product sources
+  ---
+  duration_ms: 2.851041
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach tool snapshots
+ok 21 - product imports cannot reach tool snapshots
+  ---
+  duration_ms: 3.147291
+  type: 'test'
+  ...
+# Subtest: a nested directory named delta does not hide renderer dependencies
+ok 22 - a nested directory named delta does not hide renderer dependencies
+  ---
+  duration_ms: 2.520042
+  type: 'test'
+  ...
+# Subtest: ordinary documentation scripts remain subject to ownership checks
+ok 23 - ordinary documentation scripts remain subject to ownership checks
+  ---
+  duration_ms: 2.258833
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 24 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.553625
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 25 - missing internal imports fail
+  ---
+  duration_ms: 2.447167
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 26 - syntax errors fail
+  ---
+  duration_ms: 2.481041
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 27 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.681542
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 28 - module policy cannot exclude the source root
+  ---
+  duration_ms: 1.095208
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 29 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 1.1725
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 30 - policy dependencies must name real modules
+  ---
+  duration_ms: 1.201667
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 31 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 2.783625
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 32 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 175.5685
+  type: 'test'
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 32
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 640.757833
+
+> dcode-redesign@0.1.0-dev architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 42; modules: application, contracts, main, mock, pi, preload, renderer, storage

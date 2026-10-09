@@ -1,0 +1,602 @@
+[
+  {
+    "language": "zh",
+    "successBetween": false,
+    "first": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "zh"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 1
+    },
+    "second": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "zh"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 2
+    },
+    "lastSaved": {
+      "theme": "system",
+      "fontSize": 14,
+      "coldStart": "restore",
+      "language": "zh"
+    },
+    "shownAgain": true,
+    "events": [
+      {
+        "error": null,
+        "revision": 0,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": null,
+        "revision": 0,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 1,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 2,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      }
+    ]
+  },
+  {
+    "language": "zh",
+    "successBetween": true,
+    "first": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "zh"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 3
+    },
+    "second": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "dark",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "zh"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 4
+    },
+    "lastSaved": {
+      "theme": "dark",
+      "fontSize": 14,
+      "coldStart": "restore",
+      "language": "zh"
+    },
+    "shownAgain": true,
+    "events": [
+      {
+        "error": null,
+        "revision": 2,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": null,
+        "revision": 2,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 3,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": null,
+        "revision": 3,
+        "settings": {
+          "theme": "dark",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 4,
+        "settings": {
+          "theme": "dark",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "zh"
+        }
+      }
+    ]
+  },
+  {
+    "language": "en",
+    "successBetween": false,
+    "first": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "en"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 5
+    },
+    "second": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "en"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 6
+    },
+    "lastSaved": {
+      "theme": "system",
+      "fontSize": 14,
+      "coldStart": "restore",
+      "language": "en"
+    },
+    "shownAgain": true,
+    "events": [
+      {
+        "error": null,
+        "revision": 4,
+        "settings": {
+          "theme": "dark",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": null,
+        "revision": 4,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 5,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 6,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      }
+    ]
+  },
+  {
+    "language": "en",
+    "successBetween": true,
+    "first": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "system",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "en"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 7
+    },
+    "second": {
+      "workspaces": [
+        {
+          "id": "ws-home",
+          "name": "Home",
+          "folders": [
+            "~"
+          ],
+          "builtinHome": true,
+          "defaultTaskId": "task-home-default"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-home-default",
+          "workspaceId": "ws-home",
+          "parentId": null,
+          "kind": "long",
+          "title": "默认任务",
+          "boundFolder": null,
+          "isDefault": true,
+          "updatedAt": 1791520027157
+        }
+      ],
+      "sessions": [],
+      "timelines": {},
+      "runs": {},
+      "settings": {
+        "theme": "dark",
+        "fontSize": 14,
+        "coldStart": "restore",
+        "language": "en"
+      },
+      "model": {
+        "available": false,
+        "name": null
+      },
+      "modelSetup": {
+        "kind": "unconfigured"
+      },
+      "execution": {
+        "kind": "unavailable"
+      },
+      "closeError": "settings-save-failed",
+      "closeErrorRevision": 8
+    },
+    "lastSaved": {
+      "theme": "dark",
+      "fontSize": 14,
+      "coldStart": "restore",
+      "language": "en"
+    },
+    "shownAgain": true,
+    "events": [
+      {
+        "error": null,
+        "revision": 6,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": null,
+        "revision": 6,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 7,
+        "settings": {
+          "theme": "system",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": null,
+        "revision": 7,
+        "settings": {
+          "theme": "dark",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      },
+      {
+        "error": "settings-save-failed",
+        "revision": 8,
+        "settings": {
+          "theme": "dark",
+          "fontSize": 14,
+          "coldStart": "restore",
+          "language": "en"
+        }
+      }
+    ]
+  }
+]

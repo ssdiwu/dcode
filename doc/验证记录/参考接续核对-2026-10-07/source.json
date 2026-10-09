@@ -1,0 +1,27 @@
+{
+  "branch": "codex/redesign-2026-10-03",
+  "head": "15917d1b58f6f7b244043911aa2457205308ddc3",
+  "node": "v22.22.3",
+  "sha256": {
+    "AGENTS.md": "9de1aa95b0f3abce96d2138b8816d27854e3d9b18f8077561066e86065603bab",
+    "README.md": "5249333cce9c713b6fa772c39dcf8716a75857478a5c55dc6227acc97b7ce593",
+    "DESIGN.md": "a665e571668feed9d61be33fbdb28be2cd56f20acbc3e14c13abdff9340df09e",
+    "spec/工作台信息架构.md": "832551318f59413c85643b16801ced1d57333a953749cefc764630a77f6864b8",
+    "spec/冷启动与草稿态.md": "b2bbd3543360f96ec1489fa8d62612d5c3649c0e4bb3070b0c3ded5c13a0279d",
+    "spec/开发任务路径.md": "655b600a1d377a275aef648fdd28c79a4ce0c5ff4e8859cfa8138cdf98f13a42",
+    "src/application/app.ts": "50851c96738ac872f6e6b7feb41f0c0efb6c5506565369dd444428fdbc4134ab",
+    "src/contracts/ui.ts": "1112644d00b89b62cc84d874cf7cda711436fbfae4aec1401eb84c2ec7ad3186",
+    "src/contracts/execution.ts": "794685cbebb20aefc056f3df6ad9398ce98a06a6b605101b0bcd2225af9d74b8",
+    "src/adapters/pi/session.ts": "1306fa07137bd1ecd9b45145fd8c83c7b70e46d54c1a0f6b46568bb80aeb70c0",
+    "src/renderer/App.tsx": "d2f09742979400387fc7454a18ffeb6648f8091363b5d8108a382b47bcdd5ebe",
+    "src/renderer/views/Timeline.tsx": "528ce8b600c152554dc4fe03d0a8ce052b68feedb4c532a6277c37b5ee865d63",
+    "src/renderer/views/SettingsPage.tsx": "790ddf7ffb0a5463d064f3934b350957b31157d77342434461bd8eab9e12786a",
+    "src/renderer/views/Inspector.tsx": "086d9c5f72a021a209fd6d25960a4f3311a420daed49cc673cac0e39e891ae97",
+    "src/renderer/components/Composer.tsx": "55f753ae8025b7ca7b35b975d52b849e417d2cd58e3d8b5b307624e043b1c56c",
+    "src/renderer/components/ToolCallBlock.tsx": "b0142b4d7ab91dbb099bbd67c6fae7411b9e986b41ba80532f1f0ccf944877d6",
+    "test/e2e/pi-execution.test.mjs": "3e89fcf73c77dfc822fdcdc387dd3da8e52ea9ff680f056f9db075df33fc82c5",
+    "test/e2e/storage-protection.test.mjs": "e5ceb635490a0ddb83e7e50ee57f23b0b8c453bd30433a7d94e6a48e8ae64a4b",
+    "doc/验证记录/参考接续核对-2026-10-07/probe.mjs": "144c81d1826343d4313bc67e874c6fa7e81735e2bf25f8d021ce0721e673140a"
+  },
+  "scope": "Unchanged source, governing requirements, referenced tests, and the executed diagnostic script; report/progress/index document edits are excluded."
+}

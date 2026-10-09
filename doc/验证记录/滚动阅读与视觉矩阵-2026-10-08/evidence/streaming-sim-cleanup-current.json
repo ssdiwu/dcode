@@ -1,0 +1,15 @@
+{
+ "variant": "current",
+ "launchFailure": "TimeoutError: page.waitForFunction: Timeout 15000ms exceeded.",
+ "elapsedMs": 15346,
+ "pid": 28357,
+ "dir": "/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-sim-VA5kLd",
+ "exitInfo": {
+  "exitCode": null,
+  "signalCode": "SIGKILL",
+  "escalated": false
+ },
+ "dirRemoved": true,
+ "pidGone": true,
+ "bundleRestored": true
+}

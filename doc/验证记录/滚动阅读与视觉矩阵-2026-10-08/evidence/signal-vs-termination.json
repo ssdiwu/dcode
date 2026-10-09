@@ -1,0 +1,4 @@
+{
+ "pid": 28356,
+ "note": "SIGTERM handler ready 后信号送达≠终止；终态仅由真实 exit 确认"
+}

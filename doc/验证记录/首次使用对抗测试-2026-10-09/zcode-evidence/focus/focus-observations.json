@@ -1,0 +1,374 @@
+[
+  {
+    "theme": "dark",
+    "fontSize": 14,
+    "action": "idle-baseline",
+    "active": false,
+    "focusVisible": false,
+    "inner": {
+      "boxShadow": "none",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": false,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
+      "borderColor": "rgba(236, 236, 238, 0.12)",
+      "radius": "16px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 14,
+    "action": "mouse-click",
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(236, 236, 238, 0.26)",
+      "radius": "16px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 14,
+    "action": "real-tab(x1)",
+    "tabCount": 1,
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(236, 236, 238, 0.26)",
+      "radius": "16px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 14,
+    "action": "tab-next-in-shell",
+    "next": {
+      "role": "button",
+      "label": "输入选项",
+      "focusVisible": true,
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset"
+    }
+  },
+  {
+    "theme": "dark",
+    "fontSize": 13,
+    "action": "idle-baseline",
+    "active": false,
+    "focusVisible": false,
+    "inner": {
+      "boxShadow": "none",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": false,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 0.928571px 2.78571px 0px, rgba(0, 0, 0, 0.1) 0px 0.928571px 1.85714px -0.928571px",
+      "borderColor": "rgba(236, 236, 238, 0.12)",
+      "radius": "14.8571px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 13,
+    "action": "mouse-click",
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(236, 236, 238, 0.26)",
+      "radius": "14.8571px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 13,
+    "action": "real-tab(x1)",
+    "tabCount": 1,
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(236, 236, 238)",
+      "border": "0px solid rgb(236, 236, 238)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(236, 236, 238, 0.26)",
+      "radius": "14.8571px",
+      "background": "rgb(31, 31, 33)"
+    },
+    "focusRingVar": "#ececee",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "dark",
+    "fontSize": 13,
+    "action": "tab-next-in-shell",
+    "next": {
+      "role": "button",
+      "label": "输入选项",
+      "focusVisible": true,
+      "boxShadow": "rgb(236, 236, 238) 0px 0px 0px 2px inset"
+    }
+  },
+  {
+    "theme": "light",
+    "fontSize": 14,
+    "action": "idle-baseline",
+    "active": false,
+    "focusVisible": false,
+    "inner": {
+      "boxShadow": "none",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": false,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
+      "borderColor": "rgba(28, 25, 23, 0.1)",
+      "radius": "16px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 14,
+    "action": "mouse-click",
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(28, 25, 23, 0.22)",
+      "radius": "16px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 14,
+    "action": "real-tab(x1)",
+    "tabCount": 1,
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(28, 25, 23, 0.22)",
+      "radius": "16px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(14 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 14,
+    "action": "tab-next-in-shell",
+    "next": {
+      "role": "button",
+      "label": "输入选项",
+      "focusVisible": true,
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset"
+    }
+  },
+  {
+    "theme": "light",
+    "fontSize": 13,
+    "action": "idle-baseline",
+    "active": false,
+    "focusVisible": false,
+    "inner": {
+      "boxShadow": "none",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": false,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 0.928571px 2.78571px 0px, rgba(0, 0, 0, 0.1) 0px 0.928571px 1.85714px -0.928571px",
+      "borderColor": "rgba(28, 25, 23, 0.1)",
+      "radius": "14.8571px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 13,
+    "action": "mouse-click",
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(28, 25, 23, 0.22)",
+      "radius": "14.8571px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 13,
+    "action": "real-tab(x1)",
+    "tabCount": 1,
+    "active": true,
+    "focusVisible": true,
+    "inner": {
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset",
+      "outline": "0px none rgb(28, 25, 23)",
+      "border": "0px solid rgb(28, 25, 23)",
+      "radius": "0px",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    "shell": {
+      "tag": "DIV",
+      "cls": "input-surface rounded-2xl border border-border bg-input p-3 shadow-sm",
+      "focusWithin": true,
+      "focusVisibleSelf": false,
+      "boxShadow": "rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset",
+      "borderColor": "rgba(28, 25, 23, 0.22)",
+      "radius": "14.8571px",
+      "background": "rgb(250, 250, 249)"
+    },
+    "focusRingVar": "#1c1917",
+    "uiScaleVar": "calc(13 / 14)",
+    "attributions": []
+  },
+  {
+    "theme": "light",
+    "fontSize": 13,
+    "action": "tab-next-in-shell",
+    "next": {
+      "role": "button",
+      "label": "输入选项",
+      "focusVisible": true,
+      "boxShadow": "rgb(28, 25, 23) 0px 0px 0px 2px inset"
+    }
+  }
+]

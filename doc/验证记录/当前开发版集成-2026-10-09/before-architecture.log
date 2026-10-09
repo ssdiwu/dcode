@@ -1,0 +1,254 @@
+
+> verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 19.320667
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 167.908708
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 3.524041
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 2.857083
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 3.508875
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 2.798167
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.778583
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 2.780625
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 3.399667
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.230792
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 2.268208
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.615417
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.346291
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.403625
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.518125
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 2.770125
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 2.686917
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.045042
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.023166
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 20 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.452791
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 21 - missing internal imports fail
+  ---
+  duration_ms: 2.484875
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 22 - syntax errors fail
+  ---
+  duration_ms: 2.510625
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 23 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.453916
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 24 - module policy cannot exclude the source root
+  ---
+  duration_ms: 1.041208
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 25 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 0.675917
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 26 - policy dependencies must name real modules
+  ---
+  duration_ms: 0.825
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 27 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 2.770459
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 28 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 172.826667
+  type: 'test'
+  ...
+1..28
+# tests 28
+# suites 0
+# pass 28
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 599.03525
+
+> architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: FAILED; source files: 100; modules: application, contracts, main, mock, pi, preload, renderer, storage
+.delta/worktrees/qz5knerrstty/dcode/electron.vite.config.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/eslint.config.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/mock/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/pi/backend.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/pi/controlled-models.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/pi/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/pi/ownership.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/pi/session.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/adapters/storage/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/application/app.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/application/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/application/ports.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/application/seed.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/application/types.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/contracts/execution.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/contracts/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/contracts/ui.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/main/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/preload/index.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/App.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Badge.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Banner.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Button.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/ChangeSummaryCard.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Composer.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Controls.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/DiffView.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/MarkdownLite.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/Menu.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/RootBoundary.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/components/ToolCallBlock.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/i18n.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/index.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/store.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/views/DraftState.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/views/Inspector.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/views/SettingsPage.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/views/Sidebar.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/src/renderer/views/Timeline.tsx:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/contracts-validation.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/boundary.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/cold-start.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/focus-frames.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/helpers.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/i18n.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/keyboard-tree.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/menu-720-frames.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/pi-execution.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/scroll-repro.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/scroll.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/send-receipts.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/storage-protection.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/style-geometry.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/visual-matrix.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/e2e/workbench.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/runtime/crash-child.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/runtime/fixtures.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/runtime/lifecycle.test.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/test/runtime/session.test.ts:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/tools/architecture/check.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/tools/architecture/check.test.mjs:1 [UNMANAGED] Source file has no declared module
+.delta/worktrees/qz5knerrstty/dcode/tools/pi-runtime-demo.mjs:1 [UNMANAGED] Source file has no declared module
+doc/验证记录/参考接续核对-2026-10-07/probe.mjs:1 [UNMANAGED] Source file has no declared module

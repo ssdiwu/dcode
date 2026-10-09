@@ -1,0 +1,233 @@
+[
+  {
+    "kind": "installed",
+    "timeMs": 334.69999998807907,
+    "domValue": "",
+    "draftKey": "draft:task-home-default",
+    "drafts": {},
+    "pendingDrafts": [],
+    "focused": true
+  },
+  {
+    "kind": "beforeinput",
+    "timeMs": 339.39999997615814,
+    "domValue": "",
+    "draftKey": "draft:task-home-default",
+    "drafts": {},
+    "pendingDrafts": [],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "composing": false
+  },
+  {
+    "kind": "input",
+    "timeMs": 339.89999997615814,
+    "domValue": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {},
+    "pendingDrafts": [],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "composing": false
+  },
+  {
+    "kind": "persist",
+    "timeMs": 340.69999998807907,
+    "domValue": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "等待回执期间的原稿甲（已经发送出去的原文内容）"
+    },
+    "pendingDrafts": [],
+    "focused": true
+  },
+  {
+    "kind": "persist",
+    "timeMs": 361.39999997615814,
+    "domValue": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "等待回执期间的原稿甲（已经发送出去的原文内容）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true
+  },
+  {
+    "kind": "beforeinput",
+    "timeMs": 368.5999999642372,
+    "domValue": "等待回执期间的原稿甲（已经发送出去的原文内容）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "等待回执期间的原稿甲（已经发送出去的原文内容）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "回执未回时改写的新稿乙（尚未发送）",
+    "composing": false
+  },
+  {
+    "kind": "input",
+    "timeMs": 368.89999997615814,
+    "domValue": "回执未回时改写的新稿乙（尚未发送）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "等待回执期间的原稿甲（已经发送出去的原文内容）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "回执未回时改写的新稿乙（尚未发送）",
+    "composing": false
+  },
+  {
+    "kind": "persist",
+    "timeMs": 369.19999998807907,
+    "domValue": "回执未回时改写的新稿乙（尚未发送）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true
+  },
+  {
+    "kind": "focusout",
+    "timeMs": 411.39999997615814,
+    "domValue": "回执未回时改写的新稿乙（尚未发送）",
+    "draftKey": "draft:task-home-default",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": false,
+    "inputType": null,
+    "data": null,
+    "composing": false
+  },
+  {
+    "kind": "persist",
+    "timeMs": 457.69999998807907,
+    "domValue": "",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": false
+  },
+  {
+    "kind": "focusin",
+    "timeMs": 483.5999999642372,
+    "domValue": "",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true,
+    "inputType": null,
+    "data": null,
+    "composing": false
+  },
+  {
+    "kind": "beforeinput",
+    "timeMs": 484.0999999642372,
+    "domValue": "",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "composing": false
+  },
+  {
+    "kind": "input",
+    "timeMs": 484.39999997615814,
+    "domValue": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true,
+    "inputType": "insertText",
+    "data": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "composing": false
+  },
+  {
+    "kind": "persist",
+    "timeMs": 484.89999997615814,
+    "domValue": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）",
+      "draft:task-muwng3uo-3": "另一草稿里的新稿丙（同样不应被覆盖）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true
+  },
+  {
+    "kind": "before-receipt",
+    "timeMs": 516.8000000119209,
+    "domValue": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）",
+      "draft:task-muwng3uo-3": "另一草稿里的新稿丙（同样不应被覆盖）"
+    },
+    "pendingDrafts": [
+      "draft:task-home-default"
+    ],
+    "focused": true
+  },
+  {
+    "kind": "persist",
+    "timeMs": 576.1999999880791,
+    "domValue": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）",
+      "draft:task-muwng3uo-3": "另一草稿里的新稿丙（同样不应被覆盖）"
+    },
+    "pendingDrafts": [],
+    "focused": true
+  },
+  {
+    "kind": "after-receipt",
+    "timeMs": 582.6999999880791,
+    "domValue": "另一草稿里的新稿丙（同样不应被覆盖）",
+    "draftKey": "draft:task-muwng3uo-3",
+    "drafts": {
+      "draft:task-home-default": "回执未回时改写的新稿乙（尚未发送）",
+      "draft:task-muwng3uo-3": "另一草稿里的新稿丙（同样不应被覆盖）"
+    },
+    "pendingDrafts": [],
+    "focused": true
+  }
+]

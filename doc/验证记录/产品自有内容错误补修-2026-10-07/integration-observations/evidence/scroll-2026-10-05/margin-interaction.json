@@ -1,0 +1,5 @@
+{
+ "dragSelected": "",
+ "wordSelected": "默认",
+ "note": "拖选在本 Electron/CDP 环境不扩展选区（含普通区，探针 drag2），双击选词为文字选择证据"
+}

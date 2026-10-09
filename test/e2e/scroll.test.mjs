@@ -1,0 +1,594 @@
+// 桌面滚动边界验收：各滚动区独立、整页不成为滚动容器。
+// 依据：主目录 spec/开发任务路径.md「桌面滚动边界」。
+// 与诊断脚本不同，本文件是验收测试；几何证据归档在 test/e2e/evidence/scroll-2026-10-05/。
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { launchApp, cleanup, ready, assertValidationModel, killApp } from "./helpers.mjs";
+
+// 新观测落在本片专用的 integration-observations（r2 原证据保留；对照 r2 的 integration-observations 处理）
+const EVIDENCE = join(import.meta.dirname, "../../doc/验证记录/产品自有内容错误补修-2026-10-07/integration-observations/evidence", "scroll-2026-10-05");
+
+async function measure(page) {
+  return page.evaluate(() => {
+    const rect = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom) };
+    };
+    const scroll = (el) =>
+      el && {
+        scrollTop: Math.round(el.scrollTop),
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        canScroll: el.scrollHeight > el.clientHeight + 1,
+      };
+    return {
+      win: { w: window.innerWidth, h: window.innerHeight, scrollY: window.scrollY },
+      doc: scroll(document.documentElement),
+      timeline: scroll(document.querySelector("main .overflow-y-auto")),
+      sidebar: scroll(document.querySelector("nav .overflow-y-auto")),
+      inspector: scroll(document.querySelector("aside .overflow-y-auto")),
+      sidebarRect: rect(document.querySelector("nav")),
+      // 几何断言对准「容器」而非内容控件：设置条容器（侧栏底部分隔条）与输入卡片本体（input-surface 壳）
+      settingsBar: rect(document.querySelector("nav .border-t")),
+      composer: rect(document.querySelector("textarea")?.closest(".input-surface") ?? null),
+      composerControl: rect(document.querySelector("textarea")),
+      settingsControl: rect(Array.from(document.querySelectorAll("nav button")).pop() ?? null),
+      mainRect: rect(document.querySelector("main")),
+    };
+  });
+}
+
+async function wheelOver(page, selector, dy) {
+  await page.locator(selector).first().hover();
+  await page.mouse.wheel(0, dy);
+  await page.waitForTimeout(250);
+}
+
+test("滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）", async () => {
+  const { app, page, stateDir, close } = await launchApp();
+  const evidence = [];
+  try {
+    await ready(page);
+    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
+    await page.getByRole("button", { name: /本轮改动/ }).waitFor();
+
+    // 真实展开动作：点开种子会话里带长输出的工具块
+    await page.getByRole("button", { name: /npm run test:inputs/ }).click();
+    await page.getByText("260/260 断言通过", { exact: false }).waitFor();
+
+    // 时间线：先记录真实起点（进入会话自动定位 + 贴底跟随会把视图钉在底部），向上滚离底部再验证向下滚
+    let before = await measure(page);
+    assert.ok(before.timeline.canScroll, "时间线必须可溢出滚动（不能靠裁切通过）");
+    evidence.push({
+      step: "timeline-start",
+      scrollTop: before.timeline.scrollTop,
+      max: before.timeline.scrollHeight - before.timeline.clientHeight,
+    });
+    await wheelOver(page, "main .overflow-y-auto", -400);
+    const mid = await measure(page);
+    assert.ok(mid.timeline.scrollTop < before.timeline.scrollTop, "向上滚轮须真实滚离底部");
+    await wheelOver(page, "main .overflow-y-auto", 600);
+    let after = await measure(page);
+    assert.equal(after.doc.scrollTop, 0, "时间线滚动不得带动整页");
+    assert.equal(after.win.scrollY, 0, "window.scrollY 不动");
+    assert.ok(after.timeline.scrollTop > mid.timeline.scrollTop, `时间线自身滚动：${JSON.stringify({ before: mid.timeline, after: after.timeline })}`);
+    assert.equal(after.sidebar.scrollTop, mid.sidebar.scrollTop, "侧栏不被带走");
+    evidence.push({ step: "timeline-scroll", before: mid, after });
+
+    // 侧栏：造出真实溢出（25 个新任务），然后只滚侧栏
+    await page.evaluate(async () => {
+      for (let i = 0; i < 25; i++) {
+        await window.dcode.createTask({ workspaceId: "ws-home", parentId: null, title: `滚动压测任务 ${i + 1}` });
+      }
+    });
+    await page.getByRole("treeitem", { name: "滚动压测任务 25" }).waitFor();
+    before = await measure(page);
+    assert.ok(before.sidebar.canScroll, "侧栏树必须真实溢出");
+    await wheelOver(page, "nav .overflow-y-auto", 500);
+    after = await measure(page);
+    assert.ok(after.sidebar.scrollTop > before.sidebar.scrollTop, "侧栏自身必须能滚动");
+    assert.equal(after.timeline.scrollTop, before.timeline.scrollTop, "时间线不被侧栏带走");
+    assert.equal(after.doc.scrollTop, 0, "整页不动");
+    evidence.push({ step: "sidebar-scroll", before, after });
+
+    // 检查器：打开 diff，选内容最长的文件标签并压到最小窗口，制造真实溢出
+    await page.getByRole("button", { name: /本轮改动/ }).click();
+    await page.locator("aside .overflow-y-auto").waitFor();
+    await page.locator("aside").getByRole("button", { name: "SettingsPage.tsx" }).click();
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 480);
+    });
+    await page.waitForTimeout(250);
+    before = await measure(page);
+    assert.ok(before.inspector.canScroll, "检查器必须真实溢出");
+    await wheelOver(page, "aside .overflow-y-auto", 400);
+    after = await measure(page);
+    assert.ok(after.inspector.scrollTop > before.inspector.scrollTop, "检查器自身必须能滚动");
+    assert.equal(after.timeline.scrollTop, before.timeline.scrollTop, "时间线不被检查器带走");
+    assert.equal(after.doc.scrollTop, 0, "整页不动");
+    evidence.push({ step: "inspector-scroll", before, after });
+
+    // 末尾可达：滚到时间线末尾后，末尾真实「文字行」（Range 末行 rect）与末尾操作须完整显示在输入卡片上方
+    // （sticky 卡片在文档流末位回到内容之后；长消息块 top 在屏外属正确行为，只核末行/末尾操作）
+    const endGeo = await page.evaluate(() => {
+      const scroller = document.querySelector("main .overflow-y-auto");
+      scroller.scrollTop = scroller.scrollHeight;
+      const contentCol = scroller.querySelector(".space-y-3");
+      const rows = [...(contentCol?.children ?? [])];
+      const last = rows.reverse().find((el) => el.getBoundingClientRect().height > 1);
+      let lastLine = null;
+      if (last) {
+        const walker = document.createTreeWalker(last, NodeFilter.SHOW_TEXT);
+        let node = null;
+        let n = null;
+        while ((n = walker.nextNode())) node = n;
+        if (node && node.textContent?.trim()) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rects = range.getClientRects();
+          lastLine = rects.length ? rects[rects.length - 1] : null;
+        }
+      }
+      const card = document.querySelector("textarea")?.closest(".input-surface");
+      return {
+        endText: (last?.textContent ?? "").slice(-30),
+        lineBottom: lastLine ? lastLine.bottom : 0,
+        lineTop: lastLine ? lastLine.top : 0,
+        cardTop: card?.getBoundingClientRect().top ?? 0,
+        scrollerTop: scroller.getBoundingClientRect().top,
+        actionBottom: last?.querySelector("button")?.getBoundingClientRect().bottom ?? null,
+      };
+    });
+    assert.ok(endGeo.endText.length > 0, "末尾定位必须取到真实内容行（非空锚点）");
+    assert.ok(endGeo.lineTop >= endGeo.scrollerTop - 1, "末尾文字行须在可视区上边界以内");
+    assert.ok(endGeo.lineBottom <= endGeo.cardTop + 1, "末尾文字行须完整显示在输入卡片上方（不遮挡）");
+    if (endGeo.actionBottom !== null) {
+      assert.ok(endGeo.actionBottom <= endGeo.cardTop + 1, "末尾操作须完整显示在卡片上方");
+    }
+    evidence.push({ step: "end-reachability", endGeo });
+
+    // 卡片外留白仍是时间线表面：在卡片旁的留白条滚轮 → 时间线滚动；命中测试不落在穿透包裹层
+    const strip = await page.evaluate(() => {
+      const card = document.querySelector("textarea").closest(".input-surface").getBoundingClientRect();
+      return { x: card.left - 8, y: card.top + 4 };
+    });
+    const hit = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return { tag: el?.tagName ?? null, inWrapper: !!el?.closest(".pointer-events-none") };
+    }, strip);
+    assert.ok(hit.tag && !hit.inWrapper, "留白处命中测试须穿透到时间线内容，不落在卡片包裹层");
+    const beforeWheel = await measure(page);
+    await page.mouse.move(strip.x, strip.y);
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(200);
+    const afterWheel = await measure(page);
+    assert.ok(afterWheel.timeline.scrollTop < beforeWheel.timeline.scrollTop, "留白处滚轮须滚动时间线（消息可经过卡片后方）");
+    evidence.push({ step: "margin-pass-through", strip, hit });
+
+    // 几何关系：侧栏顶底在窗口内、设置条容器贴侧栏底部；
+    // 输入卡片为悬浮留边卡片：卡片底与内容区底之间是 12·s 留边（不再贴底），卡片完整在窗内
+    const geo = await measure(page);
+    assert.ok(geo.sidebarRect.top >= 0 && geo.sidebarRect.bottom <= geo.win.h + 1, "侧栏顶底须在窗口内");
+    assert.ok(Math.abs(geo.settingsBar.bottom - geo.sidebarRect.bottom) <= 1, "设置条容器须贴侧栏底部");
+    const margin = 12 * ((await page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue("--ui-font-size-num")))) / 14);
+    const gap = geo.mainRect.bottom - geo.composer.bottom;
+    assert.ok(Math.abs(gap - margin) <= 1.5, `输入卡片底部留边应为 12·s（实际 ${gap.toFixed(1)}，期望 ${margin.toFixed(1)}）`);
+    assert.ok(
+      geo.composerControl.bottom <= geo.win.h + 1 && geo.settingsControl.bottom <= geo.win.h + 1,
+      "控件本体须完全在窗口内可见",
+    );
+    evidence.push({ step: "geometry", geo });
+  } finally {
+    mkdirSync(EVIDENCE, { recursive: true });
+    writeFileSync(join(EVIDENCE, "scroll-e2e-geometry.json"), JSON.stringify(evidence, null, 1));
+    await close();
+    cleanup(stateDir);
+  }
+});
+
+test("滚动边界四组合：中文/英文 × 13px/14px", async () => {
+  const combos = [
+    { lang: "zh", fontSize: 14 },
+    { lang: "zh", fontSize: 13 },
+    { lang: "en", fontSize: 14 },
+    { lang: "en", fontSize: 13 },
+  ];
+  // 四组只改变同一会话的语言和字号，复用一个隔离窗口，不重复启动客户端。
+  const { app, page, stateDir, close } = await launchApp();
+  try {
+    await ready(page);
+    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
+    await page.getByRole("button", { name: /files changed|本轮改动/ }).waitFor();
+    for (const combo of combos) {
+      await page.evaluate(async (c) => {
+        await window.dcode.updateSettings({ language: c.lang, fontSize: c.fontSize });
+      }, combo);
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0].setSize(1100, 560);
+      });
+      await page.waitForTimeout(250);
+      const actual = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+      const start = await measure(page);
+      await wheelOver(page, "main .overflow-y-auto", -300);
+      const before = await measure(page);
+      assert.ok(
+        before.timeline.scrollTop < start.timeline.scrollTop,
+        `${combo.lang}/${combo.fontSize}px 向上滚离底部（起点 scrollTop=${start.timeline.scrollTop}/max=${start.timeline.scrollHeight - start.timeline.clientHeight}）`,
+      );
+      await wheelOver(page, "main .overflow-y-auto", 500);
+      const after = await measure(page);
+      assert.equal(after.doc.scrollTop, 0, `${combo.lang}/${combo.fontSize}px 整页不动（实际窗口 ${actual.w}×${actual.h}）`);
+      assert.ok(after.timeline.scrollTop > before.timeline.scrollTop, `${combo.lang}/${combo.fontSize}px 时间线可滚`);
+    }
+  } finally {
+    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+  }
+});
+
+// 末尾定位的共享测量：Range 末行 rect + 卡片/滚动容器几何（与上文末尾断言同口径）
+async function measureEnd(page) {
+  return page.evaluate(() => {
+    const scroller = document.querySelector("main .overflow-y-auto");
+    const contentCol = scroller.querySelector(".space-y-3");
+    const rows = [...(contentCol?.children ?? [])];
+    const last = rows.reverse().find((el) => el.getBoundingClientRect().height > 1);
+    let lastLine = null;
+    if (last) {
+      const walker = document.createTreeWalker(last, NodeFilter.SHOW_TEXT);
+      let node = null;
+      let n = null;
+      while ((n = walker.nextNode())) node = n;
+      if (node && node.textContent?.trim()) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = range.getClientRects();
+        lastLine = rects.length ? rects[rects.length - 1] : null;
+      }
+    }
+    const card = document.querySelector("textarea")?.closest(".input-surface");
+    return {
+      endText: (last?.textContent ?? "").slice(-30),
+      lineBottom: lastLine ? lastLine.bottom : 0,
+      lineTop: lastLine ? lastLine.top : 0,
+      cardTop: card?.getBoundingClientRect().top ?? 0,
+      scrollerTop: scroller.getBoundingClientRect().top,
+      scrollH: scroller.scrollHeight,
+      clientH: scroller.clientHeight,
+    };
+  });
+}
+
+test("新内容追加自动定位：末尾文字行在可视区且在卡片上方（不手动滚动）", async () => {
+  const { page, stateDir, close } = await launchApp();
+  try {
+    await ready(page);
+    await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+    await assertValidationModel(page);
+    // 真实发送触发产品自动定位（mock 脚本陆续追加多个块）；全程不手动滚动
+    const composer = page.getByPlaceholder("交代需求、提问或粘贴内容…");
+    await composer.fill("验证新内容追加后自动定位到卡片上方");
+    await composer.press("Enter");
+    await page.getByText("本轮结束。", { exact: true }).waitFor();
+    const geo = await measureEnd(page);
+    assert.ok(geo.endText.includes("本轮结束"), `自动定位后末行应为本轮结束标记（实际 ${geo.endText}）`);
+    assert.ok(geo.lineTop >= geo.scrollerTop - 1, "自动定位后末行须在可视区上边界以内");
+    assert.ok(geo.lineBottom <= geo.cardTop + 1, "自动定位后末行须完整显示在输入卡片上方（不被卡片遮住）");
+  } finally {
+    await close();
+    cleanup(stateDir);
+  }
+});
+
+test("短会话不多出滚动空间：消息列与 dock 共用自然高度", async () => {
+  // 短会话（2 条消息）本可同屏容纳：scrollHeight 不超过视口高（dock 不再额外贡献一卡片高滚动）
+  const { page, stateDir, close } = await launchApp();
+  try {
+    await ready(page);
+    await assertValidationModel(page);
+    await page.getByRole("button", { name: /聊聊下个季度的规划/ }).click();
+    await page.getByText("写作流沉淀", { exact: false }).waitFor();
+    const geo = await measureEnd(page);
+    assert.ok(
+      geo.scrollH <= geo.clientH + 1,
+      `短会话不应多出滚动空间（scrollH=${geo.scrollH} clientH=${geo.clientH}）`,
+    );
+    assert.ok(geo.lineTop >= geo.scrollerTop - 1, "短会话末行在视口内（不在上边界外）");
+  } finally {
+    await close();
+    cleanup(stateDir);
+  }
+});
+
+test("悬浮卡片留白真实交互与卡片高度变化（字号/窗口/检查器）", async () => {
+  const { page, stateDir, close } = await launchApp();
+  const evidenceMargin = { dragSelected: null, wordSelected: null, note: "拖选在本 Electron/CDP 环境不扩展选区（含普通区，探针 drag2），双击选词为文字选择证据" };
+  try {
+    await ready(page);
+    await assertValidationModel(page);
+    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
+    await page.getByRole("button", { name: /本轮改动/ }).waitFor();
+
+    // 真实长中英文输入（多行混合）：写入会话输入区并保留
+    const longText = "第一段中文：这是一个较长的中文句子，用来验证悬浮卡片在长内容输入下的表现。\nSecond line in English: a longer English sentence to verify mixed input behavior.\n第三段混合 with code `const x = 1` 与路径 src/renderer/views/Timeline.tsx。";
+    const composer = page.getByPlaceholder("追问、补充或纠正…");
+    await composer.fill(longText);
+    assert.equal(await composer.inputValue(), longText, "长中英文输入须完整保留");
+
+    // 展开长工具块，确保时间线充裕溢出（对齐留白带需要真实滚动行程）
+    await page.getByRole("button", { name: /npm run test:inputs/ }).click();
+    await page.getByText("260/260 断言通过", { exact: false }).waitFor();
+
+    // 卡片同高外围留白穿透：把一条真实消息文本行用滚轮对齐到卡片下方 pb 留白带。
+    // 测试点必须在 dock 包裹层矩形内、卡片矩形外，且其下方是真实消息——卡片上方的普通内容区不算留白穿透证据。
+    const scrollerSel = "main .overflow-y-auto";
+    // 目标行：内容里最后一条长度≥12 且足够宽的消息文本节点（靠近内容末尾，才能用真实滚轮对齐进卡片下方留白带；
+    // 靠近顶部的行在 scrollTop=0 处就到不了底部留白带）。按文本内容稳定重新定位，不持有跨 evaluate 的节点引用。
+    const findTarget = () =>
+      page.evaluate(() => {
+        const card = document.querySelector("textarea").closest(".input-surface").getBoundingClientRect();
+        const wrap = document.querySelector("textarea").closest(".pointer-events-none").getBoundingClientRect();
+        const rows = [...document.querySelectorAll("main .overflow-y-auto .space-y-3 > *")];
+        let found = null;
+        for (const row of rows) {
+          const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+          let n;
+          while ((n = walker.nextNode())) {
+            const t = n.textContent?.trim() ?? "";
+            if (t.length < 12) continue;
+            const range = document.createRange();
+            range.selectNodeContents(n);
+            const rects = range.getClientRects();
+            const r = rects[rects.length - 1];
+            if (!r || r.width < 120) continue;
+            found = { text: t.slice(0, 10), cy: r.top + r.height / 2, left: r.left, width: r.width };
+          }
+        }
+        if (!found) return null;
+        return {
+          ...found,
+          bandTop: card.bottom + 1,
+          bandBottom: wrap.bottom - 1,
+          card: { top: card.top, bottom: card.bottom, left: card.left, right: card.right },
+          wrap: { top: wrap.top, bottom: wrap.bottom, left: wrap.left, right: wrap.right },
+        };
+      });
+    // 正常滚轮把目标行中心对齐进留白带（粗调后精调，不直接设 scrollTop、不设 selection）
+    let target = await findTarget();
+    assert.ok(target, "须存在可定位的消息文本行");
+    for (let i = 0; i < 60; i++) {
+      const mid = (target.bandTop + target.bandBottom) / 2;
+      if (target.cy >= target.bandTop && target.cy <= target.bandBottom) break;
+      const delta = target.cy - mid;
+      const step = Math.abs(delta) > 60 ? Math.sign(delta) * 60 : delta;
+      await page.locator(scrollerSel).first().hover();
+      await page.mouse.wheel(0, step);
+      await page.waitForTimeout(150);
+      target = await findTarget();
+      assert.ok(target, "滚动后目标行须仍可定位");
+    }
+    assert.ok(
+      target.cy >= target.bandTop && target.cy <= target.bandBottom,
+      `目标行中心须落入卡片下方留白带（cy=${target.cy.toFixed(1)}，带=[${target.bandTop.toFixed(1)}, ${target.bandBottom.toFixed(1)}]）`,
+    );
+    const point = { x: target.left + 8, y: target.cy };
+    // 断言测试点位置：dock 包裹层矩形内、卡片矩形外
+    assert.ok(
+      point.x > target.wrap.left && point.x < target.wrap.right && point.y > target.wrap.top && point.y < target.wrap.bottom,
+      "测试点须在 dock 包裹层矩形内",
+    );
+    assert.ok(
+      !(point.x > target.card.left && point.x < target.card.right && point.y > target.card.top && point.y < target.card.bottom),
+      "测试点须在卡片矩形外",
+    );
+
+    // 留白处命中测试：穿透到下方真实消息文本，不落在穿透包裹层
+    const hit = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return {
+        tag: el?.tagName ?? null,
+        inWrapper: !!el?.closest(".pointer-events-none"),
+        inTimeline: !!el?.closest(".space-y-3"),
+        text: el?.textContent?.trim().slice(0, 10) ?? null,
+      };
+    }, point);
+    assert.ok(hit.tag && !hit.inWrapper && hit.inTimeline, `留白处命中须穿透到时间线消息（实际 ${hit.tag}「${hit.text}」）`);
+
+    // 留白处真实点击：选区锚点落在目标消息文本内
+    await page.mouse.click(point.x, point.y);
+    const anchor = await page.evaluate(() => {
+      const sel = window.getSelection();
+      const node = sel?.anchorNode;
+      const el = node ? (node.nodeType === 3 ? node.parentElement : node) : null;
+      return { inTimeline: !!el?.closest(".space-y-3"), text: node?.textContent?.trim().slice(0, 10) ?? null };
+    });
+    assert.ok(anchor.inTimeline, `留白处点击须作用于时间线消息内容（实际锚点「${anchor.text}」）`);
+
+    // 留白处真实拖选：记录真实结果作证据。边界：本 Electron/CDP 环境下合成鼠标拖拽在任何位置
+    //（含无覆盖的普通文本区）都不扩展选区（探针 /tmp/dcode-probe-drag2.log），属工装限制而非本片产品缺陷；
+    // 文字可选择性由下同一点的鼠标双击选词证明（真实双击，不直接设置 selection）。
+    await page.mouse.move(target.left + 2, target.cy);
+    await page.mouse.down();
+    await page.mouse.move(target.left + Math.min(target.width - 4, 90), target.cy, { steps: 5 });
+    await page.mouse.up();
+    const dragSelected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+    // 同一真实留白点双击选词：文字选择须真实作用于消息文本
+    await page.mouse.click(point.x, point.y, { clickCount: 2 });
+    await page.waitForTimeout(120);
+    const wordSelected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+    assert.ok(wordSelected.trim().length > 0, `留白处双击须真实选中消息文字（选中「${wordSelected.trim().slice(0, 14)}」）`);
+    evidenceMargin.dragSelected = dragSelected;
+    evidenceMargin.wordSelected = wordSelected;
+
+    // 留白处滚轮：时间线真实滚动
+    const wheelBefore = await page.locator(scrollerSel).evaluate((el) => el.scrollTop);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, -240);
+    await page.waitForTimeout(200);
+    const wheelAfter = await page.locator(scrollerSel).evaluate((el) => el.scrollTop);
+    assert.notEqual(wheelAfter, wheelBefore, "留白处滚轮须真实滚动时间线");
+
+    // 卡片高度变化：已到末尾后改字号（13→16→13），不手动再滚，末行与卡片关系仍成立
+    await page.locator(scrollerSel).evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await measureEnd(page);
+    for (const size of [16, 13]) {
+      const cardHBefore = await page.evaluate(() => document.querySelector("textarea")?.closest(".input-surface")?.getBoundingClientRect().height ?? 0);
+      await page.evaluate((s) => window.dcode.updateSettings({ fontSize: s }), size);
+      await page.waitForFunction((s) => getComputedStyle(document.body).fontSize === `${s}px`, size);
+      const cardHAfter = await page.evaluate(() => document.querySelector("textarea")?.closest(".input-surface")?.getBoundingClientRect().height ?? 0);
+      assert.notEqual(cardHAfter, cardHBefore, `字号切到 ${size} 卡片高度须真实变化`);
+      // 不手动再滚：贴底跟随效应自动钉回真实底部
+      await page.waitForFunction(() => {
+        const scroller = document.querySelector("main .overflow-y-auto");
+        return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      });
+      const geo = await measureEnd(page);
+      assert.ok(geo.lineTop >= geo.scrollerTop - 1 && geo.lineBottom <= geo.cardTop + 1, `${size}px 后末行须在可视区且在卡片上方`);
+    }
+  } finally {
+    mkdirSync(EVIDENCE, { recursive: true });
+    writeFileSync(join(EVIDENCE, "margin-interaction.json"), JSON.stringify(evidenceMargin, null, 1));
+    await close();
+    cleanup(stateDir);
+  }
+});
+
+test("贴底跟随：纯高度缩窗与检查器开闭自动重钉，上翻后不被几何变化拉回", async () => {
+  const { app, page, stateDir, close } = await launchApp();
+  try {
+    await ready(page);
+    await assertValidationModel(page);
+    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
+    await page.getByRole("button", { name: /本轮改动/ }).waitFor();
+    // 展开长工具块，保证充裕溢出
+    await page.getByRole("button", { name: /npm run test:inputs/ }).click();
+    await page.getByText("260/260 断言通过", { exact: false }).waitFor();
+
+    const geo = () =>
+      page.evaluate(() => {
+        const s = document.querySelector("main .overflow-y-auto");
+        return { w: window.innerWidth, h: window.innerHeight, scrollTop: Math.round(s.scrollTop), max: s.scrollHeight - s.clientHeight };
+      });
+    const atBottom = (g) => g.scrollTop >= g.max - 2;
+    const waitPinned = () =>
+      page.waitForFunction(() => {
+        const s = document.querySelector("main .overflow-y-auto");
+        return s.scrollTop + s.clientHeight >= s.scrollHeight - 2;
+      });
+
+    // 先固定到 1100×900 并确认钉底（进入会话自动定位 + 展开重钉）
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 900);
+    });
+    // setSize 返回早于渲染层 resize；先等真实视口，避免旧几何的“已贴底”提前放行。
+    await page.waitForFunction(() => window.innerWidth === 1100 && window.innerHeight === 900);
+    await waitPinned();
+    const g900 = await geo();
+    assert.ok(atBottom(g900), `进入会话展开后须钉在底部（${JSON.stringify(g900)}）`);
+
+    // 纯高度缩窗：宽不变 900→480。内容列高度不变，仅 clientHeight/最大 scrollTop 变化——
+    // 这正是「只观察内容列的 ResizeObserver」覆盖不到的一路（红信号点）
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 480);
+    });
+    await page.waitForFunction(() => window.innerWidth === 1100 && window.innerHeight <= 482);
+    await waitPinned();
+    const g480 = await geo();
+    assert.ok(g480.w === 1100 && g480.h <= 482, `须为纯高度缩窗（实际 ${g480.w}×${g480.h}）`);
+    assert.ok(atBottom(g480), `纯高度缩窗后须自动重钉底部，不手动再滚（${JSON.stringify(g480)}）`);
+    const end480 = await measureEnd(page);
+    assert.ok(
+      end480.lineTop >= end480.scrollerTop - 1 && end480.lineBottom <= end480.cardTop + 1,
+      "缩窗重钉后末行须在可视区且在卡片上方",
+    );
+
+    // 检查器开闭：主区宽度变化 → 自动重钉
+    await page.getByRole("button", { name: /本轮改动/ }).click();
+    await page.locator("aside .overflow-y-auto").waitFor();
+    await waitPinned();
+    assert.ok(atBottom(await geo()), "检查器打开后须仍钉底部");
+    await page.getByRole("button", { name: "关闭检查器" }).click();
+    await waitPinned();
+    assert.ok(atBottom(await geo()), "检查器关闭后须仍钉底部");
+
+    // 用户上翻后不被几何变化拉回：滚离底部再长高窗口，位置不动、不回底部
+    await page.locator("main .overflow-y-auto").first().hover();
+    await page.mouse.wheel(0, -600);
+    await page.waitForTimeout(200);
+    const up = await geo();
+    assert.ok(!atBottom(up), `上翻后须离开底部（${JSON.stringify(up)}）`);
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 700);
+    });
+    await page.waitForTimeout(300);
+    const grown = await geo();
+    assert.ok(!atBottom(grown), `上翻后几何变化不得拉回底部（${JSON.stringify(grown)}）`);
+    assert.ok(Math.abs(grown.scrollTop - up.scrollTop) <= 2, `上翻后几何变化不得改变滚动位置（${up.scrollTop}→${grown.scrollTop}）`);
+
+    // 反例：贴底时上翻少量（30px）后再开检查器/字号变大，不得把用户拉回底部
+    //（重排锚定/钳制的 scroll 与旧几何快照不符，不覆盖保留的「已离开底部」意图。保护「离开底部一点点阅读」的用户）
+    await page.locator("main .overflow-y-auto").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await waitPinned();
+    await page.locator("main .overflow-y-auto").first().hover();
+    await page.mouse.wheel(0, -30);
+    await page.waitForTimeout(200);
+    const slightlyUp = await geo();
+    assert.ok(!atBottom(slightlyUp), `上翻 30px 须离开底部（${JSON.stringify(slightlyUp)}）`);
+    await page.getByRole("button", { name: /本轮改动/ }).click();
+    await page.locator("aside .overflow-y-auto").waitFor();
+    await page.waitForTimeout(400);
+    const afterOpen = await geo();
+    assert.ok(!atBottom(afterOpen), `上翻少量后开检查器不得拉回底部（${JSON.stringify(afterOpen)}）`);
+    await page.getByRole("button", { name: "关闭检查器" }).click();
+    await page.waitForTimeout(300);
+    // 字号变大（内容变高、无钳制方向）同样不得拉回
+    await page.evaluate(() => window.dcode.updateSettings({ fontSize: 16 }));
+    await page.waitForFunction(() => getComputedStyle(document.body).fontSize === "16px");
+    await page.waitForTimeout(300);
+    const afterFont = await geo();
+    assert.ok(!atBottom(afterFont), `上翻少量后字号变化不得拉回底部（${JSON.stringify(afterFont)}）`);
+    await page.evaluate(() => window.dcode.updateSettings({ fontSize: 14 }));
+    await page.waitForFunction(() => getComputedStyle(document.body).fontSize === "14px");
+
+    // 非滚轮滚动路径：键盘 PageUp/PageDown 同样更新跟随意图（几何快照方案不枚举输入类型）
+    // 先钉回底部；点击时间线内可见的聚合卡按钮持焦（钉底时它可见、点击不触发自动滚动；
+    // 它同时打开检查器——本身即一次几何变化，贴底须保持）
+    await page.locator("main .overflow-y-auto").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await waitPinned();
+    await page.getByRole("button", { name: /本轮改动/ }).click();
+    await page.locator("aside .overflow-y-auto").waitFor();
+    await waitPinned();
+    const kbStart = await geo();
+    assert.ok(atBottom(kbStart), `键盘路径起点须钉在底部（${JSON.stringify(kbStart)}）`);
+    await page.keyboard.press("PageUp");
+    await page.waitForTimeout(200);
+    const kbUp = await geo();
+    assert.ok(kbUp.scrollTop < kbStart.scrollTop, `键盘 PageUp 须真实滚动时间线（${kbStart.scrollTop}→${kbUp.scrollTop}）`);
+    // 键盘上翻后几何变化（纯缩高）不得拉回
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 560);
+    });
+    await page.waitForTimeout(300);
+    const kbGrown = await geo();
+    assert.ok(!atBottom(kbGrown), `键盘上翻后几何变化不得拉回底部（${JSON.stringify(kbGrown)}）`);
+    // 键盘 PageDown 回到底部后恢复跟随：再纯缩高须自动重钉
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("PageDown");
+      await page.waitForTimeout(120);
+      if (atBottom(await geo())) break;
+    }
+    assert.ok(atBottom(await geo()), "键盘 PageDown 须能回到底部");
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].setSize(1100, 480);
+    });
+    await waitPinned();
+    assert.ok(atBottom(await geo()), "键盘回底后纯缩高须自动重钉");
+  } finally {
+    await close();
+    cleanup(stateDir);
+  }
+});

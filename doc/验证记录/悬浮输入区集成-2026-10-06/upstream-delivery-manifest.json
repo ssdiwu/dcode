@@ -1,0 +1,327 @@
+{
+  "title": "D Code floating Composer r3 final scoped handoff",
+  "createdAt": "2026-10-06T20:26:30.486040+08:00",
+  "status": "Implementation, scoped independent review and evidence intake complete; main integration validation is separately owned by main chat",
+  "candidate": {
+    "path": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-composer-card-r3-2026-10-06",
+    "totalFiles": 54,
+    "hashManifestPath": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-composer-card-r3-2026-10-06/SHA256SUMS.txt",
+    "hashManifestSHA256": "1eb43fa08af16d59e8676c342844ee954a5553d00b7cc612c672ae12d117933f",
+    "listedContentHashesVerified": 52,
+    "all54FilesIndependentlyHashedInIntake": true,
+    "intakeManifestSHA256": "cbb05ba7d82272f9075f4ff686dce2a673c33cb0e35ce3434d67d5bdb8e8ea74"
+  },
+  "baseline": {
+    "path": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-style-r7-2026-10-06",
+    "hashManifestSHA256": "8a2f7b8a7d9595ae0f163b29a1dda8b356b2b3023e7a155c59d4697af2753fb9"
+  },
+  "finalReview": {
+    "path": "/Users/diwu/Workspace/Archives/dcode-composer-card-r3-final-2026-10-06/合同审查结果.md",
+    "sha256": "33892194e632ac0af863e3703882128086430eb91f1d686af33b537b960dbee0",
+    "sections": [
+      21,
+      22
+    ],
+    "verdict": "No product blockers in the reviewed floating Composer increment; r3 closes the receipt tail-action test gap"
+  },
+  "deltaFromR7": [
+    {
+      "path": "src/renderer/components/Composer.tsx",
+      "beforeSHA256": "d159f90416b6de95ec66576f288562bf9590d35a78661a41d1c8e1a83eb40a4c",
+      "afterSHA256": "55f753ae8025b7ca7b35b975d52b849e417d2cd58e3d8b5b307624e043b1c56c"
+    },
+    {
+      "path": "src/renderer/components/Menu.tsx",
+      "beforeSHA256": "eaea2decfeaac9e14286add416372a5a5698cc4d01f4664d6782f9187d703ea3",
+      "afterSHA256": "3724935a56ff9ef746f2a9db0102c236b89a6abcc5c934000cfa97a8d53a1bf2"
+    },
+    {
+      "path": "src/renderer/views/Timeline.tsx",
+      "beforeSHA256": "01a736a62fd1eee8dbae37b5b0e8d802d9d07194b8d63df44d88c441bc9a2f18",
+      "afterSHA256": "528ce8b600c152554dc4fe03d0a8ce052b68feedb4c532a6277c37b5ee865d63"
+    },
+    {
+      "path": "test/e2e/scroll.test.mjs",
+      "beforeSHA256": "62db72b3b143488ebad42d0bc0104f951e8c0c4d37eccc7864e2f788e68353cf",
+      "afterSHA256": "3413d2543bbed4476c549f5243d78d384c8ef11b755236d82a32643a23831417"
+    },
+    {
+      "path": "test/e2e/keyboard-tree.test.mjs",
+      "beforeSHA256": "4072676cfe6ac38e4ea003f0d552f049173d971e30e80e8faddd51ce20646832",
+      "afterSHA256": "45655ec10730af663b026c605667b2f962f4ba7df6dd6c2b1a56a51a670bf4b8"
+    },
+    {
+      "path": "test/e2e/send-receipts.test.mjs",
+      "beforeSHA256": "4d7f4f0135aac65724fdc423b835aaa59f7b8a36406c3426c65bb0ea5a0f507a",
+      "afterSHA256": "20b3b39a8c580213a49c1b2d058caffac1cbc3f2ee16e110ced2351480599509"
+    },
+    {
+      "path": "doc/第三轮交互设计.md",
+      "beforeSHA256": "42e956f70e5f162722ecf25314c34e392796a22fc62e83c79f335d7b042151f7",
+      "afterSHA256": "87c64d416b328f294c71390ef9dfe82edd0c79ab1f4c49b54bc7749295fd384a"
+    }
+  ],
+  "candidateFileHashes": [
+    {
+      "path": "FILELIST.txt",
+      "sha256": "b6202b46dbb341604bf7aa1c39f6b52c0972316e147d84bf77f4ff8eab9a6b9a"
+    },
+    {
+      "path": "INCREMENT.md",
+      "sha256": "7b9447d96bfe6c245ec5e2d41e9de02cc5c38072d27979b62d7b699851521a82"
+    },
+    {
+      "path": "SHA256SUMS.txt",
+      "sha256": "1eb43fa08af16d59e8676c342844ee954a5553d00b7cc612c672ae12d117933f"
+    },
+    {
+      "path": "doc/第三轮交互设计.md",
+      "sha256": "87c64d416b328f294c71390ef9dfe82edd0c79ab1f4c49b54bc7749295fd384a"
+    },
+    {
+      "path": "src/renderer/components/Composer.tsx",
+      "sha256": "55f753ae8025b7ca7b35b975d52b849e417d2cd58e3d8b5b307624e043b1c56c"
+    },
+    {
+      "path": "src/renderer/components/Menu.tsx",
+      "sha256": "3724935a56ff9ef746f2a9db0102c236b89a6abcc5c934000cfa97a8d53a1bf2"
+    },
+    {
+      "path": "src/renderer/views/Timeline.tsx",
+      "sha256": "528ce8b600c152554dc4fe03d0a8ce052b68feedb4c532a6277c37b5ee865d63"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/en-dark-13-860-时间线与检查器.png",
+      "sha256": "3707b0d60571928273653bf0549d411aa101eb1ee04c3b8b6f0ae65da7af64d3"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/en-light-13-1440-时间线与检查器.png",
+      "sha256": "efe8978d79c364213822132cc90cafb07127ad563311fc14d7f79cc5532f639c"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/menu-up-1440.png",
+      "sha256": "65615b2bd0fd51e1a5ab4398463498ecb343978a626c83ae56d7d76fb3d03451"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/menu-up-720.png",
+      "sha256": "dbcb6127cd132e3532732aef245e524d88705967e256d04c858a55c22d5c581b"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/zh-dark-13-1100-时间线与检查器.png",
+      "sha256": "40754e567f8c9aa1204dd277cc043ae249b30eb78ea46a9039da3c727309b7ab"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/zh-dark-14-1440-时间线与检查器.png",
+      "sha256": "bbdc9c909b613291357f9e1f01d71f2d88bc6de89a26effbf16d51f0d50b81e5"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/zh-light-13-720-时间线与检查器.png",
+      "sha256": "e07736e47f8d68ec182578ad64232da8f997fdae0effbe320d5351e0814d92e7"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/after/zh-light-14-1440-时间线与检查器.png",
+      "sha256": "0fe0f6e67c732b85b17fa94d25743a05c7739b8687f3d1ae11d197e27c8133b0"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/autoscroll-red.log",
+      "sha256": "6c63b0d82803bff26b6bb7e59a6ab62931ed2e11552df54d5466ab73cf8e3187"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/en-dark-13-860-时间线与检查器.png",
+      "sha256": "e2d17216d56c91589b4133047bb4874329a375494c148efa76af0571edd9fb52"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/en-light-13-1440-时间线与检查器.png",
+      "sha256": "a9e94ef91742e1866e5a60996f4e268de410b1f07d27079ab7f8c35f8ee44eec"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/zh-dark-13-1100-时间线与检查器.png",
+      "sha256": "c23b54aac748d46259afa63aa3a29adc8ff0abd80ea3a0a590cbc40f9c6ff5bb"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/zh-dark-14-1440-时间线与检查器.png",
+      "sha256": "2e78a3ea52de294757797f20a864eb60c781200c820213443750e0e0277a9dae"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/zh-light-13-720-时间线与检查器.png",
+      "sha256": "a6ca4eeb3aae9eaeda1d11fab68a16461275d0b5871f8a2247028709ea9e4df2"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/before/zh-light-14-1440-时间线与检查器.png",
+      "sha256": "393d85e52eaecd11a0524f44a99394c1a71d871de1257ada120c655706849d59"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/end-actions-geometry.json",
+      "sha256": "21673a38a5f53218dcb83bc424183366976af5cd524e01335712f8361aeec729"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/gate-after.out",
+      "sha256": "011e28ef760cb54ac25cce814cca9ca86b2d2581f5810ff51e3dbfa687d1c2f0"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/probe-inspector-after-fix.log",
+      "sha256": "dc6855179539e5a5202a3b9fbf24691b308f0c8055d6ca543f1dc3332374731c"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/probe-inspector-anchoring-red.log",
+      "sha256": "08be758104b1063aa7fb6a2e16ad68a93cfec4f22b7dcf5d80959d41c0364c2c"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/probe-keyboard-scroll.log",
+      "sha256": "8bb86867c1a3887f7d067e85c9fab6100077e4904929d523e8b9f1deb95fa3a1"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/scroll-after.log",
+      "sha256": "5b10c663aaf4ca27e70b06e8f180e851d42f7c424969cefe01845fd171d32d18"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/stick-red.log",
+      "sha256": "41e4fcdb6cd4accbac44f93d97b10e406668952ca689f1184bf823877dbf31b4"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/targeted3-red.log",
+      "sha256": "e73d8de50b54e732d5703e09e3144257b6f45365f37e419da0d223e825e5e255"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/targeted5-red.log",
+      "sha256": "affb4263c521c9d9b94c8308d9aa7dfcd3d62bbdde69a800742f1ec3da8cb835"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/targeted6-green.log",
+      "sha256": "d985432c97d3d1b7becdc9a2e3de4090edb3ef3d599cad54dd8ebccde5a33a57"
+    },
+    {
+      "path": "test/e2e/evidence/composer-card-2026-10-06/visual-matrix-after.log",
+      "sha256": "9f65c37adceb631adcdef2add16f3d80fceb885ddc02ae0a67a46f4424d1da54"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/architecture.log",
+      "sha256": "eaecf8f230700fbb289c5a1fd18d805b8ccdb9446cc6d98e3e2bc129119277ec"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/build.log",
+      "sha256": "8ff0a6c67e4ba2f13cd3c6b7f4c42bcef6e3c522016aecfeee713fb2c02645c7"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/contracts-validation.log",
+      "sha256": "b3e045d786b63d13f89ed22b916de712cef7bf2c19b1d018b497577aaf9b9769"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/e2e.log",
+      "sha256": "1a976077555bd6dfc74332bc027fcb5eea5e6b375f3f6eddeae2ae0e4a704ddc"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/gate-r5-master.log",
+      "sha256": "9c22e0e689598d07244c433542ec5a8e808fde3d0899ef642d5349d5e09e60b2"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/lint.log",
+      "sha256": "6ba41d3386946f3480608c0bcb80bb893d785c187db4178012a840ea9081d89b"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7d/typecheck.log",
+      "sha256": "8fa1cf5506304e8abac55868e7f1a136c9b1dde57a3981a382da4c21ea129a6f"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/architecture.log",
+      "sha256": "b71049e2bc7007b61e64d1e9d3964a7c712aa2f9b99f53aee55532178664d691"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/build.log",
+      "sha256": "a45aeb16ef51d64e04e5646abc7c688ead275f7e36c109bec6b338e2a791a7b6"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/contracts-validation.log",
+      "sha256": "13ac8cf62fdcbf8b063ef3a51d6e4117b39eaf43d9052554902860a1cf1b112b"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/e2e.log",
+      "sha256": "c4b8a688c86750a5c88282e10ee2a8492aa54ef16b5ae66c6c253c732a4368a7"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/gate-r5-master.log",
+      "sha256": "0905accc78858be6fd57e9b16ea510bb50c0047a05968f75f91f95f7ff9d6955"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/lint.log",
+      "sha256": "6ba41d3386946f3480608c0bcb80bb893d785c187db4178012a840ea9081d89b"
+    },
+    {
+      "path": "test/e2e/evidence/pi-slice-2026-10-05/r7e/typecheck.log",
+      "sha256": "8fa1cf5506304e8abac55868e7f1a136c9b1dde57a3981a382da4c21ea129a6f"
+    },
+    {
+      "path": "test/e2e/evidence/scroll-2026-10-05/margin-interaction.json",
+      "sha256": "8165c0be9e09d4fcc61b79249ec451c147818b6a681c27ffa74013f24597a17a"
+    },
+    {
+      "path": "test/e2e/evidence/scroll-2026-10-05/probe-drag.log",
+      "sha256": "15fb3ac8fc287bc7158f7181232a05e7801e98b8c75c5f4c1167c88f4ac5dc8e"
+    },
+    {
+      "path": "test/e2e/evidence/scroll-2026-10-05/probe-drag2.log",
+      "sha256": "de7b18861acfa989457651598b6671eb3f83543b447c760d767098cceb00a457"
+    },
+    {
+      "path": "test/e2e/evidence/scroll-2026-10-05/scroll-e2e-geometry.json",
+      "sha256": "a6e1626a289a0ddc8c4e995f514e9fd3c25b6f48c11713877c0a833df1634ae1"
+    },
+    {
+      "path": "test/e2e/keyboard-tree.test.mjs",
+      "sha256": "45655ec10730af663b026c605667b2f962f4ba7df6dd6c2b1a56a51a670bf4b8"
+    },
+    {
+      "path": "test/e2e/scroll.test.mjs",
+      "sha256": "3413d2543bbed4476c549f5243d78d384c8ef11b755236d82a32643a23831417"
+    },
+    {
+      "path": "test/e2e/send-receipts.test.mjs",
+      "sha256": "20b3b39a8c580213a49c1b2d058caffac1cbc3f2ee16e110ced2351480599509"
+    }
+  ],
+  "validation": {
+    "gatePath": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-composer-card-r3-2026-10-06/test/e2e/evidence/pi-slice-2026-10-05/r7e/gate-r5-master.log",
+    "gateSHA256": "0905accc78858be6fd57e9b16ea510bb50c0047a05968f75f91f95f7ff9d6955",
+    "rawLogDirectory": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-composer-card-r3-2026-10-06/test/e2e/evidence/pi-slice-2026-10-05/r7e",
+    "startedAt": "2026-10-06T20:11:11+08:00",
+    "endedAt": "2026-10-06T20:13:05+08:00",
+    "steps": {
+      "architecture": 0,
+      "typecheck": 0,
+      "lint": 0,
+      "build": 0,
+      "contracts-validation": 0,
+      "e2e": 0
+    },
+    "e2e": {
+      "tests": 38,
+      "pass": 38,
+      "fail": 0
+    },
+    "recordedSourceAndTestHashesVerified": 21,
+    "executionEnvironment": "Isolated UI worktree configuration; controlled/mock evidence, not real-provider or main integration acceptance"
+  },
+  "endActionsEvidence": {
+    "path": "/Users/diwu/Workspace/Archives/dcode-redesign-ui-composer-card-r3-2026-10-06/test/e2e/evidence/composer-card-2026-10-06/end-actions-geometry.json",
+    "geometryGroups": 5,
+    "actionResults": 2,
+    "scope": "Chinese light theme; 14/13/16px; 1440x874 then 720x480; actual lookup then retry with same operationId"
+  },
+  "nativeDragEvidence": {
+    "path": "/Users/diwu/Workspace/Archives/dcode-composer-native-review-2026-10-06/native-drag-observation.json",
+    "manifestSHA256": "0abc9723ee8cf10c240181ee130ae788205ab5e8f7d55690e60af9e7fa6a68c4",
+    "selectedText": "默认值 15 → 1",
+    "scope": "Chinese light 14px, actual viewport 1100x874, native CUA drag in bottom margin; preview exited and isolated state was cleaned"
+  },
+  "integrationBoundary": [
+    "Integrate the verified delta relative to r7; do not overlay the UI worktree wholesale.",
+    "Preserve main-owned application/contracts/Pi/storage/main/preload code, full check configuration, async quit/save fix and draft-gate assertions.",
+    "Main chat owns its integration tree and subsequent verification; this handoff does not assert main-tree validation, main merge, commit, push or release.",
+    "Kimi and MiniMax are stopped; UI worktree test windows have been released."
+  ],
+  "remainingEvidenceLimits": [
+    "The cause of unsuccessful synthetic drag selection is not fully established; native drag succeeded in the one recorded scenario.",
+    "The new receipt tail-action scenario does not claim a full language/theme/size cross product.",
+    "Existing out-of-scope product gaps and the separately investigated initial main-tree intermittent failures remain outside this scoped handoff."
+  ]
+}

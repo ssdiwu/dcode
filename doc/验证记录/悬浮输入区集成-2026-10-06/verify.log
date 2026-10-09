@@ -1,0 +1,614 @@
+
+> verify
+> npm run verify:runtime && npm run test:contracts && npm run test:e2e
+
+
+> verify:runtime
+> npm run verify:architecture && npm run typecheck && npm run lint && npm run test:runtime
+
+
+> verify:architecture
+> npm run architecture:test && npm run architecture:check
+
+
+> architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 29.577709
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 188.600167
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 4.233959
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 3.053625
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 3.420167
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 3.207667
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.919
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 3.19575
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 3.130042
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.007417
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 3.531834
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 3.219125
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 3.088
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.346541
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.7175
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 3.219542
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 3.065083
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.217042
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 2.245208
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 20 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.931584
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 21 - missing internal imports fail
+  ---
+  duration_ms: 3.106416
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 22 - syntax errors fail
+  ---
+  duration_ms: 2.91775
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 23 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.642333
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 24 - module policy cannot exclude the source root
+  ---
+  duration_ms: 0.969333
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 25 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 1.067833
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 26 - policy dependencies must name real modules
+  ---
+  duration_ms: 1.562666
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 27 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 3.727042
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 28 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 185.758416
+  type: 'test'
+  ...
+1..28
+# tests 28
+# suites 0
+# pass 28
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 664.426708
+
+> architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 37; modules: application, contracts, main, mock, pi, preload, renderer, storage
+
+> typecheck
+> tsc --noEmit
+
+
+> lint
+> eslint .
+
+
+> test:runtime
+> node --import tsx --test test/runtime/*.test.ts
+
+TAP version 13
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 1 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 717.5505
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 2 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 10.1715
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 3 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 50.3325
+  type: 'test'
+  ...
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 4 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 106.861416
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 5 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 129.533084
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 6 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 71.787792
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 7 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 173.90825
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 8 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 245.636042
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 9 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 128.685541
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 10 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 35.935
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 11 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 9.785417
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 12 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 151.474708
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 13 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 148.432208
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1856.577167
+
+> test:contracts
+> node --test test/contracts-validation.test.mjs
+
+TAP version 13
+# Subtest: 快照校验：合法快照通过；畸形样本逐项拒绝
+ok 1 - 快照校验：合法快照通过；畸形样本逐项拒绝
+  ---
+  duration_ms: 0.585917
+  type: 'test'
+  ...
+# Subtest: 设置部分更新：合法通路保留，畸形逐项拒绝
+ok 2 - 设置部分更新：合法通路保留，畸形逐项拒绝
+  ---
+  duration_ms: 0.077375
+  type: 'test'
+  ...
+# Subtest: 操作载荷校验：白名单 + 逐操作形状
+ok 3 - 操作载荷校验：白名单 + 逐操作形状
+  ---
+  duration_ms: 0.088708
+  type: 'test'
+  ...
+# Subtest: 操作返回契约校验：逐操作核对，畸形返回拒绝
+ok 4 - 操作返回契约校验：逐操作核对，畸形返回拒绝
+  ---
+  duration_ms: 0.072667
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 93.903541
+
+> test:e2e
+> npm run build && node --test --test-concurrency=1 test/e2e/*.test.mjs
+
+
+> build
+> electron-vite build
+
+vite v7.1.9 building SSR bundle for production...
+transforming...
+✓ 786 modules transformed.
+rendering chunks...
+out/main/index.js  879.54 kB
+✓ built in 647ms
+vite v7.1.9 building SSR bundle for production...
+transforming...
+✓ 4 modules transformed.
+rendering chunks...
+out/preload/index.cjs  6.75 kB
+✓ built in 9ms
+vite v7.1.9 building for production...
+transforming...
+✓ 1689 modules transformed.
+rendering chunks...
+../../out/renderer/index.html                   0.59 kB
+../../out/renderer/assets/index-FFNSyI2j.css   31.17 kB
+../../out/renderer/assets/index-D9ddMp8v.js   660.30 kB
+✓ built in 989ms
+TAP version 13
+# Subtest: 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+ok 1 - 畸形请求被拒绝且不改变状态；有效部分更新仍生效
+  ---
+  duration_ms: 916.407958
+  type: 'test'
+  ...
+# Subtest: 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+ok 2 - 畸形推送被接收侧丢弃，界面保持上一份已确认快照
+  ---
+  duration_ms: 1258.795125
+  type: 'test'
+  ...
+# Subtest: 首次进入：缺模型配置的草稿态、设置往返与草稿保留
+ok 3 - 首次进入：缺模型配置的草稿态、设置往返与草稿保留
+  ---
+  duration_ms: 813.511583
+  type: 'test'
+  ...
+# Subtest: 恢复目标失效与被移动：回退说明与归属定位
+ok 4 - 恢复目标失效与被移动：回退说明与归属定位
+  ---
+  duration_ms: 2325.771083
+  type: 'test'
+  ...
+# Subtest: 主题、字号旋钮与启动档位生效
+ok 5 - 主题、字号旋钮与启动档位生效
+  ---
+  duration_ms: 2046.297875
+  type: 'test'
+  ...
+# Subtest: 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+ok 6 - 中英切换：位置、草稿与执行状态保留，语言选择跨重开持久
+  ---
+  duration_ms: 1611.394792
+  type: 'test'
+  ...
+# [trap] Tab3: {"role":"input","label":"","shadow":"rgb(28, 25, 23) 0px 0px 0px 2px inset"}
+# [trap] panel buttons: [ '取消', '创建' ]
+# Subtest: 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+ok 7 - 纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点
+  ---
+  duration_ms: 842.325709
+  type: 'test'
+  ...
+# Subtest: 输入卡片发送去向菜单：会话页向上展开完整可见、可选；草稿首屏保持向下
+ok 8 - 输入卡片发送去向菜单：会话页向上展开完整可见、可选；草稿首屏保持向下
+  ---
+  duration_ms: 6083.772709
+  type: 'test'
+  ...
+# Subtest: 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+ok 9 - 真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done
+  ---
+  duration_ms: 3561.268833
+  type: 'test'
+  ...
+# Subtest: 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+ok 10 - 滚动边界：目标溢出才可滚、整页不动、几何关系成立（含真实展开动作）
+  ---
+  duration_ms: 2559.501167
+  type: 'test'
+  ...
+# Subtest: 滚动边界四组合：中文/英文 × 13px/14px
+ok 11 - 滚动边界四组合：中文/英文 × 13px/14px
+  ---
+  duration_ms: 6053.775958
+  type: 'test'
+  ...
+# Subtest: 新内容追加自动定位：末尾文字行在可视区且在卡片上方（不手动滚动）
+ok 12 - 新内容追加自动定位：末尾文字行在可视区且在卡片上方（不手动滚动）
+  ---
+  duration_ms: 2613.668083
+  type: 'test'
+  ...
+# Subtest: 短会话不多出滚动空间：消息列与 dock 共用自然高度
+ok 13 - 短会话不多出滚动空间：消息列与 dock 共用自然高度
+  ---
+  duration_ms: 781.548792
+  type: 'test'
+  ...
+# Subtest: 悬浮卡片留白真实交互与卡片高度变化（字号/窗口/检查器）
+ok 14 - 悬浮卡片留白真实交互与卡片高度变化（字号/窗口/检查器）
+  ---
+  duration_ms: 2176.974125
+  type: 'test'
+  ...
+# Subtest: 贴底跟随：纯高度缩窗与检查器开闭自动重钉，上翻后不被几何变化拉回
+ok 15 - 贴底跟随：纯高度缩窗与检查器开闭自动重钉，上翻后不被几何变化拉回
+  ---
+  duration_ms: 3697.1295
+  type: 'test'
+  ...
+# Subtest: 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+ok 16 - 回执三态：待核对→只读回查→重试已接收；草稿只在已接收后清除
+  ---
+  duration_ms: 968.406
+  type: 'test'
+  ...
+# Subtest: 回执丢失但实际已接收：只读回查找回，不盲目重投
+ok 17 - 回执丢失但实际已接收：只读回查找回，不盲目重投
+  ---
+  duration_ms: 2687.845583
+  type: 'test'
+  ...
+# Subtest: 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+ok 18 - 界面回执丢失：传输未知不误报未接收，同身份重发只读找回原对象
+  ---
+  duration_ms: 779.512125
+  type: 'test'
+  ...
+# Subtest: 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+ok 19 - 消息身份：同次双击不重复投递；相同文字的新发送是独立消息
+  ---
+  duration_ms: 11177.879792
+  type: 'test'
+  ...
+# Subtest: 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+ok 20 - 暂停中发送被拒：确认未接收保留原文与原因，重试复用同一发送身份
+  ---
+  duration_ms: 4524.854875
+  type: 'test'
+  ...
+# Subtest: stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+ok 21 - stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须新的明确意图
+  ---
+  duration_ms: 5333.048167
+  type: 'test'
+  ...
+# Subtest: 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+ok 22 - 重开只读不执行：恢复条等待显式接续，查询不推进时间线
+  ---
+  duration_ms: 5105.712708
+  type: 'test'
+  ...
+# Subtest: 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+ok 23 - 关闭收束失败：保留可见状态、不伪报成功、应用保持打开
+  ---
+  duration_ms: 720.004667
+  type: 'test'
+  ...
+# Subtest: 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+ok 24 - 首发不重复建对象：接收未确认后从草稿重发复用同一任务与主会话
+  ---
+  duration_ms: 980.506625
+  type: 'test'
+  ...
+# Subtest: 首发接收未确认后重开：复用同一任务、主会话与操作身份
+ok 25 - 首发接收未确认后重开：复用同一任务、主会话与操作身份
+  ---
+  duration_ms: 1724.409
+  type: 'test'
+  ...
+# Subtest: 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+ok 26 - 等待回执期间继续编辑：旧回执不得清新稿，已切走不被拉回
+  ---
+  duration_ms: 1048.650917
+  type: 'test'
+  ...
+# Subtest: 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+ok 27 - 等待回执期间原地改写：旧回执不清新稿、不离开当前草稿
+  ---
+  duration_ms: 929.547834
+  type: 'test'
+  ...
+# Subtest: 末尾操作验收：长消息待核对→字号/窗口变化后末尾文字行与回查/重试按钮在卡片上方可点
+ok 28 - 末尾操作验收：长消息待核对→字号/窗口变化后末尾文字行与回查/重试按钮在卡片上方可点
+  ---
+  duration_ms: 908.296125
+  type: 'test'
+  ...
+# Subtest: 损坏的状态文件：成功保全后从空白开始并如实说明
+ok 29 - 损坏的状态文件：成功保全后从空白开始并如实说明
+  ---
+  duration_ms: 591.587959
+  type: 'test'
+  ...
+# Subtest: 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+ok 30 - 读取失败（权限拒绝）：保留原文件、显式报错、不种子覆盖
+  ---
+  duration_ms: 516.995375
+  type: 'test'
+  ...
+# [main:Z42C4o] [storage] 保存失败: Error: EACCES: permission denied, open '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-Z42C4o/dcode-prototype-state.json.tmp-83464'
+#     at async open (node:internal/fs/promises:637:25)
+#     at async writeFile (node:internal/fs/promises:1239:14)
+#     at async JsonFileStorage.write (file:///Users/diwu/.codex/worktrees/dcode-client-integration/dcode/out/main/index.js:21959:7) {
+#   errno: -13,
+#   code: 'EACCES',
+#   syscall: 'open',
+#   path: '/var/folders/61/fc0gr9wd52sc59sl32dvqj5c0000gn/T/dcode-e2e-savefail-Z42C4o/dcode-prototype-state.json.tmp-83464'
+# }
+# Subtest: 保存失败进入可见通路：banner 出现，不伪报成功
+ok 31 - 保存失败进入可见通路：banner 出现，不伪报成功
+  ---
+  duration_ms: 707.962958
+  type: 'test'
+  ...
+# Subtest: 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+ok 32 - 几何随字号联动：按钮/图标/内边距/圆角/侧栏/阅读列在 14→13 档按 s=13/14 派生
+  ---
+  duration_ms: 616.23925
+  type: 'test'
+  ...
+# Subtest: 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+ok 33 - 焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Stepper 按钮同样可辨）
+  ---
+  duration_ms: 883.007167
+  type: 'test'
+  ...
+# Subtest: 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+ok 34 - 选中与悬停可辨（真实行交互）：点击迁移选中，悬停色与选中色不同
+  ---
+  duration_ms: 627.276167
+  type: 'test'
+  ...
+# Subtest: 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+ok 35 - 720px 最小窗口：三档字号各自完成阅读、编辑发送、diff 横滚、文件入口与关闭返回
+  ---
+  duration_ms: 3938.326458
+  type: 'test'
+  ...
+# Subtest: 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+ok 36 - 草稿态：继续区定位、推荐动作只填草稿、手风琴单展开
+  ---
+  duration_ms: 770.382042
+  type: 'test'
+  ...
+# Subtest: 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+ok 37 - 开发任务全链：发送、工具折叠与展开、无审批路径、失败、聚合卡与检查器
+  ---
+  duration_ms: 2498.309125
+  type: 'test'
+  ...
+# Subtest: 暂停与重开：恢复条显式接续，不自动继续执行
+ok 38 - 暂停与重开：恢复条显式接续，不自动继续执行
+  ---
+  duration_ms: 4656.51875
+  type: 'test'
+  ...
+1..38
+# tests 38
+# suites 0
+# pass 38
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 91444.903584

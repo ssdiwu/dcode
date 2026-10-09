@@ -1,0 +1,16 @@
+{
+  "state": "completed",
+  "cwd": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "command": [
+    "npm",
+    "run",
+    "verify"
+  ],
+  "startedAt": "2026-10-09T12:21:35.511109+08:00",
+  "pid": 17000,
+  "exitCode": 1,
+  "endedAt": "2026-10-09T12:21:48.334756+08:00",
+  "sourceUnchanged": true,
+  "changedCode": [],
+  "logSHA256": "5d6052162f91abfd41d2217c1a774518f27f3d572a3ff3e5c82408e3eacb4309"
+}

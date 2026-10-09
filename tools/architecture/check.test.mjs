@@ -99,6 +99,27 @@ test("unknown source module fails instead of becoming uninspected code", (t) => 
 test("source outside src also fails", (t) => {
   rejects(t, { "runtime/hidden.ts": "export const value = 1;" }, "UNMANAGED");
 });
+test("root tool snapshots are excluded without skipping product sources", (t) => {
+  const result = checkArchitecture(fixture(t, {
+    ...contracts,
+    ".delta/worktrees/snapshot/src/unowned.ts": "export const historical = 1;",
+    "doc/history/probe.mjs.txt": "historical script bytes",
+  }));
+  assert.equal(result.files, 1);
+  assert.deepEqual(result.violations, []);
+});
+test("product imports cannot reach tool snapshots", (t) => {
+  rejects(t, {
+    "src/renderer/index.ts": 'import { value } from "../../.delta/worktrees/snapshot/value";',
+    ".delta/worktrees/snapshot/value.ts": "export const value = 1;",
+  }, "UNMANAGED_IMPORT");
+});
+test("a nested directory named delta does not hide renderer dependencies", (t) => {
+  rejects(t, { "src/renderer/.delta/hidden.ts": 'import fs from "node:fs";' }, "EXTERNAL");
+});
+test("ordinary documentation scripts remain subject to ownership checks", (t) => {
+  rejects(t, { "doc/unexpected.mjs": "export const value = 1;" }, "UNMANAGED");
+});
 test("product imports cannot reach excluded test implementations", (t) => {
   rejects(t, { "src/renderer/index.ts": 'import { value } from "../../test/fake";', "test/fake.ts": "export const value = 1;" }, "UNMANAGED_IMPORT");
 });

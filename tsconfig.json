@@ -6,9 +6,21 @@
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
-    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": {
+      "@/*": [
+        "src/*"
+      ]
+    },
+    "allowJs": true
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "test/runtime"
+  ]
 }

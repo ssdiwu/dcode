@@ -1,0 +1,20 @@
+{
+  "at14": {
+    "bodyFont": 14,
+    "sidebarW": 264,
+    "sendBtnH": 32,
+    "iconBox": 16,
+    "composerPad": 12,
+    "composerRadius": 16,
+    "readingMax": 688
+  },
+  "at13": {
+    "bodyFont": 13,
+    "sidebarW": 245.140625,
+    "sendBtnH": 29.7109375,
+    "iconBox": 14.8515625,
+    "composerPad": 11.1429,
+    "composerRadius": 14.8571,
+    "readingMax": 638.857
+  }
+}

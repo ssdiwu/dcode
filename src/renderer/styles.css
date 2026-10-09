@@ -1,0 +1,274 @@
+/* D Code 设计变量（token）唯一权威。
+   结构借鉴 ZCode（语义分层 + 单一字号旋钮），具体值为 D Code 自己的方案。
+   既定原则（主树 DESIGN）：全部界面几何随单一字号尺度派生，s = fontSize/14；
+   字阶公式见下，几何经 --spacing 与 --radius 派生，语义色只用于语义态。 */
+
+@import "tailwindcss";
+
+@theme inline {
+  /* 字号刻度：全部由旋钮派生 */
+  --text-ui-xs: calc(var(--ui-font-size) * 0.72);
+  --text-ui-sm: calc(var(--ui-font-size) * 0.86);
+  --text-ui-caption: calc(var(--ui-font-size) * 0.93);
+  --text-ui-base: var(--ui-font-size);
+  --text-ui-lg: calc(var(--ui-font-size) + 2px);
+  --text-ui-xl: calc(var(--ui-font-size) + 4px);
+
+  /* 几何派生尺度：Tailwind 全部间距/尺寸/行高数字类经 --spacing 派生（s = fontSize/14）。
+     例外（不随旋钮）：滚动条宽、窗口拖拽区高、窗口最小尺寸——平台构件，见各使用处注释。 */
+  --ui-scale: calc(var(--ui-font-size-num) / 14);
+  --spacing: calc(4px * var(--ui-scale));
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "PingFang SC", monospace;
+
+  /* 表面层级（浅色） */
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-popover: var(--popover);
+  --color-input: var(--input);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+
+  /* 文字三级 */
+  --color-foreground: var(--foreground);
+  --color-subtle: var(--subtle);
+  --color-subtlest: var(--subtlest);
+
+  /* 边框 */
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  /* 行动与反馈 */
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-destructive: var(--destructive);
+
+  /* diff 专用（与通用反馈色分离） */
+  --color-diff-add-bg: var(--diff-add-bg);
+  --color-diff-add-text: var(--diff-add-text);
+  --color-diff-del-bg: var(--diff-del-bg);
+  --color-diff-del-text: var(--diff-del-text);
+
+  /* 圆角嵌套层级：随同一尺度派生 */
+  --radius-sm: calc(6px * var(--ui-scale));
+  --radius-md: calc(8px * var(--ui-scale));
+  --radius-lg: calc(10px * var(--ui-scale));
+  --radius-xl: calc(12px * var(--ui-scale));
+  --radius-2xl: calc(16px * var(--ui-scale));
+
+  /* 阴影随同一尺度派生（0 与负值原样保留符号；两主题同用黑 10% 为候选，深色浮层待渲染核验） */
+  --shadow-sm: 0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0 rgb(0 0 0 / 0.1), 0 calc(1px * var(--ui-scale)) calc(2px * var(--ui-scale)) calc(-1px * var(--ui-scale)) rgb(0 0 0 / 0.1);
+  --shadow-md: 0 calc(4px * var(--ui-scale)) calc(6px * var(--ui-scale)) calc(-1px * var(--ui-scale)) rgb(0 0 0 / 0.1), 0 calc(2px * var(--ui-scale)) calc(4px * var(--ui-scale)) calc(-2px * var(--ui-scale)) rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 calc(10px * var(--ui-scale)) calc(15px * var(--ui-scale)) calc(-3px * var(--ui-scale)) rgb(0 0 0 / 0.1), 0 calc(4px * var(--ui-scale)) calc(6px * var(--ui-scale)) calc(-4px * var(--ui-scale)) rgb(0 0 0 / 0.1);
+}
+
+:root {
+  /* 字号旋钮：设置项唯一入口。存无单位数值，字号与几何尺度都由它组成——
+     直接存 px 再除以 14 会得到 length 而非 number，calc(4px * length) 量纲非法会整体失效 */
+  --ui-font-size-num: 14;
+  --ui-font-size: calc(var(--ui-font-size-num) * 1px);
+
+  --background: #ffffff;
+  --sidebar: #f5f5f4;
+  --panel: #fafaf9;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --input: #fafaf9;
+  --hover: rgb(23 23 23 / 0.05);
+  /* 选中：同族中性、约 1.8× 悬停透明度，与悬停可辨（对比度核算见设计包第十一节） */
+  --selected: rgb(23 23 23 / 0.09);
+
+  --foreground: #1c1917;
+  --subtle: rgb(28 25 23 / 0.78);
+  --subtlest: rgb(28 25 23 / 0.66);
+  /* 焦点指示专用：完整前景色（border-strong 不再独自承担焦点）；宽度 max(2px, g(2)) 见使用处 */
+  --focus-ring: #1c1917;
+  --focus-ring-inverse: #fafaf9;
+
+  --border: rgb(28 25 23 / 0.1);
+  --border-strong: rgb(28 25 23 / 0.22);
+
+  --primary: #1c1917;
+  --primary-foreground: #fafaf9;
+  --accent: #1c1917;
+  --success: #166534;
+  --warning: #92400e;
+  --destructive: #b91c1c;
+
+  --diff-add-bg: rgb(22 101 52 / 0.08);
+  --diff-add-text: #166534;
+  --diff-del-bg: rgb(185 28 28 / 0.08);
+  --diff-del-text: #b91c1c;
+
+  color-scheme: light;
+}
+
+.dark {
+  --background: #1c1c1e;
+  --sidebar: #151516;
+  --panel: #212123;
+  --card: #232325;
+  --popover: #262628;
+  --input: #1f1f21;
+  --hover: rgb(245 245 244 / 0.06);
+  /* 选中：深色下为 2× 悬停透明度（浅底同亮度下 α 需更高才可辨） */
+  --selected: rgb(245 245 244 / 0.12);
+
+  --foreground: #ececee;
+  --subtle: rgb(236 236 238 / 0.82);
+  --subtlest: rgb(236 236 238 / 0.72);
+  --focus-ring: #ececee;
+  --focus-ring-inverse: #1c1917;
+
+  --border: rgb(236 236 238 / 0.12);
+  --border-strong: rgb(236 236 238 / 0.26);
+
+  --primary: #ececee;
+  --primary-foreground: #1c1917;
+  --accent: #ececee;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: #f87171;
+
+  --diff-add-bg: rgb(74 222 128 / 0.12);
+  --diff-add-text: #4ade80;
+  --diff-del-bg: rgb(248 113 113 / 0.12);
+  --diff-del-text: #f87171;
+
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-ui-base);
+  color: var(--foreground);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 焦点规则：去掉浏览器蓝色外框后必须给替代反馈（主树 DESIGN 要求）。
+   两层：复合输入壳由容器协调（.input-surface，内外不重复框）；
+   所有可聚焦目标自身再给清晰的中性内描边，壳内外都能辨认具体持焦目标。 */
+*:focus-visible {
+  outline: none;
+}
+/* 焦点规则：去掉浏览器蓝色外框后必须给替代反馈（主树 DESIGN 要求）。
+   两层：复合输入壳由容器协调（.input-surface，内外不重复框）；
+   所有可聚焦目标自身再给清晰的中性内描边，壳内外都能辨认具体持焦目标。
+   注意选择器权重：本条保持 0,2,0，使 .focus-ring-inverse 能以同权重后序覆盖（a[href] 会把 :is 推到 0,1,1 而压制反色规则；本应用无原生链接） */
+:is(button, [role="button"], [role="treeitem"], [role="tab"], [role="radio"], input, textarea, [tabindex]):focus-visible {
+  /* 清晰焦点内描边：完整前景色、宽 max(2px, g(2))，随元素自身圆角裁切，不扩张布局；
+     选择器权重保持 0,2,0，使 .focus-ring-inverse 能同权重后序覆盖 */
+  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring);
+}
+/* 填色（primary 底）按钮上的焦点描边用反色（focus-ring-inverse），前景色在深底上不可辨 */
+.focus-ring-inverse:focus-visible {
+  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring-inverse);
+}
+textarea {
+  resize: none;
+}
+/* 复合输入壳的组反馈只在「子目标持焦」时给出（弱 1px）；
+   壳或输入框自身持焦（:focus-visible）统一走上方正式 focus-ring（完整前景、max(2,g2)），不叠两个同元素框 */
+.input-surface:focus-within:not(:focus-visible) {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+/* Composer 的 textarea 会在鼠标点击时命中 :focus-visible；全局规则曾让它和外壳各画一框。
+   只把文字编辑区的焦点移到圆角外壳，壳内按钮继续使用自己的键盘焦点规则。 */
+.composer-input:focus-visible {
+  box-shadow: none;
+}
+.composer-surface:has(.composer-input:focus-visible) {
+  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring);
+}
+/* 图标按钮命中区下限：随尺度派生但不低于 24px（WCAG 2.2 最小目标尺寸参考） */
+.hit-floor {
+  min-width: max(24px, calc(var(--spacing) * 6));
+  min-height: max(24px, calc(var(--spacing) * 6));
+}
+
+::selection {
+  background: color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+
+/* 滚动条克制化 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 对话框壳宽度随同一尺度派生（max-w-md 的 28rem 不随旋钮，需显式派生） */
+.app-dialog {
+  max-width: calc(448px * var(--ui-scale));
+}
+
+/* 分栏分配（主树 DESIGN 公式）：S = min(g264, max(g188, 30vw))；I = min(g440, W − S − g232)；M = W − S − I。
+   主区保底由分配公式保证（检查器吸收余量），不再用独立固定最小宽度挤压主区；
+   边框计入各区宽度（border-box）。用户拖宽/尺寸记录为未实现缺口，如实记录见设计包。 */
+.app-shell {
+  --sb: min(calc(264px * var(--ui-scale)), max(calc(188px * var(--ui-scale)), 30vw));
+}
+.app-sidebar {
+  width: var(--sb);
+  flex-shrink: 0;
+}
+.app-inspector {
+  width: min(calc(440px * var(--ui-scale)), calc(100vw - var(--sb) - calc(232px * var(--ui-scale))));
+}
+
+/* 窗口拖拽区：高度固定 48px 不随字号旋钮（macOS 标题栏/交通灯区对齐，平台构件例外） */
+.drag-region {
+  -webkit-app-region: drag;
+  height: 48px;
+}
+.titlebar-band {
+  height: 48px;
+}
+.drag-region button,
+.drag-region a,
+.drag-region input,
+.drag-region textarea,
+.drag-region [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+/* macOS hiddenInset 窗控占据左上区域；标题从安全区域之后开始。 */
+html[data-platform="darwin"] .app-brand { padding-inline-start: 80px; }
+
+/* 品牌猫头鹰（D2-R2 同源）：保留宽高比，几何从字号派生（约 2 倍字号，对齐 4px 节奏）；
+   不反色、不滤镜、不 mask、不裁切。aria-hidden 装饰图，可访问名称由相邻 D Code 文本承担。 */
+.app-brand-owl {
+  width: calc(var(--ui-font-size-num) * 1px * 2);
+  height: calc(var(--ui-font-size-num) * 1px * 2);
+  object-fit: contain;
+}

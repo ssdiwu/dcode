@@ -1,0 +1,10 @@
+FOCUS OBSERVATIONS WRITTEN
+dark/14px mouse-click: active=true fv=true innerShadow="rgb(236, 236, 238) 0px 0px 0px 2px inset" innerOutline=0px none rgb(236, 236, 238) innerRadius=0px | shellShadow="rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset" shellFV=false | ring=#ececee scale=calc(14 / 14)
+dark/14px real-tab(x1): active=true fv=true innerShadow="rgb(236, 236, 238) 0px 0px 0px 2px inset" innerOutline=0px none rgb(236, 236, 238) innerRadius=0px | shellShadow="rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset" shellFV=false | ring=#ececee scale=calc(14 / 14)
+dark/13px mouse-click: active=true fv=true innerShadow="rgb(236, 236, 238) 0px 0px 0px 2px inset" innerOutline=0px none rgb(236, 236, 238) innerRadius=0px | shellShadow="rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset" shellFV=false | ring=#ececee scale=calc(13 / 14)
+dark/13px real-tab(x1): active=true fv=true innerShadow="rgb(236, 236, 238) 0px 0px 0px 2px inset" innerOutline=0px none rgb(236, 236, 238) innerRadius=0px | shellShadow="rgba(236, 236, 238, 0.26) 0px 0px 0px 1px inset" shellFV=false | ring=#ececee scale=calc(13 / 14)
+light/14px mouse-click: active=true fv=true innerShadow="rgb(28, 25, 23) 0px 0px 0px 2px inset" innerOutline=0px none rgb(28, 25, 23) innerRadius=0px | shellShadow="rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset" shellFV=false | ring=#1c1917 scale=calc(14 / 14)
+light/14px real-tab(x1): active=true fv=true innerShadow="rgb(28, 25, 23) 0px 0px 0px 2px inset" innerOutline=0px none rgb(28, 25, 23) innerRadius=0px | shellShadow="rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset" shellFV=false | ring=#1c1917 scale=calc(14 / 14)
+light/13px mouse-click: active=true fv=true innerShadow="rgb(28, 25, 23) 0px 0px 0px 2px inset" innerOutline=0px none rgb(28, 25, 23) innerRadius=0px | shellShadow="rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset" shellFV=false | ring=#1c1917 scale=calc(13 / 14)
+light/13px real-tab(x1): active=true fv=true innerShadow="rgb(28, 25, 23) 0px 0px 0px 2px inset" innerOutline=0px none rgb(28, 25, 23) innerRadius=0px | shellShadow="rgba(28, 25, 23, 0.22) 0px 0px 0px 1px inset" shellFV=false | ring=#1c1917 scale=calc(13 / 14)
+BASELINE STABLE=true
