@@ -24,10 +24,35 @@ test("首次进入：真实不可用状态、设置无假表单、草稿往返�
     assert.equal(before.tasks.length, 1);
     assert.equal(before.sessions.length, 0);
     assert.deepEqual(before.timelines, {});
-    assert.equal(await page.getByRole("button", { name: "去设置" }).count(), 0, "Home 不替代真实配置入口；配置走 Settings 模型页");
+    // D02（spec/页面与交互组件.md）：缺配置时内联给出到真实配置位置的入口，草稿保留。
+    // 这里仍然禁止的是「Home 上的假配置表单」——入口只导航，不在草稿页内联伪造表单。
+    assert.equal(await page.locator('input[type="password"]').count(), 0, "草稿页不内联伪造的模型配置表单");
+    assert.equal(await page.getByRole("button", { name: "去设置" }).count(), 1, "缺配置时应内联给出到真实配置位置的入口");
+    await page.getByRole("button", { name: "去设置" }).click();
+    // D02 入口落到模型分区本身，而不是通用设置首页：既要有真实表单，也要能判定当前分区。
+    // 模型分区合并为「预设供应商 / 自定义」双页签且默认预设（spec S07、spec/模型选择与自动切换.md
+    // 「空配置正常打开」）：真实表单先验预设页签的供应商选择器，密钥输入只属于自定义页签。
+    await page.getByLabel(/^(供应商|Provider)$/).waitFor();
+    assert.equal(
+      await page.getByRole("button", { name: /^模型/ }).getAttribute("aria-current"),
+      "page",
+      "D02 入口应直接落在模型分区",
+    );
+    assert.equal(await page.locator('input[type="password"]').count(), 0, "预设页签不出现自定义密钥输入");
+    assert.equal(
+      await page.getByRole("radio", { name: /^自定义$|^Custom$/ }).count(),
+      1,
+      "模型分区同时保留自定义入口",
+    );
+    await page.getByRole("button", { name: "返回" }).click();
+    await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
+    assert.equal(await composer.inputValue(), "这条草稿不能丢", "经 D02 入口往返设置后草稿保留");
+    assert.equal(await page.getByRole("button", { name: "发送", exact: true }).isDisabled(), true);
     await page.getByRole("button", { name: /^设置/ }).click();
     await page.getByRole("button", { name: /^模型/ }).click();
     // 真实配置入口存在（不是标签伪解锁）；未填字段时保存被禁用、快照仍为 unconfigured
+    // 双 tab 默认 preset；密码/password input 在 custom tab
+    await page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await page.locator('input[type="password"]').waitFor();
     assert.equal(await page.locator('input[type="password"]').inputValue(), "");
     assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);

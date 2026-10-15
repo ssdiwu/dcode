@@ -297,9 +297,27 @@ class MockExecutionPort implements ExecutionPort {
 
 // ---------- 脚本内容（模拟，未接 Pi；权限步骤已随旧形态移除） ----------
 
-function buildScript(userText: string): Step[] {
-  const brief = userText.trim().slice(0, 60);
+/** 取输入里全部的 ``` 围栏原文（成对匹配，逐个保留内容与语言标注）。 */
+function fenceEchoSteps(userText: string): Step[] {
+  const fences = userText.match(/```[\s\S]*?```/g);
+  if (!fences || fences.length === 0) return [];
   return [
+    {
+      delayMs: 500,
+      emit: (push) => push("mock.assistant", { text: ["以下代码按原样回显（模拟）：", "", ...fences].join("\n") }),
+    },
+  ];
+}
+
+function buildScript(userText: string): Step[] {
+  // brief 回显用户原话，但去掉围栏标记与换行：否则闭合的 ``` 会被句子里的「」打断，
+  // 产生与真实输入无关的畸形围栏，让正文渲染断言指向错误的代码块。
+  const brief = userText.replace(/```/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  return [
+    // 用户原文里带代码围栏时，脚本先把围栏原样回显成一条助手正文。
+    // 正文代码块的真实渲染、高亮与复制需要有确定的代码输入；这是模拟装配的脚本内容，
+    // 不代表真实模型会这样回答，也不改变任何正式执行语义。
+    ...fenceEchoSteps(userText),
     {
       delayMs: 600,
       emit: (push) =>

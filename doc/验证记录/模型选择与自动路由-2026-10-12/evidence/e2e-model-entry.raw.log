@@ -1,0 +1,17 @@
+TAP version 13
+# [d-model-entry] {"grouped":{"allItems":1532,"filtered":139,"groupCount":42},"identity":{"checked":true,"n":8},"quota":"unsupported"}
+# Subtest: D 片：两层模型入口按来源分组可搜索、条件参数只用逐档核实档位、额度如实呈现
+ok 1 - D 片：两层模型入口按来源分组可搜索、条件参数只用逐档核实档位、额度如实呈现
+  ---
+  duration_ms: 2798.7335
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2971.390542

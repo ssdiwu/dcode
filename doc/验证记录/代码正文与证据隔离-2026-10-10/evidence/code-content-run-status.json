@@ -1,0 +1,18 @@
+{
+  "cwd": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "command": [
+    "env",
+    "DCODE_EVIDENCE_RUN=theme-fix3",
+    "node",
+    "--test",
+    "--test-concurrency=1",
+    "--test-timeout=180000",
+    "test/e2e/code-content.test.mjs"
+  ],
+  "startedAt": "2026-10-10T19:08:20.379340+08:00",
+  "state": "completed",
+  "timeoutSeconds": 900,
+  "pid": 83615,
+  "exitCode": 0,
+  "endedAt": "2026-10-10T19:08:27.303603+08:00"
+}

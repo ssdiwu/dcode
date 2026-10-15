@@ -18,11 +18,27 @@ buildSync({
   platform: "node",
   outfile: join(dir, "contracts.mjs"),
 });
-const { validateOperationInput, validateSettingsPatch, isValidSnapshot, isValidOpResponse } = await import(
+const { validateOperationInput, validateSettingsPatch, isValidSnapshot, isValidOpResponse, isValidAuthEvent, isValidOnlineStatus, isValidSettings, isModelRoutingAttempt, parseWorkImages, OP_NAMES } = await import(
   pathToFileURL(join(dir, "contracts.mjs")).href
 );
 
 after(() => rmSync(dir, { recursive: true, force: true }));
+
+test('工作空间绑定有限契约：选择身份和目录回执受校验，界面不能传任意路径', () => {
+  const choose = { operationId: 'create-a', requestId: 'choose-a' };
+  const create = { operationId: 'create-a', selectionId: 'selection-a', name: '项目甲' };
+  for (const operation of ['chooseProjectFolder', 'discardProjectFolder', 'createWorkspace']) assert.ok(OP_NAMES.includes(operation));
+  assert.equal(validateOperationInput('chooseProjectFolder', choose), null);
+  assert.equal(validateOperationInput('createWorkspace', create), null);
+  assert.ok(validateOperationInput('createWorkspace', { ...create, path: '/unselected' }));
+  assert.ok(validateOperationInput('chooseProjectFolder', { ...choose, selectionId: 'borrowed' }));
+  assert.ok(validateOperationInput('createWorkspace', { ...create, name: '   ' }));
+  assert.ok(validateOperationInput('createWorkspace', { ...create, name: 'bad\u0000name' }));
+  assert.equal(isValidOpResponse('chooseProjectFolder', null), true);
+  assert.equal(isValidOpResponse('chooseProjectFolder', { ...choose, selectionId: 'selection-a', path: '/owned/project' }), true);
+  assert.equal(isValidOpResponse('chooseProjectFolder', { ...choose, selectionId: 'selection-a', path: '../relative' }), false);
+  assert.equal(isValidOpResponse('chooseProjectFolder', { ...choose, path: '/owned/project' }), false);
+});
 
 /** 与种子形状同构的合法快照 */
 const validSnapshot = () => ({
@@ -69,12 +85,71 @@ const validSnapshot = () => ({
     ],
   },
   runs: { s1: { sessionId: "s1", status: "ready", note: "", errorNote: null, pendingInputs: 0, updatedAt: 1 } },
-  settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system" },
+  settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "auto" }, modelCandidates: [{ sourceId: "a", modelId: "m" }] },
   model: { available: true, name: "actual-model" },
   modelSetup: { kind: "unconfigured" },
+  // D 片：会话模型状态逐条带在快照里；缺字段会被接收侧拒绝（畸形快照静默丢弃）
+  sessionModels: {
+    // 逐字段齐备：actualResponseId/usage/requests 缺席会被接收侧判为畸形（旧快照直接丢弃）
+    s1: {
+      sessionId: "s1",
+      choice: { mode: "auto" },
+      actual: null,
+      actualResponseId: null,
+      usage: null,
+      requests: [],
+      thinkingLevel: null,
+      lastRouting: null,
+      lastResult: "none",
+      invalidReason: null,
+      waitingExplicitContinue: false,
+    },
+  },
+  // D 片：任务用量是只读汇总，键必须是真实存在的任务 id
+  taskUsage: {
+    "task-home-default": {
+      taskId: "task-home-default",
+      scope: [{ sessionId: "s1", kind: "main", usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, requests: 1 } }],
+      totals: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, requests: 1 },
+      bySource: [{ sourceId: "dcode-test", sourceLabel: "受控来源", usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, requests: 1 } }],
+      incompleteReason: null,
+    },
+  },
   execution: { kind: "pi" },
   closeError: null,
   closeErrorRevision: 0,
+});
+
+// D 片路由判定的公开接收：接收侧必须认识**可能出现**的每种 outcome，
+// 否则合法判定会在接收侧被当成畸形丢弃（有界尝试的事实就此丢失）。
+// 方向要说清：这里证明的是「接收侧认识该形状」，**不是**「router 获准产出该执行策略」。
+// `attempted-unverified-capability` 属于历史/合法形状（老现场、其它生产者可能带回），
+// 接收侧必须继续认得；但能力缺依据已不是执行许可，router 不再产出它
+// （见 model-routing.test.ts：未核实能力保留工作，不借用额度未知的放行规则）。
+test("路由判定公开接收：每种 outcome（含历史形状）都被接受，未知 outcome 被拒", () => {
+  const outcomes = [
+    "adopted",
+    "attempted-unknown-quota",
+    "attempted-unverified-capability",
+    "skipped-exhausted",
+    "skipped-incapable",
+    "failed",
+  ];
+  for (const outcome of outcomes) {
+    const attempts = [
+      { sourceId: "dcode-test", modelId: "fixture", outcome, reason: outcome === "adopted" ? null : "测试原因" },
+    ];
+    assert.equal(
+      isModelRoutingAttempt(attempts[0]),
+      true,
+      `接收侧必须接受生产端会产出的 outcome：${outcome}`,
+    );
+  }
+  assert.equal(
+    isModelRoutingAttempt({ sourceId: "dcode-test", modelId: "fixture", outcome: "not-a-real-outcome", reason: null }),
+    false,
+    "未知 outcome 仍须被拒（校验不因为补全合法值就放松）",
+  );
 });
 
 test("快照校验：合法快照通过；畸形样本逐项拒绝", () => {
@@ -97,6 +172,9 @@ test("快照校验：合法快照通过；畸形样本逐项拒绝", () => {
   );
   // settings 必须四字段齐备（全量对象，不走 Partial 语义）
   assert.equal(isValidSnapshot({ ...validSnapshot(), settings: {} }), false);
+  // 候选名单是 D 片必需字段：缺席＝旧快照，不当作"自动包含目录全部"
+  assert.equal(isValidSnapshot({ ...validSnapshot(), settings: { ...validSnapshot().settings, modelCandidates: undefined } }), false);
+  assert.equal(isValidSnapshot({ ...validSnapshot(), settings: { ...validSnapshot().settings, modelCandidates: [{ sourceId: "a" }] } }), false);
   assert.equal(isValidSnapshot({ ...validSnapshot(), settings: { theme: "dark" } }), false);
   // 时间线块：坏枚举、未知 kind、缺必需字段
   assert.equal(
@@ -177,7 +255,7 @@ test("操作返回契约校验：逐操作核对，畸形返回拒绝", () => {
   assert.equal(isValidOpResponse("pauseRun", undefined), true);
   assert.equal(isValidOpResponse("pauseRun", {}), false);
   assert.equal(
-    isValidOpResponse("updateSettings", { theme: "dark", fontSize: 14, coldStart: "restore", language: "zh" }),
+    isValidOpResponse("updateSettings", { theme: "dark", fontSize: 14, coldStart: "restore", language: "zh", newSessionModelChoice: { mode: "auto" }, modelCandidates: [] }),
     true,
   );
   assert.equal(isValidOpResponse("updateSettings", { theme: "dark" }), false); // 返回是全量设置对象
@@ -193,3 +271,196 @@ test("操作返回契约校验：逐操作核对，畸形返回拒绝", () => {
   assert.ok(typeof validateOperationInput("configureModel", { provider: "openai-completions", label: "x", modelId: "m", baseUrl: "https://x/v1", keyAction: "keep", apiKey: 42 }) === "string");
   assert.equal(validateOperationInput("bogo-op", { label: "any text" }), "未知操作: bogo-op");
 });
+
+
+test("供应商专用契约：畸形登录/取消/来源/认证事件不穿过共享边界", () => {
+  assert.equal(validateOperationInput("loginProvider", { loginId: "L1", providerId: "openai", type: "api_key" }), null);
+  for (const input of [null, { loginId: 1, providerId: "openai", type: "api_key" }, { loginId: "L1", providerId: "openai", type: "wrong" }, { loginId: "L1", providerId: "openai", type: "oauth", extra: true }]) {
+    assert.ok(validateOperationInput("loginProvider", input));
+  }
+  assert.ok(validateOperationInput("cancelLogin", { loginId: 1 }));
+  assert.ok(validateOperationInput("replyAuthPrompt", { requestId: "P1", cancel: "yes" }));
+  assert.ok(validateOperationInput("setCatalogSource", { baseUrl: "http://remote.example" }));
+  assert.equal(isValidOnlineStatus({ online: true }), true);
+  assert.equal(isValidOnlineStatus({ online: false }), true);
+  for (const input of [{ online: "true" }, { online: true, op: "send" }, [], null]) assert.equal(isValidOnlineStatus(input), false);
+  const catalog = { providers: [], models: {}, source: { baseUrl: "https://pi.dev", lastSuccessAt: null, updating: false, lastError: null, revision: 0 } };
+  assert.equal(isValidOpResponse("listModelCatalog", catalog), true);
+  assert.equal(isValidOpResponse("listModelCatalog", { ...catalog, providers: [{}] }), false);
+  assert.equal(isValidOpResponse("listModelCatalog", { ...catalog, models: { openai: [{}] } }), false);
+  assert.equal(isValidOpResponse("refreshModelCatalog", { ok: true, revision: "0" }), false);
+  assert.equal(isValidOpResponse("loginProvider", { ok: false, issue: 1, message: "bad" }), false);
+  assert.equal(isValidAuthEvent({ type: "prompt", loginId: "L1", requestId: "P1", kind: "secret", message: "key" }), true);
+  assert.equal(isValidAuthEvent({ type: "auth_url", loginId: "L1", url: "https://auth.example" }), true);
+  assert.equal(isValidAuthEvent({ type: "device_code", loginId: "L1", userCode: "AB", verificationUri: "https://auth.example", intervalSeconds: 5 }), true);
+  for (const event of [
+    { type: "auth_url", loginId: "L1" },
+    { type: "auth_url", loginId: "L1", url: "javascript:alert(1)" },
+    { type: "device_code", loginId: "L1", userCode: "AB", verificationUri: "https://auth.example", expiresInSeconds: Infinity },
+    { type: "prompt", loginId: "L1", requestId: "P1", kind: "select", message: "choose", options: [{ id: 1, label: "bad" }] },
+    { type: "progress", loginId: "L1", message: {} },
+  ]) assert.equal(isValidAuthEvent(event), false);
+});
+
+test("D 片契约：模型入口操作的载荷与回执在共享边界上逐项核对", () => {
+  // 载荷：合法形状通过
+  assert.equal(validateOperationInput("setSessionModelChoice", { sessionId: "s1", choice: { mode: "auto" } }), null);
+  assert.equal(validateOperationInput("setSessionModelChoice", { sessionId: "s1", choice: { mode: "explicit", sourceId: "a", modelId: "m" } }), null);
+  assert.equal(validateOperationInput("setSessionThinkingLevel", { sessionId: "s1", level: null }), null);
+  assert.equal(validateOperationInput("setSessionThinkingLevel", { sessionId: "s1", level: "xhigh" }), null);
+  assert.equal(validateOperationInput("readModelQuota", { sourceId: "a", modelId: "m" }), null);
+  assert.equal(validateOperationInput("resolveSessionRouting", { sessionId: "s1" }), null);
+  assert.equal(validateOperationInput("setDefaultModelChoice", { choice: { mode: "auto" } }), null);
+  assert.equal(validateOperationInput("listModelSources", undefined), null);
+  assert.equal(validateOperationInput("listModelSources", { sessionId: "s1" }), null);
+
+  // 载荷：畸形一律在入口拒绝，不建对象、不接收、不执行
+  for (const input of [
+    null, {}, [], "x",
+    { sessionId: "", choice: { mode: "auto" } },
+    { sessionId: "s1" },
+    { sessionId: "s1", choice: { mode: "explicit", sourceId: "a" } },
+    { sessionId: "s1", choice: { mode: "manual", sourceId: "a", modelId: "m" } },
+    { sessionId: "s1", choice: { mode: "auto" }, extra: 1 },
+  ]) assert.ok(validateOperationInput("setSessionModelChoice", input), `setSessionModelChoice 应拒绝 ${JSON.stringify(input)}`);
+
+  assert.ok(validateOperationInput("setSessionThinkingLevel", { sessionId: "s1", level: "ultra" }));
+  assert.ok(validateOperationInput("setSessionThinkingLevel", { sessionId: "s1", level: 3 }));
+  assert.ok(validateOperationInput("readModelQuota", { sourceId: "a" }));
+  assert.ok(validateOperationInput("readModelQuota", { sourceId: "", modelId: "m" }));
+  assert.ok(validateOperationInput("resolveSessionRouting", { sessionId: 1 }));
+  assert.ok(validateOperationInput("setDefaultModelChoice", { choice: "auto" }));
+  assert.ok(validateOperationInput("listModelSources", { sessionId: 5 }));
+
+  // 设置里的新会话默认：合法枚举通过，未知设置项仍拒绝
+  assert.equal(validateSettingsPatch({ newSessionModelChoice: { mode: "auto" } }), null);
+  assert.ok(validateSettingsPatch({ newSessionModelChoice: { mode: "nope" } }));
+  assert.ok(validateSettingsPatch({ newSessionModelChoice: "auto" }));
+  assert.ok(validateSettingsPatch({ unknownKey: 1 }));
+});
+
+test("D 片契约：额度、模型状态与来源视图的接收侧校验", () => {
+  const quota = { sourceId: "a", modelId: "m", state: "available", poolId: null, windowLabel: null, updatedAt: 1, reason: null };
+  assert.equal(isValidOpResponse("readModelQuota", quota), true);
+  // 「可用」必须带更新时间与可核对来源，否则无可核对的依据
+  assert.equal(isValidOpResponse("readModelQuota", { ...quota, updatedAt: null }), false);
+  assert.equal(isValidOpResponse("readModelQuota", { ...quota, reason: "x" }), false);
+  assert.equal(isValidOpResponse("readModelQuota", { ...quota, state: "unsupported", updatedAt: null, reason: "no-source" }), true);
+  assert.equal(isValidOpResponse("readModelQuota", { ...quota, state: "zero" }), false);
+  assert.equal(isValidOpResponse("readModelQuota", { ...quota, poolId: 1 }), false);
+
+  const state = {
+    sessionId: "s1",
+    choice: { mode: "auto" },
+    actual: null,
+    actualResponseId: null,
+    usage: null,
+    requests: [],
+    thinkingLevel: null,
+    lastRouting: null,
+    lastResult: "none",
+    invalidReason: null,
+    waitingExplicitContinue: false,
+  };
+  assert.equal(isValidOpResponse("resolveSessionRouting", state), true);
+  assert.equal(isValidOpResponse("setSessionModelChoice", { ...state, lastResult: "maybe" }), false);
+  assert.equal(isValidOpResponse("setSessionModelChoice", { ...state, thinkingLevel: "ultra" }), false);
+  assert.equal(isValidOpResponse("setSessionThinkingLevel", { ...state, actual: { sourceId: "a" } }), false);
+  // 判定成立不等于请求成功：这两条分别可辨。实际采用必须同时带可核对的响应身份，
+  // 否则"有 actual"仍不能证明发生过真实请求。
+  const actuallyUsed = { ...state, actual: { sourceId: "a", modelId: "m", sourceLabel: "A", modelLabel: "M", accountLabel: null }, actualResponseId: "resp-1", lastResult: "failed" };
+  assert.equal(isValidOpResponse("resolveSessionRouting", actuallyUsed), true);
+  assert.equal(isValidOpResponse("resolveSessionRouting", { ...actuallyUsed, actualResponseId: null }), false);
+
+  assert.equal(isValidOpResponse("setDefaultModelChoice", { ok: true, choice: { mode: "auto" } }), true);
+  assert.equal(isValidOpResponse("setDefaultModelChoice", { ok: false, choice: "auto" }), false);
+
+  const sources = {
+    sources: [{ sourceId: "a", sourceLabel: "A", configured: true, models: [{ sourceId: "a", modelId: "m", modelLabel: "M", capabilities: null, quota: null }] }],
+    defaultChoice: { mode: "auto" },
+    sessionStates: [state],
+  };
+  assert.equal(isValidOpResponse("listModelSources", sources), true);
+  // 未核实能力资料必须是 null 或合法形状；额度未读取必须是 null（不假报可用）
+  assert.equal(isValidOpResponse("listModelSources", { ...sources, sources: [{ ...sources.sources[0], models: [{ ...sources.sources[0].models[0], quota: { ...quota, updatedAt: null } }] }] }), false);
+  assert.equal(isValidOpResponse("listModelSources", { ...sources, sources: [{ ...sources.sources[0], models: [{ ...sources.sources[0].models[0], capabilities: { identity: {} } }] }] }), false);
+  assert.equal(isValidOpResponse("listModelSources", { ...sources, defaultChoice: { mode: "manual" } }), false);
+  assert.equal(isValidOpResponse("listModelSources", { ...sources, sessionStates: [{ ...state, choice: {} }] }), false);
+
+  // 逐次真实请求归属：同一 responseId 不得重复出现，否则同一事实会被重复计量
+  const attributed = { ...state, actual: { sourceId: "a", modelId: "m", sourceLabel: "A", modelLabel: "M", accountLabel: null }, actualResponseId: "resp-1", requests: [{ responseId: "resp-1", sourceId: "a", sourceLabel: "A", modelId: "m", result: "succeeded", usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, requests: 1 } }] };
+  assert.equal(isValidOpResponse("resolveSessionRouting", attributed), true);
+  assert.equal(isValidOpResponse("resolveSessionRouting", { ...attributed, requests: [...attributed.requests, { ...attributed.requests[0] }] }), false);
+  assert.equal(isValidOpResponse("resolveSessionRouting", { ...attributed, requests: [{ ...attributed.requests[0], responseId: "" }] }), false);
+  assert.equal(isValidOpResponse("resolveSessionRouting", { ...attributed, requests: [{ ...attributed.requests[0], result: "pending" }] }), false);
+  // actual 存在但没有响应身份 → 不是一次可核对的真实请求
+  assert.equal(isValidOpResponse("resolveSessionRouting", { ...attributed, actualResponseId: null }), false);
+});
+
+test("D 片契约：任务用量汇总逐项核对，挂错任务或补零都被拒", () => {
+  const summary = validSnapshot().taskUsage["task-home-default"];
+  assert.equal(isValidSnapshot(validSnapshot()), true);
+  // 汇总键与自身 taskId 不一致（挂错任务）
+  assert.equal(isValidSnapshot({ ...validSnapshot(), taskUsage: { other: { ...summary, taskId: "other" } } }), false);
+  // 汇总指向不存在的任务
+  assert.equal(isValidSnapshot({ ...validSnapshot(), taskUsage: { "task-x": { ...summary, taskId: "task-x" } } }), false);
+  // 没有可归属记录时不得按来源给出数字（不补零）
+  assert.equal(
+    isValidSnapshot({ ...validSnapshot(), taskUsage: { "task-home-default": { ...summary, totals: null, bySource: summary.bySource } } }),
+    false,
+  );
+  // 无记录 = null 合法
+  assert.equal(
+    isValidSnapshot({ ...validSnapshot(), taskUsage: { "task-home-default": { ...summary, totals: null, bySource: [] } } }),
+    true,
+  );
+  // 计量范围成员类型必须是 main/sub
+  assert.equal(
+    isValidSnapshot({ ...validSnapshot(), taskUsage: { "task-home-default": { ...summary, scope: [{ ...summary.scope[0], kind: "other" }] } } }),
+    false,
+  );
+  // 缺口说明必须是真的字符串或 null
+  assert.equal(isValidSnapshot({ ...validSnapshot(), taskUsage: { "task-home-default": { ...summary, incompleteReason: 3 } } }), false);
+});
+
+test("D 片契约：快照里的会话模型状态逐条核对", () => {
+  const valid = {
+    sessionId: "s1", choice: { mode: "auto" }, actual: null,
+    thinkingLevel: null, lastRouting: null, lastResult: "none", invalidReason: null,
+  };
+  // 快照缺 sessionModels 会被接收侧拒绝（畸形快照静默丢弃，渲染层保留上一份）
+  assert.ok(OP_NAMES.includes("setSessionModelChoice"));
+  assert.ok(OP_NAMES.includes("listModelSources"));
+  assert.ok(OP_NAMES.includes("readModelQuota"));
+  assert.ok(OP_NAMES.includes("resolveSessionRouting"));
+  assert.ok(OP_NAMES.includes("setSessionThinkingLevel"));
+  assert.ok(OP_NAMES.includes("setDefaultModelChoice"));
+  assert.equal(isValidSettings({ theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "auto" }, modelCandidates: [] }), true);
+  // 候选名单是必需字段：缺席（=旧设置）不是"自动包含目录全部"
+  assert.equal(isValidSettings({ theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "auto" } }), false);
+  assert.equal(isValidSettings({ theme: "system", fontSize: 14, coldStart: "restore", language: "system" }), false);
+  assert.equal(isValidSettings({ theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "x" } }), false);
+  assert.ok(valid);
+});
+
+
+test('待核工作空间快照：原创建身份、名称和绝对目录可读，畸形投影被拒绝', () => {
+  const snapshot = validSnapshot();
+  const intent = { operationId: 'original-create', selectionId: 'original-selection', name: '待核项目', path: '/owned/project' };
+  assert.equal(isValidSnapshot({ ...snapshot, pendingWorkspaceCreation: intent }), true);
+  for (const patch of [{ operationId: '' }, { selectionId: null }, { name: 'bad\u0000name' }, { path: '../unselected' }])
+    assert.equal(isValidSnapshot({ ...snapshot, pendingWorkspaceCreation: { ...intent, ...patch } }), false);
+  assert.equal(isValidSnapshot({ ...snapshot, pendingWorkspaceCreation: null }), true);
+});
+
+test('扩展消息／工具图片有限契约：独立来源与有限图片字段，不接任意URL／字段或畸形内容',()=>{
+  const s=validSnapshot();s.timelines.s1.push({kind:'extension-message',id:'extension-1',customType:'project-result',text:'真实项目扩展正文',at:5});
+  const image={type:'image',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9YAAAAASUVORK5CYII='};s.timelines.s1[1].tool.images=[image];
+  assert.equal(isValidSnapshot(s),true);assert.deepEqual(parseWorkImages([image]),[image]);
+  for(const customType of ['',null,'x'.repeat(129)]){const invalid=structuredClone(s);invalid.timelines.s1.at(-1).customType=customType;assert.equal(isValidSnapshot(invalid),false);}
+  for(const invalid of [{...image,data:'not base64?'},{...image,mimeType:'text/html'},{...image,url:'file:///outside'},...Array.from({length:1},()=>[image,image,image,image,image])]){
+    assert.throws(()=>parseWorkImages(Array.isArray(invalid)?invalid:[invalid]));
+  }
+  const invalid=structuredClone(s);invalid.timelines.s1[1].tool.images=[{...image,data:'bad'}];assert.equal(isValidSnapshot(invalid),false);
+});
+

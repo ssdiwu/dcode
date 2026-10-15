@@ -3,8 +3,8 @@
 // 发送语义：草稿只在「已接收」后清除；确认未接收保留原文+原因+重试；待核对只读回查，不盲投。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppSnapshot, SendMode } from "@/contracts";
-import { loadUiState, usePersistentUi, useSnapshot, type UiState } from "./store";
+import type { AppSnapshot, SendMode, WorkReference } from "@/contracts";
+import { clearAcceptedDraft, loadUiState, usePersistentUi, useSnapshot, draftVersionOf, isSameDraftVersion, type UiState } from "./store";
 import { Sidebar } from "./views/Sidebar";
 import { Timeline } from "./views/Timeline";
 import { Inspector } from "./views/Inspector";
@@ -34,27 +34,23 @@ function locationOf(
 let operationCounter = 0;
 const newOperationId = () => `op-${Date.now().toString(36)}-${(operationCounter++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-// 回查／快照确认共用草稿关联：A 的 accepted 不清 B 的身份或用户后来编辑的新文。
-function clearAcceptedDraft(ui: UiState, operationId: string, text: string): UiState {
-  const key = ui.draftOfOperation[operationId];
-  if (!key) return ui;
-  const sameOperation = ui.operationOfDraft[key]?.operationId === operationId;
-  const drafts = sameOperation && (ui.drafts[key] ?? "").trim() === text.trim()
-    ? { ...ui.drafts, [key]: "" } : ui.drafts;
-  const draftOfOperation = { ...ui.draftOfOperation };
-  const operationOfDraft = { ...ui.operationOfDraft };
-  delete draftOfOperation[operationId];
-  if (sameOperation) delete operationOfDraft[key];
-  return { ...ui, drafts, draftOfOperation, operationOfDraft };
-}
-
 export default function App() {
   const t = useT();
   const snapshot = useSnapshot();
   const [ui, setUi] = useState<UiState>(loadUiState);
   const [booted, setBooted] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
+  const navigationGeneration = useRef(0);
   const [sendMode, setSendMode] = useState<SendMode>("steer");
+  /**
+   * 当前用途的即时值。发送／回查／重试都在 await 之后才清稿，那时组件可能已经重渲染过好几次：
+   * 直接用 await 所在那次 render 闭包里的 sendMode，会在"steer 发起 → 用户改成 follow-up →
+   * 旧回执到达"时按 steer 清掉用户的新稿。这里保证清稿读到的是**此刻**的用途。
+   */
+  const sendModeRef = useRef(sendMode);
+  sendModeRef.current = sendMode;
+  // D02：缺配置提示里的「去设置」直接落在模型分区；侧栏的设置入口仍从外观开始
+  const [settingsSection, setSettingsSection] = useState<"appearance" | "startup" | "model" | "about">("appearance");
   const [dismissedCloseErrorRevision, setDismissedCloseErrorRevision] = useState<number | null>(null);
   const [draftPersistFailed, setDraftPersistFailed] = useState(false);
   // 同次双击不重复投递：同草稿键+同原文的在途提交直接忽略（重试走消息块上的重试入口）。
@@ -161,7 +157,11 @@ export default function App() {
       const unknownOps = prev.unknownOps.filter((op) => {
         const hit = Object.values(snapshot.timelines).flat().find((b) => b.kind === "message" && b.operationId === op);
         if (!hit || hit.kind !== "message" || !hit.receipt || hit.receipt.status === "unknown") return true;
-        if (hit.receipt.status === "accepted") next = clearAcceptedDraft(next, op, hit.text);
+        // 只有带发送身份的用户消息才谈得上"这次发送的草稿版本"；助手/工具块没有可清的原稿。
+        if (hit.receipt.status === "accepted" && hit.kind === "message" && hit.role === "user" && hit.mode) {
+          // 历史消息块携带的就是这次发送的完整草稿版本（文字、用途与引用集合身份）。
+          next = clearAcceptedDraft(next, op, draftVersionOf(hit.text, hit.mode, hit.references), sendModeRef.current);
+        }
         return false;
       });
       if (unknownOps.length === prev.unknownOps.length) return prev;
@@ -213,10 +213,10 @@ export default function App() {
     if (!snapshot) return null;
     // 来源一：外层应答丢失的待核对标记（ui.unknownOps，只读定界，不重建接收事实）；
     // 来源二：时间线原消息回执投影仍为 unknown（持久化的待核对事实）
-    if (heldSend && ui.unknownOps.includes(heldSend.operationId)) return heldSend.text;
+    if (heldSend && ui.unknownOps.includes(heldSend.operationId)) return heldSend.version.text;
     for (const blocks of Object.values(snapshot.timelines)) {
       const hit = blocks.find((b) => b.kind === "message" && b.operationId === heldSend?.operationId);
-      if (heldSend && hit && hit.kind === "message" && hit.receipt?.status === "unknown") return heldSend.text;
+      if (heldSend && hit && hit.kind === "message" && hit.receipt?.status === "unknown") return heldSend.version.text;
     }
     // 首发原稿关联仍在 draft:<task>，新会话不能因此漏掉原消息待核对的 C06 说明。
     const unresolved = [...(snapshot.timelines[ui.selectedSessionId ?? ""] ?? [])].reverse().find(
@@ -251,13 +251,15 @@ export default function App() {
   };
 
   const handleSelectSession = (sessionId: string) => {
-    void latestSnapshot().then((s) => selectSession(sessionId, s, (p) => selectAndRecord(p), ui));
+    const generation = ++navigationGeneration.current;
+    void latestSnapshot().then((s) => { if (navigationGeneration.current === generation) selectSession(sessionId, s, (p) => selectAndRecord(p), ui); });
   };
   const handleSelectDraft = (taskId: string) => {
-    void latestSnapshot().then((s) => selectDraft(taskId, s, (p) => selectAndRecord(p), ui));
+    const generation = ++navigationGeneration.current;
+    void latestSnapshot().then((s) => { if (navigationGeneration.current === generation) selectDraft(taskId, s, (p) => selectAndRecord(p), ui); });
   };
 
-  const handleSend = async () => {
+  const handleSend = async (references: readonly WorkReference[] = []) => {
     const key = draftKey;
     const text = draft.trim();
     if (!key || !text) return;
@@ -268,44 +270,44 @@ export default function App() {
     const submitting = { key, text };
     submittingRef.current = submitting;
     bumpSubmit((n) => n + 1);
-    // 发送身份由界面随草稿持有：同文同模式复用（外层应答丢失/重开后同身份重发可只读找回），
-    // 内容或模式变了即新身份（不同文字不共享 operationId）。
+    // 发送身份由界面随草稿持有：**完整草稿版本**（文字+用途+引用集合）相同才复用同一身份
+    // （外层应答丢失/重开后同身份重发可只读找回）；任一项变了即新身份。
+    const referencesAtSend = references;
+    const versionAtSend = draftVersionOf(text, sendMode, referencesAtSend);
     const held = ui.operationOfDraft[key];
-    const reused = held && held.text === text && held.mode === sendMode;
-    const operationId = reused ? held.operationId : newOperationId();
+    const reused = isSameDraftVersion(held?.version, versionAtSend);
+    const operationId = reused ? held!.operationId : newOperationId();
     const effectiveMode = sendMode;
     if (!reused) {
       setUi((prev) => ({
         ...prev,
-        operationOfDraft: { ...prev.operationOfDraft, [key]: { operationId, text, mode: effectiveMode } },
+        operationOfDraft: { ...prev.operationOfDraft, [key]: { operationId, version: versionAtSend } },
         draftOfOperation: { ...prev.draftOfOperation, [operationId]: key },
       }));
     }
     try {
+      // 引用随本次发送一起带走：用户原文字与引用内容在执行端分成独立内容块。
       const result = ui.selectedSessionId
-        ? await window.dcode.sendMessage({ sessionId: ui.selectedSessionId, text, mode: effectiveMode, operationId })
-        : await window.dcode.sendMessage({ taskId: ui.draftTaskId ?? undefined, text, mode: effectiveMode, operationId });
+        ? await window.dcode.sendMessage({ sessionId: ui.selectedSessionId, text, references: referencesAtSend, mode: effectiveMode, operationId })
+        : await window.dcode.sendMessage({ taskId: ui.draftTaskId ?? undefined, text, references: referencesAtSend, mode: effectiveMode, operationId });
       // 续跑一律基于最新界面状态（等待回执期间用户可能已继续编辑或切走）：
       // 只清与本次提交仍对应（同键、同身份、内容未被新编辑替换）的原稿，其余草稿不动；
       // 首发进入新会话也仅当用户仍停留在同一草稿且未开始新编辑——切走或已改写的不拉回。
       setUi((prev) => {
-        const heldNow = prev.operationOfDraft[key];
-        const sameOperation = heldNow && heldNow.operationId === operationId;
-        const untouched = (prev.drafts[key] ?? "").trim() === text.trim();
-        let next = prev;
-        // 草稿只在「已接收」后清除；未接收／待核对保留原文（重试走消息块入口或同身份重发）
-        if (result.receipt.status === "accepted" && sameOperation) {
-          const drafts = { ...prev.drafts };
-          if (untouched) drafts[key] = "";
-          const operationOfDraft = { ...prev.operationOfDraft };
-          const draftOfOperation = { ...prev.draftOfOperation };
-          delete operationOfDraft[key];
-          delete draftOfOperation[operationId];
-          next = { ...next, drafts, operationOfDraft, draftOfOperation };
-        }
+        // 草稿只在「已接收」后清除；未接收／待核对保留原文（重试走消息块入口或同身份重发）。
+        // 三条清稿通路走的是同一个判据函数，不在这里另写一份"只比文字"的近似实现。
+        // 先按**清稿前**的当前草稿判定是否仍是那一版：首发转入新会话据此决定是否跟随，
+        // 若在清稿之后再判，文字已被清空、永远判不出同一版。
+        const sameVersion = isSameDraftVersion(
+          draftVersionOf((prev.drafts[key] ?? "").trim(), sendModeRef.current, prev.referencesOfDraft[key]),
+          versionAtSend,
+        );
+        let next = result.receipt.status === "accepted"
+          ? clearAcceptedDraft(prev, operationId, versionAtSend, sendModeRef.current)
+          : prev;
         if (!ui.selectedSessionId) {
           const currentKey = next.selectedSessionId ?? (next.draftTaskId ? `draft:${next.draftTaskId}` : null);
-          if (currentKey === key && untouched) {
+          if (currentKey === key && sameVersion) {
             next = { ...next, selectedSessionId: result.sessionId, draftTaskId: null, notice: null };
             next.lastScene = { sessionId: result.sessionId, draftTaskId: null };
           }
@@ -333,12 +335,11 @@ export default function App() {
   const clearDraftOnAccepted = (sessionId: string, blockId: string, accepted: boolean) => {
     if (!accepted) return;
     const block = (snapshot.timelines[sessionId] ?? []).find((b) => b.id === blockId);
-    const operationId = block && block.kind === "message" ? block.operationId : undefined;
-    const blockText = block && block.kind === "message" ? block.text : undefined;
-    if (!operationId) return;
-    setUi((prev) => {
-      return clearAcceptedDraft(prev, operationId, blockText ?? "");
-    });
+    if (!block || block.kind !== "message" || !block.operationId || !block.mode) return;
+    const operationId = block.operationId;
+    const version = draftVersionOf(block.text, block.mode, block.references);
+    // 同样读当前用途：查回／重试的在途期间用户可能已经改了输入选项。
+    setUi((prev) => clearAcceptedDraft(prev, operationId, version, sendModeRef.current));
   };
 
   const isDraft =
@@ -382,7 +383,10 @@ export default function App() {
               : [...ui.expandedTaskIds, id],
           })
         }
-        onOpenSettings={() => patch({ view: "settings" })}
+        onOpenSettings={() => {
+          setSettingsSection("appearance");
+          patch({ view: "settings" });
+        }}
         onCreateTask={(workspaceId, parentId, title) => {
           void window.dcode.createTask({ workspaceId, parentId, title }).then((task) => {
             patch({ expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, workspaceId])] });
@@ -391,6 +395,10 @@ export default function App() {
           });
         }}
         onMoveTask={(taskId, targetWorkspaceId) => void window.dcode.moveTask({ taskId, targetWorkspaceId })}
+        onWorkspaceCreated={(workspace) => {
+          patch({ expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, workspace.id])] });
+          handleSelectDraft(workspace.defaultTaskId);
+        }}
       />
 
       <main className="flex min-h-0 flex-1 min-w-0 flex-col bg-background">
@@ -427,6 +435,7 @@ export default function App() {
         {ui.view === "settings" ? (
           <SettingsPage
             snapshot={snapshot}
+            initialSection={settingsSection}
             onBack={() => patch({ view: "session" })}
             onUpdateSettings={(input) => { void window.dcode.updateSettings(input).catch(() => undefined); }}
           />
@@ -437,15 +446,36 @@ export default function App() {
             draft={draft}
             focusKey={focusKey}
             onDraftChange={(text) => draftKey && patch({ drafts: { ...ui.drafts, [draftKey]: text } })}
-            onSend={() => void handleSend()}
+            references={draftKey ? ui.referencesOfDraft[draftKey] ?? [] : []}
+            // 归属跟着当前草稿键走：选中会话（含空时间线）按 sessionId，新任务草稿按 taskId
+            referenceScope={ui.selectedSessionId
+              ? { sessionId: ui.selectedSessionId }
+              : ui.draftTaskId
+                ? { taskId: ui.draftTaskId }
+                : null}
+            // 更新式写入：作用在该草稿键的当前引用集合上，不用渲染时的旧副本
+            onReferencesChange={(update) => {
+              if (!draftKey) return;
+              setUi((prev) => ({
+                ...prev,
+                referencesOfDraft: { ...prev.referencesOfDraft, [draftKey]: [...update(prev.referencesOfDraft[draftKey] ?? [])] },
+              }));
+            }}
+            onSend={(refs) => void handleSend(refs)}
             pendingSendText={pendingSendText}
             unknownSendText={unknownSendText}
             mode={sendMode}
             onModeChange={setSendMode}
+            sessionModelState={ui.selectedSessionId ? snapshot.sessionModels[ui.selectedSessionId] ?? null : null}
             onPickRecent={handleSelectSession}
             onPickRecommended={(text) => {
               if (draftKey) patch({ drafts: { ...ui.drafts, [draftKey]: text } });
               setFocusKey((n) => n + 1);
+            }}
+            // D02：缺配置时到真实的模型配置位置；进入设置不清草稿、不改变执行状态
+            onOpenSettings={() => {
+              setSettingsSection("model");
+              patch({ view: "settings" });
             }}
           />
         ) : selectedSession ? (
@@ -455,7 +485,16 @@ export default function App() {
             locationLabel={locationOf(snapshot, ui.selectedSessionId, null, t("nav.defaultTask"))}
             draft={draft}
             onDraftChange={(text) => draftKey && patch({ drafts: { ...ui.drafts, [draftKey]: text } })}
-            onSend={() => void handleSend()}
+            references={draftKey ? ui.referencesOfDraft[draftKey] ?? [] : []}
+            // 更新式写入：作用在该草稿键的当前引用集合上，不用渲染时的旧副本
+            onReferencesChange={(update) => {
+              if (!draftKey) return;
+              setUi((prev) => ({
+                ...prev,
+                referencesOfDraft: { ...prev.referencesOfDraft, [draftKey]: [...update(prev.referencesOfDraft[draftKey] ?? [])] },
+              }));
+            }}
+            onSend={(refs) => void handleSend(refs)}
             onResume={() => handleResume(selectedSession.id)}
             resumePending={resumeFlights.current.has(selectedSession.id)}
             onDismissResume={() => patch({ dismissedResume: [...ui.dismissedResume, selectedSession.id] })}

@@ -20,6 +20,8 @@ export interface PiBackendOptions {
   demoDir: string | null;
   /** 门控应答：第 2 个及以后的模型请求在门文件出现前保持挂起（E2E 模拟在途生成） */
   gated: boolean;
+  /** 可选第二轮工具回合（只为「运行中改选」留可复现窗口，默认关闭）。 */
+  secondToolRound?: boolean;
 }
 
 const innerWrite = createWriteTool();
@@ -53,6 +55,7 @@ export function createPiBackend(options: PiBackendOptions): ExecutionBackend {
         demoDir: cwd,
         requestLog: join(cwd, "model-requests.jsonl"),
         answerGate: options.gated ? join(cwd, ".answer-gate") : null,
+        secondToolRound: options.secondToolRound === true,
       });
       const registry = createRegistry();
       registry.install(CodingTools);
@@ -63,7 +66,10 @@ export function createPiBackend(options: PiBackendOptions): ExecutionBackend {
         cwd,
         models: fixture.models,
         registry,
-        agent: { model: { provider: fixture.model.provider, modelId: fixture.model.id } },
+        agent: {
+          model: { provider: fixture.model.provider, modelId: fixture.model.id },
+          ...(context.model ? { thinkingLevel: (context.model.thinkingLevel ?? undefined) as never } : {}),
+        },
         env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd }),
       });
     },

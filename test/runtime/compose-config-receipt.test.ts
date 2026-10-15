@@ -223,10 +223,14 @@ await test('updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以�
   storage.failNext(); // B（排队在 A 之后）失败
   const secondPromise = app.updateSettings({ theme: 'light' });
   void secondPromise.catch(() => undefined);
-  assert.equal(storage.attempts.length >= 2 ? 1 : 0, 1, 'second save did not enqueue');
+  let secondDone = false;
+  void secondPromise.then(() => { secondDone = true; }, () => { secondDone = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(secondDone, false, 'A 停泊时 B 已认领但不能提前收束');
 
   // A 真实落盘成功；B 在 FIFO 中随后失败
   storage.releaseHeld();
+  await waitFor(() => storage.attempts.length >= 2, 'B 的实际保存应在 A 收束后到达存储');
   await assert.rejects(secondPromise, /settings-save-failed/);
   const firstResult = await first;
   assert.equal(firstResult.theme, 'dark', 'A durably saved and is the actual persisted configuration');
@@ -284,7 +288,7 @@ await test('updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧
 });
 
 for (const boundary of ['persistNow', 'flush'] as const) {
-  await test(`updateSettings: ${boundary} 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置`, { timeout: 15000 }, async (t) => {
+  await test(`updateSettings: ${boundary} 等已认领的 A/B 实际收束后再保存最新设置；关闭拒绝新写入`, { timeout: 15000 }, async (t) => {
     const storage = new HoldStorage();
     const app = new DCodeApplication(new MockExecutionBackend({ timescale: 0.01 }), storage);
     t.after(async () => { storage.releaseAll(); await app.flush(); });
@@ -293,12 +297,16 @@ for (const boundary of ['persistNow', 'flush'] as const) {
     storage.holdNext();
     const first = app.updateSettings({ theme: 'dark' });
     let finished = false;
+    storage.holdNext();
+    // flush 是真实关闭：A/B 都须先正式认领；关闭后的新设置必须拒绝，不能借测试绕过关闭门。
+    // persistNow 保留“等待 A 期间 B 到达”的原动作，继续证明等待者会核后来登记的保存。
+    const beforeClose = boundary === 'flush' ? app.updateSettings({ theme: 'light' }) : null;
     const waiting = boundary === 'flush' ? app.flush() : app.sendMessage({
       taskId: 'task-home-default', text: 'controlled persistNow input', mode: 'steer', operationId: `persist-${boundary}`,
     });
     void waiting.then(() => { finished = true; }, () => undefined);
-    storage.holdNext();
-    const second = app.updateSettings({ theme: 'light' });
+    const second = beforeClose ?? app.updateSettings({ theme: 'light' });
+    if (boundary === 'flush') await assert.rejects(app.updateSettings({ theme: 'system' }), /settings-closing/);
     storage.releaseOldest();
     await first;
     // 让等待 A 的续跑经过一个完整事件循环；B 的控制门仍关闭，无时长推定。

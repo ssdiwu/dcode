@@ -9,9 +9,10 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchApp, assertValidationModel, ready, waitForSnapshot } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-// 当前测试的证据由测试自行建立目录，不依赖某次历史交付恰好留下的文件夹。
-const evidenceDir = join(import.meta.dirname, "evidence", "pi-execution");
+// 证据写进本次运行的隔离根（见 evidence-root.mjs），不覆盖任何历史归档。
+const piEvidence = evidenceDir("pi-execution");
 
 const requestCount = (demoDir) => {
   const log = join(demoDir, "model-requests.jsonl");
@@ -20,7 +21,6 @@ const requestCount = (demoDir) => {
 };
 
 test("真实 Pi：发送→接收→真实工具写文件→暂停→重开只读→显式继续→done", async () => {
-  mkdirSync(evidenceDir, { recursive: true });
   const root = mkdtempSync(join(tmpdir(), "dcode-pi-e2e-"));
   const demoDir = join(root, "demo-work");
   mkdirSync(demoDir, { recursive: true });
@@ -115,7 +115,7 @@ test("真实 Pi：发送→接收→真实工具写文件→暂停→重开只�
       assert.equal(receipt?.processing, "done", "同一 operationId 须 done，而非靠 pendingInputs 归零");
       assert.equal(requestCount(demoDir), requestsBeforeLookup, "done 后原合同的回查仍只读");
       const originalReceipt = (s) => s.timelines[identity.sessionId].find((b) => b.id === identity.blockId)?.receipt;
-      writeFileSync(join(evidenceDir, "pi-natural-observation.json"), JSON.stringify({
+      writeFileSync(join(piEvidence, "pi-natural-observation.json"), JSON.stringify({
         identity, beforeResume: originalReceipt(snap2), gateHeldAfterResume: originalReceipt(placedSnapshot),
         naturalDoneBeforeExplicitLookup: originalReceipt(doneSnapshot), explicitReadAfterDone: receipt,
         requestsAtPause, requestsBeforeLookup, requestsAfterLookup: requestCount(demoDir),

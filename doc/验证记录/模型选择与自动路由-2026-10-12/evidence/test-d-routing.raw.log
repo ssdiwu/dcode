@@ -1,0 +1,296 @@
+TAP version 13
+# Subtest: 自动路由：能力筛选先于额度
+    # Subtest: 能力不满足的候选不参与额度判定，直接记为能力不满足
+    ok 1 - 能力不满足的候选不参与额度判定，直接记为能力不满足
+      ---
+      duration_ms: 0.436
+      type: 'test'
+      ...
+    # Subtest: 没有适合候选时保留工作，不把不匹配模型降级顶替
+    ok 2 - 没有适合候选时保留工作，不把不匹配模型降级顶替
+      ---
+      duration_ms: 0.057958
+      type: 'test'
+      ...
+    # Subtest: 工作不可推进时不唤醒：判定保留工作而不是选模
+    ok 3 - 工作不可推进时不唤醒：判定保留工作而不是选模
+      ---
+      duration_ms: 0.034916
+      type: 'test'
+      ...
+    1..3
+ok 1 - 自动路由：能力筛选先于额度
+  ---
+  duration_ms: 0.82825
+  type: 'suite'
+  ...
+# Subtest: 自动路由：额度事实的五态严格分开
+    # Subtest: 有已确认可用候选时直接采用，不先制造一次无额度调用失败
+    ok 1 - 有已确认可用候选时直接采用，不先制造一次无额度调用失败
+      ---
+      duration_ms: 0.088292
+      type: 'test'
+      ...
+    # Subtest: 额度全部未知且没有耗尽依据时，只对同一原工作做有界尝试
+    ok 2 - 额度全部未知且没有耗尽依据时，只对同一原工作做有界尝试
+      ---
+      duration_ms: 0.037167
+      type: 'test'
+      ...
+    # Subtest: 暂不支持（unsupported）与未知不同：不当作可用采信
+    ok 3 - 暂不支持（unsupported）与未知不同：不当作可用采信
+      ---
+      duration_ms: 0.030625
+      type: 'test'
+      ...
+    # Subtest: 已知全部耗尽：保留工作等明确继续，不改标成未知绕过
+    ok 4 - 已知全部耗尽：保留工作等明确继续，不改标成未知绕过
+      ---
+      duration_ms: 0.075375
+      type: 'test'
+      ...
+    # Subtest: 已知存在耗尽依据时，即使还有未知候选也不做有界尝试
+    ok 5 - 已知存在耗尽依据时，即使还有未知候选也不做有界尝试
+      ---
+      duration_ms: 0.160834
+      type: 'test'
+      ...
+    # Subtest: 同池内一窗耗尽时，另一窗口的「可用」不采信
+    ok 6 - 同池内一窗耗尽时，另一窗口的「可用」不采信
+      ---
+      duration_ms: 0.136291
+      type: 'test'
+      ...
+    # Subtest: 不同池的耗尽不影响另一个池的可用候选
+    ok 7 - 不同池的耗尽不影响另一个池的可用候选
+      ---
+      duration_ms: 0.134084
+      type: 'test'
+      ...
+    1..7
+ok 2 - 自动路由：额度事实的五态严格分开
+  ---
+  duration_ms: 0.824167
+  type: 'suite'
+  ...
+# Subtest: 指定模式：不扩大范围、不换备用
+    # Subtest: 额度未知时只对该模型有界尝试，不开放其它候选
+    ok 1 - 额度未知时只对该模型有界尝试，不开放其它候选
+      ---
+      duration_ms: 0.059542
+      type: 'test'
+      ...
+    # Subtest: 指定模型能力不足时保留原因，不擅自换备用
+    ok 2 - 指定模型能力不足时保留原因，不擅自换备用
+      ---
+      duration_ms: 0.067333
+      type: 'test'
+      ...
+    # Subtest: 指定模型额度已耗尽时保留原因，等待明确继续
+    ok 3 - 指定模型额度已耗尽时保留原因，等待明确继续
+      ---
+      duration_ms: 0.024708
+      type: 'test'
+      ...
+    1..3
+ok 3 - 指定模式：不扩大范围、不换备用
+  ---
+  duration_ms: 0.183875
+  type: 'suite'
+  ...
+# Subtest: 优先级：新选择 / 暂停 / 目标失效压过额度读取窗口里的旧结果
+    # Subtest: supersededBy 直接拦截，不用旧选择发起任何请求
+    ok 1 - supersededBy 直接拦截，不用旧选择发起任何请求
+      ---
+      duration_ms: 0.037042
+      type: 'test'
+      ...
+    # Subtest: 注册表：额度读取期间改选，旧结果不覆盖较新的选择
+    ok 2 - 注册表：额度读取期间改选，旧结果不覆盖较新的选择
+      ---
+      duration_ms: 5.442833
+      type: 'test'
+      ...
+    1..2
+ok 4 - 优先级：新选择 / 暂停 / 目标失效压过额度读取窗口里的旧结果
+  ---
+  duration_ms: 5.580958
+  type: 'suite'
+  ...
+# Subtest: 条件参数：只用逐档核实的档位
+    # Subtest: 已核实不支持的档位被拒，并如实说明；不静默降级到别档
+    ok 1 - 已核实不支持的档位被拒，并如实说明；不静默降级到别档
+      ---
+      duration_ms: 0.260375
+      type: 'test'
+      ...
+    # Subtest: 指定模式下按**刚选定**的模型设档位：还没发过请求也能设
+    ok 2 - 指定模式下按**刚选定**的模型设档位：还没发过请求也能设
+      ---
+      duration_ms: 0.127542
+      type: 'test'
+      ...
+    # Subtest: Pi 能力端口：thinkingLevelMap 里 null=该档不支持，缺键=未核实（都不是支持）
+    ok 3 - Pi 能力端口：thinkingLevelMap 里 null=该档不支持，缺键=未核实（都不是支持）
+      ---
+      duration_ms: 1.641625
+      type: 'test'
+      ...
+    # Subtest: 推理布尔为真但无逐档资料时，不显示任何档位（不按布尔猜六档）
+    ok 4 - 推理布尔为真但无逐档资料时，不显示任何档位（不按布尔猜六档）
+      ---
+      duration_ms: 0.417834
+      type: 'test'
+      ...
+    1..4
+ok 5 - 条件参数：只用逐档核实的档位
+  ---
+  duration_ms: 2.513875
+  type: 'suite'
+  ...
+# Subtest: 额度读取：没有可靠来源时如实 unsupported
+    # Subtest: 无读取器时返回 unsupported，不返回 0 也不返回可用
+    ok 1 - 无读取器时返回 unsupported，不返回 0 也不返回可用
+      ---
+      duration_ms: 0.110292
+      type: 'test'
+      ...
+    # Subtest: 读取器抛错是「失败」态：降级为 unknown 并附真实原因，不是 0 也不是可用
+    ok 2 - 读取器抛错是「失败」态：降级为 unknown 并附真实原因，不是 0 也不是可用
+      ---
+      duration_ms: 0.062791
+      type: 'test'
+      ...
+    # Subtest: 形状无法核对时降级为 unknown，不采信为可用
+    ok 3 - 形状无法核对时降级为 unknown，不采信为可用
+      ---
+      duration_ms: 0.035042
+      type: 'test'
+      ...
+    # Subtest: 读取额度不发送输入、不启用执行：注册表只返回事实
+    ok 4 - 读取额度不发送输入、不启用执行：注册表只返回事实
+      ---
+      duration_ms: 0.036667
+      type: 'test'
+      ...
+    1..4
+ok 6 - 额度读取：没有可靠来源时如实 unsupported
+  ---
+  duration_ms: 0.279209
+  type: 'suite'
+  ...
+# Subtest: 两份事实：新会话默认与每条会话自己的选择分开
+    # Subtest: 改设置默认不动已有会话；改某条会话不动其它会话也不动默认
+    ok 1 - 改设置默认不动已有会话；改某条会话不动其它会话也不动默认
+      ---
+      duration_ms: 0.083834
+      type: 'test'
+      ...
+    # Subtest: 默认指向目录里没有的模型时如实失败，不先存下再失效
+    ok 2 - 默认指向目录里没有的模型时如实失败，不先存下再失效
+      ---
+      duration_ms: 0.03275
+      type: 'test'
+      ...
+    # Subtest: 选定目录里不存在的模型时保留用户选择但给出真实原因，不悄悄退回自动
+    ok 3 - 选定目录里不存在的模型时保留用户选择但给出真实原因，不悄悄退回自动
+      ---
+      duration_ms: 0.032209
+      type: 'test'
+      ...
+    1..3
+ok 7 - 两份事实：新会话默认与每条会话自己的选择分开
+  ---
+  duration_ms: 0.172875
+  type: 'suite'
+  ...
+# Subtest: 接收侧运行时校验
+    # Subtest: 「可用」必须带更新时间且无原因，否则无可核对来源
+    ok 1 - 「可用」必须带更新时间且无原因，否则无可核对来源
+      ---
+      duration_ms: 0.046833
+      type: 'test'
+      ...
+    # Subtest: 一个档位都没核实出来时必须给出真实说明
+    ok 2 - 一个档位都没核实出来时必须给出真实说明
+      ---
+      duration_ms: 0.049375
+      type: 'test'
+      ...
+    # Subtest: 「已采用」不得同时带失败原因：采用与失败分开记录
+    ok 3 - 「已采用」不得同时带失败原因：采用与失败分开记录
+      ---
+      duration_ms: 0.029875
+      type: 'test'
+      ...
+    # Subtest: 路由判定产出的每条尝试记录都能过接收侧校验（采用项不带原因）
+    ok 4 - 路由判定产出的每条尝试记录都能过接收侧校验（采用项不带原因）
+      ---
+      duration_ms: 0.054667
+      type: 'test'
+      ...
+    # Subtest: 会话选择与模型状态的畸形载荷被拒
+    ok 5 - 会话选择与模型状态的畸形载荷被拒
+      ---
+      duration_ms: 0.044542
+      type: 'test'
+      ...
+    # Subtest: fitsCapabilities 逐项核对，不按名称或排名推断
+    ok 6 - fitsCapabilities 逐项核对，不按名称或排名推断
+      ---
+      duration_ms: 0.020333
+      type: 'test'
+      ...
+    # Subtest: 额度判别辅助函数：只有真实 exhausted 才算已知耗尽
+    ok 7 - 额度判别辅助函数：只有真实 exhausted 才算已知耗尽
+      ---
+      duration_ms: 0.026084
+      type: 'test'
+      ...
+    1..7
+ok 8 - 接收侧运行时校验
+  ---
+  duration_ms: 0.310458
+  type: 'suite'
+  ...
+# Subtest: 注册表输出可过接收侧校验
+    # Subtest: 路由判定后的状态本身是合法的 SessionModelState
+    ok 1 - 路由判定后的状态本身是合法的 SessionModelState
+      ---
+      duration_ms: 0.095
+      type: 'test'
+      ...
+    # Subtest: 选择方式与实际采用分别可辨：改选择后实际采用仍是上一个
+    ok 2 - 选择方式与实际采用分别可辨：改选择后实际采用仍是上一个
+      ---
+      duration_ms: 0.130542
+      type: 'test'
+      ...
+    1..2
+ok 9 - 注册表输出可过接收侧校验
+  ---
+  duration_ms: 0.246625
+  type: 'suite'
+  ...
+# Subtest: 全部耗尽后不自动续跑
+    # Subtest: 耗尽后额度恢复也不会自动改成采用：必须等明确继续
+    ok 1 - 耗尽后额度恢复也不会自动改成采用：必须等明确继续
+      ---
+      duration_ms: 0.041167
+      type: 'test'
+      ...
+    1..1
+ok 10 - 全部耗尽后不自动续跑
+  ---
+  duration_ms: 0.062083
+  type: 'suite'
+  ...
+1..10
+# tests 36
+# suites 10
+# pass 36
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 863.004542

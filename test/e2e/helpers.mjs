@@ -7,6 +7,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import { access, mkdir, writeFile } from "node:fs/promises";
+import { seedState } from "../../src/application/seed.ts";
 import { _electron as electron } from "playwright-core";
 
 const require = createRequire(import.meta.url);
@@ -19,8 +21,19 @@ const liveProcesses = new Map();
  * @param {string} [stateDir] 复用已有状态目录（重开场景）；缺省创建隔离新目录
  * @param {Record<string, string>} [extraEnv] 附加环境变量（如 DCODE_EXECUTION=pi、DCODE_DEMO_DIR）
  */
-export async function launchApp(stateDir, extraEnv, entrypoint = ".") {
+export async function launchApp(stateDir, extraEnv, entrypoint = ".", options = {}) {
   const dir = stateDir ?? mkdtempSync(join(tmpdir(), "dcode-e2e-"));
+  if (extraEnv?.DCODE_VALIDATION_ASSEMBLY === "" && options.prebindProject !== false) {
+    // 普通装配也必须用真实隔离项目；资源加载不能落到 fixture 的真实 Home。
+    const stateFile = join(dir, 'dcode-prototype-state.json');
+    try { await access(stateFile); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const project = join(dir, 'project'); await mkdir(project, { recursive: true });
+      const state = seedState(); state.workspaces[0].folders = [project];
+      await writeFile(stateFile, JSON.stringify(state), { flag: 'wx', mode: 0o600 });
+    }
+  }
   // 启动同样要有界：全量运行曾出现 firstWindow 无限等待（无超时出口，整批被外层杀死）；
   // 超时后杀掉可能迟到的子进程，不留孤儿
   const withTimeout = (p, label, onTimeout) => {
@@ -41,7 +54,8 @@ export async function launchApp(stateDir, extraEnv, entrypoint = ".") {
   const app = await withTimeout(
     electron.launch({
       executablePath: electronBinary,
-      args: [entrypoint],
+      // 经典 thumb 场景必须固定实际系统控件形态；仅本次进程的易失参数域，不写用户全局偏好。
+      args: [entrypoint, ...(options.classicScrollbars && process.platform === "darwin" ? ["-AppleShowScrollBars", "Always"] : [])],
       cwd: join(import.meta.dirname, "../.."),
       env: {
         ...env,
@@ -81,27 +95,43 @@ export async function launchApp(stateDir, extraEnv, entrypoint = ".") {
   });
   // 页面错误直接进测试输出，避免空渲染类问题静默
   page.on("pageerror", (error) => console.error("[pageerror]", String(error).slice(0, 300)));
-  let closed = false;
+  // 认领的是同一真实关闭结果，不能在退出前把 closed 布尔置真并放过后来者。
+  let closeFlight = null;
   return {
     app,
     page,
     stateDir: dir,
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      // 真实退出信号：进程 exit 才证明 before-quit 收束（全部会话 close + 存储收束）真正完成；
-      // app.close() 只触发优雅关闭，是否退出以 exit 为准；超时即失败，不再吞错。
-      const exited = new Promise((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error("close() 超时：应用 15 秒内未真实退出（收束可能被拦截或挂起）")),
-          15_000,
-        );
-        proc.once("exit", () => {
-          clearTimeout(timer);
-          resolve(undefined);
+    close: () => {
+      if (closeFlight) return closeFlight;
+      closeFlight = (async () => {
+        // exit 是一次性事件：已收到真实出口后再挂 once 会产生虚假的15秒超时。
+        // 此处只消费已有事实，不把异常退出或直接 app.exit 当作应用 flush 成功。
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          if (proc.exitCode === 0 && proc.signalCode === null) return;
+          throw new Error(`close()：程序在关闭前已异常退出 code=${proc.exitCode} signal=${proc.signalCode}`);
+        }
+        let timer;
+        let onExit;
+        const exited = new Promise((resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("close() 超时：应用 15 秒内未真实退出（收束可能被拦截或挂起）")),
+            15_000,
+          );
+          onExit = (code, signal) => {
+            if (code === 0 && signal === null) resolve(undefined);
+            else reject(new Error(`close()：程序在关闭期间异常退出 code=${code} signal=${signal}`));
+          };
+          proc.once("exit", onExit);
         });
-      });
-      await Promise.race([app.close().then(() => exited), exited]);
+        try {
+          // 真实退出仍是唯一成功信号；重复调用共同等待，不吞错或增加等待时间。
+          await Promise.race([app.close().then(() => exited), exited]);
+        } finally {
+          clearTimeout(timer);
+          proc.removeListener("exit", onExit);
+        }
+      })();
+      return closeFlight;
     },
   };
 }

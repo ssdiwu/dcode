@@ -1,0 +1,206 @@
+
+> dcode-redesign@0.1.0-dev architecture:test
+> node --test tools/architecture/check.test.mjs
+
+TAP version 13
+# Subtest: legal composition and renderer type imports use public contracts
+ok 1 - legal composition and renderer type imports use public contracts
+  ---
+  duration_ms: 18.642958
+  type: 'test'
+  ...
+# Subtest: empty bootstrap is explicitly reported as zero product sources
+ok 2 - empty bootstrap is explicitly reported as zero product sources
+  ---
+  duration_ms: 179.15425
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency node:fs
+ok 3 - renderer rejects host dependency node:fs
+  ---
+  duration_ms: 3.742125
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency fs/promises
+ok 4 - renderer rejects host dependency fs/promises
+  ---
+  duration_ms: 2.773
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency electron
+ok 5 - renderer rejects host dependency electron
+  ---
+  duration_ms: 2.980083
+  type: 'test'
+  ...
+# Subtest: renderer rejects host dependency @earendil-works/pi-durable
+ok 6 - renderer rejects host dependency @earendil-works/pi-durable
+  ---
+  duration_ms: 3.4905
+  type: 'test'
+  ...
+# Subtest: renderer cannot reach application even through a configured path alias
+ok 7 - renderer cannot reach application even through a configured path alias
+  ---
+  duration_ms: 2.955583
+  type: 'test'
+  ...
+# Subtest: allowed module direction still rejects private implementation imports
+ok 8 - allowed module direction still rejects private implementation imports
+  ---
+  duration_ms: 2.997333
+  type: 'test'
+  ...
+# Subtest: re-exports cannot launder host access through the contract module
+ok 9 - re-exports cannot launder host access through the contract module
+  ---
+  duration_ms: 3.246208
+  type: 'test'
+  ...
+# Subtest: literal dynamic imports are checked
+ok 10 - literal dynamic imports are checked
+  ---
+  duration_ms: 3.186834
+  type: 'test'
+  ...
+# Subtest: computed module names fail instead of silently reducing coverage
+ok 11 - computed module names fail instead of silently reducing coverage
+  ---
+  duration_ms: 3.696167
+  type: 'test'
+  ...
+# Subtest: CommonJS require cannot bypass renderer restrictions
+ok 12 - CommonJS require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.602208
+  type: 'test'
+  ...
+# Subtest: module.require cannot bypass renderer restrictions
+ok 13 - module.require cannot bypass renderer restrictions
+  ---
+  duration_ms: 2.037375
+  type: 'test'
+  ...
+# Subtest: bracket-form require is checked
+ok 14 - bracket-form require is checked
+  ---
+  duration_ms: 2.649166
+  type: 'test'
+  ...
+# Subtest: TypeScript import-equals is checked
+ok 15 - TypeScript import-equals is checked
+  ---
+  duration_ms: 2.385875
+  type: 'test'
+  ...
+# Subtest: TypeScript import types are checked
+ok 16 - TypeScript import types are checked
+  ---
+  duration_ms: 2.536
+  type: 'test'
+  ...
+# Subtest: same-module file cycles fail
+ok 17 - same-module file cycles fail
+  ---
+  duration_ms: 3.40175
+  type: 'test'
+  ...
+# Subtest: unknown source module fails instead of becoming uninspected code
+ok 18 - unknown source module fails instead of becoming uninspected code
+  ---
+  duration_ms: 2.24775
+  type: 'test'
+  ...
+# Subtest: source outside src also fails
+ok 19 - source outside src also fails
+  ---
+  duration_ms: 1.987625
+  type: 'test'
+  ...
+# Subtest: root tool snapshots are excluded without skipping product sources
+ok 20 - root tool snapshots are excluded without skipping product sources
+  ---
+  duration_ms: 2.852417
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach tool snapshots
+ok 21 - product imports cannot reach tool snapshots
+  ---
+  duration_ms: 2.897125
+  type: 'test'
+  ...
+# Subtest: a nested directory named delta does not hide renderer dependencies
+ok 22 - a nested directory named delta does not hide renderer dependencies
+  ---
+  duration_ms: 2.340625
+  type: 'test'
+  ...
+# Subtest: ordinary documentation scripts remain subject to ownership checks
+ok 23 - ordinary documentation scripts remain subject to ownership checks
+  ---
+  duration_ms: 2.412833
+  type: 'test'
+  ...
+# Subtest: product imports cannot reach excluded test implementations
+ok 24 - product imports cannot reach excluded test implementations
+  ---
+  duration_ms: 2.735625
+  type: 'test'
+  ...
+# Subtest: missing internal imports fail
+ok 25 - missing internal imports fail
+  ---
+  duration_ms: 2.599666
+  type: 'test'
+  ...
+# Subtest: syntax errors fail
+ok 26 - syntax errors fail
+  ---
+  duration_ms: 3.075833
+  type: 'test'
+  ...
+# Subtest: source directory symlinks cannot escape the audit
+ok 27 - source directory symlinks cannot escape the audit
+  ---
+  duration_ms: 2.317042
+  type: 'test'
+  ...
+# Subtest: module policy cannot exclude the source root
+ok 28 - module policy cannot exclude the source root
+  ---
+  duration_ms: 1.197625
+  type: 'test'
+  ...
+# Subtest: product source cannot be disguised as configuration
+ok 29 - product source cannot be disguised as configuration
+  ---
+  duration_ms: 0.919417
+  type: 'test'
+  ...
+# Subtest: policy dependencies must name real modules
+ok 30 - policy dependencies must name real modules
+  ---
+  duration_ms: 0.938375
+  type: 'test'
+  ...
+# Subtest: mock and Pi implementations cannot depend on each other
+ok 31 - mock and Pi implementations cannot depend on each other
+  ---
+  duration_ms: 2.765583
+  type: 'test'
+  ...
+# Subtest: CLI returns a failing exit code for an illegal dependency
+ok 32 - CLI returns a failing exit code for an illegal dependency
+  ---
+  duration_ms: 177.023458
+  type: 'test'
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 32
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 636.25675

@@ -1,4 +1,5 @@
 // 检查器：全高右栏，按需出现。承载需要持续阅读的文件 diff；关闭后阅读列回到居中。
+// 与侧栏对称的架子式表面：磨砂 + 极弱左缘，内部层级由标签、字重与差异语义承担。
 
 import { X } from "lucide-react";
 import type { FileChange } from "@/contracts";
@@ -20,16 +21,18 @@ export function Inspector({
   const t = useT();
   const active = files.find((f) => f.path === activeFile) ?? files[0];
   return (
-    <aside className="app-inspector flex flex-col border-l border-border bg-panel">
-      <header className="titlebar-band flex shrink-0 items-center gap-2 border-b border-border px-3">
-        <span className="text-ui-sm font-medium flex-1">{t("inspector.title", { n: files.length })}</span>
+    <aside className="app-inspector glass glass-bar flex flex-col border-l border-[var(--edge)]">
+      <header className="titlebar-band flex shrink-0 items-center gap-2 border-b border-[var(--edge)] px-3">
+        <span className="flex-1 truncate text-ui-sm font-medium">{t("inspector.title", { n: files.length })}</span>
         <IconButton icon={X} label={t("inspector.close")} onClick={onClose} />
       </header>
-      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
+      {/* 文件标签：选中用 selected + 前景色，与悬停可辨；不额外描边 */}
+      <div className="flex shrink-0 gap-1 overflow-x-auto px-2 py-1.5">
         {files.map((file) => (
           <button
             key={file.path}
-            className={`shrink-0 rounded-md px-2 h-6.5 text-ui-xs font-mono cursor-default transition-colors duration-75 ${
+            title={file.path}
+            className={`h-6.5 shrink-0 cursor-default rounded-md px-2 font-mono text-ui-xs transition-colors duration-75 ${
               (active?.path ?? "") === file.path
                 ? "bg-selected text-foreground"
                 : "text-subtle hover:bg-hover hover:text-foreground"

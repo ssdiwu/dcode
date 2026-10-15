@@ -120,9 +120,10 @@ export function sampleState(): PersistedState {
       "session-home-1": { sessionId: "session-home-1", status: "ready", note: "历史演示内容（模拟）", pendingInputs: 0, updatedAt: T + 4000 },
       "session-readme-1": { sessionId: "session-readme-1", status: "ready", note: "历史演示内容（模拟）", pendingInputs: 0, updatedAt: T + 3000 },
     },
-    settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system" },
+    settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "auto" }, modelCandidates: [] },
     model: { configured: false, label: null, simulated: true },
     pendingFirstSends: {},
+    sessionModels: {},
   };
 }
 

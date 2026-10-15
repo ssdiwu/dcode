@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { chmodSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { launchApp, ready, waitForSnapshot, cleanup, killApp } from './helpers.mjs';
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVIDENCE = join(import.meta.dirname, '../../doc/验证记录/产品自有内容错误补修-2026-10-07', process.env.DCODE_SETTINGS_ERROR_PHASE ?? 'scenario-current');
+const EVIDENCE = evidenceDir("settings-error", process.env.DCODE_SETTINGS_ERROR_PHASE ?? 'scenario-current');
 mkdirSync(EVIDENCE, { recursive: true });
 
 test('设置新失败不能沿用旧忽略：失败→忽略→同类失败，含中间真实成功与无成功的中英连续路径', async () => {

@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSync } from 'esbuild';
 import { launchApp, ready, cleanup, killApp } from './helpers.mjs';
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVIDENCE = join(import.meta.dirname, '../../doc/验证记录/产品自有内容清理-2026-10-07/evidence/product-content');
+const EVIDENCE = evidenceDir("product-owned-content");
 mkdirSync(EVIDENCE, { recursive: true });
 const normal = { DCODE_VALIDATION_ASSEMBLY: '', DCODE_VALIDATION_SAMPLE: '0' };
 const forbidden = /原型|模拟执行|真实 Pi|控制令牌|同一身份|几何.*派生|prototype|No Pi|Real Pi|control token|same identity|interface geometry|Electron \+ React|0\.0\.0|0\.1\.0/i;
@@ -39,9 +40,11 @@ test('正常入口双语内容与标题干净；隐藏不解锁；macOS 标题�
         await page.getByRole('button', { name: new RegExp(`^${section}`) }).click();
         assert.doesNotMatch(await page.locator('body').innerText(), forbidden);
         if (section === '模型' || section === 'Model') {
-          // 添加/编辑服务商是合法入口；密码框必须为空、hosted key 不回显
+          // 添加/编辑服务商是合法入口；密钥框在「自定义」页签，密码框必须为空、hosted key 不回显
+          await page.getByRole('radio', { name: language === 'zh' ? /^自定义$/ : /^Custom$/ }).click();
           const pw = page.locator('input[type="password"]');
-          if (await pw.count() > 0) assert.equal(await pw.inputValue(), '');
+          assert.equal(await pw.count(), 1, '自定义页签应有且仅有一个密钥输入');
+          assert.equal(await pw.inputValue(), '');
         } else {
           assert.equal(await page.locator('input[type="password"]').count(), 0);
         }
@@ -89,6 +92,7 @@ test('旧数据、草稿关联、用户/工具原文跨双语及真实重开完�
   old.pendingFirstSends = { 'task-home-default': { sessionId: 'session-home-1', operationId: 'old-unknown', text: originalUser, mode: 'steer' } };
   writeFileSync(join(dir, 'dcode-prototype-state.json'), JSON.stringify(old));
   let current = await launchApp(dir, normal);
+  let primary = null;
   try {
     await ready(current.page);
     await current.page.getByRole('button', { name: /聊聊下个季度的规划/ }).click();
@@ -115,7 +119,18 @@ test('旧数据、草稿关联、用户/工具原文跨双语及真实重开完�
       const snapshot = await current.page.evaluate(() => window.dcode.getSnapshot());
       for (const field of ['workspaces', 'tasks', 'sessions', 'timelines']) assert.deepEqual(snapshot[field], old[field]);
       const ui = await current.page.evaluate(() => JSON.parse(localStorage.getItem('dcode-prototype-ui-v1')));
-      assert.deepEqual(ui.operationOfDraft, oldUi.operationOfDraft);
+      // C05 迁移：旧现场的操作身份、原文、用途与草稿关联**承接**，只是归一成完整草稿版本；
+      // 清掉旧关联会让那次待核对的发送失去归属，这里按承接后的形状逐项断言。
+      assert.deepEqual(ui.operationOfDraft, {
+        'session-home-1': {
+          operationId: oldUi.operationOfDraft['session-home-1'].operationId,
+          version: {
+            text: originalUser,
+            mode: oldUi.operationOfDraft['session-home-1'].mode,
+            referenceSetId: '[]',
+          },
+        },
+      });
       assert.deepEqual(ui.draftOfOperation, oldUi.draftOfOperation);
       assert.deepEqual(ui.unknownOps, oldUi.unknownOps);
       assert.doesNotMatch(await current.page.locator('nav').innerText(), forbidden);
@@ -131,7 +146,16 @@ test('旧数据、草稿关联、用户/工具原文跨双语及真实重开完�
     await current.page.getByRole('button', { name: 'New session' }).waitFor();
     assert.equal(await current.page.locator('textarea').inputValue(), originalUser);
     assert.deepEqual((await current.page.evaluate(() => window.dcode.getSnapshot())).timelines, old.timelines);
-  } finally { try { await current.close(); } finally { await killApp(current); cleanup(dir); } }
+  } catch (error) {
+    primary = error;
+    throw error;
+  } finally {
+    // 收束错误不能覆盖较早业务断言；两者都失败时保留各自原错误与位置。
+    try { await current.close(); } catch (error) {
+      if (primary && primary !== error) throw new AggregateError([primary, error], '旧数据业务与退出同时失败');
+      throw error;
+    } finally { await killApp(current); cleanup(dir); }
+  }
 });
 
 test('渲染失败页双语说明真实影响和下一步，不展示底层错误正文', async () => {

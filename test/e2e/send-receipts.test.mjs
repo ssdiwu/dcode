@@ -7,13 +7,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchApp, assertValidationModel, cleanup, ready, killApp, waitForSnapshot } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
 
 const COMPOSER_PLACEHOLDER = "交代需求、提问或粘贴内容…";
 
 // 末尾操作验收的几何/动作证据（悬浮卡片增量 r3 补测）
 // 新观测落在本片专用的 integration-observations（r2 原证据保留）
-const EVIDENCE = join(import.meta.dirname, "../../doc/验证记录/产品自有内容错误补修-2026-10-07/integration-observations/evidence", "composer-card-2026-10-06");
+const EVIDENCE = evidenceDir("send-receipts");
 
 // 只观察隔离测试中的输入与草稿保存，不替换产品状态或延迟回执。
 // 初次失败缺少放行前的输入证据；保留时序可区分输入未完成与之后的状态覆盖。
@@ -123,7 +124,8 @@ test("回执丢失但实际已接收：只读回查找回，不盲目重投", as
     await page.getByText("待核对", { exact: true }).waitFor();
     await page.getByText("执行中", { exact: true }).first().waitFor();
     assert.equal(await page.locator('button[data-slot="composer-primary"]').getAttribute("aria-label"), "暂停", "unknown 不替换已确认运行控制");
-    await page.locator(".input-surface").getByText("发送结果待核对，请在原消息上选择“回查”", { exact: false }).waitFor();
+    // C06 说明排在输入卡片之外（与原型 .composer-hint 同层），按它的实际位置定位
+    await page.locator("[data-slot=composer-note]").getByText("发送结果待核对，请在原消息上选择“回查”", { exact: false }).waitFor();
 
     // 只读回查找回：已接收；找回后原草稿键清除（与重试已接收同义）
     await page.getByRole("button", { name: "回查" }).click();
@@ -289,7 +291,7 @@ test("暂停中发送被拒：确认未接收保留原文与原因，重试复�
       Object.values(snapshot.timelines).flat().find((block) => block.kind === "message" && block.role === "user" && block.text === "暂停期间补充的要求"),
     ));
     assert.ok(rejectedInput?.operationId, "重试前记录本次未接收输入的身份");
-    const inputRow = page.locator("main div.rounded-xl").filter({ has: page.getByText("暂停期间补充的要求", { exact: true }) });
+    const inputRow = page.locator('main [data-slot="message"][data-from="user"]').filter({ has: page.getByText("暂停期间补充的要求", { exact: true }) });
 
     // 暂停中重试：仍是确认未接收，同一 operationId 不重复计入执行
     await inputRow.getByRole("button", { name: "重试" }).click();
@@ -721,6 +723,49 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
         const s = document.querySelector("main .overflow-y-auto");
         return s.scrollTop + s.clientHeight >= s.scrollHeight - 2;
       });
+    // 失败取证：贴底等待超时时保存几何连续样本（视口/scrollTop/max/dock 高/data-tight），
+    // 把“等待超时”变成可读到位置与形态连续变化的证据（0628 全量 raw 缺这些样本）。
+    const startGeoTrace = () =>
+      page.evaluate(() => {
+        const s = document.querySelector("main .overflow-y-auto");
+        const dock = document.querySelector("[data-slot=composer-dock]");
+        const surface = document.querySelector(".input-surface");
+        const samples = [];
+        const record = (kind) =>
+          samples.push({
+            t: Math.round(performance.now()),
+            kind,
+            vp: `${window.innerWidth}x${window.innerHeight}`,
+            st: Math.round(s.scrollTop),
+            max: Math.round(s.scrollHeight - s.clientHeight),
+            dockH: Math.round(dock.getBoundingClientRect().height),
+            tight: surface?.dataset.tight ?? null,
+          });
+        record("init");
+        const onScroll = () => record("scroll");
+        s.addEventListener("scroll", onScroll, { passive: true });
+        let raf = 0;
+        const loop = () => {
+          record("raf");
+          raf = requestAnimationFrame(loop);
+        };
+        raf = requestAnimationFrame(loop);
+        window.__dumpGeoTrace = () => {
+          cancelAnimationFrame(raf);
+          s.removeEventListener("scroll", onScroll);
+          return samples.slice(-300);
+        };
+      });
+    const atBottomTraced = async () => {
+      try {
+        await atBottom();
+      } catch (err) {
+        const trace = await page.evaluate(() => window.__dumpGeoTrace?.() ?? null).catch(() => null);
+        console.error("GEO-TRACE(贴底失败) " + JSON.stringify(trace));
+        throw err;
+      }
+    };
+    await startGeoTrace();
     await atBottom(); // 等产品自动定位钉底
 
     // 末尾测量：末文字行限定在消息正文（.leading-relaxed，排除回执行的徽标/按钮文本）；
@@ -729,12 +774,13 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
       page.evaluate((name) => {
         const scroller = document.querySelector("main .overflow-y-auto");
         const sr = scroller.getBoundingClientRect();
-        const card = document.querySelector("textarea").closest(".input-surface").getBoundingClientRect();
+        // 避让对象是整个输入 dock（卡片 ＋ 卡片之外的 C06 说明）
+        const card = document.querySelector("[data-slot=composer-dock]").getBoundingClientRect();
         const col = scroller.querySelector(".space-y-3");
         const rows = [...col.children].filter((el) => el.getBoundingClientRect().height > 1);
         const last = rows[rows.length - 1];
         // 正文容器必须存在：不退回整行（否则末文字行可能测成回执行的按钮/徽标文字）
-        const body = last.querySelector(".leading-relaxed");
+        const body = last.querySelector('[data-slot="message-body"]');
         const walker = body ? document.createTreeWalker(body, NodeFilter.SHOW_TEXT) : null;
         let node = null;
         let n = null;
@@ -769,7 +815,7 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
       }, btnName);
     const assertEnd = (g, label) => {
       assert.ok(g.canScroll, `${label}：时间线须真实溢出（验收不自欺）`);
-      assert.ok(g.bodyFound, `${label}：末尾正文容器（.leading-relaxed）须存在（不退回整行测量）`);
+      assert.ok(g.bodyFound, `${label}：末尾正文容器（[data-slot=message-body]）须存在（不退回整行测量）`);
       assert.ok(g.lineTop !== null, `${label}：须取到末尾正文文字行`);
       assert.ok(g.lineText?.includes("末段标记"), `${label}：末文字行须来自正文末段标记（实际「${g.lineText}」）`);
       assert.ok(g.lineTop >= g.scrollerTop - 1 && g.lineBottom <= g.cardTop + 1, `${label}：末文字行在可视区且在卡片上方 ${JSON.stringify(g)}`);
@@ -787,7 +833,7 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
     for (const size of [13, 16]) {
       await page.evaluate((s) => window.dcode.updateSettings({ fontSize: s }), size);
       await page.waitForFunction((s) => getComputedStyle(document.body).fontSize === `${s}px`, size);
-      await atBottom();
+      await atBottomTraced();
       g = await measureEnd("回查");
       assertEnd(g, `${size}px`);
       evidence.push({ round: `font${size}`, action: "回查", ...g });
@@ -797,7 +843,10 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].setSize(720, 480);
     });
-    await atBottom();
+    // setSize 返回早于渲染层 resize：先等真实新视口落地再等重钉（与 scroll.test 同资格），
+    // 旧几何上的“已贴底”不得提前放行，也不把未落地的视口当作通过（0628 预审指出的资格缺口）
+    await page.waitForFunction(() => window.innerWidth === 720 && window.innerHeight <= 482);
+    await atBottomTraced();
     g = await measureEnd("回查");
     assertEnd(g, "16px/720×480");
     evidence.push({ round: "font16-720x480", action: "回查", ...g });
@@ -808,7 +857,7 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
     evidence.push({ round: "lookup", result: "未找到提交记录已显示" });
 
     // 最大字号/紧凑窗口下按真实 DOM 测重试按钮，再真实点击
-    await atBottom();
+    await atBottomTraced();
     g = await measureEnd("重试");
     assertEnd(g, "16px/720×480 重试");
     evidence.push({ round: "font16-720x480", action: "重试", ...g });

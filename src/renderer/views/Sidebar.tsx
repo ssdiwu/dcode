@@ -3,11 +3,12 @@
 
 import { useMemo, useState } from "react";
 import { ChevronRight, FolderClosed, MoreHorizontal, Plus, Settings as SettingsIcon } from "lucide-react";
-import type { AppSnapshot, Session, Task, Workspace } from "@/contracts";
+import type { AppSnapshot, Session, Task, Workspace, WorkspaceCreationIntent } from "@/contracts";
 import { Button, IconButton } from "../components/Button";
 import { useT } from "../i18n";
 import { Badge } from "../components/Badge";
 import { Dialog, Menu } from "../components/Menu";
+import { WorkspaceDialog } from "../components/WorkspaceDialog";
 
 export interface SidebarSelection {
   sessionId: string | null;
@@ -28,6 +29,7 @@ export function Sidebar({
   onOpenSettings,
   onCreateTask,
   onMoveTask,
+  onWorkspaceCreated,
 }: {
   snapshot: AppSnapshot;
   selection: SidebarSelection;
@@ -42,10 +44,13 @@ export function Sidebar({
   onOpenSettings: () => void;
   onCreateTask: (workspaceId: string, parentId: string | null, title: string) => void;
   onMoveTask: (taskId: string, targetWorkspaceId: string) => void;
+  onWorkspaceCreated: (workspace: Workspace) => void;
 }) {
   const t = useT();
   const [newTaskFor, setNewTaskFor] = useState<{ workspaceId: string; parentId: string | null } | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newWorkspace, setNewWorkspace] = useState(false);
+  const [workspaceIntent, setWorkspaceIntent] = useState<WorkspaceCreationIntent | null>(null);
 
   const sessionsByTask = useMemo(() => {
     const map = new Map<string, Session[]>();
@@ -108,6 +113,7 @@ export function Sidebar({
       <div key={task.id}>
         <div
           role="treeitem"
+          data-task-id={task.id}
           aria-expanded={expandable ? sessionsExpanded || childrenExpanded : undefined}
           // 键盘可达性：可点击目标须可聚焦并可用 Enter/Space 触发（主树 DESIGN 键盘路径要求）
           tabIndex={0}
@@ -172,10 +178,16 @@ export function Sidebar({
         {childrenExpanded && children.map((child) => taskRow(child, depth + 1))}
         {sessionsExpanded && (
           <div>
-            {sessions.map((session) => (
+            {sessions.map((session) => {
+              // 当前会话：文字回到前景色并加字重；其余会话保持说明色。
+              // 「知道在哪里工作」靠这一处层级差，不靠给整行加框。
+              const active = selection.sessionId === session.id;
+              return (
               <div
                 key={session.id}
                 role="treeitem"
+                data-session-id={session.id}
+                aria-current={active ? "true" : undefined}
                 tabIndex={0}
                 onKeyDown={(event) => {
                   // 只响应行自身的键盘事件：子控件冒泡不得误触父行
@@ -186,7 +198,7 @@ export function Sidebar({
                   }
                 }}
                 className={`flex items-center h-6.5 rounded-md pr-2 cursor-default select-none ${
-                  selection.sessionId === session.id ? "bg-selected" : "hover:bg-hover"
+                  active ? "bg-selected text-foreground font-medium" : "text-subtle hover:bg-hover hover:text-foreground"
                 }`}
                 style={{ paddingLeft: `calc(${10 + depth * 14 + 18}px * var(--ui-scale))` }}
                 onClick={(event) => {
@@ -194,10 +206,11 @@ export function Sidebar({
                   onSelectSession(session.id);
                 }}
               >
-                <span className="flex-1 truncate text-ui-sm text-subtle">{session.title}</span>
+                <span className="flex-1 truncate text-ui-sm">{session.title}</span>
                 {session.kind === "sub" && <Badge>{t("nav.subSession")}</Badge>}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -208,7 +221,7 @@ export function Sidebar({
     const expanded = expandedWorkspaceIds.includes(workspace.id);
     const tasks = tasksByWorkspace.get(workspace.id) ?? [];
     return (
-      <div key={workspace.id} className="mb-1">
+      <div key={workspace.id} className="mb-1" data-workspace-id={workspace.id}>
         <div
           role="treeitem"
           aria-expanded={expanded}
@@ -221,7 +234,7 @@ export function Sidebar({
               event.currentTarget.click();
             }
           }}
-          className="group flex items-center gap-1 h-8 rounded-md px-2 cursor-default select-none hover:bg-hover"
+          className={`group flex items-center gap-1 h-8 rounded-md px-2 cursor-default select-none hover:bg-hover ${expanded ? "text-foreground" : "text-subtle"}`}
           onClick={() => onToggleWorkspace(workspace.id)}
         >
           <ChevronRight className={`size-3.5 shrink-0 text-subtlest transition-transform duration-100 ${expanded ? "rotate-90" : ""}`} />
@@ -247,8 +260,10 @@ export function Sidebar({
   };
 
   return (
-    <nav className="app-sidebar flex h-full flex-col bg-sidebar border-r border-border">
-      <div className="app-brand drag-region flex items-center gap-2 px-3 shrink-0">
+    // 侧栏是工作台的「架子」而不是又一个盒子：磨砂表面 + 极弱右缘，
+    // 内部的层级由行高、字重与选中/悬停叠色承担（DESIGN 容器、颜色与信息层级）。
+    <nav className="app-sidebar glass glass-sidebar flex h-full flex-col border-r border-[var(--edge)]">
+      <div className="app-brand drag-region flex shrink-0 items-center gap-2 px-3">
         {/* 507 于 2026-10-08 定案采用 D2-R2 猫头鹰；同源同一母版，不加裁切/反色/滤镜/独立点击 */}
         <img
           src={new URL("../assets/dcode-owl.png", import.meta.url).href}
@@ -258,14 +273,17 @@ export function Sidebar({
           draggable={false}
         />
         <span className="text-ui-base font-semibold tracking-tight">D Code</span>
+        <IconButton icon={Plus} label={t(snapshot.pendingWorkspaceCreation ? 'workspace.check' : 'workspace.createTitle')}
+          onClick={() => { setWorkspaceIntent(snapshot.pendingWorkspaceCreation ?? null); setNewWorkspace(true); }} />
       </div>
 
             {/* 树内容超出时只在本区域滚动，不带动窗口；min-h-0 是 flex 收缩前提 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" role="tree" aria-label={t("nav.treeLabel")}>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2" role="tree" aria-label={t("nav.treeLabel")}>
         {snapshot.workspaces.map(workspaceRow)}
       </div>
 
-      <div className="flex items-center justify-between border-t border-border px-2 py-2 shrink-0">
+      {/* 底部只保留一条极弱上缘与设置入口；不再给整块加独立实色底栏 */}
+      <div className="flex shrink-0 items-center justify-between border-t border-[var(--edge)] px-2 py-2">
         <Button size="sm" variant="ghost" onClick={onOpenSettings}>
           <SettingsIcon className="size-3.5" />
           {t("nav.settings")}
@@ -273,6 +291,7 @@ export function Sidebar({
         </Button>
       </div>
 
+      {newWorkspace && <WorkspaceDialog initialIntent={workspaceIntent} onClose={() => setNewWorkspace(false)} onCreated={onWorkspaceCreated} />}
       {newTaskFor && (
         <Dialog
           title={newTaskFor.parentId ? t("nav.newShortTask") : t("nav.newLongTask")}

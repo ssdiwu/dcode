@@ -8,8 +8,9 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { launchApp, cleanup, ready, assertValidationModel } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVIDENCE = join(import.meta.dirname, "../../doc/验证记录/品牌猫头鹰-2026-10-08/evidence");
+const EVIDENCE = evidenceDir("brand-owl");
 mkdirSync(EVIDENCE, { recursive: true });
 const ROOT = join(import.meta.dirname, "../..");
 const MASTER = join(ROOT, "resources/brand/dcode-owl-master.png");

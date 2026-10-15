@@ -5,8 +5,8 @@ export function seedState(): PersistedState {
   return {
     workspaces: [{ id: "ws-home", name: "Home", folders: ["~"], builtinHome: true, defaultTaskId: "task-home-default" }],
     tasks: [{ id: "task-home-default", workspaceId: "ws-home", parentId: null, kind: "long", title: "默认任务", boundFolder: null, isDefault: true, updatedAt: Date.now() }],
-    sessions: [], timelines: {}, runs: {},
-    settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system" },
+    sessions: [], timelines: {}, runs: {}, sessionModels: {},
+    settings: { theme: "system", fontSize: 14, coldStart: "restore", language: "system", newSessionModelChoice: { mode: "auto" }, modelCandidates: [] },
     pendingFirstSends: {},
   };
 }

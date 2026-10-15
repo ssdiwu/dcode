@@ -68,6 +68,15 @@ export class JsonFileStorage implements StorageAdapter {
     return run;
   }
 
+  /** 保存结果核对不得调用带保全副作用的启动 load，也不解除启动期数据保护。 */
+  async readCurrent(): Promise<LoadResult> {
+    try { return { status: "ok", state: JSON.parse(await readFile(this.file, "utf8")) as PersistedState }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+      return { status: "unreadable", error: String(error) };
+    }
+  }
+
   private async write(state: PersistedState): Promise<void> {
     try {
       await mkdir(this.directory, { recursive: true });

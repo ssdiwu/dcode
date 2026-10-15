@@ -1,6 +1,6 @@
 // 组件接续第一片（2026-10-07）连续场景，一个后台窗口顺序覆盖：
 // 隐藏宿主断言 → C01 单主按钮互斥切换 → 运行中发送（故障1 端到端回归）→
-// C03/C04/C05 输入选项菜单（分组、互斥可辨、写字时菜单内暂停）→ Esc 只关浮层 →
+// C03/C04 输入选项菜单（只承载发送用途、菜单内无运行控制）→ 同位主按钮暂停 → Esc 只关浮层 →
 // 继续的真实 settle 防重（慢于任意时长仍不重发）→ 工具错误复制的可控剪贴板等待/失败。
 // 只验证已授权行为；窗口必须真实隐藏且不可获焦点，禁止前台/原生操作。
 
@@ -43,30 +43,65 @@ test("C01–C06 单主按钮、输入选项菜单与工具错误复制（连续�
     assert.equal(await primaryLabel(), "发送", "运行中有新文字：主按钮应为发送");
     assert.equal(await primary.isDisabled(), false, "运行中发送不得被禁用");
     await primary.click();
-    const followupBlock = page.locator("div.bg-card").filter({ has: page.getByText("运行中补充的第一段", { exact: true }) });
+    // 用户消息块按稳定 data-slot 定位，不依赖 bg-card/border 这类会随视觉改造变化的类名
+    const followupBlock = page.locator('[data-slot="message"][data-from="user"]').filter({ has: page.getByText("运行中补充的第一段", { exact: true }) });
     await followupBlock.getByText("已接收", { exact: true }).waitFor();
     // 发送清除草稿后无新文字 → 回到暂停
     await page.waitForFunction(() => document.querySelector('button[data-slot="composer-primary"]')?.getAttribute("aria-label") === "暂停");
     await followup.fill("菜单暂停守候稿");
     assert.equal(await primaryLabel(), "发送", "再次写字后主按钮回到发送");
 
-    // C03/C04/C05 输入选项菜单：分组、互斥可辨、写字时仍能暂停
+    // C03/C04 输入选项菜单：只承载发送方式（引导／稍后处理互斥可辨），
+    // 2026-10-10 已取消菜单内的暂停与继续——运行控制只有主按钮一个位置。
     await page.getByRole("button", { name: "输入选项" }).click();
     await page.getByRole("menu").waitFor();
     await page.getByText("发送方式").waitFor();
-    await page.getByText("运行操作").waitFor();
+    assert.equal(await page.getByText("运行操作").count(), 0, "菜单内不再有运行操作分组");
     const steer = page.getByRole("menuitemradio", { name: /引导：立即纳入/ });
     assert.equal(await steer.getAttribute("aria-checked"), "true", "C04 当前发送方式须可辨");
-    const menuPause = page.getByRole("menuitem", { name: "暂停" });
-    assert.notEqual(await menuPause.getAttribute("aria-disabled"), "true", "C05 写字时菜单内暂停必须可用");
-    await menuPause.click();
+    assert.equal(await page.getByRole("menuitem", { name: "暂停", exact: true }).count(), 0, "菜单内不得再有暂停入口");
+    assert.equal(await page.getByRole("menuitem", { name: "继续执行", exact: true }).count(), 0, "菜单内不得再有继续入口");
+    // 打开菜单、查看选项都不执行工作
+    assert.equal(await primaryLabel(), "发送", "查看菜单不得改变主按钮当前动作");
+    await page.getByRole("menuitemradio", { name: /稍后处理/ }).click();
     await page.getByRole("menu").waitFor({ state: "hidden" });
+    assert.equal(await primaryLabel(), "发送", "改发送用途不得发送、也不改运行状态");
+    assert.equal(await followup.inputValue(), "菜单暂停守候稿", "改用途不得改写已提交或现有草稿");
+    await followup.fill("同位主按钮守候稿");
+    // 暂停只由主按钮发起：清空草稿后按钮回到暂停，点击它
+    await followup.fill("");
+    await page.waitForFunction(() => document.querySelector('button[data-slot="composer-primary"]')?.getAttribute("aria-label") === "暂停");
+    await primary.click();
     await page.getByText("已暂停", { exact: true }).first().waitFor();
-    // 暂停不取消草稿
-    assert.equal(await followup.inputValue(), "菜单暂停守候稿", "菜单暂停不得取消草稿");
+    // 暂停不取消刚写入的草稿：重新写入后仍然保留
+    await followup.fill("同位主按钮守候稿");
+    assert.equal(await followup.inputValue(), "同位主按钮守候稿");
 
     // 主按钮为继续执行（只恢复不提交草稿），草稿仍在
     assert.equal(await primaryLabel(), "继续执行");
+
+    // 回归（2026-10-09 独立只读复核发现）：主按钮曾漏写 type="button"，在 <form> 内
+    // 按宿主默认成为 submit——暂停后带草稿点「继续执行」会连带提交表单，把草稿一起发出去，
+    // 违反 spec C01「只接续已保存工作，不顺带提交新草稿」。这里断言 DOM 事实本身。
+    const shape = await page.evaluate(() => {
+      const btn = document.querySelector('button[data-slot="composer-primary"]');
+      return {
+        inForm: !!btn?.closest("form"),
+        domType: btn?.getAttribute("type"),
+        effectiveType: btn instanceof HTMLButtonElement ? btn.type : null,
+      };
+    });
+    assert.equal(shape.inForm, true, "复合输入外壳是 <form>，主按钮位于其中");
+    assert.equal(shape.domType, "button", "主按钮须显式声明 type=\"button\"");
+    assert.notEqual(shape.effectiveType, "submit", "宿主的有效 type 不得是 submit");
+
+    await page.evaluate(() => {
+      window.__submitCount = 0;
+      document.querySelector('form[data-slot="prompt-input"]')?.addEventListener("submit", () => {
+        window.__submitCount += 1;
+      }, true);
+    });
+    const timelinesBeforeResume = await page.evaluate(() => window.dcode.getSnapshot().then((s) => structuredClone(s.timelines)));
 
     // 继续在途防重随真实完成：DCODE_TEST_RESUME_GATE 门未开前本次恢复请求真实在途（非时长注入），
     // 第二击在身份守卫下不得再发 resume；开门后只执行一次
@@ -79,6 +114,14 @@ test("C01–C06 单主按钮、输入选项菜单与工具错误复制（连续�
     writeFileSync(join(stateDir, "resume-gate"), "open");
     await page.getByText("执行中", { exact: true }).first().waitFor();
     await page.getByText("本轮结束。", { exact: true }).waitFor();
+    // 点「继续执行」不得触发表单提交，也不得顺带发出暂停期间写下的草稿
+    assert.equal(await page.evaluate(() => window.__submitCount), 0, "点击继续执行不得触发表单提交");
+    const timelinesAfterResume = await page.evaluate(() => window.dcode.getSnapshot().then((s) => structuredClone(s.timelines)));
+    const draftSent = Object.values(timelinesAfterResume).flat().some((b) => b.kind === "message" && b.text === "同位主按钮守候稿");
+    assert.equal(draftSent, false, "点继续执行不得顺带提交新草稿（spec C01）");
+    // 允许的差异只有「从中断处继续」标记；用户消息条数不得增加
+    const countUser = (t) => Object.values(t).flat().filter((b) => b.kind === "message" && b.role === "user").length;
+    assert.equal(countUser(timelinesAfterResume), countUser(timelinesBeforeResume), "继续执行不增加用户消息");
     let resumedMarkers = await page.getByText("从中断处继续", { exact: false }).count();
     assert.equal(resumedMarkers, 1, "在途第二击不得重复发起恢复");
 
@@ -168,6 +211,18 @@ test("C01 发送身份 A→B→A：第一次 A 迟到完成不释放第三次 A 
     const operations = [1, 2, 3].map((n) => JSON.parse(readFileSync(join(stateDir, `send-result-waiting-${n}`), "utf8")).operationId);
     assert.equal(new Set(operations).size, 3, "三次明确发送各持独立身份，同文不合并");
     const primary = page.locator('button[data-slot="composer-primary"]');
+    // 宿主文件及一次 rAF 不能证明快照已提交；先核正式身份，再等三个原文及运行徽标实际渲染。
+    // 不等待主按钮的预期文案，后面的暂停断言仍直接检验业务行为。
+    const accepted = await page.evaluate(() => window.dcode.getSnapshot());
+    const placed = accepted.timelines['session-home-1'].filter(b => b.kind === 'message' && b.role === 'user');
+    for (const op of operations) assert.ok(placed.some(b => b.operationId === op), '正式快照必须含本次三个独立输入');
+    assert.equal(accepted.runs['session-home-1'].status, 'running', '主按钮前置是第三输入已在正式运行中');
+    await page.waitForFunction(({ a, b }) => {
+      const users = [...document.querySelectorAll('[data-slot="message"][data-from="user"]')];
+      const count = text => users.filter(node => [...node.querySelectorAll('p')].some(p => p.textContent === text)).length;
+      const running = [...document.querySelectorAll('main header span')].some(node => node.textContent === '执行中');
+      return count(a) === 2 && count(b) === 1 && running;
+    }, { a: textA, b: textB }, { timeout: 5000 });
     assert.equal(await primary.getAttribute("aria-label"), "暂停", "第三次 A 已提交，不能再作为新稿");
     writeFileSync(join(stateDir, "send-result-gate-1"), "open");
     await waitFile("send-result-released-1");

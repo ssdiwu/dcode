@@ -8,8 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import { launchApp, ready, cleanup, killApp, waitForSnapshot } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVID = join(import.meta.dirname, "../../doc/验证记录/模型首次添加-2026-10-09/evidence");
+const EVID = evidenceDir("model-setup");
 mkdirSync(EVID, { recursive: true });
 
 const expectedKey = `sk-test-${randomBytes(16).toString("hex")}`;
@@ -124,11 +125,15 @@ async function artistNow(page) {
   // Playwright waitForFunction 把 Promise 当 truthy，必须走 waitForSnapshot 读真实值
   await waitForSnapshot(
     page,
-    (s) => s?.modelSetup?.kind === "configured" && s?.model?.available === true,
+    (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.model?.available === true,
     null,
-    "保存后快照应呈现 modelSetup.configured 且 model.available=true",
+    "保存后快照应呈现 modelSetup.custom|preset-with-custom 且 model.available=true",
   );
 }
+
+/** 自定义面板进入指引（无专用 helper）：在 settings-模型 section 默认 preset tab 时，
+ *  各用例在进入前须先切 `getByRole("radio", { name: /^自定义$|^Custom$/ })` 再填写 openai-completions/Anthropic 协议字段。
+ *  当前所有首用路径均已在保存前切到 custom tab（见用例首行注释）。 */
 
 function assertNoKeyLeak(containerText, key) {
   assert.ok(!containerText.includes(key), "界面/快照/日志不能含测试 key");
@@ -153,6 +158,8 @@ test("真实 UI：首次添加服务商 → 保存 → 发送 → 重开仍可�
     assert.equal(server.requests.length, 0, "保存前服务器请求数必须为 0");
 
     // 真实填写并完成保存（四字段按可访问名称 getByLabel，缺 label 关联会失败）
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await fillModelSetupForm(page, {
       label: "我的本地回环",
@@ -165,7 +172,7 @@ test("真实 UI：首次添加服务商 → 保存 → 发送 → 重开仍可�
     // 保存实时结果：不能取静态共享文字假冒，要真正快照 configured+available
     await artistNow(page);
     const snapAfterSave = await page.evaluate(() => window.dcode.getSnapshot());
-    assert.equal(snapAfterSave.modelSetup?.kind, "configured");
+    assert.equal(snapAfterSave.modelSetup?.kind, "custom");
     assert.equal(snapAfterSave.model?.available, true);
     evidence.steps.push("setup-saved");
     assert.equal(server.requests.length, 0, "保存后服务器请求数仍为 0（保存本身不发请求）");
@@ -229,9 +236,9 @@ test("真实 UI：首次添加服务商 → 保存 → 发送 → 重开仍可�
     // 页面正文实际可见该 marker：独立于快照断言，不允许"快照有但 UI 未渲染"
     await expectMarkerVisible(page, firstReq.marker);
 
-    // 凭据随单原子文件加密落盘；不含明文
-    const secretPath = join(stateDir, "model-setup.json");
-    assert.ok(existsSync(secretPath), "model-setup.json 应该已经写入（含加密凭据）");
+    // 凭据随单原子目录文件（provider-directory.json，格式化 2）加密落盘，**不**含明文；旧单 provider-directory.json 不再新写
+    const secretPath = join(stateDir, "provider-directory.json");
+    assert.ok(existsSync(secretPath), "provider-directory.json 应该已经写入（含加密凭据）");
     const secretRaw = readFileSync(secretPath, "utf8");
     assertNoKeyLeak(secretRaw, expectedKey);
     evidence.steps.push("credential-encrypted");
@@ -241,7 +248,7 @@ test("真实 UI：首次添加服务商 → 保存 → 发送 → 重开仍可�
     await close();
     evidence.steps.push("first-run-closed");
 
-    // 重开同一目录在正常装配 → model-setup.json 使能装配真实 backend，不重输 key
+    // 重开同一目录在正常装配 → provider-directory.json 使能装配真实 backend，不重输 key
     const handle2 = await launchApp(stateDir, { DCODE_VALIDATION_ASSEMBLY: "", DCODE_VALIDATION_SAMPLE: "0" });
     try {
       await ready(handle2.page);
@@ -302,6 +309,8 @@ test("401 反馈：保存后首次发送凭据错时界面呈现失败并保留�
     // 保存 wrongKey
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("我的本地回环");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill("test-model");
@@ -333,8 +342,8 @@ test("401 反馈：保存后首次发送凭据错时界面呈现失败并保留�
     assert.ok(!uiTextAfter401.includes(wrongKey), "界面不能转回 wrongKey");
     const snapshotJson = JSON.stringify(snapAfter401);
     assert.ok(!snapshotJson.includes(wrongKey), "快照不得含 wrongKey");
-    const secretRaw = readFileSync(join(stateDir, "model-setup.json"), "utf8");
-    assert.ok(!secretRaw.includes(wrongKey), "model-setup.json 不得含明文 wrongKey");
+    const secretRaw = readFileSync(join(stateDir, "provider-directory.json"), "utf8");
+    assert.ok(!secretRaw.includes(wrongKey), "provider-directory.json 不得含明文 wrongKey");
 
     // 修正后用正确 key 重发：编辑配置 keep 改 replace + expectedKey，等 fault→ready 后再发能成功
     await sidebarSettingsButton(handle.page).click();
@@ -342,7 +351,7 @@ test("401 反馈：保存后首次发送凭据错时界面呈现失败并保留�
     await handle.page.getByRole("radio", { name: /更换|Replace/i }).click();
     await handle.page.locator("input[type='password']").fill(expectedKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom"));
     // 修正后再发，必须带新 marker 完整正文 + 自然完成；errorNote 清空
     await handle.page.keyboard.press("Escape");
     const composer2 = handle.page.getByPlaceholder(/交代需求|Describe|追问|Follow/i).first();
@@ -384,13 +393,15 @@ test("编辑同目标 keep 旧 key：modelId 改成功且下一请求看到新 m
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
     // 第一次保存（带 key）
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("我的本地回环");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(server.origin + "/v1");
     await handle.page.locator("input[type='password']").fill(expectedKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured" && s?.model?.available === true);
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.model?.available === true);
     // 先发一条：确认首 ID 落地
     await handle.page.keyboard.press("Escape");
     const composer1 = handle.page.getByPlaceholder(/交代需求|Describe/i).first();
@@ -422,7 +433,7 @@ test("编辑同目标 keep 旧 key：modelId 改成功且下一请求看到新 m
     await handle.page.locator("input[placeholder*='服务商']").fill("本地回环-v2");
     // keyAction=keep 默认；无需再输 key
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured" && s?.modelSetup?.modelId === NEW_MODEL_ID && s?.model?.available === true, null, "编辑后快照应反映新 modelId");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.modelSetup?.modelId === NEW_MODEL_ID && s?.model?.available === true, null, "编辑后快照应反映新 modelId");
     const snap = await handle.page.evaluate(() => window.dcode.getSnapshot());
     assert.equal(snap.modelSetup.modelId, NEW_MODEL_ID);
     assert.equal(snap.modelSetup.hasKey, true, "keep 之后 hasKey 仍为 true");
@@ -475,13 +486,15 @@ test("跨 origin keep 必须拒绝，第二 loopback 看不到旧 key；明确�
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
     // 保存 A + keyA
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("ServerA");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(serverA.origin + "/v1");
     await handle.page.locator("input[type='password']").fill(expectedKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom"));
 
     // 换 origin 到 serverB，但不改 keyAction（仍 keep）→ 保存必须拒绝
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(serverB.origin + "/v1");
@@ -499,7 +512,7 @@ test("跨 origin keep 必须拒绝，第二 loopback 看不到旧 key；明确�
     await handle.page.locator("input[type='password']").fill(keyB);
     await handle.page.locator("input[placeholder*='服务商']").fill("ServerB");
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured" && s?.modelSetup?.label === "ServerB");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.modelSetup?.label === "ServerB");
     // 发送一条：应该向 serverB 发并带 keyB
     await handle.page.keyboard.press("Escape");
     const composer = handle.page.getByPlaceholder(/交代需求|Describe/i).first();
@@ -559,13 +572,15 @@ test("A→失败B再发A：注入写盘失败后仍可用 A 配置请求成功",
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
     // 保存 A 成功
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("ServerA");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(server.origin + "/v1");
     await handle.page.locator("input[type='password']").fill(expectedKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured" && s?.modelSetup?.label === "ServerA");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.modelSetup?.label === "ServerA");
 
     // 让 A 请求一次，确认可用 + 完整 marker 到达 + run 自然收束
     await handle.page.keyboard.press("Escape");
@@ -589,7 +604,7 @@ test("A→失败B再发A：注入写盘失败后仍可用 A 配置请求成功",
       "A 首发应自然完成且 UI 看到完整 marker",
     );
 
-    // 让 model-setup.json 目录变成只读 → B 写盘必失败（rename/commitWithCredential 会 throw）
+    // 让 provider-directory.json 目录变成只读 → B 写盘必失败（rename/commitWithCredential 会 throw）
     const { chmodSync } = await import("node:fs");
     chmodSync(stateDir, 0o500);
 
@@ -657,31 +672,33 @@ test("清除凭据后恢复缺模型不可发送；不落明文、不发网络�
     // 保存 A + keyA
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("ClearTest");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(server.origin + "/v1");
     await handle.page.locator("input[type='password']").fill(expectedKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured" && s?.model?.available === true);
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.model?.available === true);
 
     // 选择「清除」保存 → hasKey=false，model 应回到「不可用」状态
     await handle.page.getByRole("radio", { name: /清除|Clear/i }).click();
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
     await waitForSnapshot(
       handle.page,
-      (s) => s?.modelSetup?.kind === "configured" && s?.modelSetup?.hasKey === false && s?.model?.available === false,
+      (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.modelSetup?.hasKey === false && s?.model?.available === false,
       null,
       "清除凭据后 model 应恢复 不可用",
     );
     // 保存本身不发请求（清除也是同样规则：无网络探测）
     assert.equal(server.requests.length, 0, "保存（含清除）不发网络探测");
-    // 落盘不含明文 key（已被清），但保留非秘密元数据
-    const secretRaw = readFileSync(join(stateDir, "model-setup.json"), "utf8");
-    assert.ok(!secretRaw.includes(expectedKey), "清除后 model-setup.json 不得保留原 key");
+    // 落盘不含明文 key（已被清），但保留非秘密元数据（format 2：customDefinition + credentials map）
+    const secretRaw = readFileSync(join(stateDir, "provider-directory.json"), "utf8");
+    assert.ok(!secretRaw.includes(expectedKey), "清除后 provider-directory.json 不得保留原 key");
     const parsed = JSON.parse(secretRaw);
-    assert.equal(parsed.label, "ClearTest", "清除后连接元数据仍保留（供编辑回显）");
-    assert.equal(parsed.credential, undefined, "清除后 credential 字段必须缺席");
+    assert.equal(parsed.customDefinition?.label, "ClearTest", "清除后连接元数据仍保留（供编辑回显）");
+    assert.ok(!parsed.credentials?.["user-defined"], "清除后 user-defined 凭据字段必须缺席");
     // UI / 快照 不含 key 片段
     const snap = await handle.page.evaluate(() => window.dcode.getSnapshot());
     assert.ok(!JSON.stringify(snap).includes(expectedKey));
@@ -709,7 +726,7 @@ test("清除凭据后恢复缺模型不可发送；不落明文、不发网络�
       await ready(handle2.page);
       const snap2 = await handle2.page.evaluate(() => window.dcode.getSnapshot());
       assert.equal(snap2.model.available, false, "重开后 model 仍不可用（credential 缺席）");
-      assert.equal(snap2.modelSetup.kind, "configured");
+      assert.equal(snap2.modelSetup.kind, "custom");
       assert.equal(snap2.modelSetup.hasKey, false);
       assert.equal(snap2.modelSetup.label, "ClearTest", "重开后服务商 label 仍可编辑回显");
       assert.equal(snap2.modelSetup.modelId, EXPECTED_MODEL_ID);
@@ -722,7 +739,7 @@ test("清除凭据后恢复缺模型不可发送；不落明文、不发网络�
       await handle2.page.getByRole("radio", { name: /更换|Replace/i }).click();
       await handle2.page.locator("input[type='password']").fill(expectedKey);
       await handle2.page.getByRole("button", { name: /保存|Save/ }).click();
-      await waitForSnapshot(handle2.page, (s) => s?.modelSetup?.kind === "configured" && s?.model?.available === true, null, "重新 replace 后 model 应恢复可用");
+      await waitForSnapshot(handle2.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom") && s?.model?.available === true, null, "重新 replace 后 model 应恢复可用");
       await handle2.page.keyboard.press("Escape");
       const composer2 = handle2.page.getByPlaceholder(/交代需求|Describe/i).first();
       await composer2.fill("restored");
@@ -791,13 +808,15 @@ test("服务端 401/500 真实回显 key:UI/快照/诊断/运行记录(vault之�
     await ready(handle.page);
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("EchoKey");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(`${echoServer.origin}/v1`);
     await handle.page.locator("input[type='password']").fill(echoKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom"));
 
     // 真实发送 → 服务器 401 且把 key 原文回显在 error.message
     await handle.page.keyboard.press("Escape");
@@ -895,13 +914,15 @@ test("短凭据（≤3字符）同样被保护：服务端回显短 key 不渗�
     await ready(handle.page);
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("ShortKey");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(`${shortServer.origin}/v1`);
     await handle.page.locator("input[type='password']").fill(shortKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom"));
 
     await handle.page.keyboard.press("Escape");
     const composer = handle.page.getByPlaceholder(/交代需求|Describe/i).first();
@@ -956,13 +977,15 @@ test("连接拒绝（ECONNREFUSED）：UI/快照/落盘不含服务原文与 key
     await ready(handle.page);
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 双 tab 默认 preset；旧断言基于 openai-completions——必须先切 custom tab
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.page.getByRole("radio", { name: /OpenAI-compatible|OpenAI/i }).click();
     await handle.page.locator("input[placeholder*='服务商']").fill("ConnRefused");
     await handle.page.locator("input[placeholder*='gpt-4o-mini']").fill(EXPECTED_MODEL_ID);
     await handle.page.locator("input[placeholder*='api.openai.com']").fill(`${unusedOrigin}/v1`);
     await handle.page.locator("input[type='password']").fill(connKey);
     await handle.page.getByRole("button", { name: /保存|Save/ }).click();
-    await waitForSnapshot(handle.page, (s) => s?.modelSetup?.kind === "configured");
+    await waitForSnapshot(handle.page, (s) => (s?.modelSetup?.kind === "custom" || s?.modelSetup?.kind === "preset-with-custom"));
     await handle.page.keyboard.press("Escape");
     const composer = handle.page.getByPlaceholder(/交代需求|Describe/i).first();
     await composer.fill("trigger connrefused");
@@ -977,7 +1000,7 @@ test("连接拒绝（ECONNREFUSED）：UI/快照/落盘不含服务原文与 key
     const uiText = await handle.page.evaluate(() => document.body.innerText);
     assert.ok(!uiText.includes(connKey), "UI 不得含连接 key");
     assert.ok(!JSON.stringify(snap).includes(connKey), "快照不得含连接 key");
-    const secretRaw = readFileSync(join(stateDir, "model-setup.json"), "utf8");
+    const secretRaw = readFileSync(join(stateDir, "provider-directory.json"), "utf8");
     assert.ok(!secretRaw.includes(connKey), "加密落盘不得含 key 明文");
     // 有限安全码已在 UI 可见；连接错误归类为 model-request-failed（不是 auth-failed）
     const errKinds = Object.values(snap.runs ?? {}).map((r) => r.errorNote).filter(Boolean);
@@ -992,16 +1015,21 @@ test("连接拒绝（ECONNREFUSED）：UI/快照/落盘不含服务原文与 key
 });
 
 test("ModelSetupCard 在 720 窄窗 13/14 字号（其一为暗色）字段标签可读+输入不出容器+可滚到保存", async () => {
+  // 初始化整段都放进 try：早先把建目录／启动应用放在 try 之外，一次早期失败就会留下
+  // 已开的回环服务器与数据目录——服务端保持事件循环，整批用例会停在那里不再输出。
   const stateDir = mkdtempSync(join(tmpdir(), "dcode-msetup-720-"));
-  const server = await startProtocolServer();
-  const evidenceDir = join(import.meta.dirname, "evidence", "model-setup-720");
-  mkdirSync(evidenceDir, { recursive: true });
-  const handle = await launchApp(stateDir, { DCODE_VALIDATION_ASSEMBLY: "", DCODE_VALIDATION_SAMPLE: "0" });
+  let server = null;
+  let handle = null;
   const screenshots = [];
   try {
+    server = await startProtocolServer();
+    const shots720 = evidenceDir("model-setup", "720");
+    handle = await launchApp(stateDir, { DCODE_VALIDATION_ASSEMBLY: "", DCODE_VALIDATION_SAMPLE: "0" });
     await ready(handle.page);
     await sidebarSettingsButton(handle.page).click();
     await settingsSideBar(handle.page).getByRole("button", { name: /模型|Model/ }).click();
+    // 新版预设/自定义双 tab 默认 preset：先切到可写 key 的 custom 面板
+    await handle.page.getByRole("radio", { name: /^自定义$|^Custom$/ }).click();
     await handle.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(720, 600));
     await handle.page.waitForFunction(() => window.innerWidth === 720 && window.innerHeight === 600, null, { timeout: 5_000 });
 
@@ -1117,7 +1145,7 @@ test("ModelSetupCard 在 720 窄窗 13/14 字号（其一为暗色）字段标�
       );
 
       // 4) 截图：一次性假 key + password 遮蔽（type=password 自带 *** 渲染）+ 已填字段 + 可见标签 + 保存按钮
-      const shotPath = join(evidenceDir, `${theme}-fs${fontSize}.png`);
+      const shotPath = join(shots720, `${theme}-fs${fontSize}.png`);
       await handle.page.screenshot({ path: shotPath, fullPage: false });
       screenshots.push(shotPath);
       const shotText = await handle.page.evaluate(() => document.body.innerText);
@@ -1127,8 +1155,8 @@ test("ModelSetupCard 在 720 窄窗 13/14 字号（其一为暗色）字段标�
     // 5) 输出全部截图绝对路径便于本地查看
     console.log("[evidence-720]", JSON.stringify(screenshots, null, 1));
   } finally {
-    await killApp(handle);
-    await server.close();
+    if (handle) await killApp(handle);
+    if (server) await server.close();
     cleanup(stateDir);
   }
 });

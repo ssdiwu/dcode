@@ -44,7 +44,11 @@
         "lucide-react",
         "@radix-ui/react-dropdown-menu",
         "@radix-ui/react-dialog",
-        "@radix-ui/react-tooltip"
+        "@radix-ui/react-tooltip",
+        "@radix-ui/react-collapsible",
+        "streamdown",
+        "@streamdown/cjk",
+        "shiki"
       ]
     },
     {
@@ -71,7 +75,8 @@
         "application",
         "mock",
         "pi",
-        "storage"
+        "storage",
+        "references"
       ],
       "externals": [
         "electron",
@@ -114,6 +119,22 @@
       "externals": [
         "@earendil-works/pi-*",
         "@earendil-works/chord",
+        "diff",
+        "node:*"
+      ]
+    },
+    {
+      "id": "references",
+      "root": "src/adapters/references",
+      "entrypoints": [
+        "index.ts"
+      ],
+      "allows": [
+        "contracts",
+        "application"
+      ],
+      "externals": [
+        "@earendil-works/pi-*",
         "node:*"
       ]
     },

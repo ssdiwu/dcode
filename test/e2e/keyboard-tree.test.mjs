@@ -5,6 +5,8 @@ import { mkdirSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { launchApp, cleanup, ready, assertValidationModel, waitForSnapshot } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
+import { join } from "node:path";
 
 test("纯键盘路径：行与子控件可达可辨，激活不误触父行，退出回到触发点", async () => {
   const { page, stateDir, close } = await launchApp();
@@ -74,8 +76,9 @@ test("纯键盘路径：行与子控件可达可辨，激活不误触父行，�
     // 实际 Dialog 帧：Tab 到创建钮（含焦点描边）
     await page.keyboard.press("Tab");
     assert.equal((await focusedInfo())?.label, "创建", "帧前 Tab 取消→创建");
-    mkdirSync("doc/验证记录/产品自有内容清理-2026-10-07/evidence/style-2026-10-06/frames", { recursive: true });
-    await page.screenshot({ path: "doc/验证记录/产品自有内容清理-2026-10-07/evidence/style-2026-10-06/frames/dialog-焦点圈.png" });
+    const FRAMES = evidenceDir("keyboard-tree", "frames");
+    mkdirSync(FRAMES, { recursive: true });
+    await page.screenshot({ path: join(FRAMES, "dialog-焦点圈.png") });
     // 对话框关闭后焦点回到触发点所在行（行内操作钮失焦即隐藏不可直接聚焦，回到行后 focus-within 重新揭示）；
     // 恢复发生在 rAF（输入框移除后浏览器先回落 body），须等恢复真实完成而不是即时读取
     await page.keyboard.press("Escape");
@@ -219,12 +222,22 @@ test("输入卡片输入选项菜单：会话页向上展开完整可见、可�
           }),
         };
       });
+      // C03（2026-10-10 确认）：菜单只承载发送方式，运行控制只有同位主按钮一个位置。
+      // 这里核的是「只有两项发送方式、没有第二个暂停／继续」，不是把旧的运行操作分组弱化掉。
       assert.deepEqual(
         itemsInfo.items.map((i) => i.text),
-        ["引导：立即纳入当前工作", "稍后处理：留到本轮结束", "暂停"],
-        `${w} 菜单按发送方式与运行操作分组呈现（C03/C04/C05）`,
+        ["引导：立即纳入当前工作", "稍后处理：留到本轮结束"],
+        `${w} 菜单只承载两项互斥发送方式（C03/C04）`,
       );
-      assert.ok(itemsInfo.labels.includes("发送方式") && itemsInfo.labels.includes("运行操作"), "菜单须区分发送方式与运行操作两组（C03）");
+      assert.ok(itemsInfo.labels.includes("发送方式"), "菜单须保留发送方式分组（C04）");
+      assert.equal(itemsInfo.labels.includes("运行操作"), false, "菜单不得再有运行操作分组：暂停只有同位主按钮（C03）");
+      for (const label of ["暂停", "继续", "继续执行"]) {
+        assert.equal(
+          itemsInfo.items.some((i) => i.text?.includes(label)),
+          false,
+          `菜单不得出现第二个运行控制入口「${label}」（C03）`,
+        );
+      }
       for (const it of itemsInfo.items) {
         assert.ok(it.top >= itemsInfo.menu.top - 1 && it.bottom <= itemsInfo.menu.bottom + 1, `${w} 菜单项「${it.text}」须在菜单边界内`);
         assert.ok(it.left >= itemsInfo.menu.left - 1 && it.right <= itemsInfo.menu.right + 1, `${w} 菜单项「${it.text}」不得横向裁切`);
@@ -240,8 +253,9 @@ test("输入卡片输入选项菜单：会话页向上展开完整可见、可�
       });
       assert.equal(selectedDot.checked, "true");
       assert.ok(selectedDot.width > 0 && selectedDot.height > 0 && selectedDot.inside && selectedDot.color !== "rgba(0, 0, 0, 0)", `当前发送方式须有实际可见选中标记：${JSON.stringify(selectedDot)}`);
-      mkdirSync("doc/验证记录/产品自有内容清理-2026-10-07/evidence/composer-card-2026-10-06/after", { recursive: true });
-      await page.screenshot({ path: `doc/验证记录/产品自有内容清理-2026-10-07/evidence/composer-card-2026-10-06/after/menu-up-${w}.png` });
+      const AFTER = evidenceDir("keyboard-tree", "after");
+      mkdirSync(AFTER, { recursive: true });
+      await page.screenshot({ path: join(AFTER, `menu-up-${w}.png`) });
 
       // 键盘选择「稍后处理」→ 模式切换（共享原操作）；Radix 菜单用方向键导航，
       // 焦点移动是异步的（RovingFocus setTimeout 内执行），按真实焦点到位等待而不是即时读

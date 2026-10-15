@@ -1,0 +1,62 @@
+
+> dcode-redesign@0.1.0-dev test:contracts
+> node --test test/contracts-validation.test.mjs
+
+TAP version 13
+# Subtest: 快照校验：合法快照通过；畸形样本逐项拒绝
+ok 1 - 快照校验：合法快照通过；畸形样本逐项拒绝
+  ---
+  duration_ms: 0.933667
+  type: 'test'
+  ...
+# Subtest: 设置部分更新：合法通路保留，畸形逐项拒绝
+ok 2 - 设置部分更新：合法通路保留，畸形逐项拒绝
+  ---
+  duration_ms: 0.119125
+  type: 'test'
+  ...
+# Subtest: 操作载荷校验：白名单 + 逐操作形状
+ok 3 - 操作载荷校验：白名单 + 逐操作形状
+  ---
+  duration_ms: 0.153833
+  type: 'test'
+  ...
+# Subtest: 操作返回契约校验：逐操作核对，畸形返回拒绝
+ok 4 - 操作返回契约校验：逐操作核对，畸形返回拒绝
+  ---
+  duration_ms: 0.2245
+  type: 'test'
+  ...
+# Subtest: 供应商专用契约：畸形登录/取消/来源/认证事件不穿过共享边界
+ok 5 - 供应商专用契约：畸形登录/取消/来源/认证事件不穿过共享边界
+  ---
+  duration_ms: 0.444791
+  type: 'test'
+  ...
+# Subtest: D 片契约：模型入口操作的载荷与回执在共享边界上逐项核对
+ok 6 - D 片契约：模型入口操作的载荷与回执在共享边界上逐项核对
+  ---
+  duration_ms: 0.113959
+  type: 'test'
+  ...
+# Subtest: D 片契约：额度、模型状态与来源视图的接收侧校验
+ok 7 - D 片契约：额度、模型状态与来源视图的接收侧校验
+  ---
+  duration_ms: 0.169917
+  type: 'test'
+  ...
+# Subtest: D 片契约：快照里的会话模型状态逐条核对
+ok 8 - D 片契约：快照里的会话模型状态逐条核对
+  ---
+  duration_ms: 0.040875
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 77.744583

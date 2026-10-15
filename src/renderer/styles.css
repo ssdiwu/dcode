@@ -1,7 +1,11 @@
 /* D Code 设计变量（token）唯一权威。
    结构借鉴 ZCode（语义分层 + 单一字号旋钮），具体值为 D Code 自己的方案。
    既定原则（主树 DESIGN）：全部界面几何随单一字号尺度派生，s = fontSize/14；
-   字阶公式见下，几何经 --spacing 与 --radius 派生，语义色只用于语义态。 */
+   字阶公式见下，几何经 --spacing 与 --radius 派生，语义色只用于语义态。
+
+   2026-10-09 界面层次改造：本层新增「抬升／下沉／玻璃」三组表面与四级深度。
+   目标是让主次由表面色、留白与排版承担，而不是给每个布局包装再描一圈边
+   （--border 仍是被测试断言的语义弱边界，数值不变；新边界走 --edge-*）。 */
 
 @import "tailwindcss";
 
@@ -31,6 +35,10 @@
   --color-input: var(--input);
   --color-hover: var(--hover);
   --color-selected: var(--selected);
+  /* 抬升／下沉表面：消息正文、工具输出、代码块与差异各自有稳定表面，
+     不再靠「每个容器一圈 border」制造层次（--edge-* 只在真需要分隔时使用） */
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
 
   /* 文字三级 */
   --color-foreground: var(--foreground);
@@ -47,6 +55,7 @@
   --color-accent: var(--accent);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-edge-strong: var(--edge-strong);
   --color-destructive: var(--destructive);
 
   /* diff 专用（与通用反馈色分离） */
@@ -66,6 +75,13 @@
   --shadow-sm: 0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0 rgb(0 0 0 / 0.1), 0 calc(1px * var(--ui-scale)) calc(2px * var(--ui-scale)) calc(-1px * var(--ui-scale)) rgb(0 0 0 / 0.1);
   --shadow-md: 0 calc(4px * var(--ui-scale)) calc(6px * var(--ui-scale)) calc(-1px * var(--ui-scale)) rgb(0 0 0 / 0.1), 0 calc(2px * var(--ui-scale)) calc(4px * var(--ui-scale)) calc(-2px * var(--ui-scale)) rgb(0 0 0 / 0.1);
   --shadow-lg: 0 calc(10px * var(--ui-scale)) calc(15px * var(--ui-scale)) calc(-3px * var(--ui-scale)) rgb(0 0 0 / 0.1), 0 calc(4px * var(--ui-scale)) calc(6px * var(--ui-scale)) calc(-4px * var(--ui-scale)) rgb(0 0 0 / 0.1);
+  /* 2026-10-09 新增：工作台级别的柔和深度。层级靠「同一片工作台 + 少量抬升」，
+     不是每个盒子各自投影——浮起的内容（输入卡片、浮层）才使用。
+     深色主题改用黑 45%/28%，两套数值在 :root / .dark 分别声明。 */
+  --shadow-float: 0 calc(1px * var(--ui-scale)) calc(2px * var(--ui-scale)) 0 rgb(0 0 0 / 0.04), 0 calc(6px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(-6px * var(--ui-scale)) rgb(0 0 0 / 0.10), 0 calc(16px * var(--ui-scale)) calc(40px * var(--ui-scale)) calc(-16px * var(--ui-scale)) rgb(0 0 0 / 0.10);
+  --shadow-veil: 0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0 rgb(0 0 0 / 0.05), 0 calc(12px * var(--ui-scale)) calc(32px * var(--ui-scale)) calc(-8px * var(--ui-scale)) rgb(0 0 0 / 0.12);
+  /* 代码／差异等下沉内容：内阴影极弱，只说明「凹进去」而不画边框 */
+  --shadow-inset-well: inset 0 1px 2px 0 rgb(0 0 0 / 0.04);
 }
 
 :root {
@@ -84,12 +100,40 @@
   /* 选中：同族中性、约 1.8× 悬停透明度，与悬停可辨（对比度核算见设计包第十一节） */
   --selected: rgb(23 23 23 / 0.09);
 
+  /* 抬升表面：浮起的内容（工具块、用户气泡、输入卡片）——比 --card 略暖、略亮一档，
+     与下沉内容拉开层次而不引入新语义色 */
+  --raised: #ffffff;
+  /* 下沉表面：代码、工具原始输出、差异等「非正文内容」，比 --background 略深 */
+  --sunken: #f7f6f4;
+
+  /* 边缘分层：--border 是被断言的语义弱边界；--edge 只用于真正的容器轮廓，
+     且比 --border 更弱——目的是让「有边界」成为例外而不是常态 */
+  --edge: rgb(28 25 23 / 0.07);
+  --edge-strong: rgb(28 25 23 / 0.14);
+
+  /* 玻璃（磨砂）：窗口本身透明（main/backgroundColor #00000000），
+     桌面内容确实位于其后，因此侧栏与输入卡片可以使用真实 backdrop-filter。
+     底色保持高不透明度（92%），保证文字对比度不依赖桌面壁纸；
+     减少透明度偏好下退化为同值实色（见 @media prefers-reduced-transparency）。 */
+  --glass-sidebar: rgb(245 245 244 / 0.72);
+  --glass-bar: rgb(250 250 249 / 0.78);
+  --glass-composer: rgb(250 250 249 / 0.82);
+  --glass-blur: 24px;
+  --glass-saturate: 1.6;
+
   --foreground: #1c1917;
   --subtle: rgb(28 25 23 / 0.78);
   --subtlest: rgb(28 25 23 / 0.66);
   /* 焦点指示专用：完整前景色（border-strong 不再独自承担焦点）；宽度 max(2px, g(2)) 见使用处 */
   --focus-ring: #1c1917;
   --focus-ring-inverse: #fafaf9;
+  /* 复合输入外壳的浅灰焦点：比正文焦点弱，不与内层重复框。
+     Shift+Tab 时内层无框、外壳是唯一焦点指示，因此不能按附加反馈放宽：
+     0.34 在真实玻璃浅底上只有 2.14:1（减少透明度底 #fafaf9 同量级），低于 DESIGN 的 3:1。
+     0.48 合成后为中灰 #8f8e8c，在浅色玻璃底与减少透明度底上都实测 ≥3.1:1。
+     深色沿用 #ececee66（实测 3.37:1），不盲改。 */
+  --focus-ring-shell: rgb(28 25 23 / 0.48);
+  --edge-strong: rgb(28 25 23 / 0.14);
 
   --border: rgb(28 25 23 / 0.1);
   --border-strong: rgb(28 25 23 / 0.22);
@@ -120,11 +164,30 @@
   /* 选中：深色下为 2× 悬停透明度（浅底同亮度下 α 需更高才可辨） */
   --selected: rgb(245 245 244 / 0.12);
 
+  /* 深色抬升：比 --card 更亮一档（深底上「浮起」靠提亮，不靠投影） */
+  --raised: #2a2a2c;
+  /* 深色下沉：代码与原始输出比 --background 更沉，形成凹面 */
+  --sunken: #141416;
+
+  --edge: rgb(236 236 238 / 0.09);
+  --edge-strong: rgb(236 236 238 / 0.16);
+
+  --glass-sidebar: rgb(21 21 22 / 0.72);
+  --glass-bar: rgb(33 33 35 / 0.76);
+  --glass-composer: rgb(33 33 35 / 0.8);
+
+  /* 深色浮层：纯黑投影在深底上不可见，改用「黑 45% 扩散 + 细亮边」表达浮起 */
+  --shadow-float: 0 calc(1px * var(--ui-scale)) calc(2px * var(--ui-scale)) 0 rgb(0 0 0 / 0.28), 0 calc(6px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(-6px * var(--ui-scale)) rgb(0 0 0 / 0.42), 0 calc(16px * var(--ui-scale)) calc(40px * var(--ui-scale)) calc(-16px * var(--ui-scale)) rgb(0 0 0 / 0.45);
+  --shadow-veil: 0 calc(1px * var(--ui-scale)) calc(3px * var(--ui-scale)) 0 rgb(0 0 0 / 0.3), 0 calc(12px * var(--ui-scale)) calc(32px * var(--ui-scale)) calc(-8px * var(--ui-scale)) rgb(0 0 0 / 0.5);
+  --shadow-inset-well: inset 0 1px 2px 0 rgb(0 0 0 / 0.28);
+
   --foreground: #ececee;
   --subtle: rgb(236 236 238 / 0.82);
   --subtlest: rgb(236 236 238 / 0.72);
   --focus-ring: #ececee;
   --focus-ring-inverse: #1c1917;
+  --focus-ring-shell: rgb(236 236 238 / 0.4);
+  --edge-strong: rgb(236 236 238 / 0.16);
 
   --border: rgb(236 236 238 / 0.12);
   --border-strong: rgb(236 236 238 / 0.26);
@@ -193,12 +256,64 @@ textarea {
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 /* Composer 的 textarea 会在鼠标点击时命中 :focus-visible；全局规则曾让它和外壳各画一框。
-   只把文字编辑区的焦点移到圆角外壳，壳内按钮继续使用自己的键盘焦点规则。 */
+   只把文字编辑区的焦点移到圆角外壳（浅灰），壳内按钮继续使用自己的键盘焦点规则。 */
 .composer-input:focus-visible {
   box-shadow: none;
 }
 .composer-surface:has(.composer-input:focus-visible) {
-  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring);
+  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring-shell);
+}
+/* 输入区几何：单行垂直居中、按内容向上展开；长内容在卡片内部滚动。
+   内侧滚动条默认不可见（DESIGN 会话输入几何与暂收）——焦点框由外壳承担，内层不画矩形。 */
+.composer-input {
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* 展开形态：输入区在上，高度只由 Composer 的实测值决定。
+     InputGroupTextarea 带 flex-1（flex-basis:0%），列方向 flex 会用基准 0 参与主轴分配，
+     把实测高度架空成单行；这里把基准还回内容高度（未设高度时仍由内容撑开）。 */
+  flex: 0 0 auto;
+}
+/* 窄卡片：模型入口收成图标形态（C07 入口仍在，标签收起）。
+   判定在 Composer 的 measure 里按单行形态的最小可用编辑宽做（完整操作行保不住底线、
+   收起后保得住才收起；多行堆叠时操作行独占一行，不收），与当前显示形态无关，不自激；
+   这里只负责把已判定的形态落到 DOM 上。可访问名称始终在触发器 aria-label 上。 */
+.input-surface[data-tight="true"] [data-slot="model-entry-label"] {
+  display: none;
+}
+
+/* 紧凑单行：输入行与操作行并排，此时输入行才占满剩余宽度。
+   能否进入该形态由 Composer 按实测宽度判定（见 measure）：单行并排没有窄窗例外，
+   剩余宽装不下整段草稿时按内容折行向上长高；只有操作行挤掉最小可用编辑宽才走堆叠。 */
+.composer-surface.composer-compact .composer-input {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+.composer-input::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+/* 悬停或键盘聚焦时允许一圈浅灰外缘提示，仍不是矩形焦点框 */
+.composer-surface:has(.composer-input:hover),
+.composer-surface:has(.composer-input:focus-within) {
+  box-shadow: inset 0 0 0 max(1px, calc(1px * var(--ui-scale))) var(--edge-strong);
+}
+.composer-surface:has(.composer-input:focus-visible) {
+  box-shadow: inset 0 0 0 max(2px, calc(2px * var(--ui-scale))) var(--focus-ring-shell);
+}
+/* 单行形态（composer-compact）：输入行与操作行并排、垂直居中于卡片内。
+   多行时外壳仍是 InputGroup 的纵向堆叠；只换 flex 方向与 addon 的宽度/上边距，
+   左右留白与卡片宽度由外壳的 p-3 与外层容器不变（DESIGN「展开不改变左右留白与卡片宽度」）。
+   高度不写独立常数——输入行高度由 Composer 按字号尺度测得，操作行沿自身控件高度，
+   卡片高度取两者较大值加外壳内缩，输入行因此在卡片内上下对称居中。 */
+.composer-surface.composer-compact {
+  flex-direction: row;
+  align-items: center;
+}
+.composer-surface.composer-compact > [data-slot="input-group-addon"] {
+  width: auto;
+  margin-top: 0;
 }
 /* 图标按钮命中区下限：随尺度派生但不低于 24px（WCAG 2.2 最小目标尺寸参考） */
 .hit-floor {
@@ -272,3 +387,179 @@ html[data-platform="darwin"] .app-brand { padding-inline-start: 80px; }
   height: calc(var(--ui-font-size-num) * 1px * 2);
   object-fit: contain;
 }
+
+/* ============================================================================
+   磨砂材质：窗口 backgroundColor 为透明，桌面内容确实位于其后，
+   因此侧栏／标题带／输入卡片可以使用真实 backdrop-filter，而不是「透明减淡」。
+   底色保持高不透明度（72%–82%），保证正文对比度不依赖桌面壁纸。
+   减少透明度偏好下退化为同明度实色，功能与层次不变（见 prefers-reduced-transparency）。
+   ========================================================================== */
+.glass {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+.glass-sidebar { background: var(--glass-sidebar); }
+.glass-bar { background: var(--glass-bar); }
+.glass-composer { background: var(--glass-composer); }
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass { backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .glass-sidebar { background: var(--sidebar); }
+  .glass-bar { background: var(--panel); }
+  .glass-composer { background: var(--input); }
+}
+
+/* ============================================================================
+   消息正文排版层（streamdown 输出）
+   上游 Streamdown 渲染标准 HTML 标签并附带自身 Tailwind 类；D Code 的语义色
+   不包含 muted-foreground / prose 等外部类名，因此阅读层级由本层持有：
+   字阶沿用 DESIGN 共享字阶，行高取「Markdown 阅读 1.625 × base」，
+   结构靠字重与间距，不靠给每段描边。代码块与表格交给 .prose-dcode 内的专用面。
+   ========================================================================== */
+.prose-dcode {
+  color: var(--foreground);
+  font-size: var(--text-ui-base);
+  line-height: 1.625;
+  overflow-wrap: anywhere;
+}
+/* 块间距由 Streamdown 自带的 space-y-4 提供；本层不重复加 margin，避免两套节奏叠加 */
+.prose-dcode > :first-child { margin-top: 0; }
+.prose-dcode > :last-child { margin-bottom: 0; }
+
+.prose-dcode h1,
+.prose-dcode h2,
+.prose-dcode h3,
+.prose-dcode h4,
+.prose-dcode h5,
+.prose-dcode h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: calc(var(--spacing) * 5);
+  letter-spacing: -0.01em;
+}
+/* 标题在消息流里不是「页面级」：压到区块标题档，正文层级仍由段落承担 */
+.prose-dcode h1 { font-size: var(--text-ui-lg); }
+.prose-dcode h2 { font-size: var(--text-ui-base); }
+.prose-dcode h3,
+.prose-dcode h4,
+.prose-dcode h5,
+.prose-dcode h6 { font-size: var(--text-ui-base); }
+
+.prose-dcode p { margin-top: calc(var(--spacing) * 3); }
+.prose-dcode strong { font-weight: 600; }
+.prose-dcode em { font-style: italic; }
+.prose-dcode del { text-decoration: line-through; color: var(--subtle); }
+
+.prose-dcode ul,
+.prose-dcode ol {
+  padding-inline-start: calc(var(--spacing) * 5);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+}
+.prose-dcode ul { list-style: disc; }
+.prose-dcode ol { list-style: decimal; }
+.prose-dcode li > ul,
+.prose-dcode li > ol { margin-top: calc(var(--spacing) * 1.5); }
+.prose-dcode li::marker { color: var(--subtlest); }
+
+.prose-dcode a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border-strong);
+}
+.prose-dcode a:hover { text-decoration-color: var(--foreground); }
+
+.prose-dcode blockquote {
+  border-inline-start: 2px solid var(--edge-strong);
+  padding-inline-start: calc(var(--spacing) * 4);
+  color: var(--subtle);
+}
+
+/* 行内代码：浅底 + 等宽，不描边；与正文靠表面与字重区分 */
+.prose-dcode :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--hover);
+  color: var(--foreground);
+  padding: 0.1em 0.35em;
+  border-radius: calc(4px * var(--ui-scale));
+}
+
+/* 分隔线：Markdown 里的 hr 是真实内容分隔（不是布局套框），保留但极弱 */
+.prose-dcode hr {
+  border: 0;
+  border-top: 1px solid var(--edge);
+  margin-block: calc(var(--spacing) * 6);
+}
+
+/* 表格：唯一需要横向滚动的正文结构；窄检查器内长行仍可读 */
+.prose-dcode table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--text-ui-sm);
+}
+.prose-dcode th,
+.prose-dcode td {
+  border: 1px solid var(--edge);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5);
+  text-align: start;
+  white-space: nowrap;
+}
+.prose-dcode th { background: var(--hover); font-weight: 600; }
+
+/* 代码块容器：下沉表面 + 内阴影，不画边框。
+   内部 <pre> 由 streamdown 的 code 插件（含 shiki 高亮）填充。 */
+.prose-dcode pre {
+  background: var(--sunken);
+  box-shadow: var(--shadow-inset-well);
+  border-radius: var(--radius-lg);
+  padding: calc(var(--spacing) * 3.5);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-ui-sm);
+  line-height: 1.6;
+  color: var(--foreground);
+}
+.prose-dcode pre code {
+  font-family: inherit;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+/* shiki 双主题：默认按浅色出字，切到深色时切到 github-dark 的变量 */
+.prose-dcode [data-theme*=" "] span,
+.prose-dcode pre span {
+  color: var(--shiki-light, inherit);
+}
+.dark .prose-dcode pre span {
+  color: var(--shiki-dark, inherit);
+}
+.dark .prose-dcode pre {
+  background: var(--sunken);
+}
+
+/* 代码块的双主题 token 配色。
+   shiki 以 defaultColor:false 只输出 --shiki-light / --shiki-dark 两个变量，颜色在这里消费。
+   不能用 Tailwind 的 dark:!text-[…] 工具类：它会被包进 prefers-color-scheme:dark 的 media，
+   而 D Code 的手动深色只切 html.dark，结果手动深色下仍是浅色配色（浅色标识符落在深色底上）。
+   规则按 data-slot 定位，组件不依赖是否处在 .prose-dcode 容器里。 */
+[data-slot="code-block"] pre,
+[data-slot="code-block"] pre span {
+  color: var(--shiki-light, inherit);
+}
+.dark [data-slot="code-block"] pre,
+.dark [data-slot="code-block"] pre span {
+  color: var(--shiki-dark, inherit);
+}
+
+/* 图片：限制在阅读列内，不撑破窄窗口 */
+.prose-dcode img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+

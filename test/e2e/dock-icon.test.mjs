@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { launchApp, ready, cleanup, killApp } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
 test("macOS Dock：实际 setIcon 消费平台图，圆角外沿透明且保留视觉留白", { skip: process.platform !== "darwin" }, async () => {
   const root = join(import.meta.dirname, "../..");
@@ -51,7 +52,7 @@ test("macOS Dock：实际 setIcon 消费平台图，圆角外沿透明且保留�
     for (const margin of [result.bounds.minX / result.width, result.bounds.minY / result.height, 1 - result.bounds.maxX / result.width, 1 - result.bounds.maxY / result.height]) {
       assert.ok(margin >= 0.07 && margin <= 0.12, `平台图应有适当透明外边距，实际 ${margin}`);
     }
-    const evidence = join(import.meta.dirname, "evidence/dock-icon");
+    const evidence = evidenceDir("dock-icon");
     mkdirSync(evidence, { recursive: true });
     writeFileSync(join(evidence, "actual-consumer.json"), JSON.stringify(result, null, 2));
   } finally {

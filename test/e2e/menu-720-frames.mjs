@@ -1,11 +1,11 @@
 // 720×480 紧凑窗口下任务菜单实开实证：选项在收窄的侧栏内完整可见、Tab 可达、Esc 回触发点。
 // 复用 frames 同一路径；留帧与 meta，供人工评审与差异复审。
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { launchApp, cleanup, ready, assertValidationModel } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "evidence", "style-2026-10-06", "frames");
+const OUT = evidenceDir("menu-720-frames");
 mkdirSync(OUT, { recursive: true });
 const meta = [];
 

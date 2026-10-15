@@ -11,3 +11,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# E2E 证据的隔离运行目录（本机产物，不进版本控制；归档后由交付者复制进 doc/验证记录）。
+/test/e2e/evidence/runs/

@@ -1,0 +1,1041 @@
+
+> dcode-redesign@0.1.0-dev test:runtime
+> node --import tsx --test test/runtime/*.test.ts test/runtime/*.test.mjs
+
+TAP version 13
+# Subtest: login 走 SDK 正式通路：prompt 收集 → gated store 提交点写凭据；凭据归属 providerId 精确
+ok 1 - login 走 SDK 正式通路：prompt 收集 → gated store 提交点写凭据；凭据归属 providerId 精确
+  ---
+  duration_ms: 6.627583
+  type: 'test'
+  ...
+# Subtest: 同 provider 第二次 begin 后旧 guard 提交失效（新代次使旧流程失效），旧认证保留
+ok 2 - 同 provider 第二次 begin 后旧 guard 提交失效（新代次使旧流程失效），旧认证保留
+  ---
+  duration_ms: 3.034583
+  type: 'test'
+  ...
+# Subtest: 真实当前供应商 read 在途：A/B/A admission 不穿透，send/config 拒绝，SDK token 刷新保留
+ok 3 - 真实当前供应商 read 在途：A/B/A admission 不穿透，send/config 拒绝，SDK token 刷新保留
+  ---
+  duration_ms: 1510.915417
+  type: 'test'
+  ...
+# Subtest: 只给另一供应商 B 登录：当前供应商 A 的发送与继续不被无关阻断；释放 B 不改变 A 工作
+ok 4 - 只给另一供应商 B 登录：当前供应商 A 的发送与继续不被无关阻断；释放 B 不改变 A 工作
+  ---
+  duration_ms: 9.068459
+  type: 'test'
+  ...
+# Subtest: 宿主登录 admission 期间取消/重复身份/关闭：不启动 SDK，关闭真实等 read 收束
+ok 5 - 宿主登录 admission 期间取消/重复身份/关闭：不启动 SDK，关闭真实等 read 收束
+  ---
+  duration_ms: 1511.655167
+  type: 'test'
+  ...
+# Subtest: 应用先同步认领关闭：拒绝新操作，已开始设置保存仍完成再收束
+ok 6 - 应用先同步认领关闭：拒绝新操作，已开始设置保存仍完成再收束
+  ---
+  duration_ms: 0.480917
+  type: 'test'
+  ...
+# Subtest: cancel：挂起 prompt 即时拒绝，不再悬挂；已撤销后登录回执为 cancelled 且旧凭据不动
+ok 7 - cancel：挂起 prompt 即时拒绝，不再悬挂；已撤销后登录回执为 cancelled 且旧凭据不动
+  ---
+  duration_ms: 1.449625
+  type: 'test'
+  ...
+# Subtest: retrySend：A 自身认证在途时不得实际重投；B-only 在途允许同身份重试；已接收的查回不被改报
+ok 8 - retrySend：A 自身认证在途时不得实际重投；B-only 在途允许同身份重试；已接收的查回不被改报
+  ---
+  duration_ms: 1506.179167
+  type: 'test'
+  ...
+# Subtest: sanitizeCatalogModel：只保留 chat 并过全形状校验；classifier 与坏形拒绝
+ok 9 - sanitizeCatalogModel：只保留 chat 并过全形状校验；classifier 与坏形拒绝
+  ---
+  duration_ms: 0.607416
+  type: 'test'
+  ...
+# Subtest: 公开请求不携带认证头；?types=chat 参数
+ok 10 - 公开请求不携带认证头；?types=chat 参数
+  ---
+  duration_ms: 11.930958
+  type: 'test'
+  ...
+# Subtest: 304 但没有有效缓存正文：不能当作新目录成功
+ok 11 - 304 但没有有效缓存正文：不能当作新目录成功
+  ---
+  duration_ms: 0.17775
+  type: 'test'
+  ...
+# Subtest: catalog 服务刷新：A→B 实际进入生效视图、304 有缓存则延长 freshness、写盘失败落 lastError 且不报 ok
+ok 12 - catalog 服务刷新：A→B 实际进入生效视图、304 有缓存则延长 freshness、写盘失败落 lastError 且不报 ok
+  ---
+  duration_ms: 16.163959
+  type: 'test'
+  ...
+# Subtest: 换源立即吊销在途；旧源结果在 commit 点被拒不写新源
+ok 13 - 换源立即吊销在途；旧源结果在 commit 点被拒不写新源
+  ---
+  duration_ms: 5.351709
+  type: 'test'
+  ...
+# Subtest: 跨源反例：A 源 200 缓存后换 B 源，旧 ETag 不带去 B；B 返回 304 无 B 正文不能当成功，B 失败保留 A 的正文与 A 的成功时间
+ok 14 - 跨源反例：A 源 200 缓存后换 B 源，旧 ETag 不带去 B；B 返回 304 无 B 正文不能当成功，B 失败保留 A 的正文与 A 的成功时间
+  ---
+  duration_ms: 11.062792
+  type: 'test'
+  ...
+# Subtest: 已知 builtin ID 的在线参数 A→B 更新真正进入 SDK 请求模型（保留模板字段、只合安全元数据）
+ok 15 - 已知 builtin ID 的在线参数 A→B 更新真正进入 SDK 请求模型（保留模板字段、只合安全元数据）
+  ---
+  duration_ms: 8.559042
+  type: 'test'
+  ...
+# Subtest: resolveModelLocal：builtin 精确模型保留本地 baseUrl；同供应商/本地协议的新线上模型以 anchor endpoint 可执行；未知 api 不可执行
+ok 16 - resolveModelLocal：builtin 精确模型保留本地 baseUrl；同供应商/本地协议的新线上模型以 anchor endpoint 可执行；未知 api 不可执行
+  ---
+  duration_ms: 5.469709
+  type: 'test'
+  ...
+# Subtest: 跨源 404：A 200 含新 ID → B 404 保留 A 完整资料与 sourceBaseUrl/etag，B_lastSuccess 不伪报
+ok 17 - 跨源 404：A 200 含新 ID → B 404 保留 A 完整资料与 sourceBaseUrl/etag，B_lastSuccess 不伪报
+  ---
+  duration_ms: 18.33675
+  type: 'test'
+  ...
+# Subtest: 目录实效反例：有效 A 后 timeout/404/非法 chat 行 all refresh.ok=false 且保留 A
+ok 18 - 目录实效反例：有效 A 后 timeout/404/非法 chat 行 all refresh.ok=false 且保留 A
+  ---
+  duration_ms: 5.164584
+  type: 'test'
+  ...
+# Subtest: 目录 modify beforeCommit 同步门禁：temp-write 后换源立即拒，旧 record 保留且临时文件清理
+ok 19 - 目录 modify beforeCommit 同步门禁：temp-write 后换源立即拒，旧 record 保留且临时文件清理
+  ---
+  duration_ms: 8.05375
+  type: 'test'
+  ...
+# Subtest: 多供应商目录：一个更新失败不被后一个成功隐藏，旧目录保留而其他更新生效
+ok 20 - 多供应商目录：一个更新失败不被后一个成功隐藏，旧目录保留而其他更新生效
+  ---
+  duration_ms: 7.071875
+  type: 'test'
+  ...
+# Subtest: 关闭落在等待旧 refresh 的窗口：gate 未释放前关闭未完成；收束后不晚写新来源、不发布
+ok 21 - 关闭落在等待旧 refresh 的窗口：gate 未释放前关闭未完成；收束后不晚写新来源、不发布
+  ---
+  duration_ms: 2.138084
+  type: 'test'
+  ...
+# Subtest: 关闭落在来源提交已进入异步保存的窗口：队列被占期间关闭未完成；收束后旧来源与缓存保留、临时文件清理
+ok 22 - 关闭落在来源提交已进入异步保存的窗口：队列被占期间关闭未完成；收束后旧来源与缓存保留、临时文件清理
+  ---
+  duration_ms: 3.511125
+  type: 'test'
+  ...
+# Subtest: 并发两来源请求：后来的请求被显式拒绝，不覆盖在途句柄，也不返回别人的成功
+ok 23 - 并发两来源请求：后来的请求被显式拒绝，不覆盖在途句柄，也不返回别人的成功
+  ---
+  duration_ms: 2.453833
+  type: 'test'
+  ...
+# Subtest: 来源已提交后关闭：保留已保存事实，但不晚发布、不晚启动新检查，且不伪报未保存
+ok 24 - 来源已提交后关闭：保留已保存事实，但不晚发布、不晚启动新检查，且不伪报未保存
+  ---
+  duration_ms: 4.564625
+  type: 'test'
+  ...
+# Subtest: 语言别名（如 ts）也真正分词并带配色，而不是静默退化为纯文本
+ok 25 - 语言别名（如 ts）也真正分词并带配色，而不是静默退化为纯文本
+  ---
+  duration_ms: 316.673583
+  type: 'test'
+  ...
+# Subtest: 真正未知的语言退化为纯文本，不抛错也不丢原文
+ok 26 - 真正未知的语言退化为纯文本，不抛错也不丢原文
+  ---
+  duration_ms: 1.464334
+  type: 'test'
+  ...
+# Subtest: 同语言、同长度、同头尾而中间不同的代码不会共用同一份高亮
+ok 27 - 同语言、同长度、同头尾而中间不同的代码不会共用同一份高亮
+  ---
+  duration_ms: 22.628709
+  type: 'test'
+  ...
+# Subtest: 首尾一致但中间不同的三段代码各自按自己的原文高亮
+ok 28 - 首尾一致但中间不同的三段代码各自按自己的原文高亮
+  ---
+  duration_ms: 11.474125
+  type: 'test'
+  ...
+# Subtest: 缓存已预热时，带回调的调用仍会真正回调并返回同一份结果
+ok 29 - 缓存已预热时，带回调的调用仍会真正回调并返回同一份结果
+  ---
+  duration_ms: 72.856709
+  type: 'test'
+  ...
+# Subtest: 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+ok 30 - 真实设置错误身份：每次新失败推进，读取不推进；成功清除内容但保留编号与最后持久值
+  ---
+  duration_ms: 2.347083
+  type: 'test'
+  ...
+# Subtest: updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+ok 31 - updateSettings: pending save 期间任何读取与普通更新都看不到未保存的新设置；失败可辨并保留原值
+  ---
+  duration_ms: 401.349666
+  type: 'test'
+  ...
+# Subtest: updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+ok 32 - updateSettings: 并发的迟到失败不回滚也不覆盖更新的设置结果
+  ---
+  duration_ms: 0.3905
+  type: 'test'
+  ...
+# Subtest: updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+ok 33 - updateSettings: 真实 FIFO 下 A 先成功、B 后失败时，以实际成功持久化的设置为依据
+  ---
+  duration_ms: 0.489
+  type: 'test'
+  ...
+# Subtest: updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+ok 34 - updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧设置排到 B 之后
+  ---
+  duration_ms: 401.211292
+  type: 'test'
+  ...
+# Subtest: updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 35 - updateSettings: persistNow 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 2.586542
+  type: 'test'
+  ...
+# Subtest: updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+ok 36 - updateSettings: flush 等 A 期间又到 B，必须等 B 实际收束后再保存最新设置
+  ---
+  duration_ms: 0.666583
+  type: 'test'
+  ...
+# Subtest: 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+ok 37 - 应用合同：同身份找回/可靠未接收后的同身份重试不增加对象或消息；独立于 C02 键盘入口
+  ---
+  duration_ms: 1.553708
+  type: 'test'
+  ...
+# Subtest: 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+ok 38 - 恢复失败以只读确认的真实相位呈现，普通观测不吞原因
+  ---
+  duration_ms: 1014.494209
+  type: 'test'
+  ...
+# Subtest: 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+ok 39 - 普通观测自然刷新原消息的处理状态：不需额外 checkReceipt，不重投（门控：finish 在发送后那次同步收束之后才发生）
+  ---
+  duration_ms: 512.107458
+  type: 'test'
+  ...
+# Subtest: accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+ok 40 - accepted/placed 后一次 lookup unknown 不降级已接收事实，后续自然 tick 仍到 done
+  ---
+  duration_ms: 1007.870375
+  type: 'test'
+  ...
+# Subtest: C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+ok 41 - C01 derivePrimaryAction：先看运行约束，再看本次输入；回执在途/未知不取消有效控制
+  ---
+  duration_ms: 0.574917
+  type: 'test'
+  ...
+# Subtest: C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+ok 42 - C01 静态渲染：互斥呈现与禁用形态；菜单为输入选项次级入口
+  ---
+  duration_ms: 20.7765
+  type: 'test'
+  ...
+# Subtest: 三条通路传入同一个发送版本时，判据结论一致
+ok 43 - 三条通路传入同一个发送版本时，判据结论一致
+  ---
+  duration_ms: 1.013667
+  type: 'test'
+  ...
+# Subtest: 仍是那一版：文字与引用一并清走，身份关联解除
+ok 44 - 仍是那一版：文字与引用一并清走，身份关联解除
+  ---
+  duration_ms: 0.139417
+  type: 'test'
+  ...
+# Subtest: 同文字换引用：文字与引用都留下，只解除这次发送的身份
+ok 45 - 同文字换引用：文字与引用都留下，只解除这次发送的身份
+  ---
+  duration_ms: 4.717833
+  type: 'test'
+  ...
+# Subtest: 发送途中移除了引用：已接收的这一次不得把移除前的旧集合写回来
+ok 46 - 发送途中移除了引用：已接收的这一次不得把移除前的旧集合写回来
+  ---
+  duration_ms: 0.083417
+  type: 'test'
+  ...
+# Subtest: 换用途同样算新的一版
+ok 47 - 换用途同样算新的一版
+  ---
+  duration_ms: 0.181208
+  type: 'test'
+  ...
+# Subtest: A 的 accepted 不清 B 的草稿与身份
+ok 48 - A 的 accepted 不清 B 的草稿与身份
+  ---
+  duration_ms: 0.174458
+  type: 'test'
+  ...
+# Subtest: 身份已经换了：这次回执只解除映射，不动任何草稿
+ok 49 - 身份已经换了：这次回执只解除映射，不动任何草稿
+  ---
+  duration_ms: 2.626458
+  type: 'test'
+  ...
+# Subtest: 找不到关联草稿键时原样返回，不凭空造键
+ok 50 - 找不到关联草稿键时原样返回，不凭空造键
+  ---
+  duration_ms: 0.153875
+  type: 'test'
+  ...
+# Subtest: 版本判据本身逐项相等，空引用集合身份稳定
+ok 51 - 版本判据本身逐项相等，空引用集合身份稳定
+  ---
+  duration_ms: 1.642583
+  type: 'test'
+  ...
+# Subtest: another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+ok 52 - another live process is rejected; SIGKILL releases dead ownership and reopen waits for explicit resume
+  ---
+  duration_ms: 1102.26025
+  type: 'test'
+  ...
+# Subtest: concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+ok 53 - concurrent and repeated close calls preserve a failed shutdown result and keep the ownership claim
+  ---
+  duration_ms: 14.010333
+  type: 'test'
+  ...
+# Subtest: a new pause while resume is committing prevents scheduler activation
+ok 54 - a new pause while resume is committing prevents scheduler activation
+  ---
+  duration_ms: 61.787083
+  type: 'test'
+  ...
+# Subtest: 代码围栏保留原文：缩进、空行、尾部空白与中文注释都不丢
+ok 55 - 代码围栏保留原文：缩进、空行、尾部空白与中文注释都不丢
+  ---
+  duration_ms: 22.092375
+  type: 'test'
+  ...
+# Subtest: 同一回复里的多个围栏各自保留自己的原文
+ok 56 - 同一回复里的多个围栏各自保留自己的原文
+  ---
+  duration_ms: 8.540709
+  type: 'test'
+  ...
+# Subtest: 没有语言标注的围栏按纯文本处理且原文不丢
+ok 57 - 没有语言标注的围栏按纯文本处理且原文不丢
+  ---
+  duration_ms: 1.7565
+  type: 'test'
+  ...
+# Subtest: 围栏有同名不同内容时按各自内容渲染，不互相顶替
+ok 58 - 围栏有同名不同内容时按各自内容渲染，不互相顶替
+  ---
+  duration_ms: 2.071709
+  type: 'test'
+  ...
+# Subtest: 自动路由：能力筛选先于额度
+    # Subtest: 能力不满足的候选不参与额度判定，直接记为能力不满足
+    ok 1 - 能力不满足的候选不参与额度判定，直接记为能力不满足
+      ---
+      duration_ms: 1.073292
+      type: 'test'
+      ...
+    # Subtest: 没有适合候选时保留工作，不把不匹配模型降级顶替
+    ok 2 - 没有适合候选时保留工作，不把不匹配模型降级顶替
+      ---
+      duration_ms: 0.104042
+      type: 'test'
+      ...
+    # Subtest: 工作不可推进时不唤醒：判定保留工作而不是选模
+    ok 3 - 工作不可推进时不唤醒：判定保留工作而不是选模
+      ---
+      duration_ms: 0.045167
+      type: 'test'
+      ...
+    1..3
+ok 59 - 自动路由：能力筛选先于额度
+  ---
+  duration_ms: 1.617292
+  type: 'suite'
+  ...
+# Subtest: 自动路由：额度事实的五态严格分开
+    # Subtest: 有已确认可用候选时直接采用，不先制造一次无额度调用失败
+    ok 1 - 有已确认可用候选时直接采用，不先制造一次无额度调用失败
+      ---
+      duration_ms: 0.222041
+      type: 'test'
+      ...
+    # Subtest: 额度全部未知且没有耗尽依据时，只对同一原工作做有界尝试
+    ok 2 - 额度全部未知且没有耗尽依据时，只对同一原工作做有界尝试
+      ---
+      duration_ms: 0.137
+      type: 'test'
+      ...
+    # Subtest: 暂不支持（unsupported）与未知不同：不当作可用采信
+    ok 3 - 暂不支持（unsupported）与未知不同：不当作可用采信
+      ---
+      duration_ms: 0.056667
+      type: 'test'
+      ...
+    # Subtest: 已知全部耗尽：保留工作等明确继续，不改标成未知绕过
+    ok 4 - 已知全部耗尽：保留工作等明确继续，不改标成未知绕过
+      ---
+      duration_ms: 0.150959
+      type: 'test'
+      ...
+    # Subtest: 已知存在耗尽依据时，即使还有未知候选也不做有界尝试
+    ok 5 - 已知存在耗尽依据时，即使还有未知候选也不做有界尝试
+      ---
+      duration_ms: 0.275375
+      type: 'test'
+      ...
+    # Subtest: 同池内一窗耗尽时，另一窗口的「可用」不采信
+    ok 6 - 同池内一窗耗尽时，另一窗口的「可用」不采信
+      ---
+      duration_ms: 0.192625
+      type: 'test'
+      ...
+    # Subtest: 不同池的耗尽不影响另一个池的可用候选
+    ok 7 - 不同池的耗尽不影响另一个池的可用候选
+      ---
+      duration_ms: 0.187791
+      type: 'test'
+      ...
+    1..7
+ok 60 - 自动路由：额度事实的五态严格分开
+  ---
+  duration_ms: 1.54175
+  type: 'suite'
+  ...
+# Subtest: 指定模式：不扩大范围、不换备用
+    # Subtest: 额度未知时只对该模型有界尝试，不开放其它候选
+    ok 1 - 额度未知时只对该模型有界尝试，不开放其它候选
+      ---
+      duration_ms: 0.073125
+      type: 'test'
+      ...
+    # Subtest: 指定模型能力不足时保留原因，不擅自换备用
+    ok 2 - 指定模型能力不足时保留原因，不擅自换备用
+      ---
+      duration_ms: 0.076666
+      type: 'test'
+      ...
+    # Subtest: 指定模型额度已耗尽时保留原因，等待明确继续
+    ok 3 - 指定模型额度已耗尽时保留原因，等待明确继续
+      ---
+      duration_ms: 0.029375
+      type: 'test'
+      ...
+    1..3
+ok 61 - 指定模式：不扩大范围、不换备用
+  ---
+  duration_ms: 0.218792
+  type: 'suite'
+  ...
+# Subtest: 优先级：新选择 / 暂停 / 目标失效压过额度读取窗口里的旧结果
+    # Subtest: supersededBy 直接拦截，不用旧选择发起任何请求
+    ok 1 - supersededBy 直接拦截，不用旧选择发起任何请求
+      ---
+      duration_ms: 0.039875
+      type: 'test'
+      ...
+    # Subtest: 注册表：额度读取期间改选，旧结果不覆盖较新的选择
+    ok 2 - 注册表：额度读取期间改选，旧结果不覆盖较新的选择
+      ---
+      duration_ms: 5.642792
+      type: 'test'
+      ...
+    1..2
+ok 62 - 优先级：新选择 / 暂停 / 目标失效压过额度读取窗口里的旧结果
+  ---
+  duration_ms: 5.767833
+  type: 'suite'
+  ...
+# Subtest: 条件参数：只用逐档核实的档位
+    # Subtest: 已核实不支持的档位被拒，并如实说明；不静默降级到别档
+    ok 1 - 已核实不支持的档位被拒，并如实说明；不静默降级到别档
+      ---
+      duration_ms: 0.223042
+      type: 'test'
+      ...
+    # Subtest: 指定模式下按**刚选定**的模型设档位：还没发过请求也能设
+    ok 2 - 指定模式下按**刚选定**的模型设档位：还没发过请求也能设
+      ---
+      duration_ms: 0.098292
+      type: 'test'
+      ...
+    # Subtest: Pi 能力端口：thinkingLevelMap 里 null=该档不支持，缺键=未核实（都不是支持）
+    ok 3 - Pi 能力端口：thinkingLevelMap 里 null=该档不支持，缺键=未核实（都不是支持）
+      ---
+      duration_ms: 2.031125
+      type: 'test'
+      ...
+    # Subtest: 推理布尔为真但无逐档资料时，不显示任何档位（不按布尔猜六档）
+    ok 4 - 推理布尔为真但无逐档资料时，不显示任何档位（不按布尔猜六档）
+      ---
+      duration_ms: 0.519
+      type: 'test'
+      ...
+    1..4
+ok 63 - 条件参数：只用逐档核实的档位
+  ---
+  duration_ms: 3.010333
+  type: 'suite'
+  ...
+# Subtest: 额度读取：没有可靠来源时如实 unsupported
+    # Subtest: 无读取器时返回 unsupported，不返回 0 也不返回可用
+    ok 1 - 无读取器时返回 unsupported，不返回 0 也不返回可用
+      ---
+      duration_ms: 0.126291
+      type: 'test'
+      ...
+    # Subtest: 读取器抛错是「失败」态：降级为 unknown 并附真实原因，不是 0 也不是可用
+    ok 2 - 读取器抛错是「失败」态：降级为 unknown 并附真实原因，不是 0 也不是可用
+      ---
+      duration_ms: 0.070875
+      type: 'test'
+      ...
+    # Subtest: 形状无法核对时降级为 unknown，不采信为可用
+    ok 3 - 形状无法核对时降级为 unknown，不采信为可用
+      ---
+      duration_ms: 0.093958
+      type: 'test'
+      ...
+    # Subtest: 读取额度不发送输入、不启用执行：注册表只返回事实
+    ok 4 - 读取额度不发送输入、不启用执行：注册表只返回事实
+      ---
+      duration_ms: 0.087
+      type: 'test'
+      ...
+    1..4
+ok 64 - 额度读取：没有可靠来源时如实 unsupported
+  ---
+  duration_ms: 0.428333
+  type: 'suite'
+  ...
+# Subtest: 两份事实：新会话默认与每条会话自己的选择分开
+    # Subtest: 改设置默认不动已有会话；改某条会话不动其它会话也不动默认
+    ok 1 - 改设置默认不动已有会话；改某条会话不动其它会话也不动默认
+      ---
+      duration_ms: 0.198542
+      type: 'test'
+      ...
+    # Subtest: 默认指向目录里没有的模型时如实失败，不先存下再失效
+    ok 2 - 默认指向目录里没有的模型时如实失败，不先存下再失效
+      ---
+      duration_ms: 0.051709
+      type: 'test'
+      ...
+    # Subtest: 选定目录里不存在的模型时保留用户选择但给出真实原因，不悄悄退回自动
+    ok 3 - 选定目录里不存在的模型时保留用户选择但给出真实原因，不悄悄退回自动
+      ---
+      duration_ms: 0.043333
+      type: 'test'
+      ...
+    1..3
+ok 65 - 两份事实：新会话默认与每条会话自己的选择分开
+  ---
+  duration_ms: 0.328167
+  type: 'suite'
+  ...
+# Subtest: 接收侧运行时校验
+    # Subtest: 「可用」必须带更新时间且无原因，否则无可核对来源
+    ok 1 - 「可用」必须带更新时间且无原因，否则无可核对来源
+      ---
+      duration_ms: 0.062458
+      type: 'test'
+      ...
+    # Subtest: 一个档位都没核实出来时必须给出真实说明
+    ok 2 - 一个档位都没核实出来时必须给出真实说明
+      ---
+      duration_ms: 0.151958
+      type: 'test'
+      ...
+    # Subtest: 「已采用」不得同时带失败原因：采用与失败分开记录
+    ok 3 - 「已采用」不得同时带失败原因：采用与失败分开记录
+      ---
+      duration_ms: 0.067167
+      type: 'test'
+      ...
+    # Subtest: 路由判定产出的每条尝试记录都能过接收侧校验（采用项不带原因）
+    ok 4 - 路由判定产出的每条尝试记录都能过接收侧校验（采用项不带原因）
+      ---
+      duration_ms: 0.081917
+      type: 'test'
+      ...
+    # Subtest: 会话选择与模型状态的畸形载荷被拒
+    ok 5 - 会话选择与模型状态的畸形载荷被拒
+      ---
+      duration_ms: 0.095792
+      type: 'test'
+      ...
+    # Subtest: fitsCapabilities 逐项核对，不按名称或排名推断
+    ok 6 - fitsCapabilities 逐项核对，不按名称或排名推断
+      ---
+      duration_ms: 0.045791
+      type: 'test'
+      ...
+    # Subtest: 额度判别辅助函数：只有真实 exhausted 才算已知耗尽
+    ok 7 - 额度判别辅助函数：只有真实 exhausted 才算已知耗尽
+      ---
+      duration_ms: 0.0325
+      type: 'test'
+      ...
+    1..7
+ok 66 - 接收侧运行时校验
+  ---
+  duration_ms: 0.610125
+  type: 'suite'
+  ...
+# Subtest: 注册表输出可过接收侧校验
+    # Subtest: 路由判定后的状态本身是合法的 SessionModelState
+    ok 1 - 路由判定后的状态本身是合法的 SessionModelState
+      ---
+      duration_ms: 0.189417
+      type: 'test'
+      ...
+    # Subtest: 选择方式与实际采用分别可辨：改选择后实际采用仍是上一个
+    ok 2 - 选择方式与实际采用分别可辨：改选择后实际采用仍是上一个
+      ---
+      duration_ms: 0.252583
+      type: 'test'
+      ...
+    1..2
+ok 67 - 注册表输出可过接收侧校验
+  ---
+  duration_ms: 0.498333
+  type: 'suite'
+  ...
+# Subtest: 全部耗尽后不自动续跑
+    # Subtest: 耗尽后额度恢复也不会自动改成采用：必须等明确继续
+    ok 1 - 耗尽后额度恢复也不会自动改成采用：必须等明确继续
+      ---
+      duration_ms: 0.058625
+      type: 'test'
+      ...
+    1..1
+ok 68 - 全部耗尽后不自动续跑
+  ---
+  duration_ms: 0.090333
+  type: 'suite'
+  ...
+# Subtest: 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+ok 69 - 保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续
+  ---
+  duration_ms: 4.477375
+  type: 'test'
+  ...
+# Subtest: 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+ok 70 - 真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）
+  ---
+  duration_ms: 3.669167
+  type: 'test'
+  ...
+# Subtest: accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+ok 71 - accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready 后允许
+  ---
+  duration_ms: 19.146292
+  type: 'test'
+  ...
+# Subtest: 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+ok 72 - 已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作
+  ---
+  duration_ms: 4.658958
+  type: 'test'
+  ...
+# Subtest: 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+ok 73 - 已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据
+  ---
+  duration_ms: 4.629958
+  type: 'test'
+  ...
+# Subtest: 401 事件：errorMessage 中的完整短凭据（ab）被替换，其他身份字段/正文完整
+ok 74 - 401 事件：errorMessage 中的完整短凭据（ab）被替换，其他身份字段/正文完整
+  ---
+  duration_ms: 0.824334
+  type: 'test'
+  ...
+# Subtest: 正常 text/done 事件完全不变（即使其字符串与 key 同字符）
+ok 75 - 正常 text/done 事件完全不变（即使其字符串与 key 同字符）
+  ---
+  duration_ms: 0.144
+  type: 'test'
+  ...
+# Subtest: inner 同步迭代失败（stream.push 后 throw）：cleaned error 事件 + 不保留含秘密的 message
+ok 76 - inner 同步迭代失败（stream.push 后 throw）：cleaned error 事件 + 不保留含秘密的 message
+  ---
+  duration_ms: 0.132875
+  type: 'test'
+  ...
+# Subtest: result() 的最终 AssistantMessage 也净化 errorMessage（result() 转出独立 promise 同样安全）
+ok 77 - result() 的最终 AssistantMessage 也净化 errorMessage（result() 转出独立 promise 同样安全）
+  ---
+  duration_ms: 0.116
+  type: 'test'
+  ...
+# Subtest: 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+ok 78 - 正常初始记录只有 Home 和默认任务；没有示例历史或成果
+  ---
+  duration_ms: 1.192167
+  type: 'test'
+  ...
+# Subtest: 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+ok 79 - 正常装配与隐藏开关独立；旧标签和任意文字都不能提供执行能力
+  ---
+  duration_ms: 1.818166
+  type: 'test'
+  ...
+# Subtest: 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+ok 80 - 只有显式隔离装配提供样本与模型；误装配缺隔离目录时拒绝
+  ---
+  duration_ms: 0.170708
+  type: 'test'
+  ...
+# Subtest: 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+ok 81 - 保存/关闭错误不含底层正文；两个语言各有事件、影响和可用下一步
+  ---
+  duration_ms: 0.666875
+  type: 'test'
+  ...
+# Subtest: 正常启动不带真实配置入口；只有明确写入 model-setup 才推进（凭据不回显）
+ok 82 - 正常启动不带真实配置入口；只有明确写入 model-setup 才推进（凭据不回显）
+  ---
+  duration_ms: 0.203125
+  type: 'test'
+  ...
+# Subtest: 凭据严格按 providerId 隔离：read/openai 取不到 user-defined 的密钥
+ok 83 - 凭据严格按 providerId 隔离：read/openai 取不到 user-defined 的密钥
+  ---
+  duration_ms: 8.887541
+  type: 'test'
+  ...
+# Subtest: 双授权点：两点之间被吊销的写入在 rename 前清理临时文件并抛错，旧凭据保留
+ok 84 - 双授权点：两点之间被吊销的写入在 rename 前清理临时文件并抛错，旧凭据保留
+  ---
+  duration_ms: 5.832541
+  type: 'test'
+  ...
+# Subtest: list 不解密：poison cipher 的 decrypt 被调用即失败（不只看枚举结果）
+ok 85 - list 不解密：poison cipher 的 decrypt 被调用即失败（不只看枚举结果）
+  ---
+  duration_ms: 5.429375
+  type: 'test'
+  ...
+# Subtest: 空目录首次直接 modify / credential commit 不死锁（不依赖 assembly 恰好先 read）
+ok 86 - 空目录首次直接 modify / credential commit 不死锁（不依赖 assembly 恰好先 read）
+  ---
+  duration_ms: 2.996291
+  type: 'test'
+  ...
+# Subtest: delete 同门禁：吊销 flow 的删除被拒，凭据仍在
+ok 87 - delete 同门禁：吊销 flow 的删除被拒，凭据仍在
+  ---
+  duration_ms: 2.990042
+  type: 'test'
+  ...
+# Subtest: 真正提交完成后，晚到取消/关闭不能把已保存凭据抹掉
+ok 88 - 真正提交完成后，晚到取消/关闭不能把已保存凭据抹掉
+  ---
+  duration_ms: 3.513792
+  type: 'test'
+  ...
+# Subtest: 旧 model-setup.json 格式 1 承接：备份保留、凭据归 user-defined、目录迁移完成
+ok 89 - 旧 model-setup.json 格式 1 承接：备份保留、凭据归 user-defined、目录迁移完成
+  ---
+  duration_ms: 2.984375
+  type: 'test'
+  ...
+# Subtest: 并发首个 read 不多份原子覆盖（迁移只发生一次）
+ok 90 - 并发首个 read 不多份原子覆盖（迁移只发生一次）
+  ---
+  duration_ms: 3.3465
+  type: 'test'
+  ...
+# Subtest: 归属未变时结果照常落草稿：门控不误伤正常引用
+ok 91 - 归属未变时结果照常落草稿：门控不误伤正常引用
+  ---
+  duration_ms: 1.160625
+  type: 'test'
+  ...
+# Subtest: A→B：A 的迟到结果不添加、不落到 B，也不留在 A
+ok 92 - A→B：A 的迟到结果不添加、不落到 B，也不留在 A
+  ---
+  duration_ms: 0.1785
+  type: 'test'
+  ...
+# Subtest: A→B→A：回到同一归属仍是新一代，A 的旧结果不复活
+ok 93 - A→B→A：回到同一归属仍是新一代，A 的旧结果不复活
+  ---
+  duration_ms: 0.097959
+  type: 'test'
+  ...
+# Subtest: A→B→A 且期间移除了同一项：迟到结果不得把它恢复回来
+ok 94 - A→B→A 且期间移除了同一项：迟到结果不得把它恢复回来
+  ---
+  duration_ms: 0.137625
+  type: 'test'
+  ...
+# Subtest: 卸载：组件不存在后不再有任何回写
+ok 95 - 卸载：组件不存在后不再有任何回写
+  ---
+  duration_ms: 0.195416
+  type: 'test'
+  ...
+# Subtest: 严格模式的挂载→卸载→挂载后门禁仍可用
+ok 96 - 严格模式的挂载→卸载→挂载后门禁仍可用
+  ---
+  duration_ms: 0.171125
+  type: 'test'
+  ...
+# Subtest: 失败也受门控：目标已换时不透出旧目标的失败原因
+ok 97 - 失败也受门控：目标已换时不透出旧目标的失败原因
+  ---
+  duration_ms: 0.141416
+  type: 'test'
+  ...
+# Subtest: 同一归属内的重复 advance 是空操作，不误伤在途结果
+ok 98 - 同一归属内的重复 advance 是空操作，不误伤在途结果
+  ---
+  duration_ms: 0.134541
+  type: 'test'
+  ...
+# Subtest: 归属身份：会话优先，其次草稿任务，无归属为 null
+ok 99 - 归属身份：会话优先，其次草稿任务，无归属为 null
+  ---
+  duration_ms: 0.114958
+  type: 'test'
+  ...
+# Subtest: 引用发现只认受控工作空间根：忽略依赖目录，并经公共根发现已接技能
+ok 100 - 引用发现只认受控工作空间根：忽略依赖目录，并经公共根发现已接技能
+  ---
+  duration_ms: 1128.558167
+  type: 'test'
+  ...
+# Subtest: 选取固化真实内容：哈希与内容一致，来源身份自洽
+ok 101 - 选取固化真实内容：哈希与内容一致，来源身份自洽
+  ---
+  duration_ms: 12.219291
+  type: 'test'
+  ...
+# Subtest: 越界定位被拒：形状非法、逃出根与不存在各自给出真实原因
+ok 102 - 越界定位被拒：形状非法、逃出根与不存在各自给出真实原因
+  ---
+  duration_ms: 13.576916
+  type: 'test'
+  ...
+# Subtest: 未绑定目录如实报告，不伪造文件列表
+ok 103 - 未绑定目录如实报告，不伪造文件列表
+  ---
+  duration_ms: 0.610916
+  type: 'test'
+  ...
+# Subtest: 真实 SDK + 受控模型：引用正文进入本次请求，且与用户原文字分块
+ok 104 - 真实 SDK + 受控模型：引用正文进入本次请求，且与用户原文字分块
+  ---
+  duration_ms: 132.655166
+  type: 'test'
+  ...
+# Subtest: 内容与快照哈希不符的引用被拒收，不进入请求
+ok 105 - 内容与快照哈希不符的引用被拒收，不进入请求
+  ---
+  duration_ms: 66.037084
+  type: 'test'
+  ...
+# Subtest: 无引用时保持既有单字符串内容，不改变既有请求形态
+ok 106 - 无引用时保持既有单字符串内容，不改变既有请求形态
+  ---
+  duration_ms: 68.548416
+  type: 'test'
+  ...
+# Subtest: 读取权限失败如实报错，不返回半成品引用
+ok 107 - 读取权限失败如实报错，不返回半成品引用
+  ---
+  duration_ms: 2.209709
+  type: 'test'
+  ...
+# Subtest: 自然观测刷新按原引用身份回查：带引用的已接收发送不会被改写成 conflict
+ok 108 - 自然观测刷新按原引用身份回查：带引用的已接收发送不会被改写成 conflict
+  ---
+  duration_ms: 13.776583
+  type: 'test'
+  ...
+# Subtest: 可靠未找到且原内容仍在：按原身份真正重投一次，不新建对象也不换内容
+ok 109 - 可靠未找到且原内容仍在：按原身份真正重投一次，不新建对象也不换内容
+  ---
+  duration_ms: 3.607
+  type: 'test'
+  ...
+# Subtest: 源文件被删：显式回查与重试都只认原接收事实，不重投也不改写
+ok 110 - 源文件被删：显式回查与重试都只认原接收事实，不重投也不改写
+  ---
+  duration_ms: 3.054208
+  type: 'test'
+  ...
+# Subtest: 身份不符（错指纹）与真实 conflict 仍不重投
+ok 111 - 身份不符（错指纹）与真实 conflict 仍不重投
+  ---
+  duration_ms: 2.714375
+  type: 'test'
+  ...
+# Subtest: 回查结果未知：不盲重投，源文件状态不参与判断
+ok 112 - 回查结果未知：不盲重投，源文件状态不参与判断
+  ---
+  duration_ms: 2.455584
+  type: 'test'
+  ...
+# Subtest: 可靠未找到且源文件已删/已改：按原身份判冲突，不拿现状内容重投
+ok 113 - 可靠未找到且源文件已删/已改：按原身份判冲突，不拿现状内容重投
+  ---
+  duration_ms: 5.815166
+  type: 'test'
+  ...
+# Subtest: 成员会话的引用在调端口前被拒：读取与提交端口调用数均为 0，主会话不受影响
+ok 114 - 成员会话的引用在调端口前被拒：读取与提交端口调用数均为 0，主会话不受影响
+  ---
+  duration_ms: 7.841209
+  type: 'test'
+  ...
+# Subtest: 根失效不让后根前移：旧定位取不到，其余根的定位与同名文件不受影响
+ok 115 - 根失效不让后根前移：旧定位取不到，其余根的定位与同名文件不受影响
+  ---
+  duration_ms: 2.530834
+  type: 'test'
+  ...
+# Subtest: 技能目录里的越界链接在发现前被挡：根外正文不呈现也取不到，根内合法技能照常可用
+ok 116 - 技能目录里的越界链接在发现前被挡：根外正文不呈现也取不到，根内合法技能照常可用
+  ---
+  duration_ms: 7.1605
+  type: 'test'
+  ...
+# Subtest: 目录预审没审完就不进 SDK：真实原因分别报告，合法文件链接与合法目录照常可用
+ok 117 - 目录预审没审完就不进 SDK：真实原因分别报告，合法文件链接与合法目录照常可用
+  ---
+  duration_ms: 2460.410375
+  type: 'test'
+  ...
+# 目录权限在本机生效
+# 根内环下 SDK 返回的技能条目数：17
+# fd 耗尽在本机生效
+# Subtest: real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+ok 118 - real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen
+  ---
+  duration_ms: 149.697375
+  type: 'test'
+  ...
+# Subtest: pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+ok 119 - pause waits for real request cancellation; reopen/read/receipt do not run; only current explicit resume continues
+  ---
+  duration_ms: 136.9615
+  type: 'test'
+  ...
+# Subtest: member pause leaves independent lead execution running and new pause invalidates a queued resume
+ok 120 - member pause leaves independent lead execution running and new pause invalidates a queued resume
+  ---
+  duration_ms: 82.193666
+  type: 'test'
+  ...
+# Subtest: busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+ok 121 - busy steering and follow-up use Pi persisted inbox and do not abort the current model request
+  ---
+  duration_ms: 188.443916
+  type: 'test'
+  ...
+# Subtest: actual Pi coding tools write and read a real isolated file before history is reopened
+ok 122 - actual Pi coding tools write and read a real isolated file before history is reopened
+  ---
+  duration_ms: 208.474
+  type: 'test'
+  ...
+# Subtest: explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+ok 123 - explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read
+  ---
+  duration_ms: 125.39725
+  type: 'test'
+  ...
+# Subtest: pause persistence failure still closes model request and does not report a saved pause
+ok 124 - pause persistence failure still closes model request and does not report a saved pause
+  ---
+  duration_ms: 63.017083
+  type: 'test'
+  ...
+# Subtest: malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+ok 125 - malformed and wrong-target requests fail before admission; one directory cannot have two live owners
+  ---
+  duration_ms: 21.345375
+  type: 'test'
+  ...
+# Subtest: interrupted safe tool follows Pi replay policy without undoing side effects
+ok 126 - interrupted safe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 177.74875
+  type: 'test'
+  ...
+# Subtest: interrupted unsafe tool follows Pi replay policy without undoing side effects
+ok 127 - interrupted unsafe tool follows Pi replay policy without undoing side effects
+  ---
+  duration_ms: 218.795917
+  type: 'test'
+  ...
+# Subtest: 旧现场的发送身份被承接成完整草稿版本，读侧不再崩
+ok 128 - 旧现场的发送身份被承接成完整草稿版本，读侧不再崩
+  ---
+  duration_ms: 1.662333
+  type: 'test'
+  ...
+# Subtest: 旧现场按同一版判据仍然认得出是那一版（换引用才算新的一版）
+ok 129 - 旧现场按同一版判据仍然认得出是那一版（换引用才算新的一版）
+  ---
+  duration_ms: 0.142375
+  type: 'test'
+  ...
+# Subtest: 当前形状的现场原样承接，不被迁移改写
+ok 130 - 当前形状的现场原样承接，不被迁移改写
+  ---
+  duration_ms: 0.298333
+  type: 'test'
+  ...
+# Subtest: 无法还原身份的旧条目被丢弃，而不是造一个对不上任何发送的 operationId
+ok 131 - 无法还原身份的旧条目被丢弃，而不是造一个对不上任何发送的 operationId
+  ---
+  duration_ms: 0.099333
+  type: 'test'
+  ...
+# Subtest: 损坏的引用集合整条丢弃，不留半截集合
+ok 132 - 损坏的引用集合整条丢弃，不留半截集合
+  ---
+  duration_ms: 0.229792
+  type: 'test'
+  ...
+# Subtest: 损坏或缺失的整体现场回到默认形状，不阻塞启动
+ok 133 - 损坏或缺失的整体现场回到默认形状，不阻塞启动
+  ---
+  duration_ms: 0.157125
+  type: 'test'
+  ...
+1..133
+# tests 159
+# suites 10
+# pass 159
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5776.04975

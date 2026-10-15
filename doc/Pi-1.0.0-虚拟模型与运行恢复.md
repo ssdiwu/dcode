@@ -136,8 +136,28 @@ ZCode 随后在同日纠正版中接受了上述三项更正；报告仍为源�
 - [ModelRuntime v1.0.0](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/model-runtime.ts)公开`catalogBaseUrl/allowModelNetwork/refreshOnCreate/modelsPath`等配置，先给预设装配远程目录再刷新。它属于coding-agent，不能把低层createModels的静态集合推广成整个Pi没有在线功能。
 - [官方remote-catalog-provider](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/remote-catalog-provider.ts)默认源https://pi.dev，逐供应商`/api/models/providers/<id>`，采用ETag/Last-Modified、4小时检查窗口、有界GET、缓存和发布。实际无凭据GET可读OpenAI/Anthropic/ZAI/Kimi/Radius等目录；`types=chat`实测仍含其他类型，接收侧必须显式过滤。
 - 在线阶段的pi-ai Models.refresh会先解析供应商凭据，未认证可能跳过fetch。首次使用的公共更新须与账号认证分开，不能以dummy key或默认环境密钥解锁；目录请求不发用户凭据。
-- 不直接引入整套coding-agent：ModelRuntime没有authContext注入口，会采用默认环境来源，其FileModelsStore/AuthStorage含同步IO。SDK执行仍是现有Durable；供应商与auth复用pi-ai公开入口，远端目录小部件按MIT来源适配DCode自己的异步存储与接收校验。
+- 当时模型目录切片暂不直接引入整套coding-agent：ModelRuntime没有authContext注入口，会采用默认环境来源，其FileModelsStore/AuthStorage含同步IO。该切片沿现有Durable，供应商与auth复用pi-ai公开入口，远端目录小部件按MIT来源适配DCode自己的异步存储与接收校验。这是该切片的装配边界，不是禁止后续完整SDK接入；507随后确认的复用方向及仍需核验的宿主边界见下节。
 - 官方刷新器会采用远端api/baseUrl/headers，默认parse仅查对象/id/type，DCode须保留本地认证、已支持协议与端点权威，仅接受安全信息字段。新增但不能确认现版本路由的模型可展示限制，不能把目录当授权或自动换模型。
 - 多供应商凭据按真实Provider.id保存；旧custom密钥仍是custom/user-defined身份，协议openai-completions不等于OpenAI账户。SDK CredentialStore跨同一文件的RMW需串行合并；login返回的秘密凭据只保存到宿主，不透传界面。
 
 公共源和官方代码核对材料保存在 `/Users/diwu/Workspace/Archives/dcode-provider-catalog-2026-10-09/`。获取这些公开数据没有读取用户凭据、授权真实账户或发送模型推理；当前新实现尚未验收。
+
+## 完整 coding-agent 接入方向与组合验证
+
+507 于 2026-10-09 确认的职责与复用基准已进入 [架构约定](架构约定.md#pi-coding-agent-能力复用基准)，本节只维护接口证据与技术验证范围。普通执行路径在 main `5a5ea29` 使用 Durable 循环及自定义供应商，尚未传入 CodingTools 注册，`cwd` 仍为应用数据下的 `work-dir`；受控演示的工具证据不能转用为普通编码路径完成。后续实现状态只读根 PROGRESS。
+
+| 官方固定版本事实 | 接入含义 |
+|---|---|
+| [coding-agent SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md)提供`createAgentSession`、会话存储与资源加载，可不启动CLI／TUI | 以完整SDK为能力对照基准，先验证其公开注入边界，避免从低层模型API重新拼装全部上层功能 |
+| [Durable](https://github.com/earendil-works/pi/blob/v1.0.0/packages/durable/README.md)内置生成与工具任务循环，提供CodingTools及恢复机制 | 它不是只负责落盘的外挂，不能放在普通AgentSession外面就假定没有双重执行所有者 |
+| [实验组合](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/experimental/durable/README.md)复用模型、认证、设置、系统提示与CodingTools，尚未覆盖普通扩展、提示模板、图片等 | 可作Durable装配对照，但不能当作普通coding-agent的完整替代已成立 |
+| SDK不自动启用CLI的Codemode、Tool Search与MCP，官方提供显式扩展装配入口 | 核对注册、激活、会话启动和生命周期；不能仅因依赖已安装或资源已发现就宣称功能可用 |
+
+最小验证在隔离目录完成，不替换main、不读取用户真实凭据或改动正在收口的模型候选。优先使用真实SDK配受控模型与实际隔离文件／命令；真实服务商验证另记，不从受控结果推断已通过。按同一项目夹具比较两条公开入口，先复用既有暂停和身份反例，不机械重跑全部UI测试：
+
+1. **完整编码路径：** 普通AgentSession SDK完成项目AGENTS／技能发现、读改文件、命令失败回到模型、修正与再次测试、正式历史及结果读取；Durable组合使用相同目标对照，记录必须适配和暂不兼容项。UI消费与diff展示仍按开发任务规格单独验收。
+2. **恢复与副作用：** 分别在模型请求、工具调用、等待后续步骤时暂停／关闭；重开查询不执行，明确继续才推进；旧恢复不覆盖新暂停，已产生副作用不盲目重做。普通abort、会话历史重开与Durable恢复的真实差异分别记录。
+3. **资源与宿主装配：** 列出工具、AGENTS、skills、提示模板、普通扩展、Codemode／Tool Search／MCP、Pi Packages、压缩与重试的官方入口、当前覆盖和缺口；核对工作目录、凭据发现范围、异步宿主响应与扩展UI调用如何映射到D Code。使用最小本地资源夹具，不安装无关能力包；不能让命令行提问或终端渲染成为桌面操作的隐性前提。
+4. **模型与产品约束：** 核对虚拟模型实际路由身份及状态保存，复用现有配置／凭据合同；指定模型、用户暂停和原输入身份不能被自动路由或恢复绕过。运行入口改变时，提供已有历史、接收回执和暂停记录的承接方案，不为试验清空开发数据。
+
+交付应包含固定版本、实际命令和原始结果、能力对照、失败根因及推荐入口；要求、已实现、已验证与未覆盖分别列明。若两条路径不能同时满足已确认能力，应带证据指出具体冲突与代价，由507判断产品取舍，不静默放弃恢复或基础编码能力。未经组合验证与独立审查，不把候选写成主线替代方案。

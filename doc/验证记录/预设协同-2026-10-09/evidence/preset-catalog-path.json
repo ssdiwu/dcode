@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "phase": "auth-unmount-cancelled"
+    },
+    {
+      "phase": "preset-sent",
+      "model": "gpt-4"
+    },
+    {
+      "phase": "new-id-sent",
+      "model": "gpt-4o-2025",
+      "maxTokens": 32768
+    },
+    {
+      "phase": "custom-after-preset-survived"
+    },
+    {
+      "phase": "catalog-source-applied"
+    },
+    {
+      "phase": "reopened-send-ok"
+    },
+    {
+      "phase": "reopened-new-id-sent",
+      "model": "gpt-4o-2025"
+    },
+    {
+      "phase": "b-current-coldreopen-customa-send",
+      "model": "a-model",
+      "marker": "custom-3-baeec19acd15566d"
+    },
+    {
+      "phase": "offline-reopen-cached-new-id-sent",
+      "model": "gpt-4o-2025",
+      "marker": "nonce-528684a3369a8f91"
+    }
+  ]
+}

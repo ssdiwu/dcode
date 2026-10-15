@@ -9,10 +9,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchApp, cleanup, ready } from "./helpers.mjs";
+import { evidenceDir, overrideEvidencePath } from "./evidence-root.mjs";
 
-const OUT = join(import.meta.dirname, "screenshots");
+// 输出目录可用环境变量改写：同一份工装既跑本轮改造，也跑改前基线快照，
+// 两边的截图与观测必须写进各自的记录目录，不能互相覆盖。
+// 覆盖路径同样要过 evidence-root 的历史目录校验：这两个变量保留给按用例重定向，
+// 但不能成为绕过「doc/验证记录 只读」的入口。
+const OUT = overrideEvidencePath(process.env.DCODE_VISUAL_SHOTS_DIR) ?? evidenceDir("visual-matrix", "screenshots");
 mkdirSync(OUT, { recursive: true });
-const META = join(import.meta.dirname, "../../doc/验证记录/滚动阅读与视觉矩阵-2026-10-08/evidence");
+const META = overrideEvidencePath(process.env.DCODE_VISUAL_META_DIR) ?? evidenceDir("visual-matrix");
 mkdirSync(META, { recursive: true });
 
 const combos = [

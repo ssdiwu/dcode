@@ -5,11 +5,11 @@
 // 首轮失败日志（hover-only 与鼠标 .focus() 版本）保留在 frames 目录与 /tmp 原日志，不覆写。
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { launchApp, cleanup, ready, assertValidationModel } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "evidence", "style-2026-10-06", "frames");
+const OUT = evidenceDir("focus-frames");
 mkdirSync(OUT, { recursive: true });
 const meta = [];
 

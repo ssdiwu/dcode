@@ -1,0 +1,16 @@
+{
+  "cwd": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "command": [
+    "env",
+    "DCODE_EVIDENCE_RUN=full-slice0c",
+    "npm",
+    "run",
+    "test:e2e"
+  ],
+  "startedAt": "2026-10-10T19:09:09.660977+08:00",
+  "state": "completed",
+  "timeoutSeconds": 3300,
+  "pid": 85472,
+  "exitCode": 0,
+  "endedAt": "2026-10-10T19:12:06.268144+08:00"
+}

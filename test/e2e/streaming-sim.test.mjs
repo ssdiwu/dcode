@@ -13,12 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron } from "playwright-core";
 import { createRequire } from "node:module";
+import { evidenceDir } from "./evidence-root.mjs";
 
 const require = createRequire(import.meta.url);
 const electronBinary = require("electron");
 const ROOT = join(import.meta.dirname, "../..");
 const SIM_DIR = join(ROOT, "test/e2e/streaming-sim");
-const EVIDENCE = join(ROOT, "doc/验证记录/滚动阅读与视觉矩阵-2026-10-08/evidence");
+const EVIDENCE = evidenceDir("streaming-sim");
 mkdirSync(EVIDENCE, { recursive: true });
 
 // 变体由环境显式选择：current 是正式入口默认；baseline 是拒绝旧无条件 count effect 的负对照。

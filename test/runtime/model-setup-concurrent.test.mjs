@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DCodeApplication } from '../../src/application/index.ts';
 import { MockExecutionBackend } from '../../src/adapters/mock/index.ts';
-import { ModelSetupStore } from '../../src/adapters/pi/model-setup-store.ts';
+import { ProviderDirectoryStore } from '../../src/adapters/pi/provider-directory-store.ts';
 
 // 简单存根 cipher：明文 base64（不是真实 safeStorage，但覆盖 commitWithCredential → rename 通路）
 const stubCipher = {
@@ -48,17 +48,20 @@ function gate() {
 test('保存 flight 在途：flush 等真实提交；提交完成后 flush 才能继续', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dcode-ms-flush-gate-'));
   try {
-    const store = new ModelSetupStore({ stateDir }, stubCipher);
+    const store = new ProviderDirectoryStore({ stateDir }, stubCipher, { catalogBaseUrl: "https://fixture.invalid" });
     const g = gate();
     const slowStore = new Proxy(store, {
-      get(target, prop, receiver) {
-        if (prop === 'commitWithCredential') {
+      get(target, prop) {
+        if (prop === 'commitCustomSetup') {
           return async (input) => {
             await g.enter(); // 进入提交段，等测试放行
-            return target.commitWithCredential(input);
+            return target.commitCustomSetup(input);
           };
         }
-        return Reflect.get(target, prop, receiver);
+        // 非拦截方法绑定到原 target：store.read 之类读此方法里访问 #line 等私有字段，
+        // 若不绑定 this 会变成 Proxy（Proxy 没有私有字段）导致 ERR_INVALID_THIS。
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
       },
     });
     const app = new DCodeApplication(
@@ -113,17 +116,18 @@ test('保存 flight 在途：flush 等真实提交；提交完成后 flush 才�
 test('真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown session）', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dcode-ms-resume-gate-'));
   try {
-    const store = new ModelSetupStore({ stateDir }, stubCipher);
+    const store = new ProviderDirectoryStore({ stateDir }, stubCipher, { catalogBaseUrl: "https://fixture.invalid" });
     const g = gate();
     const slowStore = new Proxy(store, {
-      get(target, prop, receiver) {
-        if (prop === 'commitWithCredential') {
+      get(target, prop) {
+        if (prop === 'commitCustomSetup') {
           return async (input) => {
             await g.enter();
-            return target.commitWithCredential(input);
+            return target.commitCustomSetup(input);
           };
         }
-        return Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
       },
     });
     const app = new DCodeApplication(
@@ -213,7 +217,7 @@ test('accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready �
   const stateDir = mkdtempSync(join(tmpdir(), 'dcode-ms-observation-gate-'));
   const submitting = gate(); const projection = gate();
   let heldProjection = false;
-  const store = new ModelSetupStore({ stateDir }, stubCipher);
+  const store = new ProviderDirectoryStore({ stateDir }, stubCipher, { catalogBaseUrl: "https://fixture.invalid" });
   const fixture = executionFixture(async (state) => {
     if (state.submitted && !heldProjection) { heldProjection = true; await projection.enter(); }
   });
@@ -263,7 +267,7 @@ test('accepted 后投影仍 ready：真实运行中拒绝保存，实际 ready �
 
 test('已打开的 paused 端口保留 pending 队列：配置可保存且不恢复工作', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dcode-ms-paused-edit-'));
-  const store = new ModelSetupStore({ stateDir }, stubCipher);
+  const store = new ProviderDirectoryStore({ stateDir }, stubCipher, { catalogBaseUrl: "https://fixture.invalid" });
   const fixture = executionFixture(); const app = fixtureApplication(store, fixture);
   let snapshot; const unsubscribe = app.subscribe(value => { snapshot = value; });
   await app.init();
@@ -285,13 +289,13 @@ test('已打开的 paused 端口保留 pending 队列：配置可保存且不恢
 
 test('已打开端口的状态读取失败：不 close，不提交，保留 A 配置与凭据', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dcode-ms-read-failure-'));
-  const store = new ModelSetupStore({ stateDir }, stubCipher);
+  const store = new ProviderDirectoryStore({ stateDir }, stubCipher, { catalogBaseUrl: "https://fixture.invalid" });
   const fixture = executionFixture(); const app = fixtureApplication(store, fixture);
   await app.init();
   try {
     assert.equal((await app.configureModel(baseInput({ label: 'A' }))).ok, true);
     await openPausedPort(app);
-    const original = await store.read(); assert.ok(original?.credential);
+    const original = await store.read(); assert.ok(original?.credentials?.['user-defined'], 'A 凭据必须已落盘');
     fixture.state.readError = true;
     const rejected = await app.configureModel(baseInput({ label: 'B', apiKey: 'replacement-key' }));
     assert.equal(rejected.ok, false); assert.equal(rejected.issue, 'storage-failed');

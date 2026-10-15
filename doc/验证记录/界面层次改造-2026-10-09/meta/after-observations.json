@@ -1,0 +1,148 @@
+{
+ "combos": [
+  {
+   "name": "zh-dark-14-1440",
+   "readback": {
+    "model": {
+     "available": true,
+     "name": "dcode-script"
+    },
+    "execution": {
+     "kind": "mock"
+    },
+    "settings": {
+     "theme": "dark",
+     "fontSize": 14,
+     "coldStart": "restore",
+     "language": "zh"
+    },
+    "dom": {
+     "lang": "zh-CN",
+     "bodyFontSize": "14px",
+     "darkClass": true,
+     "viewport": {
+      "w": 1440,
+      "h": 900
+     }
+    }
+   },
+   "steps": [
+    {
+     "shot": "草稿态",
+     "path": "/tmp/vis-after/shots/zh-dark-14-1440-草稿态.png",
+     "reached": true
+    },
+    {
+     "shot": "时间线与检查器",
+     "path": "/tmp/vis-after/shots/zh-dark-14-1440-时间线与检查器.png",
+     "reached": true
+    },
+    {
+     "shot": "焦点",
+     "path": "/tmp/vis-after/shots/zh-dark-14-1440-焦点.png",
+     "reached": true
+    }
+   ]
+  },
+  {
+   "name": "en-dark-13-1440",
+   "readback": {
+    "model": {
+     "available": true,
+     "name": "dcode-script"
+    },
+    "execution": {
+     "kind": "mock"
+    },
+    "settings": {
+     "theme": "dark",
+     "fontSize": 13,
+     "coldStart": "restore",
+     "language": "en"
+    },
+    "dom": {
+     "lang": "en",
+     "bodyFontSize": "13px",
+     "darkClass": true,
+     "viewport": {
+      "w": 1440,
+      "h": 900
+     }
+    }
+   },
+   "steps": [
+    {
+     "shot": "草稿态",
+     "path": "/tmp/vis-after/shots/en-dark-13-1440-草稿态.png",
+     "reached": true
+    },
+    {
+     "shot": "时间线与检查器",
+     "path": "/tmp/vis-after/shots/en-dark-13-1440-时间线与检查器.png",
+     "reached": true
+    },
+    {
+     "shot": "焦点",
+     "path": "/tmp/vis-after/shots/en-dark-13-1440-焦点.png",
+     "reached": true
+    }
+   ]
+  },
+  {
+   "name": "zh-light-13-720",
+   "readback": {
+    "model": {
+     "available": true,
+     "name": "dcode-script"
+    },
+    "execution": {
+     "kind": "mock"
+    },
+    "settings": {
+     "theme": "light",
+     "fontSize": 13,
+     "coldStart": "restore",
+     "language": "zh"
+    },
+    "dom": {
+     "lang": "zh-CN",
+     "bodyFontSize": "13px",
+     "darkClass": false,
+     "viewport": {
+      "w": 720,
+      "h": 480
+     }
+    }
+   },
+   "steps": [
+    {
+     "shot": "草稿态",
+     "path": "/tmp/vis-after/shots/zh-light-13-720-草稿态.png",
+     "reached": true
+    },
+    {
+     "shot": "时间线与检查器",
+     "path": "/tmp/vis-after/shots/zh-light-13-720-时间线与检查器.png",
+     "reached": true
+    },
+    {
+     "shot": "焦点",
+     "path": "/tmp/vis-after/shots/zh-light-13-720-焦点.png",
+     "reached": true
+    }
+   ]
+  }
+ ],
+ "host": [
+  {
+   "id": 1,
+   "visible": false,
+   "focusable": false,
+   "focused": false
+  }
+ ],
+ "exit": {
+  "closed": true,
+  "stateDirCleaned": true
+ }
+}

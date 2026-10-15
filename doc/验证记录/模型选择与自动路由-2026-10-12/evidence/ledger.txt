@@ -1,0 +1,21 @@
+== 源码身份（运行前） ==
+files=138
+aggregate=e6f6cbb1fd1662677a9bb5e577f63fbf5fa7621dbdc1121fb62ba7230bdaa359
+newest_src_mtime=2026-10-12T05:22:22 test/runtime/model-routing.test.ts
+mavis-trash: moved to trash: '/tmp/dcode-identity-13183.txt'
+identity_before_at=2026-10-12T05:22:37+0800
+arch-test	start=2026-10-12T05:22:37+0800	end=2026-10-12T05:22:38+0800	exit=0	raw=/tmp/d-freeze2/raw/arch-test.raw.log
+arch-check	start=2026-10-12T05:22:38+0800	end=2026-10-12T05:22:38+0800	exit=0	raw=/tmp/d-freeze2/raw/arch-check.raw.log
+typecheck	start=2026-10-12T05:22:38+0800	end=2026-10-12T05:22:42+0800	exit=0	raw=/tmp/d-freeze2/raw/typecheck.raw.log
+lint	start=2026-10-12T05:22:42+0800	end=2026-10-12T05:22:47+0800	exit=0	raw=/tmp/d-freeze2/raw/lint.raw.log
+build	start=2026-10-12T05:22:47+0800	end=2026-10-12T05:22:52+0800	exit=0	raw=/tmp/d-freeze2/raw/build.raw.log
+test-runtime	start=2026-10-12T05:22:52+0800	end=2026-10-12T05:22:58+0800	exit=0	raw=/tmp/d-freeze2/raw/test-runtime.raw.log
+test-contracts	start=2026-10-12T05:22:58+0800	end=2026-10-12T05:22:59+0800	exit=0	raw=/tmp/d-freeze2/raw/test-contracts.raw.log
+test-d-routing	start=2026-10-12T05:22:59+0800	end=2026-10-12T05:23:00+0800	exit=0	raw=/tmp/d-freeze2/raw/test-d-routing.raw.log
+e2e-model-entry	start=2026-10-12T05:23:00+0800	end=2026-10-12T05:23:03+0800	exit=0	raw=/tmp/d-freeze2/raw/e2e-model-entry.raw.log
+== 源码身份（运行后） ==
+files=138
+aggregate=e6f6cbb1fd1662677a9bb5e577f63fbf5fa7621dbdc1121fb62ba7230bdaa359
+newest_src_mtime=2026-10-12T05:22:22 test/runtime/model-routing.test.ts
+mavis-trash: moved to trash: '/tmp/dcode-identity-14906.txt'
+identity_after_at=2026-10-12T05:23:04+0800

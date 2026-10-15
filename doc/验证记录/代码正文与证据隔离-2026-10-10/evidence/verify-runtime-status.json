@@ -1,0 +1,14 @@
+{
+  "cwd": "/Users/diwu/Workspace/Codes/Apps/dcode",
+  "command": [
+    "npm",
+    "run",
+    "verify:runtime"
+  ],
+  "startedAt": "2026-10-10T19:08:49.348140+08:00",
+  "state": "completed",
+  "timeoutSeconds": 900,
+  "pid": 84637,
+  "exitCode": 0,
+  "endedAt": "2026-10-10T19:09:03.778378+08:00"
+}

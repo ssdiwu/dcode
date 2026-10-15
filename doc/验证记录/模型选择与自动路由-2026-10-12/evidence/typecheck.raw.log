@@ -1,0 +1,4 @@
+
+> dcode-redesign@0.1.0-dev typecheck
+> tsc --noEmit
+

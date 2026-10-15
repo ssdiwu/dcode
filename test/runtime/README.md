@@ -6,6 +6,10 @@
 
 Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chord `1.0.0`、真实异步 JSONL 与实际文件操作。只有模型服务边界使用受控 provider，不读模型凭据或用户配置，不发网络模型请求。运行数据由每例独立临时目录保存并在结束后清理。
 
+[工作文件夹绑定](project-binding.test.mjs)使用拥有的真实临时目录与状态存储，核选择归属、目录失效、同次真实保存/重试、结果未知保护、查回只读与关闭/设置收束；mock后端只用来判别绑定没有启动工作。首次正常装配选择目录与实际SDK文件工具完整路径另见 `test/e2e/ordinary-coding-path.test.mjs`，界面/保存边界见 `test/e2e/project-binding.test.mjs`；原生可见选择器、真实用户项目和账户不在这些证据内。
+
+[普通扩展与 MCP](ordinary-extension-mcp.test.mjs)使用实际 SDK、隔离项目／凭据与本地模型 HTTP 对端、真实 stdio／HTTP MCP，核注册工具／间接调用、错误与资源正文、输入处理／正式回执、配置刷新、暂停／直接关闭取消及不重放。桌面配置与真实渲染另见 `test/e2e/ordinary-extension-mcp.test.mjs`；本地协议服务不代表真实服务商、OAuth 或完整 SDK 兼容。
+
 从仓库根目录运行：
 
 - `npm run demo:pi`：可直接观察真实工具写文件、暂停、关闭重开查询及显式继续；打印的是实际回执和磁盘读回结果。

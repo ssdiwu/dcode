@@ -4,8 +4,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchApp, cleanup, ready } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const OUT = join(import.meta.dirname, "screenshots");
+const OUT = evidenceDir("scroll-repro");
 mkdirSync(OUT, { recursive: true });
 const prefix = process.argv[2];
 if (!prefix) throw new Error("需要 prefix（pre/post），不覆盖同名证据");

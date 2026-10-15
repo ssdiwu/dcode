@@ -26,9 +26,9 @@ async function setup(t: TestContext, overrides: Partial<PiSessionOptions> = {}) 
   t.after(async () => { for (const unit of units.reverse()) await unit.close(); await rm(directory, { recursive: true, force: true }); });
   return { directory, options, open, ...fixture };
 }
-async function input(unit: PiExecutionSession, operationId: string, text = 'synthetic instruction', mode: WorkInput['mode'] = 'steer'): Promise<WorkInput> {
+async function input(unit: PiExecutionSession, operationId: string, text = 'synthetic instruction', mode: WorkInput['mode'] = 'steer', references: WorkInput['references'] = []): Promise<WorkInput> {
   const view = await unit.read();
-  return { target: view.target, operationId, text, mode, expected: view.control };
+  return { target: view.target, operationId, text, references, mode, expected: view.control };
 }
 
 await test('real Pi stores one accepted input, rejects altered retries, and looks up terminal receipts after reopen', { timeout: 15000 }, async t => {
@@ -196,3 +196,13 @@ for (const replay of ['safe', 'unsafe'] as const) {
     await until(async () => { const r = await unit.lookupReceipt(request); return r.status === 'accepted' && r.processing === 'done'; });
   });
 }
+
+await test('paused spend maintenance failure retains original close retry eligibility; pure readonly close never consumes it', { timeout:15000 }, async t=>{
+  let reconciliations=0;
+  const s=await setup(t,{reconcileExecutionSpend:async()=>{reconciliations+=1;if(reconciliations===1)throw new Error('owned maintenance rejected');}});
+  const unit=await s.open();await unit.submit(await input(unit,'known-maintenance-failure'));
+  await until(()=>s.requests.length===1);
+  await assert.rejects(unit.pause(),/could not confirm/);assert.equal(s.requests[0].settled,true);assert.equal(reconciliations,1);
+  await unit.close();assert.equal(reconciliations,2,'执行过的原实例暂停维护失败后，close必须继续收口，不能清掉资格');
+  const readonly=await s.open();await readonly.read();await readonly.close();assert.equal(reconciliations,2,'纯只读生命周期不执行维护');
+});

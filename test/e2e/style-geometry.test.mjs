@@ -4,11 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { launchApp, cleanup, ready, assertValidationModel, waitForSnapshot } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVIDENCE = join(dirname(fileURLToPath(import.meta.url)), "../../doc/验证记录/产品自有内容清理-2026-10-07/evidence", "style-2026-10-06");
+const EVIDENCE = evidenceDir("style-geometry");
 mkdirSync(EVIDENCE, { recursive: true });
 
 const closeTo = (actual, expected, tolerance, label) => {
@@ -143,12 +143,22 @@ test("焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Ste
     const composer = page.getByPlaceholder("交代需求、提问或粘贴内容…");
     await composer.click();
     await composer.fill("焦点验证");
-    await page.keyboard.press("Tab"); // textarea → 发送钮
+    // 操作行顺序（C05 起）：引用入口 → 唯一同位主按钮 → 输入选项菜单。
+    // Tab 逐个走过，每个都要有可辨焦点；这里不跳步，直接断言顺序本身。
+    await page.keyboard.press("Tab"); // textarea → 引用入口
+    const referenceFocus = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el ? { label: el.getAttribute("aria-label"), slot: el.getAttribute("data-slot"), shadow: getComputedStyle(el).boxShadow } : null;
+    });
+    assert.equal(referenceFocus?.slot, "composer-references-trigger", "Tab 第一站应是引用入口");
+    assert.equal(referenceFocus?.label, "添加文件与技能引用");
+    assert.match(referenceFocus?.shadow ?? "", /2px inset/, "引用入口同样要有键盘焦点描边");
+    await page.keyboard.press("Tab"); // 引用入口 → 发送钮
     const sendFocus = await page.evaluate(() => {
       const el = document.activeElement;
       return el ? { label: el.getAttribute("aria-label"), shadow: getComputedStyle(el).boxShadow } : null;
     });
-    assert.equal(sendFocus?.label, "发送", "Tab 应从输入框到发送钮");
+    assert.equal(sendFocus?.label, "发送", "Tab 第二站应是唯一同位主按钮");
     assert.match(sendFocus?.shadow ?? "", /rgba?\(250, 250, 249/, "填色发送钮的焦点描边应为反色（primary-foreground）");
 
     // 深色主题：树行焦点描边应为深色档 border-strong

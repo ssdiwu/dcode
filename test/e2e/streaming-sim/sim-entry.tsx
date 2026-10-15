@@ -45,12 +45,68 @@ function buildSnapshot(session: Session, blocks: TimelineBlock[]): AppSnapshot {
     sessions: [session],
     timelines: { [session.id]: blocks },
     runs: {},
+    // D 片新增的两份快照字段：时间线会按会话 id 读 sessionModels、任务区读 taskUsage。
+    // 模拟运行不发真实请求，因此如实给"没有实际采用、没有用量、没有任务汇总"，
+    // 而不是省略字段让渲染层在初始化时索引 undefined。
+    sessionModels: {
+      [session.id]: {
+        sessionId: session.id,
+        choice: { mode: "auto" },
+        actual: null,
+        actualResponseId: null,
+        usage: null,
+        requests: [],
+        thinkingLevel: null,
+        lastRouting: null,
+        lastResult: "none",
+        invalidReason: null,
+        waitingExplicitContinue: false,
+      },
+    },
+    taskUsage: {},
     settings: { theme: "light", fontSize: 13, coldStart: "home-draft", language: "zh" },
     model: { available: true, name: "mock" },
     execution: { kind: "mock" },
     closeError: null,
     closeErrorRevision: 0,
   };
+}
+
+/**
+ * 模拟运行不接主进程（无 preload、无 IPC），但渲染树会挂载 C07 模型入口。
+ * 这里给一份**有限且如实**的桥：模型来源目录为空、额度无来源，
+ * 模拟运行本来就不发真实请求，不能因为缺桥就整页崩掉。
+ */
+function installBridgeStub(): void {
+  const emptyState = (sessionId: string) => ({
+    sessionId,
+    choice: { mode: "auto" as const },
+    actual: null,
+    actualResponseId: null,
+    usage: null,
+    requests: [],
+    thinkingLevel: null,
+    lastRouting: null,
+    lastResult: "none" as const,
+    invalidReason: null,
+    waitingExplicitContinue: false,
+  });
+  const stub = {
+    listModelSources: async () => ({ sources: [], defaultChoice: { mode: "auto" as const }, sessionStates: [] }),
+    readModelQuota: async () => ({
+      sourceId: "",
+      modelId: "",
+      state: "unsupported" as const,
+      poolId: null,
+      windowLabel: null,
+      updatedAt: null,
+      reason: "模拟运行没有额度来源",
+    }),
+    setSessionModelChoice: async ({ sessionId }: { sessionId: string }) => emptyState(sessionId),
+    setSessionThinkingLevel: async ({ sessionId }: { sessionId: string }) => emptyState(sessionId),
+    resolveSessionRouting: async ({ sessionId }: { sessionId: string }) => emptyState(sessionId),
+  };
+  Object.defineProperty(window, "dcode", { value: stub, configurable: true, writable: true });
 }
 
 function App() {
@@ -126,4 +182,5 @@ function App() {
 
 const container = document.getElementById("root");
 if (!container) throw new Error("missing root");
+installBridgeStub();
 createRoot(container).render(<App />);

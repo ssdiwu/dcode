@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchApp, cleanup, ready, assertValidationModel } from "./helpers.mjs";
+import { evidenceDir } from "./evidence-root.mjs";
 
-const EVIDENCE = join(import.meta.dirname, "../../doc/验证记录/滚动阅读与视觉矩阵-2026-10-08/evidence");
+const EVIDENCE = evidenceDir("scroll-reading-intent");
 mkdirSync(EVIDENCE, { recursive: true });
 
 const geo = (page) =>

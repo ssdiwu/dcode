@@ -1,0 +1,5 @@
+
+> dcode-redesign@0.1.0-dev architecture:check
+> node tools/architecture/check.mjs
+
+Architecture: PASS; source files: 69; modules: application, contracts, main, mock, pi, preload, references, renderer, storage
