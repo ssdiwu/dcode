@@ -32,6 +32,6 @@ r17固定canonical181／`2c2710d39bce437faab7db71af2f1c33772c0bba2dc2d6a650e4ed5
 
 ## 接收与剩余范围
 
-本片已按真实晚返、普通桌面暂停／关闭／RO／明确继续、完整八门及独立三项接收。新完整恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-virtual-direct-accepted-20261015/manifest.json`；纯接收记录承接同一产品／测试／配置字节，不伪称新执行一轮检查。本地提交按既有授权办理，提交与推送／发布分别记录。
+本片已按真实晚返、普通桌面暂停／关闭／RO／明确继续、完整八门及独立三项接收。新完整恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-virtual-direct-accepted-20261015/manifest.json`；纯接收记录承接同一产品／测试／配置字节，不伪称新执行一轮检查。本地功能提交`bd8844d15a1e6020e0702aa9bbcc55381b4610ca`已完成，14路径、真实exit0且提交后工作树为空；[本地提交](本地提交-2026-10-15.md)与推送／发布分别记录。
 
 完整SDK父目标继续：provider/config/native登记、virtual其他动态／有状态消费者、typed及其他主动模型、消息／输入组合、完整事件／压缩／有限控制、SDK exec及vision正向全文路径仍按现行规格接续。旧局部通过、WIP预审、作者自检不替本轮独立接收；fullSDKComplete=false，wholeProductAcceptance=false。
