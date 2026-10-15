@@ -7,7 +7,7 @@ import { GenerationTask, ToolTask, ToolResultEntry, UsageDoc, defineDoc, defineD
 import type { Conversation, Harness, JsonObject, Registry, Session, ToolExecutionApi, ToolExecutionResult, ToolHooks, ToolRegistration } from '@earendil-works/pi-durable';
 import { validateToolArguments } from '@earendil-works/pi-ai/utils/validation';
 import type { ToolCall, TSchema } from '@earendil-works/pi-ai';
-import type { ModelRuntime, BeforeAgentStartEventResult } from '@earendil-works/pi-coding-agent';
+import type { ModelRuntime, BeforeAgentStartEventResult, VirtualModelDefinition, ModelRouteRequest } from '@earendil-works/pi-coding-agent';
 import { CodingResourcesUnavailable } from './coding-resources';
 import { extensionWorkerSource } from './extension-worker';
 import { taskToolApi } from './task-tool-api';
@@ -15,7 +15,7 @@ import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
 import type { InputPreparation, PreparedInput } from './input-preparation';
 import type { HookApi, EntryRecord, Cursor, TaskRecord, EntryId, Tx, ConversationId } from '@earendil-works/pi-durable';
-import type { ImageContent, Message, AssistantMessage, Usage, Models } from '@earendil-works/pi-ai';
+import type { Api, Model, ImageContent, Message, AssistantMessage, Usage, Models } from '@earendil-works/pi-ai';
 
 // 只投影 SDK chat 模型的公开描述；原认证与执行请求头仍由宿主 ModelRuntime 持有。
 function modelMetadata(model: ReturnType<ModelRuntime['getModels']>[number]) {
@@ -39,7 +39,21 @@ type Descriptor = { name: string; description: string; parameters: TSchema; expo
 type NestedInput = { caller: string; call: ToolCall };
 type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' };
 type RuntimeBinding = { harness: Harness; root: Conversation; ownedModel?: DurableModelRouting['withOwnedModelInvocation'] };
-type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; aborted: boolean; seq: number };
+type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; signal?: AbortSignal; aborted: boolean; seq: number };
+type VirtualRegistration = { provider: string; id: string; handle: string; origin: Worker; model?: Model<Api> };
+const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const virtualKey = (provider: string, id: string) => JSON.stringify([provider, id]);
+function virtualDefinition(value: unknown): Omit<VirtualModelDefinition, 'route'> {
+  const def = bounded(value, 64 * 1024) as Record<string, unknown>;
+  const text = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f]/.test(v);
+  if (!def || typeof def !== 'object' || Array.isArray(def)
+    || Object.keys(def).some(key => !['provider', 'id', 'name', 'thinkingLevels', 'contextWindow', 'maxTokens', 'input'].includes(key))
+    || !text(def.provider, 128) || !text(def.id, 256) || !text(def.name, 256)
+    || ['contextWindow', 'maxTokens'].some(key => def[key] !== undefined && (!Number.isSafeInteger(def[key]) || (def[key] as number) < 0))
+    || (def.thinkingLevels !== undefined && (!Array.isArray(def.thinkingLevels) || def.thinkingLevels.length > 7 || def.thinkingLevels.some(level => !thinkingLevels.includes(level))))
+    || (def.input !== undefined && (!Array.isArray(def.input) || def.input.length > 2 || def.input.some(type => type !== 'text' && type !== 'image')))) throw new CodingResourcesUnavailable();
+  return def as unknown as Omit<VirtualModelDefinition, 'route'>;
+}
 type ArgumentMemo = {source:string;name:string;inputHash:string;prepared:JsonValue;failed:boolean};
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function sumUsage(reported: readonly Usage[]): Usage | undefined {
@@ -97,9 +111,10 @@ export class CodingExtensions {
   #registry?: Registry;
   #publication: Promise<void> = Promise.resolve();
   #next = 0;
-  #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; abort?: () => void }>();
   #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: AssistantMessage[] }>();
   #modelCalls = new Map<string, ModelCall>();
+  #virtuals = new Map<string, VirtualRegistration>();
   #events = new Map<string, { api?: HookApi; context: Context }>();
   #tools: Descriptor[] = [];
   #active: string[] = [];
@@ -202,6 +217,7 @@ export class CodingExtensions {
           const caller = this.#calls.get(owned.caller);
           if (!caller || caller.api.taskId !== task.input.ownerTaskId || owned.caller !== task.input.caller || (owned.task !== undefined && owned.task !== runtime.taskId)) throw new CodingResourcesUnavailable();
           owned.task = runtime.taskId;
+          owned.signal = runtime.signal;
           const model = runtime.models.getModel(task.input.provider, task.input.modelId);
           if (!model) throw new CodingResourcesUnavailable();
           // 先保存已进入请求的检查点；中断后不能把结果未知的付费请求再发一次。
@@ -543,12 +559,18 @@ export class CodingExtensions {
     const id = ++this.#next;
     const ownCall = typeof value === 'object' && value && 'id' in value ? String(value.id) : undefined;
     const abortId = 'scope' in extra && typeof extra.scope === 'string' ? extra.scope : ownCall;
-    const abort = () => { if (abortId) worker.postMessage({ type: 'abort', callId: abortId }); };
+    const abort = () => {
+      if (abortId) worker.postMessage({ type: 'abort', callId: abortId });
+      // 选路可能忽略signal；只退出本次route等待，不能让child/execute/close彼此join成环。
+      if (method === 'virtual-route') {
+        const pending = this.#pending.get(id); this.#pending.delete(id); pending?.reject(new CodingResourcesUnavailable());
+      }
+    };
     if (signal?.aborted) throw new CodingResourcesUnavailable();
     signal?.addEventListener('abort', abort, { once: true });
     try {
       return await new Promise((resolve, reject) => {
-        this.#pending.set(id, { resolve, reject });
+        this.#pending.set(id, { resolve, reject, ...(method === 'virtual-route' ? { abort } : {}) });
         void (method === 'close' ? Promise.resolve({}) : this.#state(extra)).then(state => {
           // 只读快照 await 期间可能被暂停／关闭取代；不能把早到但未认领的 abort 丢掉后再启动调用。
           if(signal?.aborted||this.#worker!==worker||(this.#closed&&method!=='close'))throw new CodingResourcesUnavailable();
@@ -559,11 +581,42 @@ export class CodingExtensions {
       });
     } finally { signal?.removeEventListener('abort', abort); }
   }
+  #catalog() {
+    return { all: this.#models.getModels().map(modelMetadata), available: this.#models.getAvailableSnapshot().map(modelMetadata) };
+  }
+  #removeVirtuals(): void {
+    for (const [key, own] of this.#virtuals) {
+      this.#virtuals.delete(key);
+      // 原public目录对象是本次登记的认领；外部后来同名替换不归旧资源清理。
+      if (own.model && this.#models.getModel(own.provider, own.id) === own.model) this.#models.unregisterVirtualModel(own.provider, own.id);
+    }
+  }
+  async #route(own: VirtualRegistration, request: ModelRouteRequest) {
+    const signal = request.signal;
+    const current = () => this.#virtuals.get(virtualKey(own.provider, own.id)) === own && own.origin === this.#worker
+      && !this.#closed && !signal?.aborted && this.#models.getModel(own.provider, own.id) === own.model;
+    const [actionId, call] = [...this.#modelCalls.entries()].find(([, item]) => item.origin === own.origin && item.signal === signal && !item.aborted) ?? [];
+    if (!signal || request.reason !== 'direct' || !call?.task || !this.#calls.has(call.caller) || !current()) throw new CodingResourcesUnavailable();
+    const reply = bounded(await this.#request('virtual-route', { handle: own.handle, request: {
+      model: modelMetadata(request.model), thinkingLevel: request.thinkingLevel, reason: request.reason,
+      messages: request.messages, ...(request.previous ? { previous: { ...request.previous, model: modelMetadata(request.previous.model) } } : {}),
+      ...(request.failed ? { failed: { ...request.failed, model: modelMetadata(request.failed.model) } } : {}),
+    } }, signal, { scope: `route/${call.task}/${randomUUID()}` })) as JsonObject;
+    if (!current() || !actionId || this.#modelCalls.get(actionId) !== call || call.aborted
+      || typeof reply.provider !== 'string' || typeof reply.modelId !== 'string'
+      || typeof reply.thinkingLevel !== 'string' || !thinkingLevels.includes(reply.thinkingLevel)) throw new CodingResourcesUnavailable();
+    // 只消费引用：扩展返回的端点/headers/凭据不得参与真实物理请求，认证与完整准入仍由原Runtime持有。
+    const model = this.#models.getPhysicalModel(reply.provider, reply.modelId);
+    if (!model) throw new CodingResourcesUnavailable();
+    return { model, thinkingLevel: reply.thinkingLevel as import('@earendil-works/pi-ai').ModelThinkingLevel };
+  }
   #message(message: Record<string, unknown>, origin: Worker): void {
     if (origin !== this.#worker) return;
     if (message.type === 'result') {
       const pending = this.#pending.get(Number(message.id)); if (!pending) return; this.#pending.delete(Number(message.id));
-      if (message.ok === true) void this.#publication.then(() => pending.resolve(message.value), () => pending.reject(new CodingResourcesUnavailable())); else pending.reject(new CodingResourcesUnavailable());
+      // route不发布工具/状态；不能在回执已摘pending后又等publication，丢掉可取消等待的认领。
+      if (message.ok === true && pending.abort) pending.resolve(message.value);
+      else if (message.ok === true) void this.#publication.then(() => pending.resolve(message.value), () => pending.reject(new CodingResourcesUnavailable())); else pending.reject(new CodingResourcesUnavailable());
     } else if (message.type === 'tools' && !this.#closed) {
       try {
         const tools = bounded(message.tools, 1024 * 1024) as Descriptor[];
@@ -635,6 +688,28 @@ export class CodingExtensions {
     const caller = this.#calls.get(callId); const event = this.#events.get(callId);
     if (!caller && !event) throw new CodingResourcesUnavailable();
     const ctx = caller?.context ?? event!.context;
+    if (method === 'virtual-register' || method === 'virtual-unregister') {
+      if (ctx.abortSignal?.aborted || typeof payload.handle !== 'string' || !/^virtual\/[1-9]\d*$/.test(payload.handle)) throw new CodingResourcesUnavailable();
+      if (method === 'virtual-register') {
+        const definition = virtualDefinition(payload.definition);
+        const key = virtualKey(definition.provider, definition.id), previous = this.#virtuals.get(key);
+        const existing = this.#models.getModel(definition.provider, definition.id);
+        if (existing && (!previous || previous.origin !== origin || previous.model !== existing)) throw new CodingResourcesUnavailable();
+        const own: VirtualRegistration = { provider: definition.provider, id: definition.id, handle: payload.handle, origin };
+        this.#models.registerVirtualModel({ ...definition, route: request => this.#route(own, request) });
+        own.model = this.#models.getModel(definition.provider, definition.id);
+        if (!own.model) { this.#models.unregisterVirtualModel(definition.provider, definition.id); throw new CodingResourcesUnavailable(); }
+        this.#virtuals.set(key, own);
+      } else {
+        if (typeof payload.provider !== 'string' || typeof payload.modelId !== 'string') throw new CodingResourcesUnavailable();
+        const key = virtualKey(payload.provider, payload.modelId), own = this.#virtuals.get(key);
+        if (own && own.origin === origin && own.handle === payload.handle) {
+          this.#virtuals.delete(key);
+          if (this.#models.getModel(own.provider, own.id) === own.model) this.#models.unregisterVirtualModel(own.provider, own.id);
+        }
+      }
+      return { catalog: this.#catalog() };
+    }
     const commit = caller ? caller.api.commit.bind(caller.api) : async <T>(change: (tx: import('@earendil-works/pi-durable').Tx) => Promise<T>, ownContext: Context) => {
       let value!: T; await this.#binding!.harness.commit(async tx => {
         if (this.#closed || this.#worker!==origin || ownContext.abortSignal?.aborted) throw new CodingResourcesUnavailable();
@@ -673,12 +748,14 @@ export class CodingExtensions {
     }
     throw new CodingResourcesUnavailable();
   }
-  #fail(): void { this.#closed = true; for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear(); }
+  #fail(): void { this.#closed = true; this.#removeVirtuals(); for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear(); }
   close(): Promise<void> {
     if (this.#closing) return this.#closing;
     const worker = this.#worker; if (!worker) return Promise.resolve();
     // 在等待关闭前提升代次；旧回调不能提交新任务，取消由同一 Harness 所有权级联。
     this.#closed = true;
+    this.#removeVirtuals();
+    for (const pending of this.#pending.values()) pending.abort?.();
     this.#closing = (async () => {
       try { await this.#request('close', {}); await this.#publication; }
       finally { await worker.terminate(); this.#worker = undefined; this.#fail(); }

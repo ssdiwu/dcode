@@ -410,7 +410,8 @@ function deniedEvent(request: { sourceId: string; modelId: string }, reason: str
       api: "pi-virtual",
       provider: "dcode-routing",
       model: "unissued",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      // 未发出也须满足完整SDK Usage合同；漏totalTokens会让原工具累计产生NaN，而非真实费用。
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       timestamp: Date.now(),
     },
   } as unknown as AssistantMessageEvent;

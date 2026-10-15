@@ -184,7 +184,7 @@ async function reopenReadonly(f, sessionId, requestCount) {
   assert.equal((await events(f.project)).filter(item => item.type === 'start').length, started);
   return snapshot;
 }
-async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false }, action) {
+async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false }, action) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-desktop-extension-mcp-'));
   const f = { root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
   let primary; const secondary = [];
@@ -197,12 +197,13 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
     await mkdir(join(f.project, '.pi/extensions'), { recursive: true });
     await writeFile(join(f.project, '.pi/extensions/desktop.ts'), `import { Type } from 'typebox';\nimport { appendFile } from 'node:fs/promises';\nimport { join } from 'node:path';\nexport default function(pi) { pi.on('before_agent_start',()=>({message:{customType:'fixture-start',content:${JSON.stringify('startup visible '+f.nonce)},display:true}})); pi.on('before_agent_start',()=>({message:{customType:'fixture-hidden',content:${JSON.stringify('startup context only '+f.nonce)},display:false}})); pi.registerTool({name:'extension_nonce',label:'nonce',description:'Actual project extension',parameters:Type.Object({}),async execute(id,args,signal,update,ctx){pi.sendMessage({customType:'fixture-extension',content:${JSON.stringify(extensionVisibleText(f.nonce))},display:true});const read=await ctx.executeTool('read',{path:${JSON.stringify(desktopSkillPath)}});if(read.isError)throw new Error('Actual skill read failed');await appendFile(join(ctx.cwd,'desktop-skill-read-completions.jsonl'),JSON.stringify({nonce:${JSON.stringify(f.nonce)},callId:read.toolCall.id})+'\\n');return {content:[{type:'text',text:${JSON.stringify('extension actual ' + f.nonce)}},...read.result.content],details:{}};}}); }\n`);
     if(ownedComplete) await writeFile(join(f.project,'.pi/extensions/active-complete.ts'),desktopActiveExtensionSource(f.nonce));
-    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),desktopStreamExtensionSource(f.nonce));
+    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : desktopStreamExtensionSource(f.nonce)));
     await writeFile(join(f.project, '.pi/mcp.json'), JSON.stringify({ mcpServers: { fixture: {
       command: process.execPath, args: [resolve(import.meta.dirname, 'ordinary-mcp-fixture.mjs'), f.project, f.nonce], exposure: 'direct', enabled: true,
     } } }));
     f.server = await startCodingLoopback({ prefixCalls: calls(f.nonce), holdFinal, callsOverride,
-      ...(ownedStream ? {ownedComplete:{marker:desktopStreamInput(f.nonce),text:desktopStreamText(f.nonce),responseId:'desktop-stream-'+f.nonce,stream:{prefix:desktopStreamPrefix(f.nonce)}}}
+      // route等待例应当零inner；仍识别并记录意外inner，但不能套“已有held HTTP须结束”的旧stream前提。
+      ...(ownedStream ? {ownedComplete:{marker:desktopStreamInput(f.nonce),text:desktopStreamText(f.nonce),responseId:'desktop-stream-'+f.nonce,...(virtualWait?{}:{stream:{prefix:desktopStreamPrefix(f.nonce)}})}}
         : ownedComplete ? {ownedComplete:{marker:'DESKTOP_ACTIVE_INPUT_'+f.nonce,text:'DESKTOP_ACTIVE_RESULT_'+f.nonce,responseId:'desktop-active-'+f.nonce}} : {}) });
     f.env = { DCODE_VALIDATION_ASSEMBLY: '', DCODE_VALIDATION_SAMPLE: '0', DCODE_CATALOG_BASE_URL: `${f.server.origin}/catalog`, ...((ownedComplete || ownedStream) ? {DCODE_E2E_VISIBLE:'0'} : {}) };
     f.handle = await launchApp(f.stateDir, f.env, '.', { prebindProject: false }); f.proc = f.handle.app.process(); await ready(f.handle.page);
@@ -490,9 +491,7 @@ async function desktopStreamNoReexecute(f) {
   assert.equal(trace.steps.filter(step=>step.phase==='factory-returned').length,1);return trace;
 }
 
-test('普通桌面streamSimple：设置绑定启用零执行，final前真实partial可见，结果与任务用量正常关闭只读重开',async()=>withFixture({
-  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
-},async f=>{
+async function desktopStreamSuccess(f) {
   assert.equal(f.server.requests.length,0);assert.deepEqual(f.server.completeRequests,[]);await desktopStreamWindows(f);
   const input='普通桌面真实流 '+f.nonce,page=f.handle.page,composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
   await composer.fill(input);await composer.press('Enter');const held=await desktopStreamPartial(f,input,'success');
@@ -526,7 +525,11 @@ test('普通桌面streamSimple：设置绑定启用零执行，final前真实par
   await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-success-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,sessionId:held.sessionId,operationId:held.user.operationId,userBlockId:held.user.id,
     partialObservationBlockId:held.partialBlockId,formalToolBlockId:block.id,directResponseId:held.direct.responseId,httpCounts:{outer:2,inner:1},before,after:desktopActiveUsageFacts(reopened,held.sessionId,f),
     normalClose:{exitCode:0,signalCode:null},readonlyReopen:true,drained,pixels:{partial:held.png,final:finalPng,restored:restoredPng},partialTrace:held.partialTrace,finalTrace:traceBefore},null,2));
-}));
+}
+test('普通桌面streamSimple：设置绑定启用零执行，final前真实partial可见，结果与任务用量正常关闭只读重开',async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
+},desktopStreamSuccess));
+
 
 for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后${closing}：同HTTP关闭，只读重开零新增，明确继续原operation不重放`,async()=>withFixture({
   calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
@@ -562,4 +565,80 @@ for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后
   await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-${closing}-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,closing,sessionId:held.sessionId,operationId:held.user.operationId,userBlockId:held.user.id,
     partialObservationBlockId:held.partialBlockId,formalToolBlockId:failed.id,directResponseId:held.direct.responseId,originalToolCallId:'actual-tool-1',httpCounts:{beforeReadonly:{outer:1,inner:1},afterExplicitResume:{outer:2,inner:1}},
     sameRemoteClosedBeforeFinal:held.direct.closedBeforeFinal,remoteFinished:held.direct.finished,drained,actualUsage:used.usage,pixels:{partial:held.png,readonly:beforeResumePng,error:finalPng},partialTrace:held.partialTrace,afterResumeTrace:trace},null,2));
+}));
+
+
+const desktopVirtualTraceFile='desktop-virtual-route.json';
+function desktopVirtualExtensionSource(nonce,wait=false) {
+  const definition=`pi.registerVirtualModel({provider:'desktop-virtual-direct',id:'virtual-owned-stream',name:'Project direct virtual',input:['text'],thinkingLevels:['off'],
+    async route(request,ctx){
+      const physical=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!physical)throw new Error('Physical model missing');
+      const trace={nonce:${JSON.stringify(nonce)},reason:request.reason,hasState:Object.hasOwn(request,'state'),messages:request.messages,
+        selected:{provider:request.model.provider,id:request.model.id},signalSame:request.signal===ctx.signal,signalAborted:request.signal?.aborted,
+        physical:{provider:physical.provider,id:physical.id},containsCredential:/apiKey|authorization|x-dcode-catalog-secret/i.test(JSON.stringify(physical))};
+      const watching=${JSON.stringify(wait)}?watch(ctx.cwd,{persistent:false}):undefined;
+      const file=join(ctx.cwd,${JSON.stringify(desktopVirtualTraceFile)});await writeFile(file+'.tmp',JSON.stringify({...trace,phase:'route-entered'}));await rename(file+'.tmp',file);
+      if(watching){try{while(true){
+        try{const gate=JSON.parse(await readFile(join(ctx.cwd,'desktop-virtual-route-release.json'),'utf8'));if(gate.nonce===${JSON.stringify(nonce)})break;}
+        catch(error){if(error.code!=='ENOENT')throw error;}await watching.next();
+      }}finally{await watching.return();}}
+      await writeFile(file+'.tmp',JSON.stringify({...trace,phase:'route-returning',signalAborted:request.signal?.aborted}));await rename(file+'.tmp',file);
+      return {model:{...physical,baseUrl:'http://invalid.invalid/v1',headers:{'x-fake-route':'must-not-send'}},thinkingLevel:'off',state:{mustNotPersist:${JSON.stringify(nonce)}}};
+    }});`;
+  const original=desktopStreamExtensionSource(nonce);
+  const needle="export default function(pi){pi.registerTool";
+  const model="ctx.modelRegistry.find('user-defined',"+JSON.stringify(codingModel)+")";
+  assert.ok(original.includes(needle)&&original.includes(model));
+  // 先替原工具引用，再插入route；反序会误替route自己的physical查找，工具仍绕过virtual。
+  return original.replace("import {writeFile,rename}","import {writeFile,rename,readFile,watch}").replace(model,"ctx.modelRegistry.find('desktop-virtual-direct','virtual-owned-stream')").replace(needle,'export default function(pi){'+definition+'pi.registerTool');
+}
+test('普通桌面virtual direct：真实工厂登记、原工具流到canonical物理HTTP与只读重开',async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedVirtual:true,
+},async f=>{
+  await desktopStreamSuccess(f);
+  const route=JSON.parse(await readFile(join(f.project,desktopVirtualTraceFile),'utf8'));
+  assert.equal(route.nonce,f.nonce);assert.equal(route.reason,'direct');assert.equal(route.hasState,false);assert.equal(route.signalSame,true);assert.equal(route.signalAborted,false);
+  assert.deepEqual(route.selected,{provider:'desktop-virtual-direct',id:'virtual-owned-stream'});assert.deepEqual(route.physical,{provider:'user-defined',id:codingModel});assert.equal(route.containsCredential,false);
+  assert.equal(route.messages.length,1);assert.equal(route.messages[0].role,'user');assert.equal(route.messages[0].content,desktopStreamInput(f.nonce));
+  assert.equal(f.server.completeRequests.length,1);assert.equal(f.server.requests.length,2);assert.deepEqual(f.server.errors,[]);
+  await writeFile(join(evidenceDir('ordinary-extension-mcp'),'virtual-direct-desktop-route-'+f.nonce+'.json'),JSON.stringify({route,inner:f.server.completeRequests[0],httpCounts:{outer:2,inner:1},readonlyReopen:true},null,2));
+}));
+
+
+for(const closing of ['pause','close'])test(`普通桌面virtual direct/route等待${closing}：有限关闭、只读重开零调用，明确继续不重放`,async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedVirtual:true,virtualWait:true,
+},async f=>{
+  assert.equal(f.server.requests.length,0);assert.equal(f.server.completeRequests.length,0);await desktopStreamWindows(f);
+  const input='普通桌面virtual选路等待 '+closing+' '+f.nonce,page=f.handle.page;
+  const composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();await composer.fill(input);await composer.press('Enter');
+  let route;
+  const parked=await waitForSnapshot(page,async snapshot=>{
+    try{route=JSON.parse(await readFile(join(f.project,desktopVirtualTraceFile),'utf8'));}catch(error){if(error.code==='ENOENT')return false;throw error;}
+    return route.phase==='route-entered'&&snapshot.sessions.some(session=>snapshot.timelines[session.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input)
+      &&snapshot.runs[session.id]?.status==='running');
+  },undefined,'原route已实际进入且刻意忽略signal；不能用准备失败或空闲代替');
+  const sessionId=parked.sessions.find(session=>parked.timelines[session.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input)).id;
+  const user=parked.timelines[sessionId].find(block=>block.kind==='message'&&block.role==='user'&&block.text===input);assert.ok(user.operationId);
+  assert.equal(route.nonce,f.nonce);assert.equal(route.reason,'direct');assert.equal(route.hasState,false);assert.equal(route.signalSame,true);
+  assert.equal(f.server.requests.length,1);assert.equal(f.server.completeRequests.length,0,'选路尚未返回，物理HTTP不得提前发生');
+  const beforePng=join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-virtual-route-${closing}-parked-${f.nonce}.png`);await page.locator('main').screenshot({path:beforePng});
+  if(closing==='pause')await pauseAndDrain(f,sessionId);else{await f.handle.close();assert.equal(f.proc.exitCode,0);assert.equal(f.proc.signalCode,null);}
+  const drained=await desktopStreamDrained(f);assert.equal(f.server.requests.length,1);assert.equal(f.server.completeRequests.length,0);
+  // 旧Worker已实际结束；此处只放行测试门，不能冒称旧callback已经执行到return或旧reply已实测到达。
+  await writeFile(join(f.project,'desktop-virtual-route-release.json'),JSON.stringify({nonce:f.nonce}));
+  const reopened=await reopenReadonly(f,sessionId,1);await desktopStreamWindows(f);assert.equal(reopened.runs[sessionId].status,'paused');
+  desktopStreamSameOriginal(reopened,sessionId,user,input);await desktopStreamNoReexecute(f);
+  assert.equal(f.server.completeRequests.length,0);assert.equal(f.server.requests.length,1);assert.equal((await events(f.project)).filter(item=>item.type==='start').length,drained.starts);
+  const unchanged=JSON.parse(await readFile(join(f.project,desktopVirtualTraceFile),'utf8'));assert.deepEqual(unchanged,route);
+  const readonlyPng=join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-virtual-route-${closing}-readonly-${f.nonce}.png`);await f.handle.page.locator('main').screenshot({path:readonlyPng});
+  const primary=f.handle.page.locator('button[data-slot="composer-primary"]');assert.match(await primary.getAttribute('aria-label'),/^继续执行$|^Resume$/);await primary.click();
+  await f.handle.page.getByText(f.server.nonce,{exact:true}).waitFor({state:'visible'});
+  const final=await waitForSnapshot(f.handle.page,snapshot=>snapshot.runs[sessionId]?.status==='ready'&&snapshot.runs[sessionId]?.pendingInputs===0
+    &&snapshot.timelines[sessionId]?.some(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName&&block.tool.status==='failed'));
+  desktopStreamSameOriginal(final,sessionId,user,input);const trace=await desktopStreamNoReexecute(f);assert.equal(f.server.completeRequests.length,0,'明确继续不能重发已进入execute的原route/inner模型');
+  assert.equal(f.server.requests.length,2);assert.ok(f.server.requests.every(request=>request.authOk&&request.body.model===codingModel));assert.deepEqual(f.server.errors,[]);
+  assert.deepEqual(JSON.parse(await readFile(join(f.project,desktopVirtualTraceFile),'utf8')),route,'原route不随新Worker装配重放');
+  const failed=final.timelines[sessionId].filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);assert.equal(failed.length,1);assert.equal(failed[0].tool.status,'failed');assert.ok(failed[0].tool.output.length>0);
+  const forwarded=f.server.requests[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id==='actual-tool-1');assert.equal(forwarded.length,1);assert.ok(httpMessageText(forwarded[0]).length>0);
+  await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-virtual-route-${closing}-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,closing,sessionId,operationId:user.operationId,route,afterStopRoute:unchanged,trace,drained,httpCounts:{beforeReadonly:{outer:1,inner:0},afterResume:{outer:2,inner:0}},gateReleasedAfterWorkerClose:true,lateCallbackReturnProven:false,pixels:{parked:beforePng,readonly:readonlyPng}},null,2));
 }));

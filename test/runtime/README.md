@@ -29,3 +29,5 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 2026-10-05 正文读取修复证据：[修前失败](../../doc/验证记录/pi-assistant-projection-red-2026-10-05.log)实际读回 `undefined`；[修后完整检查](../../doc/验证记录/pi-assistant-projection-verify-2026-10-05.log)覆盖架构 28 个正反样例与 4 个源码文件、全量类型／Lint 及 13 项运行测试，均通过。该记录没有启动 Electron 窗口，也不替代 UI 消费者验收。
 
 测试通过不覆盖 Electron／手机 UI、配对及远端网络、真实服务商、自然语言派工授权、无协作取消行为的任意工具，或断电后的无损保证。虚拟模型的独立组合探针与已知路由状态限制见 [Pi 证据记录](../../doc/Pi-1.0.0-虚拟模型与运行恢复.md)。
+
+[普通virtual direct](ordinary-extension-virtual-direct.test.mjs)核真实工厂登记、原工具流、独立物理B的规范端点／认证／完整准入、原child／结果／费用，以及route等待中的暂停／关闭／只读恢复与不重放、原工具仍活时仅模型取消后的实际迟到回调丢弃、pure route写入前拒绝；[登记生命周期](coding-virtual-registration.test.ts)以真实Worker／ModelRuntime／Harness核物理冲突、注销、旧资源不删新同名项、失败回滚与非法定义。这里不把登记本身当执行成功；当前实际出口和独立状态见[virtual direct记录](../../doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。

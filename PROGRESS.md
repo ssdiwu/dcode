@@ -1,5 +1,7 @@
 # D Code 阶段进度
 
+2026-10-15最新接收：普通扩展virtual direct在181/2c2710d3完成完整八门真0（runtime403、contracts14、隐藏E2E114，无skip／cancel，逐门／总同源），固定475文件与255证据已独立核对，Standards／Spec／CodeQuality三项限定PASS、无本片必要剩余。新完整恢复点与实际范围见[virtual direct记录](doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。当前办理稳定范围本地提交，仍不push／tag／release；完整SDK父目标及整个产品未完成。
+
 2026-10-15最新本地交付：扩展streamSimple及普通桌面生命周期已独立接收，并正常提交为`b2d589a7ab1f463bbd3c2b20f0409f1bf6af6288`（24路径，提交后工作树为空）。八门真实出口0、runtime390／contracts14／隐藏E2E111及三项限定PASS均归同179/0791源码；实际暂存与交付边界见[流式模型本地提交](doc/验证记录/扩展流式模型-2026-10-15/本地提交-2026-10-15.md)。没有推送／tag／release，完整SDK父目标及整个产品未完成。
 
 2026-10-15交付更新：507已明确授权及时本地提交已稳定、独立验收通过的范围。此前提交源码／测试／配置按已验 `176/0d6f` 副本精确暂存，保留旧失败与许可；当时同文件内后续未审stream增量仅留工作区及隔离树，未混入该已验提交；该stream片现已按下方记录独立接收。实际本地功能提交为`3a18f18972eb95e6f250705dab9fea732d654b28`，226路径，详见[本地提交记录](doc/验证记录/扩展主动模型-2026-10-15/本地提交-2026-10-15.md)；本授权不包括push、tag或release。
@@ -7,6 +9,8 @@
 更新：2026-10-15。2026-10-09 的新版开发基线已提交、整合并同步到 GitHub `main`，尚未发布正式版；必要D1、有状态条件接缝、普通编码及后续已验扩展/MCP至单次complete已纳入2026-10-15本地功能提交`3a18f18972eb95e6f250705dab9fea732d654b28`，交付记录提交为`2c0a108ec82baa22ebeb59e047862f685623034c`；后续stream验收和本地提交状态以本页当前阶段及本片记录为准，未推送或发布；完整非界面编码能力及整个产品尚未验收。提交身份、旧历史保留、验证依据和整合前快照见 [主线整合记录](doc/阶段记录/2026-10-09-新版主线整合.md)。这里只维护当前状态；产品要求以 spec 为准。
 
 ## 当前阶段与入口
+
+本轮已验实现：普通扩展工厂注册virtual，经原工具owned direct流调用原canonical物理模型的实现与定向验证已落地。真实规范B请求／准入拒绝、登记生命周期、pure route写前拒绝、原工具仍活时模型取消后实际迟到回调丢弃，以及桌面暂停／关闭／只读重开与原身份继续已有对应定向结果；固定181/2c2710d3已完成八门真0，runtime403／contracts14／隐藏E2E114、无skip／cancel且逐门与总同源，最终独立三项已通过并由Root接收，本地提交办理中，不替下方已验streamSimple基线。原失败与边界见[virtual direct记录](doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)；provider／typed等其余父范围保持。
 
 扩展streamSimple已完成179/0791完整八门：runtime390、contracts14、隐藏E2E111全部真exit0且逐门／总前后同源。真实partial、result-only／break、两类model取消、原owner暂停／关闭／只读重开／明确继续不重发、桌面运行工具正文和120／15／3用量、临时不落正式历史与旧视图拒绝均有相称动作证据。固定R5经Standards／Spec／CodeQuality独立三项限定PASS，本片已接收；完整已验恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-streamSimple-accepted-20261015/manifest.json`。原complete基线和旧失败继续保留，见[流式模型记录](doc/验证记录/扩展流式模型-2026-10-15/README.md)。完整SDK父目标未完成，provider／virtual／typed等仍在原范围。
 

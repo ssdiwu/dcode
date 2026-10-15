@@ -1,5 +1,11 @@
 # D Code 更新记录
 
+## 2026-10-15 普通扩展 virtual direct
+
+普通项目扩展可登记／撤销虚拟模型，原工具的direct流经原ModelRuntime解析规范物理模型并完成认证、容量与请求准入；端点和凭据不取自扩展返回值。资源代次、取消、迟到结果与只读恢复沿原owned child，direct不推进会话路由状态。pure route在SDK facade写入前拒绝修改工具集合；未发出物理请求的错误事件保留完整零Usage，避免累计NaN。
+
+登记、真实B请求和拒绝、取消与活工具晚返，以及桌面暂停／关闭／RO／明确继续均有定向证据；181/2c2710d3完整八门已真0（runtime403、contracts14、隐藏E2E114），Standards／Spec／CodeQuality独立三项已通过并由Root接收。现行spec、原失败及未覆盖范围见[virtual direct记录](doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。不扩大为provider注册、typed、完整SDK或整个产品完成。
+
 ## 2026-10-15 扩展工具流式模型与普通桌面恢复
 
 实际本地功能提交：`b2d589a7ab1f463bbd3c2b20f0409f1bf6af6288`，24路径；[本地提交记录](doc/验证记录/扩展流式模型-2026-10-15/本地提交-2026-10-15.md)保留精确暂存、独立验收和交付边界。

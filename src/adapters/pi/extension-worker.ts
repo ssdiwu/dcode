@@ -12,6 +12,7 @@ const { syncBuiltinESMExports } = require('node:module');
 let runner, sdk, sessionView, streamFactory, closed = false, state = { messages: [], systemPrompt: '', model: undefined };
 const calls = new Map(), replies = new Map(), children = new Set(), closings = new Set(), transports = new Set();
 const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
+const virtualModels = new Map(), virtualHandles = new Map();
 let serial = 0, activated = new Set(), active = [], builtins = [], actions = [], errors = [];
 const nativeSpawn = cp.spawn;
 cp.spawn = (...args) => {
@@ -290,6 +291,13 @@ async function initialize() {
         logPath: path.join(workerData.agentDir, 'mcp.log'), openUrl: unavailable, updateConfig: unavailable })}] });
   await loader.reload();
   const loaded = loader.getExtensions(); if (loaded.errors.length) throw new Error('Extension failed to load');
+  const assertRuntimeActive = loaded.runtime.assertActive;
+  loaded.runtime.assertActive = () => {
+    assertRuntimeActive();
+    // registerTool先改SDK map再refreshTools；在公开pi入口的原assert前置挡住route写入，不能事后只挡发布。
+    // ctx的只读目录/cwd/session/signal走Runner自己的stale检查，仍保持可读；不声称任意项目JS是沙箱纯函数。
+    if (invocation.getStore()?.readOnlyRoute) return unavailable();
+  };
   const loadedSkills = loader.getSkills(); const loadedPrompts = loader.getPrompts();
   if (loadedSkills.diagnostics.some(item => item.type === 'error') || loadedPrompts.diagnostics.some(item => item.type === 'error')) throw new Error('Package resource unavailable');
   workerData.packageInstructions = sdk.formatSkillsForPrompt(loadedSkills.skills);
@@ -428,6 +436,12 @@ async function initialize() {
   } });
   runner = new sdk.ExtensionRunner(loaded.extensions, loaded.runtime, workerData.cwd, sessionManager, modelRegistry);
   runner.onError(() => errors.push('extension-event-failed'));
+  const registration = (method, payload) => {
+    if (closed || invocation.getStore()?.pure || !scopeOf()) return unavailable();
+    // SDK的注册API返回void；在原资源/事件flush处等宿主确认，不能先把本地函数表当可用目录。
+    const pending = rpc(method, payload, scopeOf()).then(reply => { state.modelCatalog = reply.catalog; });
+    pending.catch(() => {}); actions.push(pending);
+  };
   runner.bindCore({
     sendMessage: (message, options) => queue('message', { message, options }),
     sendUserMessage: (content, options) => queue('user', { content, options }),
@@ -445,7 +459,26 @@ async function initialize() {
     getContextUsage: () => undefined, compact: options => { rpc('compact', { instructions: options?.customInstructions }, scopeOf()).then(() => options?.onComplete?.(), () => options?.onError?.(new Error('正式压缩未完成'))); },
     getSystemPrompt: () => state.systemPrompt, executeTool, getCallableTools: callables,
   }, { registerProvider: unavailable, registerNativeProvider: unavailable, unregisterProvider: unavailable,
-    registerVirtualModel: unavailable, unregisterVirtualModel: unavailable });
+    registerVirtualModel: definition => {
+      if (closed || invocation.getStore()?.pure || !scopeOf()) return unavailable();
+      if (!definition || typeof definition.route !== 'function') return unavailable();
+      const {route,...metadata} = definition, handle = 'virtual/' + (++serial);
+      const seen=new Set();const check=value=>{
+        if(value===undefined||value===null||typeof value==='string'||typeof value==='boolean'||(typeof value==='number'&&Number.isFinite(value)))return;
+        if(!value||typeof value!=='object'||seen.has(value)||(!Array.isArray(value)&&Object.getPrototypeOf(value)!==Object.prototype))throw new Error('Invalid virtual model metadata');
+        seen.add(value);Object.values(value).forEach(check);seen.delete(value);
+      };check(metadata);
+      const key = JSON.stringify([metadata.provider,metadata.id]), previous = virtualModels.get(key);
+      if (previous) virtualHandles.delete(previous.handle);
+      const own = {handle,definition}; virtualModels.set(key,own); virtualHandles.set(handle,own);
+      registration('virtual-register',{handle,definition:metadata});
+    },
+    unregisterVirtualModel: (provider,id) => {
+      if (closed || invocation.getStore()?.pure || !scopeOf()) return unavailable();
+      const key=JSON.stringify([provider,id]), own=virtualModels.get(key); if(!own)return;
+      virtualModels.delete(key);virtualHandles.delete(own.handle);
+      registration('virtual-unregister',{provider,modelId:id,handle:own.handle});
+    } });
   builtins = workerData.builtins; active = settingsManager.getDefaultTools() ?? builtins.map(t => t.name); syncTools();
   await runner.emit({ type: 'session_start', reason: 'startup' });
   if (runner.hasHandlers('resources_discover')) {
@@ -494,6 +527,16 @@ async function request(message) {
   }
   if (message.method === 'init') return initialize();
   if (!runner) throw new Error('Resources unavailable');
+  if (message.method === 'virtual-route') {
+    const own=virtualHandles.get(message.value?.handle), controller=calls.get(message.scope);
+    if(!own || !controller || controller.signal.aborted || message.value.request?.reason!=='direct')throw new Error('Virtual route unavailable');
+    // loader包好的真实route在当前scope取得原ExtensionContext；只替本次request.signal，不换成会话messages。
+    const route=await own.definition.route({...message.value.request,signal:controller.signal});
+    if(closed || controller.signal.aborted || virtualHandles.get(own.handle)!==own)throw new Error('Virtual route expired');
+    if(!route || typeof route.model?.provider!=='string' || typeof route.model?.id!=='string' || typeof route.thinkingLevel!=='string')throw new Error('Virtual route invalid');
+    // 本片direct不消费branch state；有限引用让host重新取canonical物理对象，绝不把伪造端点/headers带回执行。
+    return {provider:route.model.provider,modelId:route.model.id,thinkingLevel:route.thinkingLevel};
+  }
   if(message.method==='arguments'){
     const tool=runner.getAllRegisteredTools().find(tool=>tool.definition.name===message.value.name);
     if(!tool)throw new Error('Tool unavailable');
@@ -567,7 +610,7 @@ parentPort.on('message', message => {
   }
   const eventController = message.scope && message.method !== 'close' ? new AbortController() : undefined;
   if (eventController) calls.set(message.scope,eventController);
-  const dispatched = Promise.resolve().then(() => invocation.run({id:message.scope,counter:0,pure:message.method==='arguments'}, () => request(message)));
+  const dispatched = Promise.resolve().then(() => invocation.run({id:message.scope,counter:0,pure:message.method==='arguments'||message.method==='virtual-route',readOnlyRoute:message.method==='virtual-route'}, () => request(message)));
   const settled = dispatched.then(value => {
     parentPort.postMessage({ type: 'result', id: message.id, ok: true, value: safe(value) });
     if (message.method === 'close') parentPort.close();
