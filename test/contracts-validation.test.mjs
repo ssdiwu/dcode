@@ -464,3 +464,16 @@ test('扩展消息／工具图片有限契约：独立来源与有限图片字�
   const invalid=structuredClone(s);invalid.timelines.s1[1].tool.images=[{...image,data:'bad'}];assert.equal(isValidSnapshot(invalid),false);
 });
 
+test('运行工具截断量只接收有限非负整数，原正文与工具状态保持独立', () => {
+  const snapshot = validSnapshot();
+  const tool = snapshot.timelines.s1[1].tool;
+  tool.status = 'running';
+  tool.outputTruncation = { droppedBytes: 123, droppedLines: 2 };
+  assert.equal(isValidSnapshot(snapshot), true);
+  assert.equal(tool.output, '……');
+  for (const invalid of [null, { droppedBytes: -1, droppedLines: 2 }, { droppedBytes: 1.5, droppedLines: 2 },
+    { droppedBytes: 1, droppedLines: NaN }, { droppedBytes: 1 }, { droppedBytes: '1', droppedLines: 2 }]) {
+    const bad = structuredClone(snapshot); bad.timelines.s1[1].tool.outputTruncation = invalid;
+    assert.equal(isValidSnapshot(bad), false);
+  }
+});

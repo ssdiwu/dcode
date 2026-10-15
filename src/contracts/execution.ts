@@ -80,6 +80,8 @@ export type ExecutionView = Readonly<{
     /** 该次真实请求的用量；无记录时不出现，绝不由计划或额度推算 */
     usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   }>;
+  /** 当前运行工具的有界只读增量；不进入正式历史或用量，也不持久化为产品事实。 */
+  toolProgress?: ReadonlyArray<{ taskId: number; callId: string; name: string; text: string; droppedBytes: number; droppedLines: number }>;
   pendingInputs: number;
 }>;
 

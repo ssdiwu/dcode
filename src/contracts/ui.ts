@@ -72,6 +72,8 @@ export interface ToolBlockData {
   primaryText: string;
   /** 展开后的正文输出 */
   output: string;
+  /** SDK对当前运行输出的实际截断量；正文不拼接内部状态文案。 */
+  outputTruncation?: { droppedBytes: number; droppedLines: number };
   status: ToolStatus;
   exitCode?: number;
   /** 关联的改动文件路径 */
@@ -954,6 +956,9 @@ function isValidToolData(t: unknown): boolean {
     isStr(t.name) &&
     isStr(t.primaryText) &&
     isStr(t.output) &&
+    (t.outputTruncation === undefined || (isRecord(t.outputTruncation)
+      && Number.isSafeInteger(t.outputTruncation.droppedBytes) && (t.outputTruncation.droppedBytes as number) >= 0
+      && Number.isSafeInteger(t.outputTruncation.droppedLines) && (t.outputTruncation.droppedLines as number) >= 0)) &&
     ["running", "done", "failed", "waiting"].includes(t.status as string) &&
     (t.exitCode === undefined || isNum(t.exitCode)) &&
     isStrArray(t.changedFiles)

@@ -115,6 +115,9 @@ export function ToolCallBlock({ tool }: { tool: ToolBlockData }) {
         aria-label={`${t('tool.result')} ${tool.name} ${tool.primaryText} ${badge.label}`} />
       <ToolContent>
         <ToolOutput output={tool.output} actions={actions} />
+        {tool.outputTruncation && <p className="text-ui-xs text-subtle" role="note">
+          {t('tool.outputTruncated', { bytes: tool.outputTruncation.droppedBytes, lines: tool.outputTruncation.droppedLines })}
+        </p>}
         {tool.images?.map((image, index) => <img key={index} alt={`${t('tool.result')} ${tool.name} ${index + 1}`}
           className="max-w-full max-h-96 object-contain rounded-md" loading="lazy"
           src={`data:${image.mimeType};base64,${image.data}`} />)}

@@ -1,6 +1,6 @@
 // ModelRuntime 有状态路由的公开 Durable 接缝：没有第二套循环、输入或响应历史。
 import { createHash } from 'node:crypto';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import type { Context, JsonValue } from '@earendil-works/chord';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
@@ -8,7 +8,7 @@ import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { physicalRequestBudget } from './request-budget';
 import type { Api, AssistantMessage, DeferredHandle, Message, Model, ModelThinkingLevel, Models, ModelsSimpleStreamOptions } from '@earendil-works/pi-ai';
 import { AgentDoc, defineDocFamily, defineExtension, GenerationTask, hook, LiveDoc } from '@earendil-works/pi-durable';
-import type { GenerationCheckpoint, Harness, HookApi, ModelRef } from '@earendil-works/pi-durable';
+import type { GenerationCheckpoint, Harness, HookApi, ModelRef, TaskRuntime } from '@earendil-works/pi-durable';
 
 type RouteState = { revision: number; value: JsonValue; hasValue: boolean; inputs: number[] };
 type RoutePlan = {
@@ -61,6 +61,7 @@ export class DurableModelRouting {
   readonly #runtime: ModelRuntime;
   readonly #runnable: () => boolean;
   readonly #bindings = new WeakMap<AbortSignal, RoutePlan | { physicalOnly: true; requested: ModelRef; selected: ModelRef; thinkingLevel: ModelThinkingLevel }>();
+  readonly #ownedInvocations = new WeakMap<AbortSignal, { taskId: number; conversationId: number; requested: string }>();
   #harness: Harness | null = null;
 
   constructor(runtime: ModelRuntime, runnable: () => boolean) {
@@ -114,6 +115,37 @@ export class DurableModelRouting {
   #owner(): Harness {
     if (!this.#harness) throw new Error('Route adapter has no Harness owner');
     return this.#harness;
+  }
+
+  /** 仅由可信Host把当前模型child认领到原Models；不借缺少Generation计划放行direct。 */
+  async withOwnedModelInvocation<T>(runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'taskId' | 'conversationId' | 'signal'>,
+    requested: ModelRef, operation: () => Promise<T>): Promise<T> {
+    const { signal, taskId, conversationId } = runtime;
+    const checkActive = () => {
+      signal.throwIfAborted();
+      if (!this.#runnable() || this.#bindings.has(signal) || this.#ownedInvocations.has(signal)) throw new Error('Owned model invocation is not available');
+    };
+    checkActive();
+    if (typeof requested.provider !== 'string' || typeof requested.modelId !== 'string') throw new Error('Owned model identity missing');
+    // 登记前固定值；调用方随后改同一ref对象不能把已核A的权限带到B。
+    const expected = identity({ provider: requested.provider, modelId: requested.modelId });
+    const task = await this.#owner().getTask(taskId, withAbortSignal(signal, BACKGROUND_CONTEXT));
+    checkActive();
+    if (!task || task.kind !== 'dcode.extension-model' || task.id !== taskId || task.conversationId !== conversationId
+      || task.abortRequested || task.state.status !== 'running') throw new Error('Owned model task does not match this invocation');
+    const input = task.input;
+    const cp = task.state.checkpoint;
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !cp || typeof cp !== 'object' || Array.isArray(cp)
+      || cp.phase !== 'execute' || typeof input.ownerTaskId !== 'number' || task.owner !== input.ownerTaskId
+      || typeof input.caller !== 'string' || !input.caller.startsWith('tool/') || typeof input.actionId !== 'string'
+      || !input.actionId.startsWith(input.caller + '/') || typeof input.provider !== 'string' || typeof input.modelId !== 'string'
+      || identity({ provider: input.provider, modelId: input.modelId }) !== expected || !this.#runtime.getModel(input.provider, input.modelId)) {
+      throw new Error('Owned model request does not match its committed owner and identity');
+    }
+    const lease = { taskId, conversationId, requested: expected };
+    this.#ownedInvocations.set(signal, lease);
+    try { return await operation(); }
+    finally { if (this.#ownedInvocations.get(signal) === lease) this.#ownedInvocations.delete(signal); }
   }
 
   async #prepare(messages: readonly Message[], api: HookApi, context: Context, passes = 0): Promise<void> {
@@ -196,6 +228,15 @@ export class DurableModelRouting {
   }
 
   #stream(model: Model<Api>, _messages: readonly Message[], input: Parameters<Models['streamSimple']>[1], options?: ModelsSimpleStreamOptions) {
+    const owned = options?.signal && this.#ownedInvocations.get(options.signal);
+    if (owned) {
+      try {
+        options!.signal!.throwIfAborted();
+        if (!this.#runnable() || identity({ provider: model.provider, modelId: model.id }) !== owned.requested) throw new Error('Owned model request identity changed');
+        // 原simple入口持有认证/完整准入与参数；不能套Generation off计划把显式reasoning抹掉。
+        return this.#runtime.streamSimple(model, input, options);
+      } catch (error) { const out = createAssistantMessageEventStream(); this.#fail(out, error); return out; }
+    }
     const binding = options?.signal && this.#bindings.get(options.signal);
     if (!binding) {
       const out = createAssistantMessageEventStream();

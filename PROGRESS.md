@@ -1,12 +1,14 @@
 # D Code 阶段进度
 
-2026-10-15交付更新：507已明确授权及时本地提交已稳定、独立验收通过的范围。本次提交源码／测试／配置按已验 `176/0d6f` 副本精确暂存，保留旧失败与许可；同文件内后续未审stream增量仅留工作区及隔离树，不混入已验提交。实际本地功能提交为`3a18f18972eb95e6f250705dab9fea732d654b28`，226路径，详见[本地提交记录](doc/验证记录/扩展主动模型-2026-10-15/本地提交-2026-10-15.md)；本授权不包括push、tag或release。
+2026-10-15交付更新：507已明确授权及时本地提交已稳定、独立验收通过的范围。此前提交源码／测试／配置按已验 `176/0d6f` 副本精确暂存，保留旧失败与许可；当时同文件内后续未审stream增量仅留工作区及隔离树，未混入该已验提交；该stream片现已按下方记录独立接收。实际本地功能提交为`3a18f18972eb95e6f250705dab9fea732d654b28`，226路径，详见[本地提交记录](doc/验证记录/扩展主动模型-2026-10-15/本地提交-2026-10-15.md)；本授权不包括push、tag或release。
 
-更新：2026-10-15。2026-10-09 的新版开发基线已提交、整合并同步到 GitHub `main`，尚未发布正式版；必要D1、有状态条件接缝、普通编码及后续已验扩展/MCP至单次complete已纳入2026-10-15本地功能提交`3a18f18972eb95e6f250705dab9fea732d654b28`，交付记录提交为`2c0a108ec82baa22ebeb59e047862f685623034c`；后续stream未审增量仍在工作区，未推送或发布；完整非界面编码能力及整个产品尚未验收。提交身份、旧历史保留、验证依据和整合前快照见 [主线整合记录](doc/阶段记录/2026-10-09-新版主线整合.md)。这里只维护当前状态；产品要求以 spec 为准。
+更新：2026-10-15。2026-10-09 的新版开发基线已提交、整合并同步到 GitHub `main`，尚未发布正式版；必要D1、有状态条件接缝、普通编码及后续已验扩展/MCP至单次complete已纳入2026-10-15本地功能提交`3a18f18972eb95e6f250705dab9fea732d654b28`，交付记录提交为`2c0a108ec82baa22ebeb59e047862f685623034c`；后续stream验收和本地提交状态以本页当前阶段及本片记录为准，未推送或发布；完整非界面编码能力及整个产品尚未验收。提交身份、旧历史保留、验证依据和整合前快照见 [主线整合记录](doc/阶段记录/2026-10-09-新版主线整合.md)。这里只维护当前状态；产品要求以 spec 为准。
 
 ## 当前阶段与入口
 
-扩展内单次主动complete片已独立接收：最终176/0d6f完整八门全部真实exit0（runtime365、contracts13、隐藏E2E108，前后同源），Standards／Spec／CodeQuality三项PASS。普通工具、未await、嵌套、已确认响应后错误/暂停/关闭、纯只读重开及明确继续不重发和费用恰一次已验证；原失败/工装清理及只读关闭/维护重试红绿全部保留，见[主动模型记录](doc/验证记录/扩展主动模型-2026-10-15/README.md)。新完整已验恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-active-complete-accepted-20261015/manifest.json`。本片仅complete；完整SDK父目标未完成，接续streamSimple真实事件流与原owner生命周期，provider/virtual/typed等保持后续原范围。
+扩展streamSimple已完成179/0791完整八门：runtime390、contracts14、隐藏E2E111全部真exit0且逐门／总前后同源。真实partial、result-only／break、两类model取消、原owner暂停／关闭／只读重开／明确继续不重发、桌面运行工具正文和120／15／3用量、临时不落正式历史与旧视图拒绝均有相称动作证据。固定R5经Standards／Spec／CodeQuality独立三项限定PASS，本片已接收；完整已验恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-streamSimple-accepted-20261015/manifest.json`。原complete基线和旧失败继续保留，见[流式模型记录](doc/验证记录/扩展流式模型-2026-10-15/README.md)。完整SDK父目标未完成，provider／virtual／typed等仍在原范围。
+
+扩展内单次主动complete片已独立接收：最终176/0d6f完整八门全部真实exit0（runtime365、contracts13、隐藏E2E108，前后同源），Standards／Spec／CodeQuality三项PASS。普通工具、未await、嵌套、已确认响应后错误/暂停/关闭、纯只读重开及明确继续不重发和费用恰一次已验证；原失败/工装清理及只读关闭/维护重试红绿全部保留，见[主动模型记录](doc/验证记录/扩展主动模型-2026-10-15/README.md)。新完整已验恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-active-complete-accepted-20261015/manifest.json`。该片仅complete；其后streamSimple与原owner生命周期已按上方独立接收，完整SDK父目标仍未完成，provider/virtual/typed等保持后续原范围。
 
 扩展同步 chat 模型目录片已独立收口：原Runtime完整chat目录与认证可用性快照分别投影，getAll/getAvailable/find保持同步，未选来源刷新、改选后真实HTTP及认证不可用对照通过。最终175/ad50ff7585c9af351f36c85e013774383163e4db7f91476c334efd9d17eb12d8八门本轮全新真0、runtime349/349、contracts13/13、完整隐藏E2E107/107，逐门与总前后同源；固定460项目／140证据全hash独立一致，Standards／Spec／CodeQuality三项PASS，无本片必要剩余。新完整恢复点为`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-model-catalog-accepted-20261015/manifest.json`，见[扩展模型目录记录](doc/验证记录/扩展模型目录-2026-10-15/README.md)。继续原父目标下一最小片：扩展工具任务内的主动模型单次请求与原owner暂停／关闭／恢复；主动provider/virtual、typed、消息输入组合、事件压缩控制、命令、exec及vision等仍未完成。本片不等于完整SDK或整产品完成。
 
@@ -67,7 +69,7 @@ Root 已补齐同一 SDK 的 grep／find／ls 公共文件工具候选：真实�
 
 ## 协作状态
 
-2026-10-15最新角色调整：507明确让Root接手实际实现与修复，ZCode／MiniMax转为可选独立检测和对抗审查，不再承担关键编码修复，也不作为实施必经依赖。已通知两方停止新编码派发，桥已核原native调用全部正常收尾、原PID均不存在，无在途工具；没有盲发停止信号。固定候选、原调用和真实出口保留；不删除或重置两独立树。Root核对后选择吸收有效增量，保原coding-agent＋Durable方案、既有修复与完整验证要求。检测者只读固定候选；必要反例脚本只写自有审查副本，不改main产品／规格／已有断言。作者自检不冒充独立验收；任一家额度不足、失败或无新证据时记录事实，由可用独立审查者接续，不等两家齐备。当前streamSimple未组合通过，不作已验提交。
+2026-10-15最新角色调整：507明确让Root接手实际实现与修复，ZCode／MiniMax转为可选独立检测和对抗审查，不再承担关键编码修复，也不作为实施必经依赖。已通知两方停止新编码派发，桥已核原native调用全部正常收尾、原PID均不存在，无在途工具；没有盲发停止信号。固定候选、原调用和真实出口保留；不删除或重置两独立树。Root核对后选择吸收有效增量，保原coding-agent＋Durable方案、既有修复与完整验证要求。检测者只读固定候选；必要反例脚本只写自有审查副本，不改main产品／规格／已有断言。作者自检不冒充独立验收；任一家额度不足、失败或无新证据时记录事实，由可用独立审查者接续，不等两家齐备。当前streamSimple已完成完整八门和限定独立三项，按既有授权办理本片本地提交；不将其扩大为整个SDK或产品通过。
 
 2026-10-15角色调整前的实际编码尝试（历史）：两树从固定462／176-0d6f全hash播种，ZCode曾在`/Users/diwu/.codex/worktrees/dcode-stream-worker-zcode/dcode`实际Edit Worker并取得语法/类型0；MiniMax曾经机械桥在`/Users/diwu/.codex/worktrees/dcode-stream-lease-minimax/dcode`实际产码落树，首新作用域5/6、typecheck2、原routing14/14真0，Root另发现身份校验未落实等必要问题。先前上下文未匹配及token截断均未应用，不把native退出0算产品正确；这些候选与失败继续保留，由Root接手。两方不写main、不自行commit、不改账户／模型配置，旧原会话额度和早期只读辅助均仅历史。
 

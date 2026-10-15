@@ -122,8 +122,10 @@ export class DCodeApplication {
   // 首发在途关联不在此列——它必须随 state 持久化，重开后才能复用同一对象与操作身份。
   private readonly ports = new Map<string, Promise<ExecutionPort>>();
   private readonly controls = new Map<string, ControlToken>();
-  private readonly views = new Map<string, { instanceId: string; observation: number }>();
+  private readonly views = new Map<string, { instanceId: string; observation: number; revision: number; retired: Set<string> }>();
   private readonly projectedThrough = new Map<string, number>();
+  /** 原执行端活工具的临时展示；不写PersistedState，不成为历史或控制状态。 */
+  private readonly toolProgress = new Map<string, TimelineBlock[]>();
   private readonly syncing = new Set<string>();
   private readonly runtimeCreationSaves = new Map<string, Promise<boolean>>();
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -243,6 +245,9 @@ export class DCodeApplication {
 
   private snapshot(): AppSnapshot {
     const base = JSON.parse(JSON.stringify(this.persistedState())) as AppSnapshot & Partial<Omit<PersistedState, "model" | "modelSetup">>;
+    for (const [sessionId, blocks] of this.toolProgress) {
+      base.timelines[sessionId] = [...(base.timelines[sessionId] ?? []), ...structuredClone(blocks)];
+    }
     // 首发在途关联是应用层内部协调状态，不通过桥暴露给界面
     delete base.pendingFirstSends;
     delete base.workspaceBindingReceipts;
@@ -762,7 +767,8 @@ export class DCodeApplication {
         // 新 port 是同会话 continuation，已投影过的 entry id 不重放为新事实。
         this.ports.delete(sessionId);
         this.controls.delete(sessionId);
-        this.views.delete(sessionId);
+        // 新端口首个新instance会重置观测基准；保旧身份供迟到视图拒绝，不允许旧实例再次成为当前。
+        this.toolProgress.delete(sessionId);
       } catch (err) {
         failures.push(sessionId);
         this.diagnose("model-setup-port-close-failed", err);
@@ -2252,6 +2258,7 @@ export class DCodeApplication {
       if (!pending) return;
       const port = await pending;
       const view = await port.read();
+      if (this.ports.get(sessionId) !== pending) return; // read在途换端口：结果仍属旧认领。
       this.applyView(sessionId, view);
       await this.refreshReceipts(sessionId, port);
       this.commitIfDirty();
@@ -2357,10 +2364,15 @@ export class DCodeApplication {
    */
   private applyView(sessionId: string, view: ExecutionView): void {
     const seen = this.views.get(sessionId);
-    if (seen && seen.instanceId === view.control.instanceId && view.observation <= seen.observation) {
+    const sameInstance = seen?.instanceId === view.control.instanceId;
+    if (seen && (seen.retired.has(view.control.instanceId) || (sameInstance
+      && (view.observation <= seen.observation || view.control.revision < seen.revision)))) {
       return; // 旧视图：不覆盖更新鲜的已确认状态
     }
-    this.views.set(sessionId, { instanceId: view.control.instanceId, observation: view.observation });
+    // 首次见到新实例可换基准，但已被取代的实例永不复活；同实例较高观测号也不能倒退控制版本。
+    const retired = seen?.retired ?? new Set<string>();
+    if (seen && !sameInstance) retired.add(seen.instanceId);
+    this.views.set(sessionId, { instanceId: view.control.instanceId, observation: view.observation, revision: view.control.revision, retired });
     this.controls.set(sessionId, view.control);
     // 顺序关键（2026-10-09 401 修复）：
     // applyRunState 处理相位与「老 errorNote vs 新相位」的清理规则（resume-* 按相位清；
@@ -2369,6 +2381,24 @@ export class DCodeApplication {
     // 会把刚由本次新增条目录入的 auth-failed 又覆盖回 null，UI 永远看不到错误。
     this.applyRunState(sessionId, view);
     this.projectEntries(sessionId, view);
+    // 只接受当前新鲜视图；旧实例/旧观测不能恢复已结束的运行工具块。
+    const previous = this.toolProgress.get(sessionId) ?? [];
+    const progress: TimelineBlock[] = view.phase === 'running' && Array.isArray(view.toolProgress) ? view.toolProgress.filter(item =>
+      item !== null && typeof item === 'object' && !Array.isArray(item)
+      && Number.isSafeInteger(item.taskId) && item.taskId > 0 && typeof item.callId === 'string' && item.callId.trim().length > 0
+      && typeof item.name === 'string' && /^[\w.-]{1,128}$/.test(item.name)
+      && typeof item.text === 'string' && item.text.length > 0 && Number.isSafeInteger(item.droppedBytes) && item.droppedBytes >= 0
+      && Number.isSafeInteger(item.droppedLines) && item.droppedLines >= 0
+      && !view.entries.some(entry => entry.toolResult?.callId === item.callId)).map(item => {
+      const id = `pi-progress-${item.taskId}`;
+      const at = previous.find(block => block.id === id)?.at ?? Date.now();
+      return { kind: 'tool', id, at, tool: { name: item.name, primaryText: item.text.split('\n')[0]?.slice(0, 160) || item.name,
+        output: item.text, status: 'running', changedFiles: [],
+        ...(item.droppedBytes || item.droppedLines ? { outputTruncation: { droppedBytes: item.droppedBytes, droppedLines: item.droppedLines } } : {}) } };
+    }) : [];
+    if (JSON.stringify(previous) !== JSON.stringify(progress)) {
+      this.toolProgress.set(sessionId, progress); this.markDirty();
+    }
     // 真实请求事实（实际归属、响应标识、结果、用量）在**观测投影口**发布：
     // 发送前的那次读只能证明提交用了什么计划，发不出真实请求发生过的事实。
     // 漏在这里的表现是运行结束后 actual 永远为空（曾见：只在 latestControl 发布）。

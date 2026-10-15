@@ -184,7 +184,7 @@ async function reopenReadonly(f, sessionId, requestCount) {
   assert.equal((await events(f.project)).filter(item => item.type === 'start').length, started);
   return snapshot;
 }
-async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false }, action) {
+async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false }, action) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-desktop-extension-mcp-'));
   const f = { root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
   let primary; const secondary = [];
@@ -197,12 +197,14 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
     await mkdir(join(f.project, '.pi/extensions'), { recursive: true });
     await writeFile(join(f.project, '.pi/extensions/desktop.ts'), `import { Type } from 'typebox';\nimport { appendFile } from 'node:fs/promises';\nimport { join } from 'node:path';\nexport default function(pi) { pi.on('before_agent_start',()=>({message:{customType:'fixture-start',content:${JSON.stringify('startup visible '+f.nonce)},display:true}})); pi.on('before_agent_start',()=>({message:{customType:'fixture-hidden',content:${JSON.stringify('startup context only '+f.nonce)},display:false}})); pi.registerTool({name:'extension_nonce',label:'nonce',description:'Actual project extension',parameters:Type.Object({}),async execute(id,args,signal,update,ctx){pi.sendMessage({customType:'fixture-extension',content:${JSON.stringify(extensionVisibleText(f.nonce))},display:true});const read=await ctx.executeTool('read',{path:${JSON.stringify(desktopSkillPath)}});if(read.isError)throw new Error('Actual skill read failed');await appendFile(join(ctx.cwd,'desktop-skill-read-completions.jsonl'),JSON.stringify({nonce:${JSON.stringify(f.nonce)},callId:read.toolCall.id})+'\\n');return {content:[{type:'text',text:${JSON.stringify('extension actual ' + f.nonce)}},...read.result.content],details:{}};}}); }\n`);
     if(ownedComplete) await writeFile(join(f.project,'.pi/extensions/active-complete.ts'),desktopActiveExtensionSource(f.nonce));
+    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),desktopStreamExtensionSource(f.nonce));
     await writeFile(join(f.project, '.pi/mcp.json'), JSON.stringify({ mcpServers: { fixture: {
       command: process.execPath, args: [resolve(import.meta.dirname, 'ordinary-mcp-fixture.mjs'), f.project, f.nonce], exposure: 'direct', enabled: true,
     } } }));
     f.server = await startCodingLoopback({ prefixCalls: calls(f.nonce), holdFinal, callsOverride,
-      ...(ownedComplete ? {ownedComplete:{marker:'DESKTOP_ACTIVE_INPUT_'+f.nonce,text:'DESKTOP_ACTIVE_RESULT_'+f.nonce,responseId:'desktop-active-'+f.nonce}} : {}) });
-    f.env = { DCODE_VALIDATION_ASSEMBLY: '', DCODE_VALIDATION_SAMPLE: '0', DCODE_CATALOG_BASE_URL: `${f.server.origin}/catalog`, ...(ownedComplete ? {DCODE_E2E_VISIBLE:'0'} : {}) };
+      ...(ownedStream ? {ownedComplete:{marker:desktopStreamInput(f.nonce),text:desktopStreamText(f.nonce),responseId:'desktop-stream-'+f.nonce,stream:{prefix:desktopStreamPrefix(f.nonce)}}}
+        : ownedComplete ? {ownedComplete:{marker:'DESKTOP_ACTIVE_INPUT_'+f.nonce,text:'DESKTOP_ACTIVE_RESULT_'+f.nonce,responseId:'desktop-active-'+f.nonce}} : {}) });
+    f.env = { DCODE_VALIDATION_ASSEMBLY: '', DCODE_VALIDATION_SAMPLE: '0', DCODE_CATALOG_BASE_URL: `${f.server.origin}/catalog`, ...((ownedComplete || ownedStream) ? {DCODE_E2E_VISIBLE:'0'} : {}) };
     f.handle = await launchApp(f.stateDir, f.env, '.', { prebindProject: false }); f.proc = f.handle.app.process(); await ready(f.handle.page);
     await configureModel(f.handle.page, f.server); f.workspace = await bindProject(f.handle, f.project, '真实扩展 MCP 空间');
     assert.deepEqual(await events(f.project), []); assert.equal(f.server.requests.length, 0);
@@ -394,4 +396,170 @@ test('普通桌面active complete：开启意图不执行，真实内层HTTP与�
   assert.equal(f.server.requests.length,2);assert.equal(f.server.completeRequests.length,1);assert.equal(f.server.completeRequests[0],direct);assert.deepEqual(f.server.errors,[]);
   assert.equal((await events(f.project)).filter(item=>item.type==='start').length,starts.length,'只读用量/历史/回执不重连资源');
   await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-active-complete-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,sessionId,taskId:before.taskId,userBlockId:user.id,operationId:user.operationId,toolBlockId:block.id,directResponseId:direct.responseId,outerResponseIds:['actual-response-1','actual-response-2'],httpCounts:{outer:2,inner:1},before,after:desktopActiveUsageFacts(last,sessionId,f),normalClose:{exitCode:0,signalCode:null},readonlyReopen:true,reopenPhase:last.runs[sessionId].status},null,2));
+}));
+
+
+// 下一片真实stream的普通桌面资产：原四条场景原样保留，不用done正文倒推partial可见。
+const desktopStreamToolName='desktop_active_stream';
+const desktopStreamInput=nonce=>'DESKTOP_STREAM_INPUT_'+nonce;
+const desktopStreamPrefix=nonce=>'DESKTOP_STREAM_PARTIAL_'+nonce;
+const desktopStreamText=nonce=>desktopStreamPrefix(nonce)+'\nDESKTOP_STREAM_FINAL_'+nonce;
+const desktopStreamTraceFile='desktop-owned-stream-trace.json';
+function desktopStreamExtensionSource(nonce) {return `import {Type} from 'typebox';import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';
+export default function(pi){pi.registerTool({name:${JSON.stringify(desktopStreamToolName)},label:'desktop owned stream',description:'One actual owned SDK stream with a live desktop tool update',parameters:Type.Object({}),
+async execute(id,args,signal,onUpdate,ctx){
+  if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
+  const trace={nonce:${JSON.stringify(nonce)},callId:id,steps:[]},file=join(ctx.cwd,${JSON.stringify(desktopStreamTraceFile)});let writes=Promise.resolve();
+  const note=(phase,data={})=>{trace.steps.push({seq:trace.steps.length+1,phase,...data});const bytes=JSON.stringify(trace);writes=writes.then(async()=>{await writeFile(file+'.tmp',bytes);await rename(file+'.tmp',file);});return writes;};
+  await note('execute-start');
+  const model=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!model)throw new Error('Configured chat model missing');
+  const stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(desktopStreamInput(nonce))},timestamp:Date.now()}]},
+    {signal,maxRetries:0,maxTokens:32,temperature:0});
+  const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
+  await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
+  const eventTypes=[];let deltas='';
+  try{
+    for await(const event of stream){
+      eventTypes.push(event.type);
+      if(event.type==='text_delta'){
+        deltas+=event.delta;onUpdate?.({content:[{type:'text',text:deltas}]});
+        await note('text-delta',{delta:event.delta,output:deltas,contentIndex:event.contentIndex,signalAborted:signal.aborted});
+      }else if(event.type==='done'||event.type==='error')await note('terminal-event',{type:event.type,reason:event.reason,signalAborted:signal.aborted});
+    }
+    const result=await stream.result();
+    await note('result-settled',{stopReason:result.stopReason,signalAborted:signal.aborted});
+    if(signal.aborted||result.stopReason!=='stop')throw new Error('Interrupted stream cannot publish completed tool success');
+    const observed={nonce:${JSON.stringify(nonce)},originalToolCallId:id,method:'streamSimple',synchronousStream,eventTypes,deltas,
+      message:{role:result.role,provider:result.provider,model:result.model,responseId:result.responseId,stopReason:result.stopReason,
+        text:result.content.filter(part=>part.type==='text').map(part=>part.text).join(''),usage:result.usage}};
+    await note('handler-returning');return {content:[{type:'text',text:JSON.stringify(observed)}],details:{ownedModelObservation:observed}};
+  }catch(error){await note('handler-error',{signalAborted:signal.aborted});throw error;}
+}});}`;}
+async function desktopStreamTrace(f) {
+  try{return JSON.parse(await readFile(join(f.project,desktopStreamTraceFile),'utf8'));}
+  catch(error){if(error.code==='ENOENT')return undefined;throw error;}
+}
+async function desktopStreamWindows(f) {
+  const windows=await f.handle.app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().map(window=>({visible:window.isVisible(),focused:window.isFocused(),focusable:window.isFocusable()})));
+  assert.ok(windows.length>0);assert.ok(windows.every(window=>!window.visible&&!window.focused&&!window.focusable));return windows;
+}
+async function desktopStreamPartial(f,input,phase) {
+  const page=f.handle.page;let trace;
+  const running=await waitForSnapshot(page,async snapshot=>{
+    trace=await desktopStreamTrace(f);
+    const session=snapshot.sessions.find(item=>snapshot.timelines[item.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    if(!session)return false;const tools=snapshot.timelines[session.id].filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);
+    return tools.some(block=>['done','failed'].includes(block.tool.status)) || (f.server.completeRequests.length===1
+      &&trace?.steps.some(step=>step.phase==='text-delta')&&tools.some(block=>block.tool.status==='running'&&block.tool.output===desktopStreamPrefix(f.nonce)));
+  },undefined,'真实stream必须在服务端扣住final时把partial交到运行工具块；准备/工具错误不替代');
+  const session=running.sessions.find(item=>running.timelines[item.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));assert.ok(session);
+  const sessionId=session.id,blocks=running.timelines[sessionId],tools=blocks.filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);
+  assert.equal(tools.length,1);const block=tools[0];assert.equal(block.tool.status,'running');assert.equal(block.tool.output,desktopStreamPrefix(f.nonce));
+  assert.equal(running.runs[sessionId].status,'running');assert.ok(running.runs[sessionId].pendingInputs>0,'原输入确实仍在途，不用ready作为已接收捷径');
+  const users=blocks.filter(item=>item.kind==='message'&&item.role==='user'&&item.text===input);assert.equal(users.length,1);assert.ok(users[0].operationId);
+  assert.equal(f.server.requests.length,1,'partial在途不能漏出外层续请求');assert.equal(f.server.completeRequests.length,1);const direct=f.server.completeRequests[0];
+  assert.equal(direct.accepted,true);assert.equal(direct.partialSent,true);assert.equal(direct.finished,false);assert.equal(direct.closedBeforeFinal,false);assert.equal(direct.authOk,true);assert.equal(direct.model,codingModel);assert.deepEqual(f.server.errors,[]);
+  assert.equal(trace.nonce,f.nonce);assert.equal(trace.callId,'actual-tool-1');assert.equal(trace.steps.filter(step=>step.phase==='execute-start').length,1);
+  assert.equal(trace.steps.find(step=>step.phase==='factory-returned').synchronousStream,true);
+  const deltas=trace.steps.filter(step=>step.phase==='text-delta');assert.equal(deltas.map(step=>step.delta).join(''),desktopStreamPrefix(f.nonce));
+  assert.ok(deltas.every(step=>Number.isInteger(step.contentIndex)&&step.contentIndex>=0&&!step.signalAborted));
+  assert.ok(!trace.steps.some(step=>['terminal-event','result-settled','handler-returning','handler-error'].includes(step.phase)), '真实final还扣住时不能用终态结果生成假partial');
+  assert.equal(blocks.filter(item=>item.kind==='message'&&item.role==='assistant'&&item.text.includes(desktopStreamText(f.nonce))).length,0);
+  const pre=await visibleTool(page,block);assert.equal(await pre.innerText(),desktopStreamPrefix(f.nonce));assert.ok((await pre.innerText()).includes(f.nonce));
+  const trigger=page.getByRole('button',{name:new RegExp(`^(工具结果|Tool result) ${escapeRegex(block.tool.name)} ${escapeRegex(block.tool.primaryText)} `,'i')});
+  const row=page.locator('[data-slot="tool"]').filter({has:trigger});assert.equal(await row.count(),1);
+  assert.match(await trigger.getAttribute('aria-label'),/执行中|Running/);
+  const png=join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-stream-${phase}-partial-running-${f.nonce}.png`);await row.screenshot({path:png});
+  // 截图结束才允许释放final；截图只能在未来真实运行后证明实际像素，本草稿不自称已有图。
+  assert.equal(direct.finished,false);assert.equal(direct.closedBeforeFinal,false);assert.equal(f.server.requests.length,1);
+  return {sessionId,user:users[0],partialBlockId:block.id,direct,partialTrace:trace,png,windows:await desktopStreamWindows(f)};
+}
+async function desktopStreamDrained(f) {
+  const records=await events(f.project),starts=records.filter(item=>item.type==='start');assert.ok(starts.length>0);
+  assert.ok(starts.every(start=>records.some(item=>item.pid===start.pid&&item.type==='close.drained'&&item.pending===0)
+    &&records.some(item=>item.pid===start.pid&&item.type==='exit'&&item.code===0)));
+  return {starts:starts.length,events:records.filter(item=>['start','close.drained','exit'].includes(item.type))};
+}
+function desktopStreamSameOriginal(snapshot,sessionId,user,input) {
+  const users=snapshot.timelines[sessionId].filter(block=>block.kind==='message'&&block.role==='user');assert.equal(users.length,1);
+  assert.equal(users[0].id,user.id);assert.equal(users[0].operationId,user.operationId);assert.equal(users[0].text,input);
+}
+async function desktopStreamNoReexecute(f) {
+  const trace=await desktopStreamTrace(f);assert.equal(trace.nonce,f.nonce);assert.equal(trace.callId,'actual-tool-1');
+  assert.equal(trace.steps.filter(step=>step.phase==='execute-start').length,1,'重开/继续不能再次执行原stream处理器');
+  assert.equal(trace.steps.filter(step=>step.phase==='factory-returned').length,1);return trace;
+}
+
+test('普通桌面streamSimple：设置绑定启用零执行，final前真实partial可见，结果与任务用量正常关闭只读重开',async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
+},async f=>{
+  assert.equal(f.server.requests.length,0);assert.deepEqual(f.server.completeRequests,[]);await desktopStreamWindows(f);
+  const input='普通桌面真实流 '+f.nonce,page=f.handle.page,composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
+  await composer.fill(input);await composer.press('Enter');const held=await desktopStreamPartial(f,input,'success');
+  f.server.releaseOwnedStream();
+  const completed=await waitForSnapshot(page,snapshot=>snapshot.timelines[held.sessionId]?.some(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName&&block.tool.status==='done')
+    &&snapshot.runs[held.sessionId]?.status==='ready'&&snapshot.runs[held.sessionId]?.pendingInputs===0);
+  await page.getByText(f.server.nonce,{exact:true}).waitFor({state:'visible'});
+  assert.equal(f.server.requests.length,2);assert.equal(f.server.completeRequests.length,1);assert.equal(f.server.completeRequests[0],held.direct);assert.equal(held.direct.finished,true);assert.equal(held.direct.closedBeforeFinal,false);
+  assert.ok(f.server.requests.every(request=>request.authOk&&request.body.model===codingModel));assert.deepEqual(f.server.errors,[]);
+  const tools=completed.timelines[held.sessionId].filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);assert.equal(tools.length,1);const block=tools[0];
+  const observed=JSON.parse(block.tool.output);assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,'actual-tool-1');assert.equal(observed.method,'streamSimple');assert.equal(observed.synchronousStream,true);
+  assert.equal(observed.message.role,'assistant');assert.equal(observed.message.provider,'user-defined');assert.equal(observed.message.model,codingModel);assert.equal(observed.message.responseId,held.direct.responseId);
+  assert.equal(observed.message.stopReason,'stop');assert.equal(observed.message.text,desktopStreamText(f.nonce));assert.equal(observed.deltas,desktopStreamText(f.nonce));
+  assert.ok(observed.eventTypes.includes('start'));assert.ok(observed.eventTypes.includes('text_delta'));assert.equal(observed.eventTypes.filter(type=>type==='done').length,1);assert.ok(!observed.eventTypes.includes('error'));
+  assert.equal(observed.message.usage.input,117);assert.equal(observed.message.usage.output,13);assert.equal(observed.message.usage.cacheRead,0);assert.equal(observed.message.usage.cacheWrite,0);assert.equal(observed.message.usage.totalTokens,130);
+  const forwarded=f.server.requests[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id==='actual-tool-1');assert.equal(forwarded.length,1);assert.equal(httpMessageText(forwarded[0]),block.tool.output);
+  assert.ok(!completed.timelines[held.sessionId].some(item=>item.kind==='message'&&item.role==='assistant'&&item.text.includes(desktopStreamText(f.nonce))),'inner流是工具正文，不伪造对话助手');
+  const finalPre=await visibleTool(page,block);assert.ok((await finalPre.innerText()).includes(desktopStreamText(f.nonce).replace('\n','\\n')),'JSON正式结果必须保完整本次流文本');
+  const finalPng=join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-final-tool-${f.nonce}.png`);await finalPre.screenshot({path:finalPng});
+  const usageReady=await waitForSnapshot(page,snapshot=>snapshot.sessionModels[held.sessionId]?.actualResponseId==='actual-response-2'&&snapshot.sessionModels[held.sessionId]?.lastResult==='succeeded'
+    &&snapshot.taskUsage[snapshot.sessions.find(session=>session.id===held.sessionId)?.taskId]?.totals!=null,undefined,'真实流终态与任务汇总发布后才能核120/15/3');
+  const before=desktopActiveUsageFacts(usageReady,held.sessionId,f);await visibleDesktopActiveUsage(page,held.sessionId,'stream-before-close',f);
+  desktopStreamSameOriginal(usageReady,held.sessionId,held.user,input);const traceBefore=await desktopStreamNoReexecute(f);assert.equal(traceBefore.steps.filter(step=>step.phase==='handler-returning').length,1);
+  await f.handle.close();assert.equal(f.proc.exitCode,0);assert.equal(f.proc.signalCode,null);const drained=await desktopStreamDrained(f);
+  const reopened=await reopenReadonly(f,held.sessionId,2);await desktopStreamWindows(f);desktopStreamSameOriginal(reopened,held.sessionId,held.user,input);
+  assert.equal(reopened.settings.projectExtensionsEnabled,true);assert.ok(['ready','paused'].includes(reopened.runs[held.sessionId].status));assert.equal(reopened.runs[held.sessionId].pendingInputs,0);
+  const restored=reopened.timelines[held.sessionId].filter(item=>item.kind==='tool'&&item.tool.name===desktopStreamToolName);assert.equal(restored.length,1);assert.equal(restored[0].id,block.id);assert.equal(restored[0].tool.status,'done');assert.equal(restored[0].tool.output,block.tool.output);
+  assert.deepEqual(desktopActiveUsageFacts(reopened,held.sessionId,f),before);await visibleDesktopActiveUsage(f.handle.page,held.sessionId,'stream-readonly-reopen',f);
+  const restoredPre=await visibleTool(f.handle.page,restored[0]);const restoredPng=join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-final-readonly-${f.nonce}.png`);await restoredPre.screenshot({path:restoredPng});
+  await desktopStreamNoReexecute(f);assert.equal(f.server.requests.length,2);assert.equal(f.server.completeRequests.length,1);assert.equal((await events(f.project)).filter(item=>item.type==='start').length,drained.starts);
+  await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-success-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,sessionId:held.sessionId,operationId:held.user.operationId,userBlockId:held.user.id,
+    partialObservationBlockId:held.partialBlockId,formalToolBlockId:block.id,directResponseId:held.direct.responseId,httpCounts:{outer:2,inner:1},before,after:desktopActiveUsageFacts(reopened,held.sessionId,f),
+    normalClose:{exitCode:0,signalCode:null},readonlyReopen:true,drained,pixels:{partial:held.png,final:finalPng,restored:restoredPng},partialTrace:held.partialTrace,finalTrace:traceBefore},null,2));
+}));
+
+for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后${closing}：同HTTP关闭，只读重开零新增，明确继续原operation不重放`,async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
+},async f=>{
+  assert.equal(f.server.requests.length,0);assert.deepEqual(f.server.completeRequests,[]);await desktopStreamWindows(f);
+  const input='普通桌面中断真实流 '+closing+' '+f.nonce,page=f.handle.page,composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
+  await composer.fill(input);await composer.press('Enter');const held=await desktopStreamPartial(f,input,closing);
+  if(closing==='pause'){
+    await pauseAndDrain(f,held.sessionId);
+    await waitForSnapshot(page,()=>held.direct.closedBeforeFinal===true,undefined,'用户暂停必须实际关闭同一未final的HTTP');
+    assert.equal(held.direct.finished,false);
+  }else{
+    await f.handle.close();assert.equal(f.proc.exitCode,0);assert.equal(f.proc.signalCode,null);
+  }
+  const drained=await desktopStreamDrained(f);assert.equal(f.server.requests.length,1);assert.equal(f.server.completeRequests.length,1);assert.equal(held.direct.finished,false);assert.deepEqual(f.server.errors,[]);
+  // direct close先以真实process exit收束，再在只读窗口用既有有界观察等待对端close事件；不新增sleep/timeout。
+  const reopened=await reopenReadonly(f,held.sessionId,1);await desktopStreamWindows(f);
+  await waitForSnapshot(f.handle.page,()=>held.direct.closedBeforeFinal===true,undefined,'旧进程退出后对端必须实际看到原HTTP关闭');
+  assert.equal(reopened.runs[held.sessionId].status,'paused');desktopStreamSameOriginal(reopened,held.sessionId,held.user,input);await desktopStreamNoReexecute(f);
+  assert.equal(f.server.requests.length,1);assert.equal(f.server.completeRequests.length,1);assert.equal((await events(f.project)).filter(item=>item.type==='start').length,drained.starts);
+  const beforeResumePng=join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-${closing}-readonly-${f.nonce}.png`);await f.handle.page.locator('main').screenshot({path:beforeResumePng});
+  const primary=f.handle.page.locator('button[data-slot="composer-primary"]');assert.match(await primary.getAttribute('aria-label'),/^继续执行$|^Resume$/);await primary.click();
+  await f.handle.page.getByText(f.server.nonce,{exact:true}).waitFor({state:'visible'});
+  const final=await waitForSnapshot(f.handle.page,snapshot=>snapshot.runs[held.sessionId]?.status==='ready'&&snapshot.runs[held.sessionId]?.pendingInputs===0
+    &&snapshot.timelines[held.sessionId]?.some(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName&&block.tool.status==='failed'));
+  desktopStreamSameOriginal(final,held.sessionId,held.user,input);const trace=await desktopStreamNoReexecute(f);
+  assert.equal(f.server.completeRequests.length,1,'明确继续不能重发已被对端接收但没有final的inner流');assert.equal(f.server.completeRequests[0],held.direct);assert.equal(held.direct.finished,false);assert.equal(held.direct.closedBeforeFinal,true);
+  assert.equal(f.server.requests.length,2);assert.ok(f.server.requests.every(request=>request.authOk&&request.body.model===codingModel));assert.deepEqual(f.server.errors,[]);
+  const tools=final.timelines[held.sessionId].filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);assert.equal(tools.length,1);const failed=tools[0];assert.equal(failed.tool.status,'failed');assert.ok(failed.tool.output.length>0);assert.ok(!failed.tool.output.includes(desktopStreamText(f.nonce)),'未知结果不得变成已确认完整成功正文');
+  const forwarded=f.server.requests[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id==='actual-tool-1');assert.equal(forwarded.length,1);assert.ok(httpMessageText(forwarded[0]).length>0);assert.ok(!httpMessageText(forwarded[0]).includes(desktopStreamText(f.nonce)));
+  const used=final.sessionModels[held.sessionId];assert.ok(used);assert.ok(used.requests.filter(request=>request.responseId===held.direct.responseId).every(request=>request.usage.input===0&&request.usage.output===0&&request.usage.cacheRead===0&&request.usage.cacheWrite===0),'未收到117/13终态usage，不能编造inner已确认费用');
+  const failedPre=await visibleTool(f.handle.page,failed);const finalPng=join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-${closing}-continued-error-${f.nonce}.png`);await failedPre.screenshot({path:finalPng});
+  await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-${closing}-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,closing,sessionId:held.sessionId,operationId:held.user.operationId,userBlockId:held.user.id,
+    partialObservationBlockId:held.partialBlockId,formalToolBlockId:failed.id,directResponseId:held.direct.responseId,originalToolCallId:'actual-tool-1',httpCounts:{beforeReadonly:{outer:1,inner:1},afterExplicitResume:{outer:2,inner:1}},
+    sameRemoteClosedBeforeFinal:held.direct.closedBeforeFinal,remoteFinished:held.direct.finished,drained,actualUsage:used.usage,pixels:{partial:held.png,readonly:beforeResumePng,error:finalPng},partialTrace:held.partialTrace,afterResumeTrace:trace},null,2));
 }));

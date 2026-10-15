@@ -25,6 +25,7 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
   const requests = [];
   const errors = [];
   const completeRequests = [];
+  const ownedStreamHeld = new Set();
   const nonce = `coding-result-${randomUUID()}`;
   const held = new Set();
   let finalReleased = !holdFinal;
@@ -68,6 +69,21 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
         if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || record.ordinal !== 1) {
           errors.push('owned complete identity or duplicate invalid'); res.writeHead(400); res.end(); return;
         }
+        // 仅新增stream夹具使用此分段门；原complete默认响应字节保持原样。
+        if (ownedComplete.stream) {
+          const prefix = ownedComplete.stream.prefix;
+          if (typeof prefix !== 'string' || !prefix || !ownedComplete.text.startsWith(prefix) || prefix === ownedComplete.text) {
+            errors.push('owned stream fixture prefix invalid'); res.writeHead(400); res.end(); return;
+          }
+          record.closedBeforeFinal = false;
+          const pending = { res, record, remaining: ownedComplete.text.slice(prefix.length), model: body.model };
+          ownedStreamHeld.add(pending);
+          res.once('close', () => { record.closedBeforeFinal = !record.finished; ownedStreamHeld.delete(pending); });
+          res.writeHead(200, { 'content-type':'text/event-stream' });
+          res.write('data: '+JSON.stringify({id:record.responseId,model:body.model,choices:[{index:0,delta:{role:'assistant',content:prefix},finish_reason:null}]})+'\n\n');
+          record.partialSent = true;
+          return;
+        }
         res.writeHead(200, { 'content-type':'text/event-stream' });
         const chunks = [
           {id:record.responseId,model:body.model,choices:[{index:0,delta:{role:'assistant',content:ownedComplete.text},finish_reason:null}]},
@@ -76,6 +92,8 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
         record.finished=true;res.end(chunks.map(chunk=>'data: '+JSON.stringify(chunk)+'\n\n').join('')+'data: [DONE]\n\n');return;
       }
       const ordinal = requests.length + 1;
+      if (ownedComplete?.stream && ordinal > 1 && !completeRequests[0]?.finished && !completeRequests[0]?.closedBeforeFinal)
+        errors.push('Outer continuation escaped before the held owned stream finished or actually closed');
       requests.push({ ordinal, body, authOk, receivedAt:Date.now(), extensionHeader:req.headers['x-dcode-extension-fixture']??null,
         ...(expectedCatalogHeader === undefined ? {} : { catalogHeaderOk }) });
       if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || ordinal > calls.length + subsequentCalls.length + 3) {
@@ -90,6 +108,20 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
   const address = server.address();
   return { origin: `http://127.0.0.1:${address.port}`, requests, completeRequests, errors, nonce,
     releaseFinal() { finalReleased = true; for (const pending of held) reply(pending.res, pending.body, pending.ordinal); held.clear(); },
+    releaseOwnedStream() {
+      if (!ownedComplete?.stream || ownedStreamHeld.size !== 1) throw new Error('Exactly one actual stream response must be held');
+      for (const pending of ownedStreamHeld) {
+        const {res,record,remaining,model} = pending;
+        if (record.finished || record.closedBeforeFinal || res.destroyed) throw new Error('Cannot release a finished or closed stream');
+        const chunks = [
+          {id:record.responseId,model,choices:[{index:0,delta:{content:remaining},finish_reason:null}]},
+          {id:record.responseId,model,choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:117,completion_tokens:13,total_tokens:130}},
+        ];
+        record.finished = true;
+        res.end(chunks.map(chunk=>'data: '+JSON.stringify(chunk)+'\n\n').join('')+'data: [DONE]\n\n');
+      }
+      ownedStreamHeld.clear();
+    },
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }),
   };
 }

@@ -11,6 +11,7 @@ import type { ModelRuntime, BeforeAgentStartEventResult } from '@earendil-works/
 import { CodingResourcesUnavailable } from './coding-resources';
 import { extensionWorkerSource } from './extension-worker';
 import { taskToolApi } from './task-tool-api';
+import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
 import type { InputPreparation, PreparedInput } from './input-preparation';
 import type { HookApi, EntryRecord, Cursor, TaskRecord, EntryId, Tx, ConversationId } from '@earendil-works/pi-durable';
@@ -36,8 +37,9 @@ const Turn = defineDocFamily<{ started: boolean; finished: boolean; messages: Js
 const RequestRound=defineDoc<{assistant:number}>({kind:'dcode.extension-request-round',version:1,scope:'task',initial:()=>({assistant:0})});
 type Descriptor = { name: string; description: string; parameters: TSchema; exposure: string; defaultActive?: boolean; constrainedSampling?: import('@earendil-works/pi-ai').ConstrainedSamplingConfig | false; hasPrepareArguments?: boolean };
 type NestedInput = { caller: string; call: ToolCall };
-type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject };
-type RuntimeBinding = { harness: Harness; root: Conversation };
+type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' };
+type RuntimeBinding = { harness: Harness; root: Conversation; ownedModel?: DurableModelRouting['withOwnedModelInvocation'] };
+type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; aborted: boolean; seq: number };
 type ArgumentMemo = {source:string;name:string;inputHash:string;prepared:JsonValue;failed:boolean};
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function sumUsage(reported: readonly Usage[]): Usage | undefined {
@@ -97,7 +99,7 @@ export class CodingExtensions {
   #next = 0;
   #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: AssistantMessage[] }>();
-  #modelCalls = new Map<string, { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; aborted: boolean }>();
+  #modelCalls = new Map<string, ModelCall>();
   #events = new Map<string, { api?: HookApi; context: Context }>();
   #tools: Descriptor[] = [];
   #active: string[] = [];
@@ -197,13 +199,16 @@ export class CodingExtensions {
         call: async (task, runtime, ctx) => {
           const owned = this.#modelCalls.get(task.input.actionId);
           if (!owned || owned.origin !== this.#worker || owned.aborted || this.#closed) throw new CodingResourcesUnavailable();
+          const caller = this.#calls.get(owned.caller);
+          if (!caller || caller.api.taskId !== task.input.ownerTaskId || owned.caller !== task.input.caller || (owned.task !== undefined && owned.task !== runtime.taskId)) throw new CodingResourcesUnavailable();
+          owned.task = runtime.taskId;
           const model = runtime.models.getModel(task.input.provider, task.input.modelId);
           if (!model) throw new CodingResourcesUnavailable();
           // 先保存已进入请求的检查点；中断后不能把结果未知的付费请求再发一次。
           await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'execute' } }), ctx);
           if (owned.aborted || runtime.signal.aborted) throw new CodingResourcesUnavailable();
-          const message = await runtime.models.complete(model, task.input.input as unknown as Parameters<Models['complete']>[1], { ...task.input.options, signal: runtime.signal });
-          const result = bounded({ message }) as JsonObject;
+          const persist = async (message: AssistantMessage, terminal?: { type: 'done' | 'error'; reason: string }) => {
+          const result = bounded({ message, ...(terminal ? { terminal } : {}) }) as JsonObject;
           await runtime.commit(async tx => {
             // 返回值属于原工具；只另存真实请求事实，绝不伪造会话 assistant/model 投影。
             await tx.appendEntry(ExtensionModelResult, runtime.conversationId, { data: result });
@@ -212,6 +217,28 @@ export class CodingExtensions {
             if (message.usage) spend.usages[String(runtime.taskId)] = bounded(message.usage) as JsonValue;
             return { status: 'terminal', outcome: { status: 'completed', result } };
           }, ctx);
+          };
+          if (task.input.mode === 'streamSimple') {
+            if (!this.#binding?.ownedModel) throw new CodingResourcesUnavailable();
+            await this.#binding.ownedModel(runtime, { provider: model.provider, modelId: model.id }, async () => {
+              const stream = runtime.models.streamSimple(model, task.input.input as unknown as Parameters<Models['streamSimple']>[1], { ...task.input.options, signal: runtime.signal });
+              let terminal: { type: 'done' | 'error'; reason: string } | undefined;
+              for await (const event of stream) {
+                if (event.type === 'done' || event.type === 'error') terminal = { type: event.type, reason: event.reason };
+                else {
+                  // partial 只是原请求的事件投影；旧worker/scope失效后不再投递，不能成为正式成功事实。
+                  if (owned.origin !== this.#worker || owned.aborted || this.#closed || caller.context.abortSignal?.aborted || runtime.signal.aborted) throw new CodingResourcesUnavailable();
+                  owned.origin.postMessage(bounded({ type: 'model-event', actionId: task.input.actionId, scope: owned.caller, taskId: runtime.taskId, seq: ++owned.seq, event }));
+                }
+              }
+              const message = await stream.result();
+              if (!terminal) throw new CodingResourcesUnavailable();
+              // 公共流 push(done/error) 会立即 resolve result；终态只在原任务提交成功后由host reply交付。
+              await persist(message, terminal);
+            });
+          } else {
+            await persist(await runtime.models.complete(model, task.input.input as unknown as Parameters<Models['complete']>[1], { ...task.input.options, signal: runtime.signal }));
+          }
         },
         execute: async (_task, runtime, ctx) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'failed', error: { code: 'model-result-unknown', message: '单次模型请求曾进入执行，结果未知，不自动重放' } } }), ctx),
       },
@@ -303,7 +330,7 @@ export class CodingExtensions {
     } });
   }
   get packageResources() { return { instructions: this.#packageInstructions, prompts: this.#packagePrompts }; }
-  attach(harness: Harness, root: Conversation): void { this.#binding = { harness, root }; }
+  attach(harness: Harness, root: Conversation, ownedModel?: DurableModelRouting['withOwnedModelInvocation']): void { this.#binding = { harness, root, ownedModel }; }
   useRegistry(registry: Registry): void { this.#registry = registry; }
   #argumentKey(call:Pick<ToolCall,'name'|'arguments'>):string{return `${call.name}/${createHash('sha256').update(JSON.stringify(call.arguments)).digest('hex')}`;}
   async #prepareArguments(call:ToolCall, api:HookApi, ctx:Context):Promise<void>{
@@ -483,7 +510,7 @@ export class CodingExtensions {
       this.#armed = true; this.#closed = false; this.#closing = undefined; this.#tools = []; this.#active = [];this.#arguments.clear();this.#resourceEpoch=randomUUID();
       const worker = new Worker(extensionWorkerSource, { eval: true, execArgv: [], stdout: true, stderr: true,
         env: { ...process.env, PI_CODING_AGENT_DIR: this.#agentDir, PI_OFFLINE: '1', NODE_TEST_CONTEXT: undefined },
-        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'),
+        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'), streamFactory: import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),
           builtins: this.#builtins.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters, exposure: 'direct' })) } });
       this.#worker = worker; worker.stdout.resume(); worker.stderr.resume();
       worker.on('message', (message: Record<string, unknown>) => this.#message(message,worker));
@@ -565,7 +592,7 @@ export class CodingExtensions {
   async #host(method: string, value: unknown, callId: string, origin: Worker): Promise<unknown> {
     if (this.#closed || origin !== this.#worker || !this.#binding) throw new CodingResourcesUnavailable();
     const payload = bounded(value, 1024 * 1024) as JsonObject;
-    if (method === 'model-complete' || method === 'model-cancel') {
+    if (method === 'model-complete' || method === 'model-stream' || method === 'model-cancel') {
       const caller = this.#calls.get(callId);
       if (!caller || !callId.startsWith('tool/') || caller.context.abortSignal?.aborted || typeof payload.actionId !== 'string' || !payload.actionId.startsWith(callId + '/')) throw new CodingResourcesUnavailable();
       if (method === 'model-cancel') {
@@ -579,18 +606,19 @@ export class CodingExtensions {
       if (typeof payload.provider !== 'string' || typeof payload.modelId !== 'string' || !payload.input || !Array.isArray((payload.input as JsonObject).messages) || !payload.options || typeof payload.options !== 'object' || Array.isArray(payload.options) || this.#modelCalls.has(payload.actionId)) throw new CodingResourcesUnavailable();
       const options = payload.options as JsonObject;
       if (['apiKey', 'headers', 'env', 'onPayload', 'transformHeaders', 'onResponse'].some(key => key in options) || (options.maxRetries !== undefined && options.maxRetries !== 0)) throw new CodingResourcesUnavailable();
-      const pending: { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; aborted: boolean } = { caller: callId, origin, aborted: false };
+      const pending: ModelCall = { caller: callId, origin, aborted: false, seq: 0 };
       this.#modelCalls.set(payload.actionId, pending);
       try {
-        const child = await caller.api.createTask(this.#modelTask, {...payload,ownerTaskId:caller.api.taskId} as unknown as ModelInput, { ownership: { kind: 'task', taskId: caller.api.taskId } }, caller.context);
+        const child = await caller.api.createTask(this.#modelTask, {...payload,ownerTaskId:caller.api.taskId,mode:method==='model-stream'?'streamSimple':'complete'} as unknown as ModelInput, { ownership: { kind: 'task', taskId: caller.api.taskId } }, caller.context);
         pending.task = child;
         if (pending.aborted) await this.#binding.harness.abortTask(child, context);
         const settled = await caller.api.waitForTask(child, caller.context);
         const outcome = settled.state.outcome;
         if (outcome.status !== 'completed' || !outcome.result || !('message' in outcome.result)) throw new CodingResourcesUnavailable();
+        if (origin !== this.#worker || this.#closed || pending.aborted || caller.context.abortSignal?.aborted) throw new CodingResourcesUnavailable();
         const message = outcome.result.message as unknown as AssistantMessage;
         caller.models.push(message);
-        return { message };
+        return { message, ...(method === 'model-stream' ? { terminal: outcome.result.terminal, taskId: child, seq: ++pending.seq } : {}) };
       } finally { this.#modelCalls.delete(payload.actionId); }
     }
     if (method === 'nested') {

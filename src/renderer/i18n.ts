@@ -195,6 +195,7 @@ const DICT = {
 
   "tool.filesCount": ["{n} 个文件", ["{n} file", "{n} files"]],
   "tool.copyError": ["复制错误", "Copy error"],
+  "tool.outputTruncated": ["运行输出已截断：丢弃 {bytes} 字节／{lines} 行。", "Running output truncated: {bytes} bytes / {lines} lines dropped."],
   "tool.copying": ["复制中…", "Copying…"],
   "tool.copied": ["已复制", "Copied"],
   "tool.copyFailed": ["复制失败", "Copy failed"],

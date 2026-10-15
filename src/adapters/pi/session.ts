@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { Harness, createSession, createRegistry, defineDoc, defineDocFamily, defineExtension, StorageRejected, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
+import { Harness, LiveDoc, createSession, createRegistry, defineDoc, defineDocFamily, defineExtension, StorageRejected, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
 import type { UserInput } from '@earendil-works/pi-durable';
 import type { AgentChange, Conversation, Cursor, HarnessOptions, Storage, SubmissionRecord, TaskId, ToolExecutionApi } from '@earendil-works/pi-durable';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
@@ -51,7 +51,7 @@ export type PiSessionOptions = {
   /** 仅发送／明确继续装配资源，观察旧运行不得改写它的指令。 */
   prepareExecution?: (cwd: string) => Promise<AgentChange>;
   /** 每次只读重开只接上原 Harness 的读取，不启动资源。 */
-  attachExecution?: (harness: Harness, root: Conversation) => void;
+  attachExecution?: (harness: Harness, root: Conversation, ownedModel?: DurableModelRouting['withOwnedModelInvocation']) => void;
   /** 先失效资源准备／在途回调，再等实际连接与调用收束。 */
   closeExecutionResources?: () => Promise<void>;
   /** 只有停止旧调度后的暂停/关闭、明确继续前可消费已确认费用；不执行资源代码。 */
@@ -177,7 +177,7 @@ export class PiExecutionSession implements ExecutionPort {
     this.#harness = await Harness.open(this.#storage, { models: this.#routing?.models ?? this.#options.models, registry, env: this.#options.env, settings: this.#options.settings ?? { retry: { maxRetries: 0 } } }, context);
     this.#routing?.attach(this.#harness);
     this.#root = await this.#harness.root(context, { agent: { ...agent, cwd: this.#cwd }, init: async tx => { (await tx.doc(Binding)).identity = this.#identity; } });
-    this.#options.attachExecution?.(this.#harness, this.#root);
+    this.#options.attachExecution?.(this.#harness, this.#root, this.#routing?.withOwnedModelInvocation.bind(this.#routing));
     const binding = await this.#harness.snapshot(Binding, context);
     if (!binding || binding.identity !== this.#identity) throw new Error('Stored session belongs to a different target or directory');
     const pending = await this.#harness.inspect(context);
@@ -447,7 +447,22 @@ export class PiExecutionSession implements ExecutionPort {
       const linked=record.requestId && await this.#storage.findDocument({kind:'dcode.prepared-input-link',scope:{kind:'session'},key:record.requestId},'current',context);
       if(!linked)pendingInputs+=1;
     }
-    return { target: this.target, control: { instanceId: this.#instanceId, revision: this.#revision }, observation: ++this.#observation, phase: this.#faulted ? 'faulted' : this.#pausing ? 'pausing' : this.#paused ? 'paused' : this.#enabled && inspection.tasks.length > 0 ? 'running' : 'ready', execution: 'pi-durable-1.0.0', model: agent.model ?? null, entries, pendingInputs };
+    // 桌面原先只读正式entry，丢掉了SDK已提交的运行工具输出；仅取同一run的活工具，绝不造结果条目。
+    const mayReadProgress = !this.#faulted && !this.#pausing && !this.#paused && this.#enabled && inspection.tasks.length > 0;
+    const live = mayReadProgress ? await this.#harness.snapshot(LiveDoc, this.#root.id, context) : undefined;
+    // snapshot等待期间pause会同步提升control并认领pausing；相位必须在最后一次await后与返回token同代次取样。
+    const phase = this.#faulted ? 'faulted' : this.#pausing ? 'pausing' : this.#paused ? 'paused' : this.#enabled && inspection.tasks.length > 0 ? 'running' : 'ready';
+    const toolProgress: NonNullable<ExecutionView['toolProgress']>[number][] = [];
+    for (const slot of phase === 'running' ? live?.tools ?? [] : []) {
+      const task = inspection.tasks.find(item => item.record.id === slot.taskId)?.record;
+      if (slot.status !== 'running' || !task || task.kind !== 'pi.tool' || task.conversationId !== this.#root.id
+        || task.owner !== live?.run?.taskId || task.abortRequested || typeof slot.output !== 'string' || !slot.output
+        || !task.input || typeof task.input !== 'object' || Array.isArray(task.input) || task.input.callId !== slot.callId
+        || entries.some(entry => entry.toolResult?.callId === slot.callId)) continue;
+      toolProgress.push({ taskId: task.id, callId: slot.callId, name: slot.name, text: slot.output,
+        droppedBytes: slot.droppedBytes ?? 0, droppedLines: slot.droppedLines ?? 0 });
+    }
+    return { target: this.target, control: { instanceId: this.#instanceId, revision: this.#revision }, observation: ++this.#observation, phase, execution: 'pi-durable-1.0.0', model: agent.model ?? null, entries, pendingInputs, toolProgress };
   }
 
   pause(): Promise<ExecutionView> {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
@@ -27,7 +27,9 @@ async function activeHttp({ nonce, method, hold, releaseable = false }) {
   const finishHeld = (record, res) => {
     if (record.finished || res.destroyed) throw new Error('Owned held request cannot be completed twice or after close');
     if (!res.headersSent) res.writeHead(200, { 'content-type': 'text/event-stream' });
-    sse(res, record.id, { role:'assistant', content:'OWNED_SINGLE_CHAT_RESULT_' }, null);
+    // stream 已实际发过此前缀；放行只补余文，不在 complete 后拆字符串冒充流。
+    if (method !== 'streamSimple' || !record.partialSent)
+      sse(res, record.id, { role:'assistant', content:'OWNED_SINGLE_CHAT_RESULT_' }, null);
     sse(res, record.id, { content:nonce }, null);
     sse(res, record.id, {}, 'stop', { prompt_tokens:117, completion_tokens:13, total_tokens:130 });
     record.finished = true; held.delete(record); res.end('data: [DONE]\n\n');
@@ -58,7 +60,8 @@ async function activeHttp({ nonce, method, hold, releaseable = false }) {
         held.set(record, res);
         if (method === 'streamSimple') {
           res.writeHead(200, { 'content-type': 'text/event-stream' });
-          sse(res, id, { role: 'assistant', content: 'OWNED_PARTIAL_' + nonce }, null);
+          sse(res, id, { role: 'assistant', content: 'OWNED_SINGLE_CHAT_RESULT_' }, null);
+          record.partialSent = true;
         }
         return;
       }
@@ -152,7 +155,7 @@ async function fixture(method, { hold = false, releaseable = false, source = ext
 }
 
 // Read only after the real session has closed. This is the public storage reader, not another Harness or model runtime.
-async function records(f, nestedToolName) {
+async function records(f, nestedToolName, allowNoModelChild = false) {
   const storage = await openNodeJsonlStorage(join(f.stateDir, 'runtime', f.target.sessionId), context);
   const scan = async (method, query) => {
     const result = []; let cursor;
@@ -188,9 +191,12 @@ async function records(f, nestedToolName) {
       assert.equal(nestedTask.conversationId, toolTasks[0].conversationId);
     }
     const children = nestedTask ? tasks.filter(task => task.owner === nestedTask.id) : directChildren;
-    assert.equal(children.length, 1, 'Exactly one owned single model task; no detached request or extra execution queue');
-    assert.notEqual(children[0].kind, GenerationTask.definition.name, 'The inner request is not a new agent generation loop');
-    assert.equal(children[0].conversationId, toolTasks[0].conversationId);
+    // 仅新 pre-aborted signal 场景可在 Worker 本地有限收束而没有模型子任务；原19例默认仍严格一个。
+    if (!allowNoModelChild || children.length > 0) {
+      assert.equal(children.length, 1, 'Exactly one owned single model task; no detached request or extra execution queue');
+      assert.notEqual(children[0].kind, GenerationTask.definition.name, 'The inner request is not a new agent generation loop');
+      assert.equal(children[0].conversationId, toolTasks[0].conversationId);
+    }
     return { entries, tasks, submissions, submissionIdentity, usage, messages, toolTask: toolTasks[0], child: children[0], ...(nestedTask ? { nestedTask } : {}) };
   } finally { await storage.close(context); }
 }
@@ -488,9 +494,9 @@ for(const nested of [false,true])for(const stop of ['pause','close'])await test(
 
 
 await test('已确认费用但未停机收口的真实记录：只读重开及关闭均不补账，明确继续才一次消费',{timeout:30000},async()=>{
-  const source=(nonce,marker)=>"import {writeFile} from 'node:fs/promises';import {join} from 'node:path';\n"+replaceOnce(extensionSource(nonce,marker),
+  const source=(nonce,marker)=>"import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';\n"+replaceOnce(extensionSource(nonce,marker),
     "return {content:[{type:'text',text:JSON.stringify(observed)}],details:{ownedModelObservation:observed}};",
-    `await writeFile(join(ctx.cwd,'known-before-stop.json'),JSON.stringify({nonce:${JSON.stringify(nonce)},phase:'known-model-owner-waiting'}));await new Promise((resolve,reject)=>{if(signal.aborted)reject(new Error('Stopped'));else signal.addEventListener('abort',()=>reject(new Error('Stopped')),{once:true});});throw new Error('Wait cannot succeed');`);
+    `await writeFile(join(ctx.cwd,'known-before-stop.json.tmp'),JSON.stringify({nonce:${JSON.stringify(nonce)},phase:'known-model-owner-waiting'}));await rename(join(ctx.cwd,'known-before-stop.json.tmp'),join(ctx.cwd,'known-before-stop.json'));await new Promise((resolve,reject)=>{if(signal.aborted)reject(new Error('Stopped'));else signal.addEventListener('abort',()=>reject(new Error('Stopped')),{once:true});});throw new Error('Wait cannot succeed');`);
   const f=await fixture('complete',{source});let restoredSession;
   try {
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');
@@ -512,4 +518,337 @@ await test('已确认费用但未停机收口的真实记录：只读重开及�
     assert.equal(f.remote.direct().length,1);assert.equal(f.remote.outer().length,2);assertOriginalAdmission(f);assert.deepEqual(f.remote.errors,[]);
     await restoredSession.close();const continued=await records(reader);assert.equal(sumTokens(continued.usage.tools),130);assert.equal(sumTokens(continued.usage.models),6);assert.equal(continued.child.id,before.child.id);assert.equal(continued.toolTask.id,before.toolTask.id);assert.equal(formalTool(continued).length,1);assert.equal(formalTool(continued)[0].isError,true);
   }finally{try{await restoredSession?.close();}finally{await f.dispose();}}
+});
+
+
+// 下一 stream 片的有限资产；测试只记录拥有目录内的公开文本事件，不读取私密推理/外部用户数据。
+const streamTraceFile = 'owned-stream-observation.json';
+const streamPrefix = 'OWNED_SINGLE_CHAT_RESULT_';
+function streamExtensionSource(mode) {
+  return (nonce, marker) => `import {Type} from 'typebox';import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';
+export default function(pi){pi.registerTool({name:${JSON.stringify(toolName)},label:'owned real stream',description:'Consume one actual owned SDK stream without another agent loop',
+parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,args,signal,onUpdate,ctx){
+  if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
+  const mode=${JSON.stringify(mode)},nonce=${JSON.stringify(nonce)},file=join(ctx.cwd,${JSON.stringify(streamTraceFile)});
+  const trace={nonce,callId:id,mode,steps:[]};let writes=Promise.resolve();
+  const note=(phase,data={})=>{trace.steps.push({seq:trace.steps.length+1,phase,...data});const bytes=JSON.stringify(trace);
+    writes=writes.then(async()=>{await writeFile(file+'.tmp',bytes);await rename(file+'.tmp',file);});return writes;};
+  const summary=result=>({role:result.role,provider:result.provider,model:result.model,responseId:result.responseId,stopReason:result.stopReason,
+    text:result.content.filter(part=>part.type==='text').map(part=>part.text).join(''),usage:result.usage});
+  const model=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!model)throw new Error('Original configured model missing');
+  const stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
+    {signal,maxRetries:0,maxTokens:32,temperature:0});
+  const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
+  await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
+  const resultPromise=stream.result(),resultReadback=stream.result();void resultReadback.catch(()=>{});let resultSettled=false;
+  const final=resultPromise.then(async result=>{resultSettled=true;await note('result-settled',{signalAborted:signal.aborted,message:summary(result)});return result;},
+    async()=>{resultSettled=true;await note('result-rejected',{signalAborted:signal.aborted});throw new Error('Public result rejected without an error AssistantMessage');});
+  void final.catch(()=>{});const eventTypes=[];let deltas='';
+  try{
+    if(mode==='result-only')await note('result-only-awaiting',{resultReads:2,resultSettled,iteratorUsed:false});
+    else{
+      await note('iterator-entered',{resultReads:2,resultSettled});
+      for await(const event of stream){
+        eventTypes.push(event.type);
+        if(event.type==='text_delta'){
+          deltas+=event.delta;onUpdate?.({content:[{type:'text',text:event.delta}]});
+          await note('text-delta',{delta:event.delta,deltas,contentIndex:event.contentIndex,
+            partialText:event.partial.content.filter(part=>part.type==='text').map(part=>part.text).join(''),resultSettled,signalAborted:signal.aborted});
+          if(mode==='break'){await note('iterator-breaking',{deltas,resultSettled,signalAborted:signal.aborted});break;}
+        }else if(event.type==='done'||event.type==='error')await note('terminal-event',{type:event.type,reason:event.reason,resultSettled,signalAborted:signal.aborted});
+      }
+      await note(mode==='break'?'iterator-broke':'iterator-ended',{eventTypes:[...eventTypes],deltas,resultSettled,signalAborted:signal.aborted});
+    }
+    const result=await final,readback=await resultReadback;
+    const resultReadbackConsistent=JSON.stringify(summary(result))===JSON.stringify(summary(readback));
+    if(!resultReadbackConsistent)throw new Error('Repeated result read changed the same actual response');
+    if(signal.aborted){await note('owner-aborted-after-result');throw new Error('Aborted original owner cannot publish tool success');}
+    const observed={probe:'owned-real-stream',nonce,originalToolCallId:id,method:args.method,mode,signalSame:true,
+      synchronousStream,resultReadbackConsistent,eventTypes,deltas,message:summary(result)};
+    await note('handler-returning',{signalAborted:signal.aborted});
+    return {content:[{type:'text',text:JSON.stringify(observed)}],details:{ownedModelObservation:observed}};
+  }catch(error){await note('handler-error',{signalAborted:signal.aborted});throw error;}
+}});}`;
+}
+async function readStreamTrace(f) {
+  try {return JSON.parse(await readFile(join(f.opening.workFolder,streamTraceFile),'utf8'));}
+  catch(error){if(error.code==='ENOENT')return undefined;throw error;}
+}
+async function streamCheckpoint(f,mode) {
+  const phase=mode==='result-only'?'result-only-awaiting':mode==='break'?'iterator-broke':'text-delta';let trace;
+  // 实际失败工具结果可以结束等待，但不能被算成 partial 或目标业务通过。
+  await until(async()=>{
+    trace=await readStreamTrace(f);if(trace?.steps.some(step=>step.phase===phase))return true;
+    return (await f.session.read()).entries.some(entry=>entry.toolResult?.callId===callId);
+  });
+  assert.ok(trace?.steps.some(step=>step.phase===phase),'必须实际到达 '+phase+'，准备/unsupported/工具错误不能替代流消费者');
+  assert.equal(trace.nonce,f.nonce);assert.equal(trace.callId,callId);assert.equal(trace.mode,mode);
+  assert.deepEqual(trace.steps.map(step=>step.seq),trace.steps.map((_,index)=>index+1));
+  assert.equal(trace.steps.find(step=>step.phase==='factory-returned').synchronousStream,true);
+  assert.equal(trace.steps.find(step=>step.phase===phase).resultSettled,false);
+  assert.ok(!trace.steps.some(step=>['result-settled','result-rejected','terminal-event','handler-returning','handler-error'].includes(step.phase)),
+    '真实HTTP final仍扣住时，不能先给终态/工具成功');
+  if(mode==='result-only'){
+    const waiting=trace.steps.find(step=>step.phase===phase);assert.equal(waiting.iteratorUsed,false);assert.equal(waiting.resultReads,2);
+    assert.equal(trace.steps.filter(step=>step.phase==='text-delta').length,0,'此例不拉取iterator，不能冒称已消费partial');
+  }else{
+    const parts=trace.steps.filter(step=>step.phase==='text-delta');assert.ok(parts.length>0);
+    assert.equal(parts.map(step=>step.delta).join(''),streamPrefix,'服务端final之前，真实SDK text_delta已到消费者');
+    assert.equal(parts.at(-1).deltas,streamPrefix);assert.equal(parts.at(-1).partialText,streamPrefix);
+    assert.ok(parts.every(step=>Number.isInteger(step.contentIndex)&&step.contentIndex>=0&&!step.resultSettled&&!step.signalAborted));
+    if(mode==='break')assert.equal(trace.steps.find(step=>step.phase==='iterator-broke').signalAborted,false,'break本身不等同owner取消');
+  }
+  return trace;
+}
+async function assertHeldStream(f,accepted,mode) {
+  await streamCheckpoint(f,mode);await until(()=>f.remote.direct().length===1);
+  const parked=f.remote.direct()[0];assert.equal(parked.accepted,true);assert.equal(parked.partialSent,true);
+  assert.equal(parked.finished,false);assert.equal(parked.closedBeforeFinal,false);assert.equal(f.remote.outer().length,1);
+  assert.deepEqual(f.remote.errors,[]);assertOriginalAdmission(f);
+  const held=await heldOwnedStage(f); // 内部复用 copyOwnedRecords；不二次打开 live JSONL。
+  const owners=held.tasks.filter(task=>task.kind===ToolTask.definition.name&&task.input.callId===callId);assert.equal(owners.length,1);
+  const owner=owners[0],children=held.tasks.filter(task=>task.owner===owner.id);assert.equal(children.length,1);const child=children[0];
+  assert.notEqual(child.kind,GenerationTask.definition.name);assert.equal(child.conversationId,owner.conversationId);
+  assert.notEqual(owner.state.status,'terminal');assert.notEqual(child.state.status,'terminal','partial不能把真实模型子任务提前结为终态');
+  const live=held.live?.tools?.find(tool=>tool.callId===callId);assert.ok(live);assert.equal(live.taskId,owner.id);assert.equal(live.status,'running');assert.equal(live.entry,undefined);
+  assert.equal(resultEntries(held,toolName,callId).length,0,'扣住真实final时，原工具正式ToolResult尚未提交');
+  assert.equal(resultFact(held,parked.id).length,0,'partial不是已确认模型结果事实');
+  const view=await f.session.read();assert.equal(view.phase,'running');assert.equal(view.entries.filter(entry=>entry.toolResult?.callId===callId).length,0);
+  const pending=await f.session.lookupReceipt(f.input);assert.equal(pending.submissionId,accepted.submissionId);assert.ok(['queued','placed'].includes(pending.processing));
+  return {parked,ownerId:owner.id,childId:child.id};
+}
+async function assertStreamCompleted(f,accepted,held,mode) {
+  await done(f);assert.equal(held.parked.finished,true);assert.equal(held.parked.closedBeforeFinal,false);
+  assert.equal(f.remote.direct().length,1);assert.equal(f.remote.outer().length,2);assertOriginalAdmission(f);assert.deepEqual(f.remote.errors,[]);
+  const trace=await readStreamTrace(f);const settled=trace.steps.filter(step=>step.phase==='result-settled');assert.equal(settled.length,1);
+  assert.equal(trace.steps.filter(step=>step.phase==='result-rejected').length,0);assert.equal(settled[0].signalAborted,false);
+  assert.equal(trace.steps.filter(step=>step.phase==='handler-returning').length,1);assert.equal(trace.steps.filter(step=>step.phase==='handler-error').length,0);
+  const visible=(await f.session.read()).entries.filter(entry=>entry.toolResult?.name===toolName&&entry.toolResult.callId===callId);assert.equal(visible.length,1);assert.equal(visible[0].toolResult.isError,false);
+  const observed=JSON.parse(visible[0].toolResult.text);assert.equal(observed.probe,'owned-real-stream');assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,callId);
+  assert.equal(observed.method,'streamSimple');assert.equal(observed.mode,mode);assert.equal(observed.synchronousStream,true);assert.equal(observed.resultReadbackConsistent,true);assert.equal(observed.signalSame,true);
+  assert.equal(observed.message.role,'assistant');assert.equal(observed.message.provider,'user-defined');assert.equal(observed.message.model,codingModel);
+  assert.equal(observed.message.responseId,held.parked.id);assert.equal(observed.message.stopReason,'stop');assert.equal(observed.message.text,f.remote.innerText);
+  assert.deepEqual(settled[0].message,observed.message);usageCounts(observed.message.usage,117,13);
+  if(mode==='iterate'){
+    assert.ok(observed.eventTypes.includes('start'));assert.equal(observed.eventTypes.filter(type=>type==='done').length,1);assert.equal(observed.eventTypes.filter(type=>type==='error').length,0);
+    assert.equal(observed.deltas,f.remote.innerText);assert.equal(trace.steps.filter(step=>step.phase==='terminal-event').length,1);
+    const terminal=trace.steps.find(step=>step.phase==='terminal-event');assert.equal(terminal.type,'done');assert.equal(terminal.reason,'stop');
+  }else if(mode==='break'){
+    assert.ok(observed.eventTypes.includes('text_delta'));assert.ok(!observed.eventTypes.includes('done'));assert.ok(!observed.eventTypes.includes('error'));
+    assert.equal(observed.deltas,streamPrefix);assert.equal(trace.steps.filter(step=>step.phase==='terminal-event').length,0,'break后用result取终态，不伪称iterator消费了done');
+  }else{assert.deepEqual(observed.eventTypes,[]);assert.equal(observed.deltas,'');assert.equal(trace.steps.filter(step=>step.phase==='terminal-event').length,0);}
+  assert.equal(f.remote.outer()[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id===callId&&message.content===JSON.stringify(observed)).length,1,
+    '当次真实流结果沿原工具记录到紧邻实际外层HTTP');
+  const actual=(await f.session.read()).entries.filter(entry=>entry.kind==='dcode.extension-model-result'&&entry.responseId===held.parked.id);assert.equal(actual.length,1);
+  assert.equal(actual[0].provider,'user-defined');assert.equal(actual[0].model,codingModel);assert.deepEqual(actual[0].usage,{input:117,output:13,cacheRead:0,cacheWrite:0});
+  await f.session.close();const raw=await records(f),formal=formalTool(raw);assert.equal(formal.length,1);assert.equal(formal[0].isError,false);
+  assert.deepEqual(formal[0].usage,observed.message.usage);assert.deepEqual(raw.usage.tools[toolName],formal[0].usage);assert.equal(sumTokens(raw.usage.tools),130);assert.equal(sumTokens(raw.usage.models),6);
+  assert.equal(raw.toolTask.id,held.ownerId);assert.equal(raw.child.id,held.childId);assert.equal(raw.child.owner,raw.toolTask.id);
+  for(const task of [raw.toolTask,raw.child]){assert.equal(task.state.status,'terminal');assert.equal(task.state.outcome.status,'completed');assert.equal(task.conversationId,ROOT_CONVERSATION_ID);}
+  assert.ok(JSON.stringify(raw.child.state.outcome.result).includes(held.parked.id));const facts=resultFact(raw,held.parked.id),results=resultEntries(raw,toolName,callId);
+  assert.equal(facts.length,1);assert.equal(results.length,1);assert.equal(facts[0].byTaskId,raw.child.id);assert.equal(results[0].byTaskId,raw.toolTask.id);assert.ok(facts[0].id<results[0].id);
+  const paid=raw.messages.filter(message=>message.role==='toolResult'&&(message.usage?.totalTokens??0)>0);assert.deepEqual(paid,[formal[0]]);
+  assert.equal(raw.entries.filter(entry=>entry.kind==='pi.user').length,1);const assistants=raw.messages.filter(message=>message.role==='assistant');assert.equal(assistants.length,2);
+  assert.deepEqual(assistants.map(message=>message.responseId).sort(),f.remote.outer().map(request=>request.id).sort());
+  assert.ok(!assistants.some(message=>message.responseId===held.parked.id||JSON.stringify(message.content).includes(f.remote.innerText)),'真实流不伪造成独立对话assistant');
+  const counts=f.remote.requests.length,identity=raw.submissionIdentity;
+  f.session=await f.backend.open({...f.opening,initialize:false});assert.equal((await f.session.read()).phase,'ready');
+  assert.equal((await f.session.submit(f.input)).submissionId,accepted.submissionId);assert.equal((await f.session.lookupReceipt(f.input)).processing,'done');assert.equal(f.remote.requests.length,counts,'只读重开/原身份查回不重发已完成流');
+  await f.session.close();const restored=await records(f);assert.equal(restored.child.id,held.childId);assert.equal(restored.toolTask.id,held.ownerId);
+  assert.deepEqual(restored.submissionIdentity,identity);assert.deepEqual(restored.usage,raw.usage);assert.equal(formalTool(restored).length,1);assert.equal(resultFact(restored,held.parked.id).length,1);
+}
+for(const mode of ['iterate','result-only','break'])await test(`扩展streamSimple/${mode}：同步公共流、真实partial门与原Task/result/usage一次收束`,{timeout:30000},async()=>{
+  const f=await fixture('streamSimple',{hold:true,releaseable:true,source:streamExtensionSource(mode)});
+  try{
+    const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const held=await assertHeldStream(f,accepted,mode);
+    // 此刻已由实际SDK事件/消费者阶段与正式Task同时确认；不是 complete 完成后再人为拆字串。
+    f.remote.releaseDirect();await assertStreamCompleted(f,accepted,held,mode);
+  }finally{await f.dispose();}
+});
+// SDK的error AssistantMessage与Durable outcome映射不是同一合同：不硬编码failed/aborted桶，仍拒绝成功与虚构费用。
+function assertNoSuccessfulStreamFinal(child) {
+  if(child.state.status==='terminal'&&child.state.outcome.status==='completed') {
+    const message=child.state.outcome.result?.message;assert.ok(message);
+    assert.ok(['aborted','error'].includes(message.stopReason),'本地取消不能保存为成功终态');
+    assert.equal(message.usage?.totalTokens??0,0,'没有真实终态usage不能补造费用');
+  }
+}
+for(const stop of ['pause','close'])await test(`扩展streamSimple/partial后${stop}：原流有限取消、同HTTP关闭与只读重开不重放`,{timeout:30000},async()=>{
+  const f=await fixture('streamSimple',{hold:true,source:streamExtensionSource('iterate')});
+  try{
+    const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const held=await assertHeldStream(f,accepted,'iterate');
+    if(stop==='pause')assert.equal((await f.session.pause()).phase,'paused');else await f.session.close();
+    await until(()=>held.parked.closedBeforeFinal);assert.equal(held.parked.finished,false);assert.equal(f.remote.outer().length,1);
+    let trace;await until(async()=>{trace=await readStreamTrace(f);return trace?.steps.some(step=>step.phase==='handler-error');});
+    const settled=trace.steps.filter(step=>step.phase==='result-settled');assert.equal(settled.length,1,'取消须让本地result有限返回真实error AssistantMessage');
+    assert.equal(trace.steps.filter(step=>step.phase==='result-rejected').length,0);assert.equal(settled[0].signalAborted,true);
+    assert.ok(['aborted','error'].includes(settled[0].message.stopReason));assert.notEqual(settled[0].message.text,f.remote.innerText,'partial保留不等于已确认完整成功正文');
+    const terminal=trace.steps.filter(step=>step.phase==='terminal-event');assert.equal(terminal.length,1);assert.equal(terminal[0].type,'error');assert.ok(['aborted','error'].includes(terminal[0].reason));
+    const ended=trace.steps.find(step=>step.phase==='iterator-ended');assert.ok(ended,'取消不能把本地iterator永久悬挂');assert.equal(ended.deltas,streamPrefix);assert.equal(ended.signalAborted,true);
+    assert.equal(trace.steps.filter(step=>step.phase==='handler-returning').length,0);if(stop==='pause')await f.session.close();
+    const interrupted=await records(f);assert.equal(interrupted.child.id,held.childId);assert.equal(interrupted.toolTask.id,held.ownerId);
+    assertNoSuccessfulStreamFinal(interrupted.child);
+    assert.equal(sumTokens(interrupted.usage.tools),0,'fixture没有发送终态usage，不能编造117/13费用');
+    f.session=await f.backend.open({...f.opening,initialize:false});assert.equal((await f.session.read()).phase,'paused');
+    assert.equal((await f.session.submit(f.input)).submissionId,accepted.submissionId);await f.session.lookupReceipt(f.input);await f.session.read();
+    assert.equal(f.remote.direct().length,1);assert.equal(f.remote.outer().length,1,'只读重开与原operation查回不能隐式恢复');
+    await f.session.resume((await f.session.read()).control);await done(f);assert.equal(f.remote.direct().length,1,'明确继续也不重发已被远端接收但结果未知的流');
+    assert.equal(f.remote.direct()[0],held.parked);assert.equal(held.parked.closedBeforeFinal,true);assert.equal(f.remote.outer().length,2);assertOriginalAdmission(f);assert.deepEqual(f.remote.errors,[]);
+    const visible=(await f.session.read()).entries.filter(entry=>entry.toolResult?.name===toolName&&entry.toolResult.callId===callId);assert.equal(visible.length,1);assert.equal(visible[0].toolResult.isError,true);assert.ok(visible[0].toolResult.text.length>0);assert.ok(!visible[0].toolResult.text.includes(f.remote.innerText));
+    await f.session.close();const restored=await records(f);assert.equal(restored.child.id,held.childId);assert.equal(restored.toolTask.id,held.ownerId);assert.deepEqual(restored.submissionIdentity,interrupted.submissionIdentity);
+    assert.equal(restored.child.state.status,'terminal');assertNoSuccessfulStreamFinal(restored.child);assert.equal(formalTool(restored).length,1);assert.equal(formalTool(restored)[0].isError,true);
+    assert.equal(sumTokens(restored.usage.tools),0);assert.equal(sumTokens(restored.usage.models),6);assert.equal(restored.entries.filter(entry=>entry.kind==='pi.user').length,1);
+  }finally{await f.dispose();}
+});
+
+
+// 合法 model signal 的取消合同：不与非法/未经授权 options 的同步拒绝混为一类。
+const modelSignalReleaseFile = 'owned-model-signal-release.json';
+function modelSignalExtensionSource(mode) {
+  return (nonce, marker) => `import {Type} from 'typebox';import {writeFile,rename,readFile,watch} from 'node:fs/promises';import {join} from 'node:path';
+export default function(pi){pi.registerTool({name:${JSON.stringify(toolName)},label:'owned model signal',description:'Consume one cancelled model stream while its original tool stays alive',
+parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,args,signal,onUpdate,ctx){
+  if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
+  const mode=${JSON.stringify(mode)},nonce=${JSON.stringify(nonce)},file=join(ctx.cwd,${JSON.stringify(streamTraceFile)});
+  const trace={nonce,callId:id,mode,steps:[]};let writes=Promise.resolve();
+  const flags=()=>({ownerSignalAborted:signal.aborted,modelSignalAborted:modelController.signal.aborted});
+  const note=(phase,data={})=>{trace.steps.push({seq:trace.steps.length+1,phase,...flags(),...data});const bytes=JSON.stringify(trace);
+    writes=writes.then(async()=>{await writeFile(file+'.tmp',bytes);await rename(file+'.tmp',file);});return writes;};
+  const summary=result=>({role:result.role,provider:result.provider,model:result.model,responseId:result.responseId,stopReason:result.stopReason,
+    text:result.content.filter(part=>part.type==='text').map(part=>part.text).join(''),usage:result.usage});
+  const modelController=new AbortController();
+  const model=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!model)throw new Error('Original configured model missing');
+  await note('tool-entered',{signalsDistinct:modelController.signal!==signal});
+  if(mode==='pre-aborted'){modelController.abort(new Error('owned model cancelled before factory'));await note('model-pre-aborted');}
+  let stream;
+  try{stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
+      {signal:modelController.signal,maxRetries:0,maxTokens:32,temperature:0});}
+  catch(error){await note('factory-threw');throw new Error('A legal cancelled model signal must return a finite public stream');}
+  const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
+  await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
+  const resultPromise=stream.result(),resultReadback=stream.result();void resultReadback.catch(()=>{});let resultSettled=false;
+  const final=resultPromise.then(async result=>{resultSettled=true;await note('result-settled',{message:summary(result)});return result;},
+    async()=>{resultSettled=true;await note('result-rejected');throw new Error('Cancelled public result rejected instead of yielding an error AssistantMessage');});
+  void final.catch(()=>{});const eventTypes=[];let deltas='';
+  try{
+    await note('iterator-entered',{resultReads:2});
+    for await(const event of stream){
+      eventTypes.push(event.type);
+      if(event.type==='text_delta'){
+        deltas+=event.delta;onUpdate?.({content:[{type:'text',text:event.delta}]});
+        await note('text-delta',{delta:event.delta,deltas,partialText:event.partial.content.filter(part=>part.type==='text').map(part=>part.text).join(''),resultSettled});
+        if(mode==='model-only-abort'&&!modelController.signal.aborted){
+          await note('model-aborting',{resultSettled});modelController.abort(new Error('only this owned model request cancelled'));await note('model-aborted');
+        }
+      }else if(event.type==='done'||event.type==='error')await note('terminal-event',{type:event.type,reason:event.reason,message:summary(event.type==='error'?event.error:event.message)});
+    }
+    await note('iterator-ended',{eventTypes:[...eventTypes],deltas,resultSettled});
+    const result=await final,readback=await resultReadback;
+    const resultReadbackConsistent=JSON.stringify(summary(result))===JSON.stringify(summary(readback));
+    if(!resultReadbackConsistent)throw new Error('Repeated result reads changed cancelled response');
+    if(signal.aborted)throw new Error('Cancelling only model signal must not abort original tool');
+    // 只为测试保留原工具，外层据真实 Task/HTTP 检查 model 已取消而 owner 尚活；不是另一输入队列。
+    const changes=watch(ctx.cwd,{signal,persistent:false});let change=changes.next();
+    await note('owner-awaiting-release',{resultReadbackConsistent});
+    try{
+      for(;;){const item=await change;if(item.done)throw new Error('Original owner watch ended before explicit fixture release');
+        if(item.value.filename===${JSON.stringify(modelSignalReleaseFile)}){
+          const release=JSON.parse(await readFile(join(ctx.cwd,${JSON.stringify(modelSignalReleaseFile)}),'utf8'));
+          if(release.nonce===nonce)break;
+        }
+        change=changes.next();
+      }
+    }finally{await changes.return?.();}
+    if(signal.aborted)throw new Error('Original owner stopped before tool completion');
+    const observed={probe:'owned-model-signal',nonce,originalToolCallId:id,method:args.method,mode,synchronousStream,
+      resultReadbackConsistent,ownerSignalAborted:signal.aborted,modelSignalAborted:modelController.signal.aborted,eventTypes,deltas,message:summary(result)};
+    await note('handler-returning');
+    return {content:[{type:'text',text:JSON.stringify(observed)}],details:{ownedModelObservation:observed}};
+  }catch(error){await note('handler-error');throw error;}
+}});}`;
+}
+async function modelSignalCheckpoint(f, mode) {
+  let trace;
+  await until(async()=>{
+    trace=await readStreamTrace(f);if(trace?.steps.some(step=>step.phase==='owner-awaiting-release'))return true;
+    return (await f.session.read()).entries.some(entry=>entry.toolResult?.callId===callId);
+  });
+  assert.ok(trace?.steps.some(step=>step.phase==='owner-awaiting-release'),'必须实际完成公共流/iterator/result并保留活的原工具；throw/unsupported/挂起不能替代');
+  assert.equal(trace.nonce,f.nonce);assert.equal(trace.callId,callId);assert.equal(trace.mode,mode);
+  assert.deepEqual(trace.steps.map(step=>step.seq),trace.steps.map((_,index)=>index+1));
+  assert.equal(trace.steps.filter(step=>step.phase==='factory-threw').length,0);assert.equal(trace.steps.filter(step=>step.phase==='result-rejected').length,0);
+  assert.equal(trace.steps.filter(step=>step.phase==='handler-error').length,0);assert.equal(trace.steps.filter(step=>step.phase==='handler-returning').length,0);
+  assert.equal(trace.steps.find(step=>step.phase==='tool-entered').signalsDistinct,true);
+  assert.equal(trace.steps.find(step=>step.phase==='factory-returned').synchronousStream,true);
+  assert.ok(trace.steps.every(step=>step.ownerSignalAborted===false),'单次模型取消期间，原工具signal始终保持活跃');
+  const settled=trace.steps.filter(step=>step.phase==='result-settled');assert.equal(settled.length,1);
+  assert.equal(settled[0].modelSignalAborted,true);assert.ok(['aborted','error'].includes(settled[0].message.stopReason));
+  assert.equal(settled[0].message.role,'assistant');assert.equal(settled[0].message.provider,'user-defined');assert.equal(settled[0].message.model,codingModel);
+  assert.equal(settled[0].message.usage?.totalTokens??0,0);assert.notEqual(settled[0].message.text,f.remote.innerText);
+  const terminal=trace.steps.filter(step=>step.phase==='terminal-event');assert.equal(terminal.length,1);assert.equal(terminal[0].type,'error');
+  assert.ok(['aborted','error'].includes(terminal[0].reason));assert.deepEqual(terminal[0].message,settled[0].message,'error event/result/repeated result必须同一有限消息');
+  const ended=trace.steps.filter(step=>step.phase==='iterator-ended');assert.equal(ended.length,1);assert.equal(ended[0].modelSignalAborted,true);
+  assert.equal(ended[0].eventTypes.filter(type=>type==='done').length,0);assert.equal(ended[0].eventTypes.filter(type=>type==='error').length,1);
+  assert.equal(trace.steps.find(step=>step.phase==='owner-awaiting-release').resultReadbackConsistent,true);
+  if(mode==='pre-aborted'){
+    assert.deepEqual(ended[0].eventTypes,['error']);assert.equal(ended[0].deltas,'');assert.equal(trace.steps.filter(step=>step.phase==='text-delta').length,0);
+    assert.equal(trace.steps.filter(step=>step.phase==='model-pre-aborted').length,1);
+    assert.equal(trace.steps.find(step=>step.phase==='factory-returned').modelSignalAborted,true);
+    assert.equal(f.remote.direct().length,0,'合法预abort signal不得到HTTP');
+  }else{
+    const parts=trace.steps.filter(step=>step.phase==='text-delta');assert.ok(parts.length>0);assert.equal(parts.map(step=>step.delta).join(''),streamPrefix);
+    const aborting=trace.steps.filter(step=>step.phase==='model-aborting');assert.equal(aborting.length,1);assert.equal(aborting[0].modelSignalAborted,false);assert.equal(aborting[0].resultSettled,false);
+    assert.ok(parts.at(-1).seq<aborting[0].seq);assert.equal(trace.steps.filter(step=>step.phase==='model-aborted').length,1);
+    assert.equal(ended[0].deltas,streamPrefix);assert.equal(f.remote.direct().length,1);
+  }
+  assert.equal(f.remote.outer().length,1,'工具仍被本夹具保留，不能提前外层continuation');assert.deepEqual(f.remote.errors,[]);assertOriginalAdmission(f);
+  return trace;
+}
+for(const mode of ['pre-aborted','model-only-abort'])await test(`扩展streamSimple/${mode}：合法单次signal有限收束，原工具仍活且HTTP不重放`,{timeout:30000},async()=>{
+  const f=await fixture('streamSimple',{hold:mode==='model-only-abort',source:modelSignalExtensionSource(mode)});
+  try{
+    const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const trace=await modelSignalCheckpoint(f,mode);
+    const parked=f.remote.direct()[0];
+    if(mode==='model-only-abort'){
+      assert.ok(parked);assert.equal(parked.accepted,true);assert.equal(parked.partialSent,true);assert.equal(parked.finished,false);
+      await until(()=>parked.closedBeforeFinal);assert.equal(f.remote.direct()[0],parked,'关闭的是原已接收HTTP，不能换身份模拟取消');
+    }
+    let held,owner,children;
+    await until(async()=>{
+      held=await heldOwnedStage(f);const owners=held.tasks.filter(task=>task.kind===ToolTask.definition.name&&task.input.callId===callId);
+      assert.equal(owners.length,1);owner=owners[0];children=held.tasks.filter(task=>task.owner===owner.id);
+      return children.every(child=>child.state.status==='terminal');
+    });
+    assert.equal(owner.state.status,'running','模型已取消收束，原工具必须仍活');assert.equal(owner.state.checkpoint.phase,'execute');
+    if(mode==='model-only-abort')assert.equal(children.length,1);
+    else assert.ok(children.length===0||children.length===1,'预abort最多保留一个原owner模型事实，不能多建任务/接收队列');
+    for(const child of children){assert.equal(child.kind,'dcode.extension-model');assert.equal(child.conversationId,owner.conversationId);assertNoSuccessfulStreamFinal(child);}
+    assert.equal(resultEntries(held,toolName,callId).length,0);assert.equal(held.live.tools.find(tool=>tool.callId===callId).status,'running');
+    assert.equal((await f.session.read()).phase,'running');assert.equal((await f.session.lookupReceipt(f.input)).submissionId,accepted.submissionId);
+    const releaseFile=join(f.opening.workFolder,modelSignalReleaseFile);
+    await writeFile(releaseFile+'.tmp',JSON.stringify({nonce:f.nonce}));await rename(releaseFile+'.tmp',releaseFile);await done(f);
+    assert.equal(f.remote.direct().length,mode==='pre-aborted'?0:1);assert.equal(f.remote.outer().length,2);assert.deepEqual(f.remote.errors,[]);assertOriginalAdmission(f);
+    if(parked){assert.equal(f.remote.direct()[0],parked);assert.equal(parked.closedBeforeFinal,true);assert.equal(parked.finished,false);}
+    const visible=(await f.session.read()).entries.filter(entry=>entry.toolResult?.name===toolName&&entry.toolResult.callId===callId);assert.equal(visible.length,1);assert.equal(visible[0].toolResult.isError,false,'工具已正常处理单次模型取消，不应被一起取消');
+    const observed=JSON.parse(visible[0].toolResult.text);assert.equal(observed.probe,'owned-model-signal');assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,callId);assert.equal(observed.mode,mode);
+    assert.equal(observed.synchronousStream,true);assert.equal(observed.resultReadbackConsistent,true);assert.equal(observed.ownerSignalAborted,false);assert.equal(observed.modelSignalAborted,true);
+    assert.deepEqual(observed.message,trace.steps.find(step=>step.phase==='result-settled').message);
+    assert.equal(f.remote.outer()[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id===callId&&message.content===JSON.stringify(observed)).length,1,'同一原工具结果必须到实际outer HTTP');
+    const finishedTrace=await readStreamTrace(f);assert.equal(finishedTrace.steps.filter(step=>step.phase==='handler-returning').length,1);assert.equal(finishedTrace.steps.filter(step=>step.phase==='handler-error').length,0);
+    assert.ok(finishedTrace.steps.every(step=>step.ownerSignalAborted===false));
+    assert.equal((await f.session.pause()).phase,'paused');await f.session.close();
+    const raw=await records(f,undefined,mode==='pre-aborted');assert.equal(raw.toolTask.id,owner.id);assert.equal(raw.toolTask.state.status,'terminal');assert.equal(raw.toolTask.state.outcome.status,'completed');
+    assert.equal(raw.child?.id,children[0]?.id,'公共流收束后不能又晚建或替换一个模型子任务');
+    if(raw.child){assert.equal(raw.child.state.status,'terminal');assertNoSuccessfulStreamFinal(raw.child);}else assert.equal(mode,'pre-aborted');
+    assert.equal(formalTool(raw).length,1);assert.equal(formalTool(raw)[0].isError,false);assert.equal(sumTokens(raw.usage.tools),0);assert.equal(sumTokens(raw.usage.models),6);
+    assert.equal(raw.entries.filter(entry=>entry.kind==='pi.user').length,1);const assistants=raw.messages.filter(message=>message.role==='assistant');assert.equal(assistants.length,2);
+    assert.deepEqual(assistants.map(message=>message.responseId).sort(),f.remote.outer().map(request=>request.id).sort());assert.ok(!assistants.some(message=>parked&&message.responseId===parked.id));
+    const identity=raw.submissionIdentity,count=f.remote.requests.length;
+    f.session=await f.backend.open({...f.opening,initialize:false});assert.equal((await f.session.read()).phase,'paused');
+    assert.equal((await f.session.submit(f.input)).submissionId,accepted.submissionId);assert.equal((await f.session.lookupReceipt(f.input)).processing,'done');await f.session.read();
+    assert.equal(f.remote.requests.length,count,'只读重开与原operation查回不重放已取消模型');
+    await f.session.resume((await f.session.read()).control);await done(f);assert.equal(f.remote.requests.length,count,'明确继续也不自动重发已取消单次模型');
+    await f.session.close();const restored=await records(f,undefined,mode==='pre-aborted');assert.equal(restored.toolTask.id,owner.id);assert.equal(restored.child?.id,raw.child?.id);
+    assert.deepEqual(restored.submissionIdentity,identity);assert.deepEqual(restored.usage,raw.usage);assert.equal(formalTool(restored).length,1);
+  }finally{await f.dispose();}
 });

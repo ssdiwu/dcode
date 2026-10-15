@@ -9,9 +9,9 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const invocation = new AsyncLocalStorage();
 const scopeOf = () => invocation.getStore()?.id;
 const { syncBuiltinESMExports } = require('node:module');
-let runner, sdk, sessionView, closed = false, state = { messages: [], systemPrompt: '', model: undefined };
+let runner, sdk, sessionView, streamFactory, closed = false, state = { messages: [], systemPrompt: '', model: undefined };
 const calls = new Map(), replies = new Map(), children = new Set(), closings = new Set(), transports = new Set();
-const modelPending = new Map(), sealedModelScopes = new Set();
+const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
 let serial = 0, activated = new Set(), active = [], builtins = [], actions = [], errors = [];
 const nativeSpawn = cp.spawn;
 cp.spawn = (...args) => {
@@ -299,6 +299,10 @@ async function initialize() {
     async read() { return undefined; }, async list() { return []; }, async write() { unavailable(); }, async remove() { unavailable(); }
   }, modelsPath: null, refreshOnCreate: false });
   // 模型目录只作派生读取；扩展发起模型执行仍须经过宿主准入，不从线程另开模型通路。
+  // Root 装配只公开 event-stream 工厂入口；线程内动态 import 取公共流，不引包私有路径或自造兼容流。
+  if (typeof workerData.streamFactory !== 'string') throw new Error('Public event stream unavailable');
+  streamFactory = (await import(workerData.streamFactory))?.createAssistantMessageEventStream;
+  if (typeof streamFactory !== 'function') throw new Error('Public event stream unavailable');
   const modelRegistry = new sdk.ModelRegistry(modelRuntime);
   for (const name of ['stream', 'streamSimple', 'complete', 'completeSimple', 'classify', 'generateImages', 'getApiKeyAndHeaders', 'getProviderAuth', 'getApiKeyForProvider', 'registerProvider', 'unregisterProvider', 'registerVirtualModel', 'unregisterVirtualModel']) modelRegistry[name] = unavailable;
   // 同步兼容 facade 只读本次宿主发布的完整 chat 帧，不另查认证、不从当前模型猜目录。
@@ -339,6 +343,82 @@ async function initialize() {
       pending.then(() => own.delete(pending), () => own.delete(pending));
     }
     return pending;
+  };
+  modelRegistry.streamSimple = (model, input, options = {}) => {
+    const own = invocation.getStore(); const scope = scopeOf();
+    if (!own || own.pure || !scope?.startsWith('tool/') || !calls.has(scope) || sealedModelScopes.has(scope)) return unavailable();
+    const controller = calls.get(scope);
+    const { signal = controller.signal, ...parameters } = options;
+    // 函数／循环／非有限值不能被JSON静默丢弃后冒充SDK选项已生效。
+    const seen = new Set();
+    const check = value => {
+      if (value === undefined || value === null || typeof value === 'string' || typeof value === 'boolean') return;
+      if (typeof value === 'number' && Number.isFinite(value)) return;
+      if (!value || typeof value !== 'object' || seen.has(value) || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) throw new Error('Unsupported model request value');
+      seen.add(value); Object.values(value).forEach(check); seen.delete(value);
+    };
+    check(input); check(parameters);
+    const actionId = scope + '/' + (++own.counter);
+    const stream = streamFactory();
+    // 本地终态消息的 api/provider/model 取本次 canonical 模型引用并在发起时固定；后续目录变化不再影响。
+    const catalogued = state.modelCatalog?.all.find(entry => entry.provider === model.provider && entry.id === model.id);
+    const origin = { api: (catalogued ?? model).api, provider: model.provider, model: model.id };
+    // 同一流只认首见 taskId 与精确递增 seq；done/error 终帧只由本 action 的最终 reply 发出一次。
+    const record = { scope, taskId: undefined, seq: 0, settled: false, stream, partial: undefined };
+    const scopeSignal = controller.signal;
+    // 本地取消／拒绝终帧必须是完整 AssistantMessage：保留已验证 partial 的 content/usage；未确认用量给全 0 结构，不冒充 provider 完成或正式事实。
+    const failure = (stopReason, errorMessage) => ({
+      role: 'assistant', api: origin.api, provider: origin.provider, model: origin.model,
+      content: record.partial?.content ?? [], usage: record.partial?.usage
+        ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason, errorMessage, timestamp: Date.now(),
+    });
+    // 合法已取消signal仍保持公开同步流合同；没有发起的请求不建RPC/模型子任务或猜费用。
+    if (signal?.aborted || scopeSignal.aborted) {
+      stream.push({ type: 'error', reason: 'aborted', error: failure('aborted', 'Request was aborted') });
+      stream.end(); return stream;
+    }
+    const cleanup = () => { modelStreams.delete(actionId); signal?.removeEventListener('abort', cancel); if (signal !== scopeSignal) scopeSignal.removeEventListener('abort', cancel); };
+    const cancel = () => {
+      if (record.settled) return;
+      record.settled = true;
+      // 本地取消立即以 aborted 终帧收束 iterator/result；取消只通知一次，host 事务仍 join 至真实 reply，不因本地完成丢弃。
+      void rpc('model-cancel', { actionId }, scope).catch(() => {});
+      stream.push({ type: 'error', reason: 'aborted', error: failure('aborted', 'Request was aborted') });
+      stream.end(); cleanup();
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal !== scopeSignal) scopeSignal.addEventListener('abort', cancel, { once: true });
+    modelStreams.set(actionId, record);
+    const hostCall = rpc('model-stream', { caller: scope, actionId, provider: model.provider, modelId: model.id, input, options: parameters }, scope);
+    // modelPending join 真实 host RPC 至 settled；result-only、提前 break 或本地取消都不能提前解除这笔事务。
+    const joined = modelPending.get(scope) ?? new Set(); modelPending.set(scope, joined); joined.add(hostCall);
+    hostCall.then(() => joined.delete(hostCall), () => joined.delete(hostCall));
+    hostCall.then(reply => {
+      if (record.settled) { cleanup(); return; }
+      // reply 的 taskId 须等于 partial 首认领（或此刻首认领），seq 必须是预期下一号；违者不推进流、不替代当前调用。
+      // taskId 是原 SDK child TaskId：正安全整数；seq 同为正安全整数，校验失败不推进。
+      const valid = Number.isSafeInteger(reply?.taskId) && reply.taskId > 0
+        && (record.taskId === undefined ? (record.taskId = reply.taskId) : record.taskId === reply.taskId)
+        && Number.isSafeInteger(reply.seq) && reply.seq === record.seq + 1
+        && (reply.terminal?.type === 'done' || reply.terminal?.type === 'error');
+      record.settled = true;
+      if (!valid) {
+        // 终态协议不完整时本地以 error 终帧有限收束；不重发请求，也不虚构成功。
+        stream.push({ type: 'error', reason: 'error', error: failure('error', 'Model stream settlement invalid') });
+        stream.end(); cleanup(); return;
+      }
+      if (reply.terminal.type === 'done') stream.push({ type: 'done', reason: reply.terminal.reason, message: reply.message });
+      else stream.push({ type: 'error', reason: reply.terminal.reason, error: reply.message });
+      stream.end(reply.message); cleanup();
+    }, () => {
+      if (record.settled) { cleanup(); return; }
+      record.settled = true;
+      // host 拒绝本操作时没有可转发的 child 终态；本地有限 error 收束，不另发请求。
+      stream.push({ type: 'error', reason: 'error', error: failure('error', 'Formal host operation rejected') });
+      stream.end(); cleanup();
+    });
+    return stream;
   };
   sessionView = sdk.SessionManager.inMemory(workerData.cwd, { id: state.sessionId }); refreshSession();
   const readMethods = new Set(['getCwd','getSessionDir','getSessionId','getSessionFile','getLeafId','getLeafEntry','getEntry','getLabel','getBranch','buildContextEntries','buildSessionProjection','getHeader','getEntries','getTree','getSessionName']);
@@ -394,8 +474,13 @@ async function initialize() {
 async function request(message) {
   if (message.method === 'close') {
     closed = true; for (const controller of calls.values()) controller.abort();
+    // close 先等既有 execute 及其 modelPending 的 host RPC 真实结算，再回 close reply／关端口，防 Root terminate 抢杀流消费者收尾；不 join 全局 actions 或 provider 回调。
+    const finishing = [...executions].map(promise => promise.catch(() => undefined));
+    const settling = [...modelPending.values()].flatMap(own => [...own]).map(promise => promise.catch(() => undefined));
     // 从真实 transport.start 起认领；client 尚在 connecting 也不能漏掉它。SDK 仍完成自己的清理。
     await Promise.all([...transports].map(transport=>transport.close()));
+    // MCP调用可依赖transport关闭才结束；先发起真实close，再join，不让新流桥反锁既有MCP收束。
+    await Promise.all(finishing); await Promise.all(settling);
     if (runner) { await runner.emit({ type: 'session_shutdown' }); runner.invalidate(); }
     // 原生 SDK 关闭后，仍由本线程持有的实际子进程也必须终止；不按旧 PID 文本清理别人的进程。
     for (const child of children) if (child.exitCode === null) child.kill();
@@ -464,11 +549,30 @@ parentPort.on('message', message => {
   if (message.type === 'reply') { const pending = replies.get(message.id); if (!pending) return; replies.delete(message.id);
     if (message.ok) pending.resolve(message.value); else pending.reject(new Error('Formal host operation rejected')); return; }
   if (message.type === 'abort') { calls.get(message.callId)?.abort(); return; }
+  if (message.type === 'model-event') {
+    const record = modelStreams.get(message.actionId);
+    // 入站 partial 只推进同 action/scope 仍活跃的当前流：taskId 是原 SDK child TaskId（正安全整数）首见认领后不变，seq 精确递增，终帧不入流。
+    if (record && !record.settled && record.scope === message.scope && calls.has(message.scope)
+      && Number.isSafeInteger(message.taskId) && message.taskId > 0
+      && (record.taskId ?? message.taskId) === message.taskId
+      && Number.isSafeInteger(message.seq) && message.seq === record.seq + 1
+      && message.event && message.event.type !== 'done' && message.event.type !== 'error') {
+      record.taskId = record.taskId ?? message.taskId;
+      record.seq = message.seq;
+      // 本地终态只采已通过本 action/scope/taskId/seq 验证的 partial 内容与用量，无效帧不取。
+      record.partial = message.event.partial ?? record.partial;
+      record.stream.push(message.event);
+    }
+    return;
+  }
   const eventController = message.scope && message.method !== 'close' ? new AbortController() : undefined;
   if (eventController) calls.set(message.scope,eventController);
-  Promise.resolve().then(() => invocation.run({id:message.scope,counter:0,pure:message.method==='arguments'}, () => request(message))).then(value => {
+  const dispatched = Promise.resolve().then(() => invocation.run({id:message.scope,counter:0,pure:message.method==='arguments'}, () => request(message)));
+  const settled = dispatched.then(value => {
     parentPort.postMessage({ type: 'result', id: message.id, ok: true, value: safe(value) });
     if (message.method === 'close') parentPort.close();
   }, () => parentPort.postMessage({ type: 'result', id: message.id, ok: false, code: 'resources-unavailable' })).finally(()=>{if(eventController && calls.get(message.scope) === eventController) {calls.delete(message.scope); modelPending.delete(message.scope); sealedModelScopes.delete(message.scope);}});
+  // executions 只跟踪真实 execute 的完整派发（含回执与 scope 清理），finally 只移除自身；close 用它做真实 join，不含全局 actions、provider 回调或 close 自身。
+  if (message.method === 'execute') { executions.add(settled); settled.then(() => executions.delete(settled), () => executions.delete(settled)); }
 });
 `;
