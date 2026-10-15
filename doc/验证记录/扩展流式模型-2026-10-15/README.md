@@ -49,3 +49,5 @@ R24／R25沿真实PiExecutionSession、原Harness、实际defineTool／api.outpu
 最终完整门槛：固定179/0791a86b11ec7838483a3d1006e3f56afd27f59be227b22f85bf99bd14038bf9，八个子命令真exit0；架构正反32／源码82、全类型／Lint／构建、runtime390/390、contracts14/14、完整隐藏E2E111/111，无fail/skip/cancel。每门及总前后同源，绝对起止及每子出口见B/Root-stream-full-gates-r3-20261015/ledger.json。R21受控端口原4例2pass2fail命中旧实例复活和坏项丢合法项；R22同4例真0，兼核高observation不能倒退revision。公开快照及订阅可见partial，任一次save都不落pi-progress／临时正文，正式结果替换；这些是受控端口合同对抗，不冒称真实Pi轮转。最终记录只承接相同产品／测试／配置字节，Standards／Spec／CodeQuality独立三项限定PASS，不外推完整SDK或整个产品。
 
 完整已验恢复点：`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-streamSimple-accepted-20261015/manifest.json`。产品／测试／配置完整179项与最终R5及八门源逐字一致；验收登记、报告副本及导航为纯记录更新，没有冒称其后重新运行检查。本地提交及远端状态按实际Git回执另行记录。
+
+本片已按既有授权本地提交为`b2d589a7ab1f463bbd3c2b20f0409f1bf6af6288`，24路径；实际身份、精确暂存及未推送边界见[本地提交记录](本地提交-2026-10-15.md)。验收登记另有[纯记录独立确认](记录确认.md)，没有因登记或Git操作重复已经通过的产品检查。
