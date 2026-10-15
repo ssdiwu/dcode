@@ -11,7 +11,7 @@
     "verify:architecture": "npm run architecture:test && npm run architecture:check",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test:runtime": "node --import tsx --test test/runtime/*.test.ts test/runtime/*.test.mjs",
+    "test:runtime": "node --import tsx --test --test-concurrency=4 test/runtime/*.test.ts test/runtime/*.test.mjs",
     "verify:runtime": "npm run verify:architecture && npm run typecheck && npm run lint && npm run test:runtime",
     "demo:pi": "node --import tsx tools/pi-runtime-demo.mjs",
     "dev": "electron-vite dev",

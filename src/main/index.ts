@@ -524,8 +524,9 @@ app.on("before-quit", (event) => {
           app.quit();
         },
         () => {
-          // 收束失败：不退出、不伪报成功；快照里的 closeError 让界面如实呈现，
-          // 后续退出仍被阻止（flush 在同一实例复用同一个收束结果与失败）。
+          // 失败仍保留关闭认领与可见错误，但释放本次退出快门：App.flush已清掉失败promise，
+          // 用户修复存储后再次正常退出必须能重试；不能永久卡在已失败的flushStarted。
+          flushStarted = false;
         },
       );
   }

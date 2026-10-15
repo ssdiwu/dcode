@@ -299,6 +299,21 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
   const stateDir = mkdtempSync(join(tmpdir(), "dcode-preset-e2e-"));
   let catStage = "A";
   let catalogClosedEarly = false;
+  let primary = null;
+  const closeRecords = [];
+  const persistCloseRecords = () => writeFileSync(join(EVID, 'preset-close-phases.json'), JSON.stringify(closeRecords, null, 2));
+  const closeOwned = async (owned, phase) => {
+    closeRecords.push({ phase, stateDir: owned.stateDir, status: 'started', at: Date.now() }); persistCloseRecords();
+    try { await owned.close(); closeRecords.push({ phase, status: 'normal-exit-confirmed', at: Date.now() }); persistCloseRecords(); }
+    catch (error) {
+      primary ??= error;
+      closeRecords.push({ phase, status: 'failed', error: { name: error.name, message: error.message }, at: Date.now() }); persistCloseRecords();
+      // 强制回收仅发生在真实关闭已经失败之后；仍保留原错误，不能把回收当作正常退出。
+      try { await killApp(owned); closeRecords.push({ phase, status: 'owned-failure-recovered', at: Date.now() }); }
+      catch (recovery) { closeRecords.push({ phase, status: 'recovery-failed', error: { name: recovery.name, message: recovery.message }, at: Date.now() }); }
+      persistCloseRecords(); throw primary;
+    }
+  };
   const catalog = await startCatalogLoop({
     validA: { etag: 'W/"cat-A"', lastModified: 1_800_000_000_000 },
     withModelsByProvider: (pid) => {
@@ -570,7 +585,7 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
       evidence.steps.push({ phase: "catalog-source-applied" });
 
       // 真实重开：最后一次写入是 custom keep（origin/凭据须留用 A）；重开恢复 custom 并再发证明 origin 核对 A
-      await handle.close();
+      await closeOwned(handle, "first-before-custom-reopen");
       const reopened = await launchApp(stateDir, {
         DCODE_CATALOG_BASE_URL: catalog.origin,
         DCODE_E2E_PRESET_BASE_URLS: JSON.stringify({ [kimiProvider]: `${openai.origin}/v1` }),
@@ -638,7 +653,7 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
 
         // (d) 反例：B 保持 current（新 ID 应用后未切回 custom）→ 真实重开 → 切回 A（custom keep）→ A 资料保留 + A key 可用
         // 当前 current=preset（新 ID）。直接二次真实重开（B 保持 current），不先切回 custom。
-        await reopened.close();
+        await closeOwned(reopened, "custom-before-preset-reopen");
         const reopenedWithPresetCurrent = await launchApp(stateDir, {
           DCODE_CATALOG_BASE_URL: catalog.origin,
           DCODE_E2E_PRESET_BASE_URLS: JSON.stringify({ [kimiProvider]: `${openai.origin}/v1` }),
@@ -669,14 +684,14 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
           await reopenedWithPresetCurrent.page.keyboard.press("Escape");
           const reqCustomA = await sendInNewSession(reopenedWithPresetCurrent.page, "hello B-cold custom-A", customLoop, "a-model");
           evidence.steps.push({ phase: "b-current-coldreopen-customa-send", model: reqCustomA.model, marker: reqCustomA.marker });
-        } finally {
-          await reopenedWithPresetCurrent.close();
+        } catch (error) { primary ??= error; throw error; } finally {
+          await closeOwned(reopenedWithPresetCurrent, "preset-current-finally");
         }
-      } finally {
-        await reopened.close();
+      } catch (error) { primary ??= error; throw error; } finally {
+        await closeOwned(reopened, "custom-before-preset-reopen");
       }
-    } finally {
-      await handle.close().catch(() => undefined);
+    } catch (error) { primary ??= error; throw error; } finally {
+      await closeOwned(handle, "initial-finally");
     }
     writeFileSync(join(EVID, "preset-catalog-path.json"), JSON.stringify(evidence, null, 2));
 
@@ -712,15 +727,24 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
       const reqOffline = await sendInNewSession(offlineReopen.page, "hello offline send", openai, "gpt-4o-2025");
       evidence.steps.push({ phase: "offline-reopen-cached-new-id-sent", model: reqOffline.model, marker: reqOffline.marker });
       writeFileSync(join(EVID, "preset-catalog-path.json"), JSON.stringify(evidence, null, 2));
-    } finally {
-      await offlineReopen.close();
+    } catch (error) { primary ??= error; throw error; } finally {
+      await closeOwned(offlineReopen, "offline-finally");
     }
-  } finally {
-    if (!catalogClosedEarly) await catalog.close();
-    await openai.close();
-    await customLoop.close();
-    cleanup(stateDir);
+  } catch (error) { primary ??= error; }
+  finally {
+    const finish = async (phase, action) => {
+      try { await action(); } catch (error) {
+        primary ??= error;
+        closeRecords.push({ phase, status: 'cleanup-failed', error: { name: error.name, message: error.message }, at: Date.now() });
+      }
+    };
+    if (!catalogClosedEarly) await finish('catalog-close', () => catalog.close());
+    await finish('openai-close', () => openai.close());
+    await finish('custom-close', () => customLoop.close());
+    await finish('data-cleanup', () => cleanup(stateDir));
+    persistCloseRecords();
   }
+  if (primary) throw primary;
 });
 
 // ---------- P1-2：准入会话身份必须绑定到**本条会话**的端口 ----------

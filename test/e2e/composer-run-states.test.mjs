@@ -181,7 +181,7 @@ test("C01–C06 单主按钮、输入选项菜单与工具错误复制（连续�
   } finally {
     writeFileSync(join(stateDir, "resume-gate"), "open");
     await page.evaluate(() => window.__clipGate?.resolve?.()).catch(() => undefined);
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 

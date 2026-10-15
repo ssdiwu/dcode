@@ -184,7 +184,7 @@ async function reopenReadonly(f, sessionId, requestCount) {
   assert.equal((await events(f.project)).filter(item => item.type === 'start').length, started);
   return snapshot;
 }
-async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false }, action) {
+async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false, ownedProviderHeader = false }, action) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-desktop-extension-mcp-'));
   const f = { root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
   let primary; const secondary = [];
@@ -197,11 +197,12 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
     await mkdir(join(f.project, '.pi/extensions'), { recursive: true });
     await writeFile(join(f.project, '.pi/extensions/desktop.ts'), `import { Type } from 'typebox';\nimport { appendFile } from 'node:fs/promises';\nimport { join } from 'node:path';\nexport default function(pi) { pi.on('before_agent_start',()=>({message:{customType:'fixture-start',content:${JSON.stringify('startup visible '+f.nonce)},display:true}})); pi.on('before_agent_start',()=>({message:{customType:'fixture-hidden',content:${JSON.stringify('startup context only '+f.nonce)},display:false}})); pi.registerTool({name:'extension_nonce',label:'nonce',description:'Actual project extension',parameters:Type.Object({}),async execute(id,args,signal,update,ctx){pi.sendMessage({customType:'fixture-extension',content:${JSON.stringify(extensionVisibleText(f.nonce))},display:true});const read=await ctx.executeTool('read',{path:${JSON.stringify(desktopSkillPath)}});if(read.isError)throw new Error('Actual skill read failed');await appendFile(join(ctx.cwd,'desktop-skill-read-completions.jsonl'),JSON.stringify({nonce:${JSON.stringify(f.nonce)},callId:read.toolCall.id})+'\\n');return {content:[{type:'text',text:${JSON.stringify('extension actual ' + f.nonce)}},...read.result.content],details:{}};}}); }\n`);
     if(ownedComplete) await writeFile(join(f.project,'.pi/extensions/active-complete.ts'),desktopActiveExtensionSource(f.nonce));
-    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : desktopStreamExtensionSource(f.nonce)));
+    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : ownedProviderHeader ? desktopProviderHeaderExtensionSource(f.nonce) : desktopStreamExtensionSource(f.nonce)));
     await writeFile(join(f.project, '.pi/mcp.json'), JSON.stringify({ mcpServers: { fixture: {
       command: process.execPath, args: [resolve(import.meta.dirname, 'ordinary-mcp-fixture.mjs'), f.project, f.nonce], exposure: 'direct', enabled: true,
     } } }));
     f.server = await startCodingLoopback({ prefixCalls: calls(f.nonce), holdFinal, callsOverride,
+      ...(ownedProviderHeader ? {expectedProviderHeader:f.nonce} : {}),
       // route等待例应当零inner；仍识别并记录意外inner，但不能套“已有held HTTP须结束”的旧stream前提。
       ...(ownedStream ? {ownedComplete:{marker:desktopStreamInput(f.nonce),text:desktopStreamText(f.nonce),responseId:'desktop-stream-'+f.nonce,...(virtualWait?{}:{stream:{prefix:desktopStreamPrefix(f.nonce)}})}}
         : ownedComplete ? {ownedComplete:{marker:'DESKTOP_ACTIVE_INPUT_'+f.nonce,text:'DESKTOP_ACTIVE_RESULT_'+f.nonce,responseId:'desktop-active-'+f.nonce}} : {}) });
@@ -531,9 +532,7 @@ test('普通桌面streamSimple：设置绑定启用零执行，final前真实par
 },desktopStreamSuccess));
 
 
-for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后${closing}：同HTTP关闭，只读重开零新增，明确继续原operation不重放`,async()=>withFixture({
-  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
-},async f=>{
+function desktopStreamInterrupted(closing) { return async f=>{
   assert.equal(f.server.requests.length,0);assert.deepEqual(f.server.completeRequests,[]);await desktopStreamWindows(f);
   const input='普通桌面中断真实流 '+closing+' '+f.nonce,page=f.handle.page,composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
   await composer.fill(input);await composer.press('Enter');const held=await desktopStreamPartial(f,input,closing);
@@ -565,7 +564,10 @@ for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后
   await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${held.sessionId}-stream-${closing}-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,closing,sessionId:held.sessionId,operationId:held.user.operationId,userBlockId:held.user.id,
     partialObservationBlockId:held.partialBlockId,formalToolBlockId:failed.id,directResponseId:held.direct.responseId,originalToolCallId:'actual-tool-1',httpCounts:{beforeReadonly:{outer:1,inner:1},afterExplicitResume:{outer:2,inner:1}},
     sameRemoteClosedBeforeFinal:held.direct.closedBeforeFinal,remoteFinished:held.direct.finished,drained,actualUsage:used.usage,pixels:{partial:held.png,readonly:beforeResumePng,error:finalPng},partialTrace:held.partialTrace,afterResumeTrace:trace},null,2));
-}));
+}; }
+for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后${closing}：同HTTP关闭，只读重开零新增，明确继续原operation不重放`,async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
+},desktopStreamInterrupted(closing)));
 
 
 const desktopVirtualTraceFile='desktop-virtual-route.json';
@@ -642,3 +644,22 @@ for(const closing of ['pause','close'])test(`普通桌面virtual direct/route等
   const forwarded=f.server.requests[1].body.messages.filter(message=>message.role==='tool'&&message.tool_call_id==='actual-tool-1');assert.equal(forwarded.length,1);assert.ok(httpMessageText(forwarded[0]).length>0);
   await writeFile(join(evidenceDir('ordinary-extension-mcp'),`${sessionId}-virtual-route-${closing}-actions-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,closing,sessionId,operationId:user.operationId,route,afterStopRoute:unchanged,trace,drained,httpCounts:{beforeReadonly:{outer:1,inner:0},afterResume:{outer:2,inner:0}},gateReleasedAfterWorkerClose:true,lateCallbackReturnProven:false,pixels:{parked:beforePng,readonly:readonlyPng}},null,2));
 }));
+
+
+function desktopProviderHeaderExtensionSource(nonce) {
+  const source=desktopStreamExtensionSource(nonce),needle='export default function(pi){pi.registerTool';
+  assert.ok(source.includes(needle));
+  return source.replace(needle,'export default function(pi){pi.registerProvider(\'user-defined\',{headers:{\'x-dcode-provider-config\':'+JSON.stringify(nonce)+'}});pi.registerTool');
+}
+async function assertDesktopProviderHeader(f,kind='normal') {
+  assert.equal(f.server.requests.length,2);assert.equal(f.server.completeRequests.length,1);
+  assert.ok(f.server.requests.every(request=>request.providerHeader===f.nonce&&request.authOk&&request.body.model===codingModel));
+  assert.equal(f.server.completeRequests[0].providerHeader,f.nonce);assert.equal(f.server.completeRequests[0].authOk,true);assert.deepEqual(f.server.errors,[]);
+  await writeFile(join(evidenceDir('ordinary-extension-mcp'),`provider-header-${kind}-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,kind,outer:f.server.requests.map(request=>({ordinal:request.ordinal,authOk:request.authOk,model:request.body.model,providerHeader:request.providerHeader})),inner:f.server.completeRequests,readonlyReopen:true,explicitResume:kind!=='normal'},null,2));
+}
+test('普通桌面provider headers：配置绑定启用、三次真实HTTP消费、结果用量与正常关闭RO',async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedProviderHeader:true,
+},async f=>{await desktopStreamSuccess(f);await assertDesktopProviderHeader(f);}));
+for(const closing of ['pause','close'])test(`普通桌面provider headers/partial后${closing}：原HTTP收束、RO零执行、明确继续重装但不重放`,async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedProviderHeader:true,
+},async f=>{await desktopStreamInterrupted(closing)(f);await assertDesktopProviderHeader(f,closing);}));

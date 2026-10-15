@@ -21,7 +21,7 @@ export async function prepareCodingProject(project) {
   await writeFile(join(project, 'check.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from './index.mjs';\ntest('actual addition', () => assert.equal(add(2, 3), 5));\n");
 }
 
-export async function startCodingLoopback({ holdFinal = false, prefixCalls = [], subsequentCalls = [], firstRoundCalls, callsOverride, expectedModels = [codingModel], expectedKey = codingKey, expectedCatalogHeader, ownedComplete } = {}) {
+export async function startCodingLoopback({ holdFinal = false, prefixCalls = [], subsequentCalls = [], firstRoundCalls, callsOverride, expectedModels = [codingModel], expectedKey = codingKey, expectedCatalogHeader, expectedProviderHeader, ownedComplete } = {}) {
   const requests = [];
   const errors = [];
   const completeRequests = [];
@@ -61,12 +61,14 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
       catch { errors.push('invalid request JSON'); res.writeHead(400); res.end(); return; }
       const authOk = req.headers.authorization === `Bearer ${expectedKey}`;
       const catalogHeaderOk = expectedCatalogHeader === undefined || req.headers['x-dcode-catalog-secret'] === expectedCatalogHeader;
+      const providerHeader = req.headers['x-dcode-provider-config'] ?? null;
+      const providerHeaderOk = expectedProviderHeader === undefined || providerHeader === expectedProviderHeader;
       // 仅测试对端分流一个真实主动complete；不能让内层HTTP占走外层工具脚本ordinal。
       if (ownedComplete && body.messages?.some(message => message.role === 'user' && message.content === ownedComplete.marker)) {
         const record = { ordinal:completeRequests.length + 1, responseId:ownedComplete.responseId, authOk,
-          model:body.model, accepted:true, finished:false, input:117, output:13 };
+          model:body.model, accepted:true, finished:false, input:117, output:13, ...(expectedProviderHeader === undefined ? {} : {providerHeader}) };
         completeRequests.push(record);
-        if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || record.ordinal !== 1) {
+        if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || !providerHeaderOk || record.ordinal !== 1) {
           errors.push('owned complete identity or duplicate invalid'); res.writeHead(400); res.end(); return;
         }
         // 仅新增stream夹具使用此分段门；原complete默认响应字节保持原样。
@@ -95,8 +97,8 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
       if (ownedComplete?.stream && ordinal > 1 && !completeRequests[0]?.finished && !completeRequests[0]?.closedBeforeFinal)
         errors.push('Outer continuation escaped before the held owned stream finished or actually closed');
       requests.push({ ordinal, body, authOk, receivedAt:Date.now(), extensionHeader:req.headers['x-dcode-extension-fixture']??null,
-        ...(expectedCatalogHeader === undefined ? {} : { catalogHeaderOk }) });
-      if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || ordinal > calls.length + subsequentCalls.length + 3) {
+        ...(expectedCatalogHeader === undefined ? {} : { catalogHeaderOk }), ...(expectedProviderHeader === undefined ? {} : {providerHeader}) });
+      if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || !providerHeaderOk || ordinal > calls.length + subsequentCalls.length + 3) {
         errors.push('request identity or count invalid'); res.writeHead(400); res.end(); return;
       }
       if (ordinal > calls.length && !finalReleased) {

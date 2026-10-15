@@ -103,7 +103,7 @@ test("回执三态：待核对→只读回查→重试已接收；草稿只在�
     await page.getByText("执行中", { exact: true }).first().waitFor();
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -139,7 +139,7 @@ test("回执丢失但实际已接收：只读回查找回，不盲目重投", as
     assert.equal(await page.locator("main").getByText(text, { exact: true }).count(), 1);
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -171,7 +171,7 @@ test("外层回包丢失但已 accepted：快照确认清原稿与身份，不�
     assert.equal(matches.length, 1);
     assert.equal(matches[0].receipt.status, "accepted");
   } finally {
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -210,7 +210,7 @@ test("外层回包与接收均未知：Enter 和换 mode 不重试旧文；T02 �
     assert.equal(after.tasks.length, before.tasks.length);
     assert.equal(after.sessions.length, before.sessions.length);
   } finally {
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -255,7 +255,7 @@ test("消息身份：同次双击不重复投递；相同文字的新发送是�
     );
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -310,7 +310,7 @@ test("暂停中发送被拒：确认未接收保留原文与原因，重试复�
     assert.equal(retried[0].receipt?.status, "accepted");
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -353,7 +353,7 @@ test("stale 恢复拒绝：过期恢复被拒后不自动重投，再恢复须�
     await page.getByText("本轮结束。", { exact: true }).waitFor();
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -470,7 +470,7 @@ test("首发未知：草稿 Enter 不重投，回查后同身份重试复用原�
     await page.getByText("执行中", { exact: true }).first().waitFor();
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -632,7 +632,7 @@ test("等待回执期间继续编辑：旧回执不得清新稿，已切走不�
       assert.equal(recording.captureError, null, "取证失败必须明确报告，不能记成空轨迹通过");
     } finally {
       // 证据采集或写盘失败也必须收束隔离应用；关闭失败后强制清理，不遗留测试窗口。
-      try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+      try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
     }
   }
 });
@@ -682,7 +682,7 @@ test("等待回执期间原地改写且外层回包丢失：accepted 快照不�
     assert.equal(matches[0].receipt?.status, "accepted");
   } finally {
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 
@@ -877,6 +877,6 @@ test("末尾操作验收：长消息待核对→字号/窗口变化后末尾文�
     mkdirSync(EVIDENCE, { recursive: true });
     writeFileSync(join(EVIDENCE, "end-actions-geometry.json"), JSON.stringify(evidence, null, 1));
     writeFileSync(join(stateDir, "send-result-gate"), "open");
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });

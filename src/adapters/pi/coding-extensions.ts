@@ -10,6 +10,7 @@ import type { ToolCall, TSchema } from '@earendil-works/pi-ai';
 import type { ModelRuntime, BeforeAgentStartEventResult, VirtualModelDefinition, ModelRouteRequest } from '@earendil-works/pi-coding-agent';
 import { CodingResourcesUnavailable } from './coding-resources';
 import { extensionWorkerSource } from './extension-worker';
+import type { CodingProviderHeaders } from './coding-provider-headers';
 import { taskToolApi } from './task-tool-api';
 import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
@@ -115,6 +116,7 @@ export class CodingExtensions {
   #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: AssistantMessage[] }>();
   #modelCalls = new Map<string, ModelCall>();
   #virtuals = new Map<string, VirtualRegistration>();
+  #providerClaims = new Map<string, { origin: Worker; handle: string; claim: object }>();
   #events = new Map<string, { api?: HookApi; context: Context }>();
   #tools: Descriptor[] = [];
   #active: string[] = [];
@@ -134,12 +136,14 @@ export class CodingExtensions {
   readonly #agentDir: string;
   readonly #enabled: () => boolean;
   readonly #sessionId: string;
+  readonly #providerHeaders?: CodingProviderHeaders;
   readonly #nestedTask;
   readonly #modelTask;
   readonly #extensionName = 'dcode-project-extensions';
 
-  constructor(builtins: readonly ToolRegistration[], agentDir: string, enabled: () => boolean, models: ModelRuntime, sessionId: string) {
+  constructor(builtins: readonly ToolRegistration[], agentDir: string, enabled: () => boolean, models: ModelRuntime, sessionId: string, providerHeaders?: CodingProviderHeaders) {
     this.#builtins = builtins; this.#agentDir = agentDir; this.#enabled = enabled; this.#models = models; this.#sessionId = sessionId;
+    this.#providerHeaders = providerHeaders;
     const settle = async (input: NestedInput, runtime: Parameters<NonNullable<ReturnType<typeof defineTask<NestedInput, { phase: 'call' | 'execute' }, ToolExecutionResult, ToolHooks>>['definition']['abort']>>[1], result: ToolExecutionResult, status: 'completed' | 'aborted' | 'failed', ctx: Context) => {
       await runtime.commit(async tx => {
         const spend = await tx.doc(ExtensionModelSpend, runtime.taskId);
@@ -322,6 +326,7 @@ export class CodingExtensions {
       if (['stream','streamSimple','complete','completeSimple','streamDeferred','fetchDeferred','generateImages','classify'].includes(String(key))) {
         return (...args: unknown[]) => {
           if (this.#armed && this.#closed) throw new CodingResourcesUnavailable();
+          this.#providerHeaders?.assertCurrent();
           if (this.#worker && !this.#closed && ['stream','streamSimple','complete','completeSimple'].includes(String(key))) {
             const previous = (args[2] ?? {}) as { signal?: AbortSignal; onPayload?: (payload: unknown, model: unknown) => unknown; transformHeaders?: (headers: unknown, model: unknown) => unknown };
             args[2] = { ...previous,
@@ -591,6 +596,11 @@ export class CodingExtensions {
       if (own.model && this.#models.getModel(own.provider, own.id) === own.model) this.#models.unregisterVirtualModel(own.provider, own.id);
     }
   }
+  #removeProviderHeaders(): void {
+    for (const [id, owned] of this.#providerClaims) {
+      this.#providerClaims.delete(id); this.#providerHeaders?.release(id, owned.claim);
+    }
+  }
   async #route(own: VirtualRegistration, request: ModelRouteRequest) {
     const signal = request.signal;
     const current = () => this.#virtuals.get(virtualKey(own.provider, own.id)) === own && own.origin === this.#worker
@@ -688,6 +698,21 @@ export class CodingExtensions {
     const caller = this.#calls.get(callId); const event = this.#events.get(callId);
     if (!caller && !event) throw new CodingResourcesUnavailable();
     const ctx = caller?.context ?? event!.context;
+    if (method === 'provider-register' || method === 'provider-unregister') {
+      if (!this.#providerHeaders || ctx.abortSignal?.aborted || typeof payload.provider !== 'string' || !payload.provider.trim()
+        || payload.provider.length > 128 || /[\x00-\x1f]/.test(payload.provider)
+        || typeof payload.handle !== 'string' || !/^provider\/[1-9]\d*$/.test(payload.handle)) throw new CodingResourcesUnavailable();
+      const id = payload.provider, previous = this.#providerClaims.get(id);
+      if (method === 'provider-register') {
+        if (previous && previous.origin !== origin) throw new CodingResourcesUnavailable();
+        const claim = {};
+        this.#providerHeaders.register(id, bounded(payload.config, 64 * 1024), claim, previous?.claim);
+        this.#providerClaims.set(id, { origin, handle: payload.handle, claim });
+      } else if (previous?.origin === origin && previous.handle === payload.handle) {
+        this.#providerClaims.delete(id); this.#providerHeaders.release(id, previous.claim);
+      }
+      return { catalog: this.#catalog() };
+    }
     if (method === 'virtual-register' || method === 'virtual-unregister') {
       if (ctx.abortSignal?.aborted || typeof payload.handle !== 'string' || !/^virtual\/[1-9]\d*$/.test(payload.handle)) throw new CodingResourcesUnavailable();
       if (method === 'virtual-register') {
@@ -748,13 +773,14 @@ export class CodingExtensions {
     }
     throw new CodingResourcesUnavailable();
   }
-  #fail(): void { this.#closed = true; this.#removeVirtuals(); for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear(); }
+  #fail(): void { this.#closed = true; this.#removeVirtuals(); this.#removeProviderHeaders(); for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear(); }
   close(): Promise<void> {
     if (this.#closing) return this.#closing;
     const worker = this.#worker; if (!worker) return Promise.resolve();
     // 在等待关闭前提升代次；旧回调不能提交新任务，取消由同一 Harness 所有权级联。
     this.#closed = true;
     this.#removeVirtuals();
+    this.#removeProviderHeaders();
     for (const pending of this.#pending.values()) pending.abort?.();
     this.#closing = (async () => {
       try { await this.#request('close', {}); await this.#publication; }

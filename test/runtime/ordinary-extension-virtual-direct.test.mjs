@@ -95,10 +95,11 @@ export default function(pi){
         const held=await fetch(${JSON.stringify(remote.origin+'/route-gate/'+nonce)});await held.text();
       }
       if(${JSON.stringify(mutationProbe)}){
-        let setRejected=false,registerRejected=false;
+        let setRejected=false,registerRejected=false,providerRejected=false;
         try{pi.setActiveTools([]);}catch{setRejected=true;}
         try{pi.registerTool({name:'route_pure_injected',label:'must be rejected',description:'pure route mutation probe',parameters:Type.Object({}),async execute(){return {content:[{type:'text',text:'must not register'}]};}});}catch{registerRejected=true;}
-        await note('pure-mutations',{setRejected,registerRejected});
+        try{pi.registerProvider(${JSON.stringify(providerB)},{headers:{'x-pure-provider-mutation':'must-not-register'}});}catch{providerRejected=true;}
+        await note('pure-mutations',{setRejected,registerRejected,providerRejected});
       }
       const canonical=ctx.modelRegistry.find(${JSON.stringify(providerB)},${JSON.stringify(remote.modelB)});
       if(!canonical)throw new Error('Configured B absent from the real catalog');
@@ -362,6 +363,7 @@ await test('pure route拒绝：真实pi.setActiveTools与registerTool不能改�
     const denied=observed.steps.find(step=>step.phase==='pure-mutations');assert.ok(denied);
     assert.equal(denied.setRejected,true,'真实route中的pi.setActiveTools必须在写active之前拒绝');
     assert.equal(denied.registerRejected,true,'真实route中的pi.registerTool必须在写SDK工具map之前拒绝');
+    assert.equal(denied.providerRejected,true,'真实route中的pi.registerProvider必须在发送登记RPC或写当前claim之前同步拒绝');
     const loadout=observed.steps.find(step=>step.phase==='tool-loadout-after');assert.ok(loadout);assert.deepEqual(loadout.activeAfter,loadout.activeBefore);
     assert.equal(loadout.allNames.includes('route_pure_injected'),false,'后续正常scope也不能发布先前pure的本地注册');
     assert.equal(f.remote.of('B').length,1);assert.equal(f.remote.of('A').length,2);assert.equal(f.remote.of('forged').length,0);

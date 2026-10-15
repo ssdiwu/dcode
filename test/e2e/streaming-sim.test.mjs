@@ -172,7 +172,10 @@ const info = (page) => page.evaluate(() => {
 const blockHeight = (page, needle) => page.evaluate((n) => window.__SIM.getScrollerInfo().blockHeight(n), needle);
 const blockTextLength = (page, needle) => page.evaluate((n) => window.__SIM.getScrollerInfo().blockTextLength(n), needle);
 const atBottom = (g) => g.scrollTop + g.clientHeight >= g.scrollHeight - 2;
-const grow = (page, id, delta) => page.evaluate(({ id, delta }) => window.__SIM.growBlock(id, delta), { id, delta });
+const grow = (page, id, delta) => page.evaluate(({ id, delta }) => {
+  window.__STREAM_OBSERVE?.mark('before-grow');
+  window.__SIM.growBlock(id, delta);
+}, { id, delta });
 const resetSession = (page, block) => page.evaluate((b) => window.__SIM.resetSession([b]), block);
 const appendBlock = (page, id, text) =>
   page.evaluate(
@@ -240,6 +243,34 @@ test(`同块流式五组（${VARIANT}）：底部增高跟随 / 上翻保持 / �
       return g.scrollTop + g.clientHeight >= g.scrollHeight - 2;
     });
 
+    // 只读事件取证：不写滚动位置／尺寸，不调用内部意图；保原动作及15秒断言。
+    await page.evaluate(() => {
+      const scroller = document.querySelector("main .overflow-y-auto"), trace = [];
+      let phase = 'A', frame, stopped = false;
+      const record = (kind, event) => {
+        if (trace.length >= 1536) return;
+        trace.push({ t: performance.now(), phase, kind, top: scroller.scrollTop,
+          sh: scroller.scrollHeight, ch: scroller.clientHeight,
+          gap: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+          target: event?.target?.tagName ?? null, targetIsScroller: event?.target === scroller,
+          active: document.activeElement?.tagName, activeIsScroller: document.activeElement === scroller,
+          key: event?.key, deltaY: event?.deltaY, trusted: event?.isTrusted,
+          dockHeight: document.querySelector('[data-slot="composer-dock"]')?.getBoundingClientRect().height,
+          areaHeight: document.querySelector('[data-slot="composer-card"] textarea')?.getBoundingClientRect().height });
+      };
+      const scroll = event => record('scroll', event), wheel = event => record('wheel', event), key = event => record('keydown', event);
+      scroller.addEventListener('scroll', scroll); scroller.addEventListener('wheel', wheel);
+      document.addEventListener('keydown', key, true);
+      const sample = () => { if (stopped) return; if (phase === 'C') record('raf'); frame = requestAnimationFrame(sample); };
+      frame = requestAnimationFrame(sample);
+      window.__STREAM_OBSERVE = { mark(kind) { record(kind); }, phase(value) { phase = value; record('phase'); },
+        hasScopedKey(key) { return trace.some(event => event.phase === 'C' && event.kind === 'keydown' && event.key === key && event.trusted && event.targetIsScroller); },
+        hasBottomScroll() { return trace.some(event => event.phase === 'C' && event.kind === 'scroll' && event.gap <= 2); },
+        stop() { stopped = true; cancelAnimationFrame(frame); record('final');
+          scroller.removeEventListener('scroll', scroll); scroller.removeEventListener('wheel', wheel); document.removeEventListener('keydown', key, true); return trace; } };
+      record('installed');
+    });
+
     // A：底部时同块增高 → 跟随
     const a0 = await info(page);
     const a0h = await blockHeight(page, "（ABC）");
@@ -281,12 +312,18 @@ test(`同块流式五组（${VARIANT}）：底部增高跟随 / 上翻保持 / �
     // C：显式回底 → 同块增高恢复跟随
     await page.evaluate(() => {
       const s = document.querySelector("main .overflow-y-auto");
+      window.__STREAM_OBSERVE.phase('C');
+      // 与真实键盘用例相同：焦点只作前置，PageDown必须到时间线，不落BODY或输入框。
+      s.tabIndex = 0; s.focus({ preventScroll: true });
       s.scrollTop = s.scrollHeight;
+      window.__STREAM_OBSERVE.mark('explicit-programmatic-bottom-written');
     });
+    // 先确认回底scroll已经真实派发，再按PageDown：覆盖已在底部、按键不再产生位移的合法顺序。
+    await page.waitForFunction(() => window.__STREAM_OBSERVE.hasBottomScroll());
     await page.keyboard.press("PageDown");
     await page.waitForFunction(() => {
       const g = window.__SIM.getScrollerInfo();
-      return g.scrollTop + g.clientHeight >= g.scrollHeight - 2;
+      return window.__STREAM_OBSERVE.hasScopedKey('PageDown') && g.scrollTop + g.clientHeight >= g.scrollHeight - 2;
     });
     const c0 = await info(page);
     const c0h = await blockHeight(page, "（ABC）");
@@ -304,6 +341,7 @@ test(`同块流式五组（${VARIANT}）：底部增高跟随 / 上翻保持 / �
     assert.ok(c1h > c0h, `C：同一块高度须真实增加（${c0h}→${c1h}）`);
     assert.ok(atBottom(c1), `C：回到底部后同块增高须恢复跟随`);
     evidence.scenarios.push({ name: "C-resume-growth-follows", before: { ...c0, h: c0h }, after: { ...c1, h: c1h } });
+    await page.evaluate(() => window.__STREAM_OBSERVE.phase('after-C'));
 
     // ---- 场景 E：独立新会话（长内容）——上翻 + 新块追加保持（关键反例：拒绝旧无条件 count effect）----
     await resetSession(page, makeBlock("e0", LONG_MARK("E")));
@@ -349,10 +387,12 @@ test(`同块流式五组（${VARIANT}）：底部增高跟随 / 上翻保持 / �
     assert.ok(atBottom(d1), `D：初始短内容增高到溢出仍须跟随`);
     evidence.scenarios.push({ name: "D-initial-short-growth-follows", before: { ...d0, h: d0h }, after: { ...d1, h: d1h } });
 
+    evidence.observations = await page.evaluate(() => window.__STREAM_OBSERVE?.stop() ?? []);
     evidence.host = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => ({ visible: w.isVisible(), focusable: w.isFocusable(), focused: w.isFocused() })));
     writeFileSync(join(EVIDENCE, VARIANT_EVIDENCE), JSON.stringify(evidence, null, 1));
   } catch (err) {
     // 失败也保留已收场景与失败观察：baseline 反例的红证据不能只靠 exit 码
+    evidence.observations = await page.evaluate(() => window.__STREAM_OBSERVE?.stop() ?? []).catch(() => []);
     evidence.failure = { message: String(err), stack: err?.stack?.split("\n").slice(0, 4) };
     writeFileSync(join(EVIDENCE, VARIANT_EVIDENCE), JSON.stringify(evidence, null, 1));
     throw err;

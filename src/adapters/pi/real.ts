@@ -23,6 +23,7 @@ import type { RegisteredPresetProvider } from "./preset-providers";
 import { registerPresetProviders } from "./preset-providers";
 import { createCodingTools } from "./coding-tools";
 import { CodingExtensions } from "./coding-extensions";
+import { CodingProviderHeaders } from './coding-provider-headers';
 import { loadCodingResources } from "./coding-resources";
 import type { CodingPromptTemplate } from "./coding-resources";
 import { expandCodingPrompt } from "./prompt-templates";
@@ -31,9 +32,9 @@ import * as anthropicMessagesApi from "@earendil-works/pi-ai/api/anthropic-messa
 
 /** 只为新运行选择目录；已有运行由正式绑定保留原 cwd，查询不创建目录。 */
 // 模板缓存只属本实例的执行准备；已有输入按正式回执查回，不以新模板重写历史。
-function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, agentDir: string, enabled: () => boolean, registry: ReturnType<typeof createRegistry>, models: ModelRuntime, sessionId: string) {
+function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, agentDir: string, enabled: () => boolean, registry: ReturnType<typeof createRegistry>, models: ModelRuntime, sessionId: string, providerHeaders: CodingProviderHeaders) {
   let prompts: CodingPromptTemplate[] = [];
-  const extensions = coding ? new CodingExtensions(coding.tools ?? [], agentDir, enabled, models, sessionId) : null;
+  const extensions = coding ? new CodingExtensions(coding.tools ?? [], agentDir, enabled, models, sessionId, providerHeaders) : null;
   extensions?.useRegistry(registry);
   return {
     models: extensions?.guardModels(models) ?? models,
@@ -488,13 +489,13 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
   client.registerNativeProvider(provider);
   // 走的是和 preset 装配同一个登记循环，不另造一套。
   registerAdditionalSources(client, additionalSources, providerId, { ...options, sessionRef, registered, currentProvider: provider });
-  return { client, provider };
+  return { client, provider, providerHeaders: new CodingProviderHeaders(client, [...registered.keys()]) };
   };
 
   /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
   // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
   // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown }[] = [];
+  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown; providerHeaders: CodingProviderHeaders }[] = [];
 
   return {
     kind: "pi",
@@ -504,9 +505,15 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
      */
     async refreshAdditionalSources(sources: readonly ConfiguredSourceModels[] | undefined): Promise<void> {
       additionalSources = sources;
+      const failures: unknown[] = [];
+      // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
       for (const opened of openedClients) {
-        registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+        try {
+          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+          opened.providerHeaders.refresh(replaced);
+        } catch (error) { failures.push(error); }
       }
+      if (failures.length) throw failures[0];
     },
     modelName: options.config.label,
     async open(context: SessionExecutionContext): Promise<PiExecutionSession> {
@@ -521,6 +528,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
         client: modelsClient,
         sessionId: context.target.sessionId,
         provider: built.provider,
+        providerHeaders: built.providerHeaders,
       });
       const session = await PiExecutionSession.open({
         target: context.target,
@@ -529,7 +537,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
         initialize: context.initialize,
         reuseStoredCwd: true,
         registry,
-        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId),
+        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders),
         settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
         agent: {
           extensions: [],
@@ -658,7 +666,8 @@ function registerAdditionalSources(
     /** 当前来源已包装好的 provider：刷新后要把同源新增模型重新挂回去 */
     currentProvider?: unknown;
   },
-): void {
+): string[] {
+  const replaced: string[] = [];
   for (const extra of sources ?? []) {
     if (extra.providerId === currentProviderId) {
       // 当前来源同样要同步：目录刷新后**同源**新增的模型不在已打开客户端的模型集合里，
@@ -672,6 +681,7 @@ function registerAdditionalSources(
       const base = options.currentProvider as Record<string, unknown> | undefined;
       if (base) {
         modelsClient.registerNativeProvider({ ...base, getModels: () => sameModels, getAllModels: () => sameModels } as never);
+        replaced.push(extra.providerId);
       }
       continue;
     }
@@ -689,6 +699,7 @@ function registerAdditionalSources(
         reasoning: false,
       } as unknown as Model<Api>]);
       modelsClient.registerNativeProvider(createCustomSourceProvider(extra.config, { ...options, modelsClient }) as never);
+      replaced.push(extra.providerId);
       continue;
     }
     if (extra.models.length === 0) continue;
@@ -705,7 +716,9 @@ function registerAdditionalSources(
       getModels: () => models,
       getAllModels: () => models,
     } as never);
+    replaced.push(extra.providerId);
   }
+  return replaced;
 }
 
 /**
@@ -738,7 +751,8 @@ function wrapStreamMethod(
           if (chosen.thinkingLevel !== null && chosen.thinkingLevel !== "off") admittedOptions.reasoning = chosen.thinkingLevel;
         }
         if (chosen.sourceId !== request.sourceId || chosen.modelId !== request.modelId) {
-          const selected = resolveRegisteredModel(options.registered, chosen);
+          // registered只核受管身份/能力；实际重分派必须取本会话canonical投影，原始模板不含已确认的扩展头。
+          const selected = options.modelsClient.getPhysicalModel(chosen.sourceId, chosen.modelId);
           if (!selected) throw new Error("裁定模型已从执行端移除");
           // SDK 到达 provider 前已按原来源解析认证。只换 model 会把 A 的密钥/头传给 B，
           // 也会继续使用 A 的协议。去掉这份已解析认证，经本会话的 SDK 重新分派和解析 B；
@@ -812,13 +826,13 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
   registered.set(providerId, ownModels);
   modelsClient.registerNativeProvider(providerWithModels(provider, ownModels) as never);
   registerAdditionalSources(modelsClient, additionalSources, providerId, { ...options, sessionRef, registered, currentProvider: provider });
-  return { client: modelsClient, provider };
+  return { client: modelsClient, provider, providerHeaders: new CodingProviderHeaders(modelsClient, [...registered.keys()]) };
   };
 
   /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
   // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
   // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown }[] = [];
+  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown; providerHeaders: CodingProviderHeaders }[] = [];
 
   return {
     kind: "pi",
@@ -831,9 +845,15 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
      */
     async refreshAdditionalSources(sources: readonly ConfiguredSourceModels[] | undefined): Promise<void> {
       additionalSources = sources;
+      const failures: unknown[] = [];
+      // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
       for (const opened of openedClients) {
-        registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+        try {
+          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+          opened.providerHeaders.refresh(replaced);
+        } catch (error) { failures.push(error); }
       }
+      if (failures.length) throw failures[0];
     },
     modelName: `${options.preset.name} / ${options.info.name}`,
     async open(context: SessionExecutionContext): Promise<PiExecutionSession> {
@@ -848,6 +868,7 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
         client: modelsClient,
         sessionId: context.target.sessionId,
         provider: built.provider,
+        providerHeaders: built.providerHeaders,
       });
       const session = await PiExecutionSession.open({
         target: context.target,
@@ -856,7 +877,7 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
         initialize: context.initialize,
         reuseStoredCwd: true,
         registry,
-        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId),
+        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders),
         settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
         agent: {
           extensions: [],

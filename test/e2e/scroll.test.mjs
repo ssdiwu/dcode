@@ -231,7 +231,7 @@ test("滚动边界四组合：中文/英文 × 13px/14px", async () => {
       assert.ok(after.timeline.scrollTop > before.timeline.scrollTop, `${combo.lang}/${combo.fontSize}px 时间线可滚`);
     }
   } finally {
-    try { await close(); } finally { await killApp({ stateDir }); cleanup(stateDir); }
+    try { await close(); } finally { await killApp({ stateDir, close }); cleanup(stateDir); }
   }
 });
 

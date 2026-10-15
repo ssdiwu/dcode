@@ -2,7 +2,7 @@
 // 恢复条只恢复界面；继续执行是用户的显式动作。
 // 运行徽标直接映射执行端相位（ready/running/pausing/paused/faulted）——没有「已完成」相。
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** 滚动停止的空闲判定：交互节奏参数，不承担任何状态收束职责。 */
 const SCROLL_IDLE_MS = 140;
@@ -98,6 +98,11 @@ export function Timeline({
   // 滚动结束用空闲计时识别——它是交互节奏，不是用来掩盖同步错误；重排锚定与程序化位移都不触发（见 onScroll）。
   const [scrolling, setScrolling] = useState(false);
   const scrollIdleRef = useRef<number | null>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // Composer先在本次布局恢复原高度，再撤暂收占位；不能先清占位而制造一帧max收缩/钳底。
+    if (!scrolling && dockRef.current) dockRef.current.style.minHeight = "";
+  }, [scrolling]);
 
   // mount/切换会话的监听器与意图初始化：本 effect 不重跑（依赖不含 count），
   // 与下文按 count 驱动的位移 effect 分离——避免位移 cleanup 中止监听器、丢失真实滚动识别
@@ -128,11 +133,13 @@ export function Timeline({
     // 向上动作立即离开跟随，避免实际 scroll 事件尚未派发时 RO 又把用户钉回底部。
     let userScrollPending = false;
     let userScrollDirection = 0;
-    const markUserScroll = (up: boolean) => {
+    const markUserScroll = (direction: -1 | 0 | 1) => {
       userScrollPending = true;
-      userScrollDirection = up ? -1 : 1;
+      userScrollDirection = direction;
       programmaticRef.current = null;
-      if (up) followingRef.current = false;
+      if (direction === -1) followingRef.current = false;
+      // 已在末尾的明确下翻可能不产生新scroll；此处认领，否则旧上翻意图会挡住随后增高。
+      else if (direction === 1 && atBottom()) followingRef.current = true;
     };
     const onWheel = (event: WheelEvent) => {
       if (!event.isTrusted || event.deltaY === 0) return;
@@ -145,20 +152,19 @@ export function Timeline({
           && (event.deltaY < 0 ? node.scrollTop > 1 : node.scrollTop < max - 1)) return;
         node = node.parentElement;
       }
-      markUserScroll(event.deltaY < 0);
+      markUserScroll(event.deltaY < 0 ? -1 : 1);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.defaultPrevented || event.target !== scroller) return;
-      if (["PageUp", "ArrowUp", "Home"].includes(event.key)) markUserScroll(true);
-      else if (["PageDown", "ArrowDown", "End", " "].includes(event.key)) markUserScroll(false);
+      if (["PageUp", "ArrowUp", "Home"].includes(event.key)) markUserScroll(-1);
+      else if (["PageDown", "ArrowDown", "End", " "].includes(event.key)) markUserScroll(1);
     };
     const onPointerDown = (event: PointerEvent) => {
       if (!event.isTrusted || event.button !== 0) return;
       const rect = scroller.getBoundingClientRect();
       const contentRight = rect.left + scroller.clientLeft + scroller.clientWidth;
       if (event.clientX >= contentRight && event.clientX < rect.right && event.clientY >= rect.top && event.clientY < rect.bottom) {
-        markUserScroll(false);
-        userScrollDirection = 0; // thumb 可以向任一方向拖动，以实际落点核阅读意图
+        markUserScroll(0); // thumb可以向任一方向拖动，仍以实际落点核阅读意图
       }
     };
     const onScroll = () => {
@@ -182,10 +188,13 @@ export function Timeline({
         // PageDown 的浏览器动画可能在“已回底”之后仍派发尾帧；期间字号／卡片重排
         // 扩大 max 时，旧动画目标不再是新底部，不能把继续向下的同次动作误读成上翻。
         // 已回底且仍在真实向下动作中的跟随保持；新的上翻在输入事件处立即解除跟随。
-        if (!(userScrollPending && userScrollDirection === 1 && followingRef.current)) {
+        if (!(userScrollPending && (userScrollDirection === -1 || (userScrollDirection === 1 && followingRef.current)))) {
           followingRef.current = atBottom();
         }
         // 真实滚动 → 输入区暂收；停止滚动后恢复（恢复高度由 Composer 按暂收前实测值给出）
+        // 暂收只缩卡片显示；保留本轮展开占位，避免内容max减少把已上翻位置钳成新底部。
+        const dock = dockRef.current;
+        if (dock && !dock.style.minHeight) dock.style.minHeight = `${dock.getBoundingClientRect().height}px`;
         setScrolling(true);
         if (scrollIdleRef.current !== null) window.clearTimeout(scrollIdleRef.current);
         scrollIdleRef.current = window.setTimeout(() => {
@@ -221,6 +230,7 @@ export function Timeline({
       scrollIdleRef.current = null;
       followingRef.current = null;
       programmaticRef.current = null;
+      if (dockRef.current) dockRef.current.style.minHeight = "";
       setScrolling(false);
     };
   }, [session.id]);
@@ -302,7 +312,7 @@ export function Timeline({
             卡片自身持表面/边界/圆角（DESIGN 容器规则 + spec 桌面会话输入区） */}
         {/* data-slot="composer-dock"：末尾消息避让、底部留边与留白穿透都以整个 dock
             （卡片＋C06 说明）为对象，不再只量卡片本体——说明行同样会遮住滚动中的消息 */}
-        <div data-slot="composer-dock" className="pointer-events-none sticky bottom-0 mx-auto w-full max-w-172 px-4 pb-3">
+        <div ref={dockRef} data-slot="composer-dock" className="pointer-events-none sticky bottom-0 mx-auto flex w-full max-w-172 flex-col justify-end px-4 pb-3">
           <div className="pointer-events-auto">
             <Composer
               draft={draft}

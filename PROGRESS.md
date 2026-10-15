@@ -1,5 +1,7 @@
 # D Code 阶段进度
 
+当前provider headers普通消费者切片已Root接收。R35前七门真0（runtime471／contracts14），隐藏E2E119条118pass1fail的原失败副本继续保留；同块流式C失败由r36–r38逐步缩小，r39在原同一强资产3/3真0，保留原断言／期限与F3上翻／dock占位规则。R40七门和R41完整隐藏E2E组成同一188／816cef源码身份的八门资格，真实出口全0（runtime471／contracts14／E2E119，无skip／cancel；Lint有一条warning）。固定候选的独立复核Standards／Spec／CodeQuality三项PASS；此接收只覆盖有限headers消费者，完整provider/config/native、完整SDK与整个产品仍未完成。详细边界见[Provider Headers记录](doc/验证记录/扩展Provider-Headers-2026-10-15/README.md)。原virtual direct已验提交和恢复点保持。
+
 2026-10-15最新接收：普通扩展virtual direct在181/2c2710d3完成完整八门真0（runtime403、contracts14、隐藏E2E114，无skip／cancel，逐门／总同源），固定475文件与255证据已独立核对，Standards／Spec／CodeQuality三项限定PASS、无本片必要剩余。新完整恢复点与实际范围见[virtual direct记录](doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。稳定功能已本地提交为`bd8844d15a1e6020e0702aa9bbcc55381b4610ca`（14路径、真实exit0、提交后工作树为空），纯交付记录随后保存，仍不push／tag／release；完整SDK父目标及整个产品未完成。
 
 2026-10-15最新本地交付：扩展streamSimple及普通桌面生命周期已独立接收，并正常提交为`b2d589a7ab1f463bbd3c2b20f0409f1bf6af6288`（24路径，提交后工作树为空）。八门真实出口0、runtime390／contracts14／隐藏E2E111及三项限定PASS均归同179/0791源码；实际暂存与交付边界见[流式模型本地提交](doc/验证记录/扩展流式模型-2026-10-15/本地提交-2026-10-15.md)。没有推送／tag／release，完整SDK父目标及整个产品未完成。

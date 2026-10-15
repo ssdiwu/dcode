@@ -16,6 +16,7 @@ const electronBinary = require("electron");
 
 /** 仍活着的进程（stateDir → childProcess）：退出前不允许清理其数据目录 */
 const liveProcesses = new Map();
+const ownedProcesses = new WeakMap();
 
 /**
  * @param {string} [stateDir] 复用已有状态目录（重开场景）；缺省创建隔离新目录
@@ -97,7 +98,7 @@ export async function launchApp(stateDir, extraEnv, entrypoint = ".", options = 
   page.on("pageerror", (error) => console.error("[pageerror]", String(error).slice(0, 300)));
   // 认领的是同一真实关闭结果，不能在退出前把 closed 布尔置真并放过后来者。
   let closeFlight = null;
-  return {
+  const handle = {
     app,
     page,
     stateDir: dir,
@@ -134,6 +135,12 @@ export async function launchApp(stateDir, extraEnv, entrypoint = ".", options = 
       return closeFlight;
     },
   };
+  // Playwright关闭并清理连接后app.process()也可能不可调用；认领在launch时固定，不在回收时重查。
+  const ownership = { proc, stateDir: dir };
+  ownedProcesses.set(handle, ownership);
+  // 既有用例会解构close；它是本次launch创建的唯一函数，也可保留同一进程认领。
+  ownedProcesses.set(handle.close, ownership);
+  return handle;
 }
 
 /** 就绪信号 + 失败时输出页面现状，便于定位是加载问题还是断言问题 */
@@ -180,10 +187,18 @@ export function cleanup(dir) {
 
 /** 强制结束仍活着的进程（关闭失败注入等场景用），随后可安全 cleanup */
 export async function killApp(handle) {
-  const proc = liveProcesses.get(handle.stateDir);
-  if (proc && proc.exitCode === null && !proc.killed) {
-    proc.kill("SIGKILL");
-    await new Promise((resolve) => proc.once("exit", resolve));
+  // stateDir可被后来重开复用；只回收原句柄捕获的真实进程，不能按目录误杀新owner。
+  const ownership = ownedProcesses.get(handle) ?? ownedProcesses.get(handle.close);
+  if (!ownership) throw new Error("killApp requires the original launch handle or its close function");
+  const { proc, stateDir } = ownership;
+  if (proc.exitCode === null && proc.signalCode === null) {
+    // killed仅表示发过信号；必须先订阅并等待实际exit，才能解除活进程的数据保护。
+    await new Promise((resolve, reject) => {
+      const exited = () => { proc.removeListener("error", failed); resolve(undefined); };
+      const failed = (error) => { proc.removeListener("exit", exited); reject(error); };
+      proc.once("exit", exited); proc.once("error", failed);
+      try { proc.kill("SIGKILL"); } catch (error) { failed(error); }
+    });
   }
-  liveProcesses.delete(handle.stateDir);
+  if (liveProcesses.get(stateDir) === proc) liveProcesses.delete(stateDir);
 }

@@ -15,7 +15,7 @@ test("损坏的状态文件：成功保全后从空白开始并如实说明", as
   writeFileSync(stateFile(dir), "{ 这不是合法 JSON", "utf8");
   const original = readFileSync(stateFile(dir), "utf8");
 
-  const { page, app } = await launchApp(dir);
+  const { page, app, close } = await launchApp(dir);
   try {
     await ready(page);
     await page.getByText("保存的工作记录无法读取", { exact: false }).waitFor();
@@ -25,7 +25,7 @@ test("损坏的状态文件：成功保全后从空白开始并如实说明", as
     await app.close();
   } finally {
     await app.close().catch(() => {});
-    await killApp({ stateDir: dir });
+    await killApp({ stateDir: dir, close });
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -36,7 +36,7 @@ test("读取失败（权限拒绝）：保留原文件、显式报错、不种�
   const original = readFileSync(stateFile(dir), "utf8");
   chmodSync(stateFile(dir), 0o000);
 
-  const { page } = await launchApp(dir);
+  const { page, close } = await launchApp(dir);
   try {
     await ready(page);
     await page.getByText("无法读取保存的工作记录", { exact: false }).waitFor();
@@ -50,14 +50,14 @@ test("读取失败（权限拒绝）：保留原文件、显式报错、不种�
   } finally {
     chmodSync(stateFile(dir), 0o600);
     // 受保护状态下 flush 按设计固定失败、应用保持打开：不等待永不成功的正常关闭，直接强制结束并等真实退出
-    await killApp({ stateDir: dir });
+    await killApp({ stateDir: dir, close });
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("保存失败进入可见通路：banner 出现，不伪报成功", async () => {
   const dir = mkdtempSync(join(tmpdir(), "dcode-e2e-savefail-"));
-  const { page } = await launchApp(dir);
+  const { page, close } = await launchApp(dir);
   try {
     await ready(page);
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
@@ -73,7 +73,7 @@ test("保存失败进入可见通路：banner 出现，不伪报成功", async (
     await page.getByText("设置未能保存", { exact: false }).first().waitFor();
   } finally {
     chmodSync(dir, 0o755);
-    await killApp({ stateDir: dir });
+    await killApp({ stateDir: dir, close });
     rmSync(dir, { recursive: true, force: true });
   }
 });

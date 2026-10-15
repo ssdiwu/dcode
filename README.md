@@ -57,6 +57,8 @@ D Code 的重新设计工作区。目标是在 macOS 上成为能够持续承接
 | 运行切片完整门槛 | `npm run verify:runtime` | 架构正反样例及源码、全量类型、Lint、全部运行集成测试 |
 | 类型 / Lint / 运行测试 | `npm run typecheck` / `npm run lint` / `npm run test:runtime` | 本主树配置的完整范围；具体覆盖见 [运行验证](test/runtime/README.md) |
 
+运行集成测试的文件进程并发固定为4：仍执行全部runtime用例，保留各自原期限／断言；避免Node按宿主15个可用CPU同时冷启动大量SDK Worker和子进程，挤占同机有限场景的执行机会。它不是产品超时或重试策略，已有失败记录与实际命令仍分别保留。
+
 界面自动测试默认不显示窗口、不进入 Dock，也不能获得系统焦点；使用专用隔离状态，隐藏时保留绘制与计时。日常定位只执行相关场景，例如先构建，再运行 `node --test --test-name-pattern='滚动边界四组合' test/e2e/scroll.test.mjs`。同一场景内的语言／字号组合复用窗口；正常重开与崩溃场景仍保留各自的生命周期验证。
 
 界面证据默认写入被忽略的 `test/e2e/evidence/runs/<运行标识>/`（`DCODE_EVIDENCE_RUN` 可固定目录名，`DCODE_EVIDENCE_ROOT` 可整体重定向）。`doc/验证记录/` 是只读历史归档：测试默认拒绝写入，复跑不会覆盖既有截图与 JSON；需要归档当次结果时，先跑进隔离根，确认后由交付者复制进对应带日期的验证记录并在 README 说明来源。

@@ -13,6 +13,7 @@ let runner, sdk, sessionView, streamFactory, closed = false, state = { messages:
 const calls = new Map(), replies = new Map(), children = new Set(), closings = new Set(), transports = new Set();
 const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
 const virtualModels = new Map(), virtualHandles = new Map();
+const providerHandles = new Map();
 let serial = 0, activated = new Set(), active = [], builtins = [], actions = [], errors = [];
 const nativeSpawn = cp.spawn;
 cp.spawn = (...args) => {
@@ -23,6 +24,13 @@ cp.spawn = (...args) => {
 };
 syncBuiltinESMExports();
 const safe = value => JSON.parse(JSON.stringify(value));
+const finiteDefinition = value => {
+  const seen=new Set();const check=item=>{
+    if(item===undefined||item===null||typeof item==='string'||typeof item==='boolean'||(typeof item==='number'&&Number.isFinite(item)))return;
+    if(!item||typeof item!=='object'||seen.has(item)||(!Array.isArray(item)&&Object.getPrototypeOf(item)!==Object.prototype))throw new Error('Invalid resource metadata');
+    seen.add(item);Object.values(item).forEach(check);seen.delete(item);
+  };check(value);
+};
 const rpc = (method, value, callId) => new Promise((resolve, reject) => {
   const id = ++serial; replies.set(id, { resolve, reject });
   parentPort.postMessage({ type: 'host', id, method, value: safe(value), callId });
@@ -458,16 +466,25 @@ async function initialize() {
     abort: () => queue('abort', {}), hasPendingMessages: () => false, shutdown: () => queue('shutdown', {}),
     getContextUsage: () => undefined, compact: options => { rpc('compact', { instructions: options?.customInstructions }, scopeOf()).then(() => options?.onComplete?.(), () => options?.onError?.(new Error('正式压缩未完成'))); },
     getSystemPrompt: () => state.systemPrompt, executeTool, getCallableTools: callables,
-  }, { registerProvider: unavailable, registerNativeProvider: unavailable, unregisterProvider: unavailable,
+  }, { registerProvider: (provider,config) => {
+      if (closed || invocation.getStore()?.pure || !scopeOf() || typeof provider!=='string') return unavailable();
+      finiteDefinition(config);
+      // JSON会删除undefined字段/值；须先核原始形状，不能将不支持字段抹去或把坏值变成合法清空。
+      if (!config || typeof config!=='object' || Array.isArray(config) || Object.keys(config).some(key=>key!=='headers')
+        || (config.headers!==undefined && (!config.headers || typeof config.headers!=='object' || Array.isArray(config.headers)
+          || Object.values(config.headers).some(value=>typeof value!=='string')))) return unavailable();
+      const handle='provider/' + (++serial);
+      providerHandles.set(provider,handle); registration('provider-register',{provider,config,handle});
+    }, registerNativeProvider: unavailable, unregisterProvider: provider => {
+      if (closed || invocation.getStore()?.pure || !scopeOf() || typeof provider!=='string') return unavailable();
+      const handle=providerHandles.get(provider);if(!handle)return;
+      providerHandles.delete(provider);registration('provider-unregister',{provider,handle});
+    },
     registerVirtualModel: definition => {
       if (closed || invocation.getStore()?.pure || !scopeOf()) return unavailable();
       if (!definition || typeof definition.route !== 'function') return unavailable();
       const {route,...metadata} = definition, handle = 'virtual/' + (++serial);
-      const seen=new Set();const check=value=>{
-        if(value===undefined||value===null||typeof value==='string'||typeof value==='boolean'||(typeof value==='number'&&Number.isFinite(value)))return;
-        if(!value||typeof value!=='object'||seen.has(value)||(!Array.isArray(value)&&Object.getPrototypeOf(value)!==Object.prototype))throw new Error('Invalid virtual model metadata');
-        seen.add(value);Object.values(value).forEach(check);seen.delete(value);
-      };check(metadata);
+      finiteDefinition(metadata);
       const key = JSON.stringify([metadata.provider,metadata.id]), previous = virtualModels.get(key);
       if (previous) virtualHandles.delete(previous.handle);
       const own = {handle,definition}; virtualModels.set(key,own); virtualHandles.set(handle,own);

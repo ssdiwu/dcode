@@ -31,3 +31,5 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 测试通过不覆盖 Electron／手机 UI、配对及远端网络、真实服务商、自然语言派工授权、无协作取消行为的任意工具，或断电后的无损保证。虚拟模型的独立组合探针与已知路由状态限制见 [Pi 证据记录](../../doc/Pi-1.0.0-虚拟模型与运行恢复.md)。
 
 [普通virtual direct](ordinary-extension-virtual-direct.test.mjs)核真实工厂登记、原工具流、独立物理B的规范端点／认证／完整准入、原child／结果／费用，以及route等待中的暂停／关闭／只读恢复与不重放、原工具仍活时仅模型取消后的实际迟到回调丢弃、pure route写入前拒绝；[登记生命周期](coding-virtual-registration.test.ts)以真实Worker／ModelRuntime／Harness核物理冲突、注销、旧资源不删新同名项、失败回滚与非法定义。这里不把登记本身当执行成功；当前实际出口和独立状态见[virtual direct记录](../../doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。
+
+[普通provider公开头](ordinary-provider-config-header.test.mjs)核首次／owned／后续真实HTTP消费及原身份／费用／关闭RO与同backend新会话隔离；[注册与认证边界](coding-provider-headers.test.ts)核真实SDK的原认证派生与动态私有头碰撞、登记与清理；[Worker边界](coding-provider-header-worker-boundary.test.ts)核原始值失真拒绝、实际重登记／注销与跨资源认领；[活会话刷新](ordinary-provider-header-live-refresh.test.mjs)核原S1/S2的新模型实际请求、能力与关闭隔离以及单会话失败不截断其它客户端；[准入当次改选](ordinary-provider-header-admission-switch.test.mjs)核同源和跨源A→B最终物理请求的公开头、认证与原上下文；不是任意provider配置或完整native消费者。当前结果与失败资格见[本片记录](../../doc/验证记录/扩展Provider-Headers-2026-10-15/README.md)。
