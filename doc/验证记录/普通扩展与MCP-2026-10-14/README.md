@@ -58,7 +58,7 @@ R2不再丢BeforeAgentStart返回的CustomMessage。原准备任务／Turn消费
 
 成员没有正式文件范围时不加载资源、不连 MCP；关闭默认值、原工作目录绑定、模型来源／参数／额度／暂停、凭据和输入身份合同保留。SDK 文件、父目录和 Home 不作为项目资源；显式越界或失效条目不能静默跳过。已配置模型／认证回调不能改换本次模型、历史、工具、思考参数或模型凭据；默认请求重试没有增加。第三方内部同步读取位于独立资源线程，扩展本身不是 OS 沙箱。
 
-完整 SDK 接入仍有明确未完成消费者：扩展发起模型请求／完整目录及 provider／virtual 注册、完整压缩与消息事件、扩展sendUserMessage的input／模板／deliverAs组合、SDK命令及渲染定制等。当前拒绝未接通操作而不默默忽略或增设第二循环；本片普通路径证据不能删除这些已确认要求。真实服务账户、HTTP OAuth 浏览器登录、真实用户目录、人工视觉接受及 Git 交付均未在本轮执行。
+完整 SDK 接入仍有明确未完成消费者：扩展主动模型执行（包括 `classify`／`generateImages`）、完整 provider／virtual 定义与注册时机、完整压缩与消息事件、所有 `sendUserMessage` 输入组合、SDK `exec` 与渲染定制，以及命令专属 UI／自动补全／会话树控制等。普通命令输入和下述 typed 目录读取不表示其他消费者完成；未接通操作仍明确拒绝，不默默忽略或增设第二循环。真实服务账户、HTTP OAuth 浏览器登录、真实用户目录、人工视觉接受及 Git 交付仍未验收。
 
 ## 修复后完整门槛 r4（已独立接收）
 
@@ -71,3 +71,73 @@ R2不再丢BeforeAgentStart返回的CustomMessage。原准备任务／Turn消费
 已验完整恢复点：`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-ordinary-extension-MCP-accepted-20261014/manifest.json`，458项目文件，canonical175／`5bf0e6a0609983a1dd39fe8507fa937044498279da5648bfd8b28af909e13859`。接收后的README／PROGRESS／本记录只登记结果与剩余，没有改变产品／测试／配置，不重复已绿检查；记录补段另以before／after字节回独立核对。此前449/167工作文件夹绑定、搜索及提示模板恢复点继续保留。
 
 后续仍按同一已授权coding-agent＋Durable方案补完整SDK消费者，不从此PASS外推整个产品、真实外部服务／用户目录、HTTP SSE／OAuth、全部TCP连接关闭、人工视觉接受或Git交付。
+
+## 2026-10-15 `sendUserMessage` 普通客户端续接
+
+已沿本记录原普通客户端与 Durable 生命周期接续扩展 `sendUserMessage`。扩展输入以独立 operationId 进入原 Session 的 Durable 准备任务及正式提交；文本／图片规范化、input 事件、模板默认关闭与显式开启、`steer`／`followUp` 沿同一 owner 处理。桌面投影同会话用户消息与原回执，不建立第二队列；图片身份经 Durable marker、ExecutionView、TimelineBlock、自然刷新／显式回查／只读重开消费者贯通，跨进程时间线块按既有图片合同校验。暂停、直接关闭、只读重开和明确继续保留原接收及不重投规则。
+
+隐藏桌面 E2E 实际从输入框调用普通扩展，核对同会话消息、第三次 loopback SDK HTTP 与原 operation 的 `done` 回执；截图是隔离窗口证据，不是前台人工接受。图片 runtime 覆盖 Session→ExecutionView→同 operation 查回、关闭及只读重开；当前模型 vision 能力未核实，合法图片回执为 `accepted/unanswered`，无图片模型 HTTP 成功声明。该图片用例未直接运行 App 层图片自然刷新／显式 `checkReceipt`，此覆盖边界保留；相应消费者已由限定只读审查核对。
+
+最终租约完整门槛证据在 `B/Root-send-user-message-full-verify-20261015-r5/receipt.json`：`npm run verify` 真 `exitCode: 0`、600.018 秒、前后源码映射同一、无超时。架构32/32、源码83、runtime476/476、contracts14/14、完整隐藏 E2E120/120，无 fail／skip／cancel。固定当前差异的独立审查 Standards／Spec／CodeQuality 三项 PASS；审查未发现必要剩余。两轮早期完整门槛真实失败与中止轮均保留历史，未计入本次通过。
+
+本续接只覆盖 `sendUserMessage`、同 Durable 输入／回执及普通桌面生命周期，不等于完整 SDK、真实服务商账户、真实用户项目、图片模型视觉请求、前台人工接受或整个产品验收；未提交、推送或发布。工作树仍有本地未提交改动。
+
+## 2026-10-15 App 图片回执消费者补证（独立接收）
+
+针对上一节明确保留的 App 图片路径运行覆盖缺口，新增一条普通桌面 E2E：从 composer 提交原始文本，真实普通扩展调用 `sendUserMessage` 提交文本加 PNG，核同会话时间线图片与唯一扩展 operation、自然观察后的原始 `accepted/unanswered`，再调用公开 `window.dcode.checkReceipt`，直接关窗并只读重开后复查相同 block／operation／图片／回执。未核实的 vision 能力保持 unanswered，因此图片没有发给受控模型；初始请求和扩展工具后的普通 HTTP 仍按现有通路核对，不外推图片 HTTP。
+
+租约定向 receipt：`B/Root-extension-image-app-path-e2e-20261015-r1/receipt.json`，真 exit0、1/1、6.178 秒、前后源映射一致；实际隐藏窗口截图见 `test/e2e/evidence/runs/20261015-131012/ordinary-extension-mcp/desktop-image-send-user-message-fc21e49c-c1aa-47fc-ba44-f894bee3b6eb.png`。限定独立审查确认该测试资产通过，报告 `main-extension-sendUserMessage-image-app-check-candidate-20261015/evidence/image-app-consumer-independent-review.md`；审查指出它没有强制 queued／placed 非终态刷新窗口，因此该细分分支仍未由本测试覆盖。此前 `npm run verify` 的120/120归属前一测试字节，没有为本测试增量重跑完整套件；typecheck通过，Lint 0 error／1既有warning。该有界测试检查点已接受，完整SDK与整产品仍未接收。
+
+## 2026-10-15 App 图片非终态查回与注册命令生命周期（r3 独立接收）
+
+r2 对图片 E2E 增加受控 barrier：等普通扩展通过 `sendUserMessage` 提交的同会话图片 operation 实际到达 `accepted` 且处理为 `queued`／`placed`，再调用公开 `window.dcode.checkReceipt`。释放后，原图片回执自然进入 `accepted/unanswered`；直接关窗、只读重开与再次查回均保持相同 block、operation、图片与回执，不增加 HTTP 或重放扩展。该证据覆盖 App 公共查回在真实非终态的消费者路径；没有单独证明自然 `refreshReceipts` 的某次 lookup 完成，也没有发送 vision 模型请求。
+
+普通桌面注册命令也已沿同一正式输入准备接入：仅显式开启模板展开时，匹配的已登记命令由 Worker 调用，flush 所有副作用后以 `handled` 收束；原 `/command args` 不再进入模型正文。未匹配仍回到原 input／模板路径。命令 context 的 `hasUI` 保 Pi 1.0.0 布尔属性合同，并先触发原 getter 的 stale-runner 检查；未接入的 UI、会话树和 reload 操作明确抛错。
+
+隐藏桌面 E2E 从 composer 输入命令，核真实扩展显示消息、原 operation 的 `done` 回执、零模型 HTTP、公开 `checkReceipt` 和同会话只读重开。两条中断场景在命令 handler 已产生持久显示副作用后分别 pause 与直接 close；两条均核同一 operation 和唯一已完成消息，重开只读不再次进入 handler，明确继续后原接收回执收束到 `unanswered`，handler 仍只执行一次、没有模型 HTTP或恢复错误。runtime 另以分立命令断言无 UI headless 成功和 UI 操作拒绝。
+
+完整门槛证据为 `B/Root-extension-command-full-verify-20261015-r3/receipt.json`：租约包装的 `npm run verify` 真 exit0，605.716 秒、未超时，12 项变更文件前后源 hash 一致。架构正反32/32、架构源码审计83、runtime477/477、contracts14/14、完整隐藏 E2E124/124，无 fail／skip／cancel。独立复核候选486项目文件、188项 canonical、19份证据hash，位置为 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-extension-commands-sendUserMessage-candidate-20261015-r3/manifest.json`。独立报告 `B/Root-extension-commands-r3-independent-review-20261015.md` 对 Standards／Spec／CodeQuality 三项均 PASS，未发现当前必要残余；旧 r2 的 `hasUI` 函数合同发现已由 r3 修复并独立复核。
+
+包含本记录、`PROGRESS`、`CHANGELOG` 与 doc 导航更新的最终完整恢复点：`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-commands-accepted-20261015-r2/manifest.json`，486项目文件、188项 canonical。接受后的改动仅更新记录／进度／导航；固定复核候选的canonical映射未变，外部 `documentation-readiness.json` 记载链接检查与 `git diff --check` 通过。
+
+该接收仅覆盖 `sendUserMessage`、注册命令普通客户端、图片非终态回执查回和本记录列出的扩展／MCP生命周期，不代表完整 Pi SDK（包括尚未接入的命令 UI／autocomplete／会话树控制）、真实 provider 账户、用户实际项目、vision HTTP、前台人工视觉接受或整个产品验收。未提交、推送或发布。
+
+## 2026-10-15 普通扩展与 MCP 桌面恢复、固定入口补证
+
+在注册命令与图片回执接收点之后，普通扩展和 MCP 的同一桌面场景补了两种停机分支：MCP 与扩展工具真实结果已进入时间线、编码修复结果已返回后，分别由用户暂停和直接关闭应用。两条路径都等待实际 MCP 子进程 drain／exit；重新打开与查回回执保持只读，没有新增模型请求或再次启动 MCP；显式继续只恢复原输入，工具块、唯一 `append_once` 副作用与扩展消息不重放。现有 HTTP MCP 在途 pause／close 同 requestId 取消、DELETE 与 drain 场景继续保留。
+
+固定桌面启动链的包装脚本此前没有转交命令参数，新增 `"$@"` 透传。入口回归测试只在临时假根运行 `.command`、`npm run desktop -- --check` 和 Python launcher；假构建与哨兵 Electron 只会写入临时 `HOME`，即使参数透传回退也不会构建当前主目录或打开真实窗口。另在当前主目录实际运行 `python3 tools/launch-desktop.py --check`，读回 source 为本工作树，版本为 `0.1.0-dev`，构建入口和品牌资源均存在，固定数据目录指向当前用户 D Code Development；此检查无写入。普通路径的应用行为另由隐藏 Electron E2E 从真实设置页配置／项目绑定／开启，到输入、扩展／MCP 结果、暂停或直接关窗、只读重开和继续完整操作；窗口使用每测试独立状态目录与 loopback 服务，未使用真实账户、用户工作目录或前台窗口。
+
+本轮完整门槛命令为租约包装的 `npm run verify`。采集回执：`B/Root-extension-ordinary-client-full-verify-20261015-r3/receipt.json`，真实退出码、用时和189项 canonical 前后hash见回执。输出原件为同目录 `output.log`，前后源码身份为 `source-pre.json` 与 `source-post.json`。从完整输出核到架构正反样例32/32、源码审计83、runtime478/478、contracts14/14、隐藏E2E125/125，fail／skip／cancel均为0；类型检查通过，Lint 0 error、1条 `Timeline.tsx` ref warning。普通桌面扩展＋MCP pause／close 两分支定向E2E 2/2与安全假根入口测试 1/1 的 raw／真实出口也保存在该证据根。`python3 tools/launch-desktop.py --check` 当前主目录读回通过；它没有启动正常应用窗口。本地完整门槛不是独立审查、真实外部账户或前台人工接受。
+
+固定候选 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-extension-ordinary-client-recovery-candidate-20261015-r2/manifest.json`（487项目文件、189项 canonical、`cf598b7c6eb9ef64f211f7e52e4343a745b063dd3e34732a4046a934485738fc`）经 `model_integration_review` 独立只读核验，Standards／Spec／CodeQuality 三项均 PASS，未发现当前必要剩余。报告：`B/Root-extension-ordinary-client-recovery-independent-review-20261015-r2.md`，SHA-256 `fd56613b0050d937348e078befbecbb11f716ea7e0977556897f8283678fe29e`。独立审查核了固定候选及证据，没有运行检查、UI或模型，没有写产品。
+
+包含本轮记录／进度收口的最终完整恢复点见本节后续登记。该接收只覆盖普通扩展／MCP上述客户端路径和固定入口安全预检；完整 Pi SDK及其余未接入消费者、真实服务商账户、用户真实目录、前台视觉接受和整个产品仍未验收。
+
+最终本地已验完整恢复点：`/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-ordinary-extension-mcp-desktop-recovery-accepted-20261015/manifest.json`；不包括 Git 提交、推送或发布。
+
+## 2026-10-16 扩展 typed 模型目录读取（独立审查通过）
+
+普通扩展 `ModelRegistry` 的按类型目录读取现在使用同一会话宿主 `ModelRuntime` 发布的 `chat`、`image` 与 `classifier` 模型，而不是 Worker 本地默认注册表。同步 `getModelsOfType`／`getModelOfType`／`findOfType` 返回安全副本；异步 `getAvailableOfType` 经宿主当前认证可用性过滤，关联原调用 scope 与 `AbortSignal`，调用取消或 owner 关闭会中止该次认证检查。模型描述不包含认证材料或执行 headers。目录查询不创建 Durable task、不写历史、不发模型请求；`classify` 与 `generateImages` 仍保持拒绝。
+
+真实 `CodingExtensions` Worker／Harness 测试覆盖同一 ID 的 chat/classifier 分离、image/classifier 的完整与可用目录、未配置认证的登记模型仍可见但不可用、宿主认证检查取消、敏感头不跨 Worker，以及主动分类／生图仍拒绝。只移除 typed 同步 facade 的受控红灯以预期缺少宿主 chat 目标失败；恢复实现后绿灯通过。定向证据位于 `B/Root-extension-typed-catalog-redgreen-20261016-r1/`，包含完整 TAP 和源码恢复哈希。
+
+本轮八个子命令均以真实 exit 0 结束，前后源码与逐门哈希保持同一 canonical 190 项／`a28053a46e081477a35490a2d0695e1e92171633211bea6b161902c89adc7e77`：架构正反32/32、源码架构检查83、全类型检查、Lint 0 error／1条既有 Timeline warning、构建、runtime485/485、contracts14/14、租约串行隐藏桌面 E2E125/125，fail／skip／cancel均0。每门原始日志与开始／结束身份见 `B/Root-extension-typed-catalog-full-verify-20261016-r1/ledger.json`。
+
+固定候选为 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-extension-typed-model-catalog-candidate-20261016-r2/manifest.json`（492 项项目文件、190 项 canonical、aggregate `a28053a46e081477a35490a2d0695e1e92171633211bea6b161902c89adc7e77`）。独立报告 `B/Root-extension-typed-model-catalog-r2-independent-review-20261016.md` 对 Standards／Spec／CodeQuality 三项均 PASS，未发现本片必要剩余；报告 SHA-256 为 `cf257ee7db8bf6a0657b437566559712dbbdae1794176c2188fc858ed0d37c79`。审查确认 typed 同步读取消费宿主按类型安全帧，异步认证过滤沿原 scope 到宿主 ModelRuntime，取消与 owner 关闭均取消关联检查；模型描述不泄露执行 headers／凭据，`classify`／`generateImages` 仍拒绝。最终接受恢复点为 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-typed-model-catalog-accepted-20261016/manifest.json`，本段记录及进度更新不改变已审查产品／测试／配置字节。
+
+本段只接收按类型目录读取消费者，不外推为主动分类／生图执行、完整 Pi SDK、真实服务商、真实用户项目、整体产品验收或 Git 交付。此前普通扩展／MCP的同一 Durable 接收、工具与资源、暂停、直接关闭、只读重开、明确继续及固定桌面入口预检仍按2026-10-15既有独立接收记录；该固定入口预检没有启动不带 `--check` 的真实桌面应用。截图中指向 `Root-D1-ABA-by-text-target-mutation-20261013.json` 的 `ERR_IMPORT_ATTRIBUTE_MISSING` 已有受控变异夹具 bootstrap 失败记录；它不是正常 `.command` 主应用导入失败证据，也不证明普通主应用启动成功。前台人工视觉接受、真实启动与真实服务账户仍未验收。
+
+## 2026-10-16 扩展 provider 元数据只读消费者（独立接收）
+
+从同一宿主 `ModelRuntime` 增加 `getProviderDisplayName` 与 `getRegisteredProviderIds` 的有限只读投影。旧 Worker 本地默认 registry 不知道宿主自定义 provider，故 provider display name 会错误回退为 ID，登记 ID 列表也不对应当前会话；目标 red 证据见 `B/Root-extension-registry-provider-metadata-red-20261016-r1/`。修复只下发 provider ID 与公开显示名；未知 provider 的名称回退保持 Pi SDK 语义。
+
+Provider 实例、认证状态／配置、凭据与 `refresh` 仍在 Worker 边界明确拒绝；不会把 Worker 本地默认 provider 当成宿主，也不会让资源线程读取宿主 Provider 对象或触发新的目录刷新。其余 `ModelRuntime` typed 目录读取和已接运行消费者保持原实现；本片不开放 `classify`／`generateImages`。
+
+配套 Worker／Harness 测试扩充 provider display／登记 ID 正反例，并核认证与 Provider 实例相关 getter、refresh 明确失败。首轮实现后发现测试夹具将 Pi 内置 providers 也登记为 host native providers；fixture 期望已改为比对真实 host Runtime 顺序，第一次失败原件保存在 `B/Root-extension-registry-provider-metadata-fixture-failure-20261016-r1/`，它是断言夹具预期错误，不是产品缺陷。旧实现 display name 回退红灯、夹具预期错误和修复后绿灯分别保存在 `B/Root-extension-registry-provider-metadata-red-20261016-r1/`、`B/Root-extension-registry-provider-metadata-fixture-failure-20261016-r1/` 与 `B/Root-extension-registry-provider-metadata-green-20261016-r2/`。
+
+本片最终八门均以真实 exit 0 结束，前后源码保持同一 canonical 190 项／`dad84e59dafefaec84c358fa430c0db3bbeda7d22888bc42a49e10efb73adb97`：架构正反32/32、架构源码83、全类型检查、Lint 0 error／1项既有 Timeline warning、构建、runtime485/485、contracts14/14、租约串行隐藏桌面 E2E125/125；fail／skip／cancel均0。逐门原始日志和身份见 `B/Root-extension-provider-metadata-full-verify-20261016-r1/ledger.json`。
+
+固定候选 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-extension-provider-metadata-candidate-20261016-r1/manifest.json` 含492项目文件、19份证据；原独立报告 `B/Root-extension-provider-metadata-r1-independent-review-20261016.md` 的当时结论为 Spec／CodeQuality PASS、Standards 待纯记录修正，报告 SHA-256 `83a0266102459537b1667a0603f2b45122736e2b0632cfd7e6a4c50c54054a2e`。按该意见更正本记录后，审查员另行复核并确认 Standards PASS，补充回执见 `B/Root-extension-provider-metadata-standards-record-followup-20261016.md`。审查确认两个 getter 消费宿主 `ModelRuntime` 安全快照，未知 provider 名称保留 SDK ID 回退、登记列表保持宿主顺序并返回副本；Provider 对象、认证状态／配置和 Worker 本地 `refresh` 明确拒绝。记录修正只登记已经完成的门槛与复核，不改变已审查产品／测试／配置字节，不为纯文字重复跑绿门槛。完整恢复点为 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-provider-metadata-accepted-20261016/manifest.json`。
+
+本片仅覆盖 provider 名称与登记 ID 的只读消费者；不开放 Provider 对象／认证资料、`classify`／`generateImages` 执行，也不等于完整 Pi SDK、真实服务商账户、普通 Electron 主进程启动、前台人工接受或整体产品验收。此前 `ERR_IMPORT_ATTRIBUTE_MISSING` 截图属于受控 ABA 变异夹具在产品 bootstrap 前的导入失败；它不证明正常启动失败，也不能作为正常启动成功证据。桌面入口 `--check` 和隐藏 E2E 的边界仍如上文记录。

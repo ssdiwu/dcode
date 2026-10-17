@@ -24,7 +24,7 @@ import { registerPresetProviders } from "./preset-providers";
 import { createCodingTools } from "./coding-tools";
 import { CodingExtensions } from "./coding-extensions";
 import { CodingProviderHeaders } from './coding-provider-headers';
-import { loadCodingResources } from "./coding-resources";
+import { CodingResourcesUnavailable, loadCodingResources } from "./coding-resources";
 import type { CodingPromptTemplate } from "./coding-resources";
 import { expandCodingPrompt } from "./prompt-templates";
 import * as openaiCompletionsApi from "@earendil-works/pi-ai/api/openai-completions";
@@ -34,15 +34,16 @@ import * as anthropicMessagesApi from "@earendil-works/pi-ai/api/anthropic-messa
 // 模板缓存只属本实例的执行准备；已有输入按正式回执查回，不以新模板重写历史。
 function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, agentDir: string, enabled: () => boolean, registry: ReturnType<typeof createRegistry>, models: ModelRuntime, sessionId: string, providerHeaders: CodingProviderHeaders) {
   let prompts: CodingPromptTemplate[] = [];
+  let session: PiExecutionSession | undefined;
   const extensions = coding ? new CodingExtensions(coding.tools ?? [], agentDir, enabled, models, sessionId, providerHeaders) : null;
   extensions?.useRegistry(registry);
   return {
     models: extensions?.guardModels(models) ?? models,
-    prepareExecution: coding ? async (cwd: string) => {
+    prepareExecution: coding ? async (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload') => {
       // 扩展开启时由同一次 Loader 独占目录，基础扫描只保项目指令，不能绕过筛选或重复技能。
       const useExtensions = enabled();
       const resources = await loadCodingResources(cwd, agentDir, { instructionsOnly: useExtensions });
-      const prepared = await extensions!.prepare(cwd, useExtensions);
+      const prepared = await extensions!.prepare(cwd, useExtensions, sessionStartReason);
       const packageResources = extensions!.packageResources;
       prompts = [...resources.prompts, ...packageResources.prompts.filter(prompt => !resources.prompts.some(previous => previous.name === prompt.name))];
       return { instructions: [resources.instructions, packageResources.instructions].filter(Boolean).join('\n\n'),
@@ -50,11 +51,19 @@ function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, 
         tools: prepared.tools };
     } : undefined,
     attachExecution: extensions ? extensions.attach.bind(extensions) : undefined,
-    closeExecutionResources: extensions ? () => extensions.close() : undefined,
+    beginCloseExecutionResources: extensions ? (reason: 'resume' | 'quit') => extensions.beginClose(reason) : undefined,
     reconcileExecutionSpend: extensions ? extensions.reconcileModelSpend.bind(extensions) : undefined,
     needsInputPreparation: enabled,
     prepareInput: coding && extensions ? (input: import("./input-preparation").InputPreparation, api: import("@earendil-works/pi-durable").ToolExecutionApi, ctx: import("@earendil-works/chord").Context) => extensions.prepareInput(input, api, ctx, text => expandCodingPrompt(text, prompts)) : undefined,
     transformInput: coding ? (text: string) => expandCodingPrompt(text, prompts) : undefined,
+    bindSession(value: PiExecutionSession) {
+      session = value;
+      extensions?.setUserMessageSubmitter(async (content, inputOptions, actionId, ctx, admission) => {
+        if (ctx.abortSignal?.aborted || !admission.isCurrent() || !session) throw new CodingResourcesUnavailable();
+        const receipt = await session.submitExtensionMessage(content, inputOptions, actionId, ctx, admission);
+        if (receipt.status !== 'accepted') throw new CodingResourcesUnavailable();
+      });
+    },
   };
 }
 
@@ -530,6 +539,8 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
         provider: built.provider,
         providerHeaders: built.providerHeaders,
       });
+      const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
+      const { bindSession, ...sessionPreparation } = preparation;
       const session = await PiExecutionSession.open({
         target: context.target,
         directory,
@@ -537,7 +548,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
         initialize: context.initialize,
         reuseStoredCwd: true,
         registry,
-        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders),
+        ...sessionPreparation,
         settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
         agent: {
           extensions: [],
@@ -547,6 +558,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
         // 宿主的 Node 测试子进程标记不能传给项目命令，否则真实测试可能沿嵌套协议返回 0。
         env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd, shellEnv: { NODE_TEST_CONTEXT: undefined } }),
       });
+      bindSession(session);
       // 重开只读取原配置；发送／明确继续前由应用层权威应用本次模型。
       return session;
     },
@@ -870,6 +882,8 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
         provider: built.provider,
         providerHeaders: built.providerHeaders,
       });
+      const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
+      const { bindSession, ...sessionPreparation } = preparation;
       const session = await PiExecutionSession.open({
         target: context.target,
         directory,
@@ -877,7 +891,7 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
         initialize: context.initialize,
         reuseStoredCwd: true,
         registry,
-        ...codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders),
+        ...sessionPreparation,
         settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
         agent: {
           extensions: [],
@@ -886,6 +900,7 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
         },
         env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd, shellEnv: { NODE_TEST_CONTEXT: undefined } }),
       });
+      bindSession(session);
       // 模型应用只发生在正式发送／继续；只读回查不能顺带配置旧运行。
       return session;
     },

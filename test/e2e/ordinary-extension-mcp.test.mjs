@@ -170,6 +170,13 @@ async function pauseAndDrain(f, sessionId) {
       && records.some(item => item.pid === start.pid && item.type === 'exit' && item.code === 0));
   }, undefined, 'MCP must really drain and exit after user pause');
 }
+async function closeAndDrain(f) {
+  await f.handle.close();
+  const records = await events(f.project), starts = records.filter(item => item.type === 'start');
+  assert.ok(starts.length > 0, '直接关窗前必须确有 MCP 子进程');
+  assert.ok(starts.every(start => records.some(item => item.pid === start.pid && item.type === 'close.drained' && item.pending === 0)
+    && records.some(item => item.pid === start.pid && item.type === 'exit' && item.code === 0)), '直接关窗必须等真实 MCP drain 与进程退出');
+}
 async function reopenReadonly(f, sessionId, requestCount) {
   const before = await events(f.project), started = before.filter(item => item.type === 'start').length;
   await f.handle.close(); f.handle = await launchApp(f.stateDir, f.env, '.', { prebindProject: false }); f.proc = f.handle.app.process();
@@ -184,7 +191,7 @@ async function reopenReadonly(f, sessionId, requestCount) {
   assert.equal((await events(f.project)).filter(item => item.type === 'start').length, started);
   return snapshot;
 }
-async function withFixture({ calls, holdFinal = false, callsOverride, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false, ownedProviderHeader = false }, action) {
+async function withFixture({ calls, holdFinal = false, callsOverride, extensionSendsUserMessage = false, extensionImageMessage = false, holdImagePreparation = false, extensionCommand = false, holdExtensionCommand = false, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false, ownedProviderHeader = false }, action) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-desktop-extension-mcp-'));
   const f = { root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
   let primary; const secondary = [];
@@ -196,6 +203,11 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
     await writeFile(join(f.project,desktopSkillPath),f.skillContent);
     await mkdir(join(f.project, '.pi/extensions'), { recursive: true });
     await writeFile(join(f.project, '.pi/extensions/desktop.ts'), `import { Type } from 'typebox';\nimport { appendFile } from 'node:fs/promises';\nimport { join } from 'node:path';\nexport default function(pi) { pi.on('before_agent_start',()=>({message:{customType:'fixture-start',content:${JSON.stringify('startup visible '+f.nonce)},display:true}})); pi.on('before_agent_start',()=>({message:{customType:'fixture-hidden',content:${JSON.stringify('startup context only '+f.nonce)},display:false}})); pi.registerTool({name:'extension_nonce',label:'nonce',description:'Actual project extension',parameters:Type.Object({}),async execute(id,args,signal,update,ctx){pi.sendMessage({customType:'fixture-extension',content:${JSON.stringify(extensionVisibleText(f.nonce))},display:true});const read=await ctx.executeTool('read',{path:${JSON.stringify(desktopSkillPath)}});if(read.isError)throw new Error('Actual skill read failed');await appendFile(join(ctx.cwd,'desktop-skill-read-completions.jsonl'),JSON.stringify({nonce:${JSON.stringify(f.nonce)},callId:read.toolCall.id})+'\\n');return {content:[{type:'text',text:${JSON.stringify('extension actual ' + f.nonce)}},...read.result.content],details:{}};}}); }\n`);
+    if(extensionSendsUserMessage) await writeFile(join(f.project,'.pi/extensions/send-user-message.ts'),`import {Type} from 'typebox';export default function(pi){pi.registerTool({name:'extension_submit_followup',label:'submit follow-up',description:'Submit one durable extension input',parameters:Type.Object({}),execute:async()=>{await pi.sendUserMessage(${JSON.stringify(`extension durable input ${f.nonce}`)},{deliverAs:'followUp'});return {content:[{type:'text',text:'extension input accepted'}]};}});}`);
+    if(extensionImageMessage) await writeFile(join(f.project,'.pi/extensions/send-image-message.ts'),`import {Type} from 'typebox';import {readFile,writeFile} from 'node:fs/promises';import {join} from 'node:path';export default function(pi){${holdImagePreparation?`pi.on('input',async event=>{if(event.source!=='extension'||!event.text.startsWith('extension image input '))return;await writeFile(${JSON.stringify(join(f.project,'image-input-preparation-started'))},'entered');while(true){try{await readFile(${JSON.stringify(join(f.project,'image-input-preparation-release'))});return;}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,5));}}});`:''}pi.registerTool({name:'extension_submit_image',label:'submit image',description:'Submit one image through the same durable extension input path',parameters:Type.Object({}),execute:async()=>{await pi.sendUserMessage([{type:'text',text:${JSON.stringify(`extension image input ${f.nonce}`)}},{type:'image',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII='}],{deliverAs:'followUp'});return {content:[{type:'text',text:'extension image accepted'}]};}});}`);
+    if(extensionImageMessage&&holdImagePreparation) f.releaseImagePreparation=()=>writeFile(join(f.project,'image-input-preparation-release'),'release');
+    if(extensionCommand&&holdExtensionCommand) await writeFile(join(f.project,'.pi/extensions/commands.ts'),`import {appendFile} from 'node:fs/promises';import {join} from 'node:path';export default function(pi){pi.registerCommand('greet',{description:'Controlled interruptible desktop extension command',handler:async(args,ctx)=>{await appendFile(join(ctx.cwd,'desktop-command-attempts.jsonl'),JSON.stringify({args})+'\\n');await pi.sendMessage({customType:'desktop-command-result',content:'DESKTOP_COMMAND '+args,display:true});const signal=ctx.signal;if(!signal)throw new Error('Expected command owner signal');await new Promise((resolve,reject)=>{if(signal.aborted){reject(new Error('Command interrupted'));return;}signal.addEventListener('abort',()=>reject(new Error('Command interrupted')),{once:true});});}});}`);
+    else if(extensionCommand) await writeFile(join(f.project,'.pi/extensions/commands.ts'),`export default function(pi){pi.registerCommand('greet',{description:'Controlled desktop extension command',handler:async(args)=>{pi.sendMessage({customType:'desktop-command-result',content:'DESKTOP_COMMAND '+args,display:true});}});}`);
     if(ownedComplete) await writeFile(join(f.project,'.pi/extensions/active-complete.ts'),desktopActiveExtensionSource(f.nonce));
     if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : ownedProviderHeader ? desktopProviderHeaderExtensionSource(f.nonce) : desktopStreamExtensionSource(f.nonce)));
     await writeFile(join(f.project, '.pi/mcp.json'), JSON.stringify({ mcpServers: { fixture: {
@@ -215,6 +227,7 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
     await action(f);
   } catch (error) { primary = error; }
   finally {
+    try { await f.releaseImagePreparation?.(); } catch(error) { secondary.push(error); }
     if (f.handle) {
       try { await f.handle.close(); } catch (error) { secondary.push(error); }
       if (f.proc?.exitCode === null && f.proc.signalCode === null) {
@@ -229,8 +242,8 @@ async function withFixture({ calls, holdFinal = false, callsOverride, ownedCompl
   if (primary) throw primary; if (secondary.length) throw new AggregateError(secondary, '真实关闭/清理失败');
 }
 
-// 1) 项目扩展 + MCP read/append/error，再保原编码1→0/diff；暂停与重开不重放。
-test('普通桌面启用：真实项目扩展/MCP作用与错误进入UI和下一HTTP；暂停重开只读，继续不重放', async () => withFixture({ holdFinal: true,
+// 项目扩展 + MCP read/append/error，再保原编码1→0/diff；暂停与直接关窗均只读重开、继续不重放。
+for (const stopping of ['pause', 'close']) test(`普通桌面启用：真实项目扩展/MCP作用与错误进入UI和下一HTTP；${stopping}后重开只读，继续不重放`, async () => withFixture({ holdFinal: true,
   calls: nonce => [['extension_nonce', {}], ['mcp__fixture__read', {}], ['mcp__fixture__append_once', { token: 'desktop_once', text: nonce }], ['mcp__fixture__fail', { token: 'handled_error' }]],
 }, async f => {
   const page = f.handle.page, input = `真实扩展 MCP 与编码 ${f.nonce}`;
@@ -254,7 +267,9 @@ test('普通桌面启用：真实项目扩展/MCP作用与错误进入UI和下�
   const inspector = page.locator('.app-inspector'); await inspector.waitFor({ state: 'visible' });
   await inspector.getByRole('button', { name: 'index.mjs', exact: true }).click(); assert.match(await inspector.innerText(), /return a - b/); assert.match(await inspector.innerText(), /return a \+ b/);
   await page.getByRole('button', { name: /关闭检查器|Close inspector/ }).click();
-  const ids = tools.map(block => block.id); await pauseAndDrain(f, sessionId); assert.equal(f.server.requests.length, 10);
+  const ids = tools.map(block => block.id);
+  if (stopping === 'pause') await pauseAndDrain(f, sessionId); else await closeAndDrain(f);
+  assert.equal(f.server.requests.length, 10);
   const reopened = await reopenReadonly(f, sessionId, 10);
   assert.deepEqual(reopened.timelines[sessionId].filter(block => block.kind === 'tool').map(block => block.id), ids);
   assert.equal((await visibleExtensionMessage(f.handle.page, reopened, sessionId, f.server, f.nonce)).id, extensionMessage.id);
@@ -269,6 +284,163 @@ test('普通桌面启用：真实项目扩展/MCP作用与错误进入UI和下�
   assert.equal((await events(f.project)).filter(item => item.type === 'call.start' && item.tool === 'append_once').length, 1);
   assert.deepEqual(await effects(f.project), [{ nonce: f.nonce, token: 'desktop_once', text: f.nonce }]);
   assert.ok(f.server.requests.every(request => request.authOk && request.body.model === codingModel)); assert.deepEqual(f.server.errors, []);
+}));
+
+test('普通桌面入口：扩展 sendUserMessage 作为同会话 Durable 用户输入进入后续真实 HTTP',async()=>withFixture({
+  calls:()=>[],callsOverride:[['extension_submit_followup',{}]],extensionSendsUserMessage:true,
+},async f=>{
+  const page=f.handle.page,input=`桌面原始输入 ${f.nonce}`,extensionInput=`extension durable input ${f.nonce}`;
+  const composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();await composer.fill(input);await composer.press('Enter');
+  let snapshot;
+  try{snapshot=await waitForSnapshot(page,value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    const session=sessionId?value.timelines[sessionId]:undefined;
+    const users=session?.filter(block=>block.kind==='message'&&block.role==='user')??[];
+    return f.server.requests.length===3&&users.some(block=>block.text===extensionInput)
+      &&value.runs[sessionId]?.status==='ready'&&value.runs[sessionId]?.pendingInputs===0;
+  });}catch(error){
+    const current=await page.evaluate(()=>window.dcode.getSnapshot());
+    const session=current.sessions.find(item=>current.timelines[item.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    throw new Error(`desktop extension input did not settle: ${error.message}; requests=${f.server.requests.length}; errors=${JSON.stringify(f.server.errors)}; session=${session?.id??'missing'}; phase=${session?JSON.stringify(current.runs[session.id]):'missing'}; users=${JSON.stringify(session?current.timelines[session.id].filter(block=>block.kind==='message'&&block.role==='user').map(block=>({text:block.text,operationId:block.operationId})):[])}; tools=${JSON.stringify(session?current.timelines[session.id].filter(block=>block.kind==='tool').map(block=>({name:block.tool.name,status:block.tool.status,output:block.tool.output})):[])}; http=${JSON.stringify(f.server.requests.map(request=>({ordinal:request.ordinal,model:request.body.model,messages:request.body.messages.map(message=>({role:message.role,content:httpMessageText(message)}))})))}`);
+  }
+  const sessionId=Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  assert.ok(sessionId);const blocks=snapshot.timelines[sessionId],users=blocks.filter(block=>block.kind==='message'&&block.role==='user');
+  assert.deepEqual(users.map(block=>block.text),[input,extensionInput]);
+  assert.ok(users[1].operationId.startsWith('pi-extension/'),'SDK 输入有独立正式 operationId');
+  assert.equal(users[1].receipt.processing,'done');
+  assert.equal(blocks.filter(block=>block.kind==='tool'&&block.tool.name==='extension_submit_followup'&&block.tool.status==='done').length,1);
+  assert.ok(!JSON.stringify(f.server.requests[0].body.messages).includes(extensionInput),'扩展正文不是预置到首次请求的假上下文');
+  assert.equal(f.server.requests[2].ordinal,3);assert.equal(f.server.requests[2].authOk,true);assert.equal(f.server.requests[2].body.model,codingModel);
+  assert.equal(f.server.requests[2].body.messages.filter(message=>message.role==='user'&&httpMessageText(message)===extensionInput).length,1);
+  await page.getByText(extensionInput,{exact:true}).waitFor({state:'visible'});
+  await page.getByText(extensionInput,{exact:true}).screenshot({path:join(evidenceDir('ordinary-extension-mcp'),`desktop-send-user-message-${f.nonce}.png`)});
+  assert.deepEqual(f.server.errors,[]);
+}));
+
+test('普通桌面入口：显式扩展命令由原 Durable 输入准备分派并恢复只读回执',async()=>withFixture({
+  calls:()=>[],callsOverride:[],extensionCommand:true,
+},async f=>{
+  const page=f.handle.page,input=`/greet desktop args ${f.nonce}`,expected=`DESKTOP_COMMAND desktop args ${f.nonce}`;
+  const composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();await composer.fill(input);await composer.press('Enter');
+  const snapshot=await waitForSnapshot(page,value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    const blocks=sessionId?value.timelines[sessionId]:undefined;
+    const command=blocks?.find(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected);
+    const original=blocks?.find(block=>block.kind==='message'&&block.role==='user'&&block.text===input);
+    return !!command&&original?.receipt?.status==='accepted'&&original.receipt.processing==='done';
+  });
+  const sessionId=Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  assert.ok(sessionId);const blocks=snapshot.timelines[sessionId];
+  const command=blocks.find(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected);assert.ok(command);
+  const original=blocks.find(block=>block.kind==='message'&&block.role==='user'&&block.text===input);assert.ok(original.operationId);assert.equal(original.receipt.processing,'done');
+  await page.getByText(expected,{exact:true}).waitFor({state:'visible'});
+  await page.getByText(expected,{exact:true}).screenshot({path:join(evidenceDir('ordinary-extension-mcp'),`desktop-extension-command-${f.nonce}.png`)});
+  assert.equal(f.server.requests.length,0,'成功命令只产生扩展显示消息，不把命令正文交给模型');
+  const result=await page.evaluate(({sessionId,blockId})=>window.dcode.checkReceipt({sessionId,blockId}),{sessionId,blockId:original.id});
+  assert.equal(result.receipt.status,'accepted');assert.equal(result.receipt.processing,'done');assert.equal(f.server.requests.length,0);
+  const reopened=await reopenReadonly(f,sessionId,0);
+  assert.equal(reopened.timelines[sessionId].find(block=>block.kind==='extension-message'&&block.id===command.id).text,expected);
+  assert.equal(reopened.timelines[sessionId].find(block=>block.id===original.id).receipt.processing,'done');assert.equal(f.server.requests.length,0);
+}));
+
+for(const closing of ['pause','close'])test(`普通桌面扩展注册命令 ${closing}：已完成消息保留，只读重开与明确继续不重放 handler`,async()=>withFixture({
+  calls:()=>[],callsOverride:[],extensionCommand:true,holdExtensionCommand:true,
+},async f=>{
+  const page=f.handle.page,input=`/greet hold ${closing} ${f.nonce}`,expected=`DESKTOP_COMMAND hold ${closing} ${f.nonce}`;
+  await page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first().fill(input);
+  await page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first().press('Enter');
+  await waitForSnapshot(page,async()=>{try{return (await readFile(join(f.project,'desktop-command-attempts.jsonl'),'utf8')).trim().split('\\n').filter(Boolean).length===1;}catch(error){if(error.code==='ENOENT')return false;throw error;}},undefined,'扩展命令handler未进入受控等待');
+  let snapshot=await waitForSnapshot(page,value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    return sessionId&&value.timelines[sessionId].some(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected);
+  });
+  const sessionId=Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  const original=snapshot.timelines[sessionId].find(block=>block.kind==='message'&&block.role==='user'&&block.text===input);
+  const command=snapshot.timelines[sessionId].find(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected);
+  assert.ok(original?.operationId);assert.ok(command);assert.equal(f.server.requests.length,0);
+  if(closing==='pause'){
+    const primary=page.locator('button[data-slot="composer-primary"]');assert.match(await primary.getAttribute('aria-label'),/^暂停$|^Pause$/);await primary.click();
+    await waitForSnapshot(page,value=>value.runs[sessionId]?.status==='paused');
+  }else{
+    await f.handle.close();assert.equal(f.proc.exitCode,0);assert.equal(f.proc.signalCode,null);
+  }
+  const reopened=await reopenReadonly(f,sessionId,0),restored=reopened.timelines[sessionId];
+  assert.equal(restored.filter(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected).length,1);
+  assert.equal(restored.find(block=>block.id===command.id).text,expected);
+  const reopenedInput=restored.find(block=>block.id===original.id);assert.equal(reopenedInput.operationId,original.operationId);
+  const attemptsBefore=JSON.parse('['+(await readFile(join(f.project,'desktop-command-attempts.jsonl'),'utf8')).trim().split('\\n').join(',')+']');
+  assert.equal(attemptsBefore.length,1,'暂停／关闭与只读重开不再次进入已中断命令handler');
+  assert.equal(f.server.requests.length,0);
+  const primary=f.handle.page.locator('button[data-slot="composer-primary"]');assert.match(await primary.getAttribute('aria-label'),/^继续执行$|^Resume$/);await primary.click();
+  const resumed=await waitForSnapshot(f.handle.page,value=>value.runs[sessionId]?.status==='ready',undefined,'继续后 Durable 中断分支没有正常收束');
+  assert.ok(resumed.runs[sessionId].errorNote==null,'继续收束中断回执不得留下恢复失败或状态不确定');
+  await waitForSnapshot(f.handle.page,value=>{
+    const row=value.timelines[sessionId]?.find(block=>block.id===original.id);
+    return row?.receipt?.processing==='unanswered';
+  });
+  const final=await f.handle.page.evaluate(()=>window.dcode.getSnapshot()),finalBlocks=final.timelines[sessionId];
+  assert.equal(finalBlocks.filter(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected).length,1);
+  assert.equal(JSON.parse('['+(await readFile(join(f.project,'desktop-command-attempts.jsonl'),'utf8')).trim().split('\\n').join(',')+']').length,1,'明确恢复只收束中断回执，不自动重放 handler');
+  assert.equal(f.server.requests.length,0);
+}));
+
+test('普通桌面图片输入：App投影、自然回执刷新、显式查回与只读重开保留原图片operation',async()=>withFixture({
+  calls:()=>[],callsOverride:[['extension_submit_image',{}]],extensionImageMessage:true,holdImagePreparation:true,
+},async f=>{
+  const page=f.handle.page,input=`桌面原始图片输入 ${f.nonce}`,extensionInput=`extension image input ${f.nonce}`;
+  const composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();await composer.fill(input);await composer.press('Enter');
+  let snapshot,queued;
+  try{queued=await waitForSnapshot(page,async value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    const image=sessionId&&value.timelines[sessionId].find(block=>block.kind==='message'&&block.role==='user'&&block.text===extensionInput);
+    try{await readFile(join(f.project,'image-input-preparation-started'));}catch(error){if(error.code==='ENOENT')return false;throw error;}
+    return !!image?.images?.length&&image.receipt?.status==='accepted'&&['queued','placed'].includes(image.receipt?.processing)
+      &&f.server.requests.length===2;
+  });}catch(error){const current=await page.evaluate(()=>window.dcode.getSnapshot());throw new Error(`image preparation did not reach a held nonterminal state: ${error.message}; requests=${f.server.requests.length}; users=${JSON.stringify(Object.values(current.timelines).flat().filter(block=>block.kind==='message'&&block.role==='user').map(block=>({text:block.text,images:block.images?.length,receipt:block.receipt})))}`);}
+  const sessionId=Object.keys(queued.timelines).find(id=>queued.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  const queuedBlock=queued.timelines[sessionId].find(block=>block.kind==='message'&&block.role==='user'&&block.text===extensionInput);
+  assert.ok(queuedBlock);assert.ok(['queued','placed'].includes(queuedBlock.receipt.processing));assert.equal(queuedBlock.images.length,1);
+  await page.evaluate(({sessionId,blockId})=>window.dcode.checkReceipt({sessionId,blockId}),{sessionId,blockId:queuedBlock.id});
+  let during=await page.evaluate(()=>window.dcode.getSnapshot());
+  let duringCheck=during.timelines[sessionId].find(block=>block.id===queuedBlock.id);
+  assert.equal(duringCheck.receipt.status,'accepted');assert.ok(['queued','placed'].includes(duringCheck.receipt.processing));assert.deepEqual(duringCheck.images,queuedBlock.images);
+  assert.equal(f.server.requests.length,2,'非终态显式查回不提交图片HTTP');
+  await f.releaseImagePreparation();
+  try{snapshot=await waitForSnapshot(page,value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    const session=sessionId?value.timelines[sessionId]:undefined;
+    const image=session?.find(block=>block.kind==='message'&&block.role==='user'&&block.text===extensionInput);
+    return !!image?.images?.length&&image.receipt?.status==='accepted'&&image.receipt?.processing==='unanswered'
+      &&value.runs[sessionId]?.status==='ready'&&value.runs[sessionId]?.pendingInputs===0;
+  });}catch(error){
+    const current=await page.evaluate(()=>window.dcode.getSnapshot());
+    const session=current.sessions.find(item=>current.timelines[item.id]?.some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    throw new Error(`desktop extension image input did not settle: ${error.message}; requests=${f.server.requests.length}; errors=${JSON.stringify(f.server.errors)}; run=${session?JSON.stringify(current.runs[session.id]):'missing'}; users=${JSON.stringify(session?current.timelines[session.id].filter(block=>block.kind==='message'&&block.role==='user').map(block=>({text:block.text,operationId:block.operationId,images:block.images?.length,receipt:block.receipt})):[])}`);
+  }
+  assert.equal(Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input)),sessionId);
+  const block= snapshot.timelines[sessionId].find(item=>item.kind==='message'&&item.role==='user'&&item.text===extensionInput);
+  assert.ok(sessionId&&block);assert.equal(block.images.length,1);assert.ok(block.operationId.startsWith('pi-extension/'));
+  assert.equal(block.receipt.status,'accepted');assert.equal(block.receipt.processing,'unanswered','当前测试来源未核实vision能力，只保留接收事实，不伪报图片已处理');
+  assert.equal(f.server.requests.length,2,'初始模型请求与扩展工具后的正式HTTP存在；未核实vision时图片请求不得发出');
+  assert.equal(f.server.requests[1].body.messages.filter(message=>message.role==='user'&&httpMessageText(message)===extensionInput).length,0);
+  await page.getByText(extensionInput,{exact:true}).waitFor({state:'visible'});
+  const imageRow=page.locator('[data-slot="message"]').filter({hasText:extensionInput});
+  await imageRow.screenshot({path:join(evidenceDir('ordinary-extension-mcp'),`desktop-image-send-user-message-${f.nonce}.png`)});
+  await page.evaluate(({sessionId,blockId})=>window.dcode.checkReceipt({sessionId,blockId}),{sessionId,blockId:block.id});
+  let checked=await page.evaluate(()=>window.dcode.getSnapshot());
+  let afterCheck=checked.timelines[sessionId].find(item=>item.id===block.id);
+  assert.equal(afterCheck.receipt.status,'accepted');assert.equal(afterCheck.receipt.processing,'unanswered');assert.deepEqual(afterCheck.images,block.images);
+  assert.equal(f.server.requests.length,2,'显式只读查回不重发');
+  await f.handle.close();f.handle=await launchApp(f.stateDir,f.env,'.',{prebindProject:false});f.proc=f.handle.app.process();await ready(f.handle.page);await gotoSession(f.handle.page,sessionId);
+  const reopened=await f.handle.page.evaluate(()=>window.dcode.getSnapshot());
+  const restored=reopened.timelines[sessionId].find(item=>item.id===block.id);
+  assert.ok(restored);assert.equal(restored.operationId,block.operationId);assert.deepEqual(restored.images,block.images);
+  assert.equal(restored.receipt.status,'accepted');assert.equal(restored.receipt.processing,'unanswered');
+  await f.handle.page.evaluate(({sessionId,blockId})=>window.dcode.checkReceipt({sessionId,blockId}),{sessionId,blockId:block.id});
+  const afterReopenCheck=await f.handle.page.evaluate(()=>window.dcode.getSnapshot());
+  assert.equal(afterReopenCheck.timelines[sessionId].find(item=>item.id===block.id).receipt.processing,'unanswered');
+  assert.equal(f.server.requests.length,2,'只读重开与同operation显式查回不启动图片请求或重放扩展');
+  assert.deepEqual(f.server.errors,[]);
 }));
 
 // 2) 已完成作用 + 真正wait在途：按requestId消费取消，暂停关闭drain，RO不连接。

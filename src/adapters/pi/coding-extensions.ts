@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import type { Context, JsonValue } from '@earendil-works/chord';
 import { GenerationTask, ToolTask, ToolResultEntry, UsageDoc, defineDoc, defineDocFamily, defineEntry, defineExtension, defineTask, defineTool, hook } from '@earendil-works/pi-durable';
-import type { Conversation, Harness, JsonObject, Registry, Session, ToolExecutionApi, ToolExecutionResult, ToolHooks, ToolRegistration } from '@earendil-works/pi-durable';
+import type { Conversation, Harness, JsonObject, Registry, Session, TaskId, ToolExecutionApi, ToolExecutionResult, ToolHooks, ToolRegistration } from '@earendil-works/pi-durable';
 import { validateToolArguments } from '@earendil-works/pi-ai/utils/validation';
 import type { ToolCall, TSchema } from '@earendil-works/pi-ai';
 import type { ModelRuntime, BeforeAgentStartEventResult, VirtualModelDefinition, ModelRouteRequest } from '@earendil-works/pi-coding-agent';
@@ -16,14 +16,17 @@ import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
 import type { InputPreparation, PreparedInput } from './input-preparation';
 import type { HookApi, EntryRecord, Cursor, TaskRecord, EntryId, Tx, ConversationId } from '@earendil-works/pi-durable';
-import type { Api, Model, ImageContent, Message, AssistantMessage, Usage, Models } from '@earendil-works/pi-ai';
+import type { AnyModel, Api, Model, ModelType, ImageContent, Message, AssistantMessage, Usage, Models } from '@earendil-works/pi-ai';
 
-// 只投影 SDK chat 模型的公开描述；原认证与执行请求头仍由宿主 ModelRuntime 持有。
-function modelMetadata(model: ReturnType<ModelRuntime['getModels']>[number]) {
-  const { id, name, api, provider, baseUrl, input, inputLimits, cost, type, reasoning,
-    thinkingLevelMap, promptCache, contextWindow, maxTokens, samplingParams, compat } = model;
-  return JSON.parse(JSON.stringify({ id, name, api, provider, baseUrl, input, inputLimits, cost, type,
-    reasoning, thinkingLevelMap, promptCache, contextWindow, maxTokens, samplingParams, compat },
+// 只投影各类型模型的公开描述；认证材料与执行请求头仍由宿主 ModelRuntime 持有。
+function modelMetadata(model: AnyModel): JsonValue {
+  const base = { id: model.id, name: model.name, api: model.api, provider: model.provider, baseUrl: model.baseUrl,
+    input: model.input, inputLimits: model.inputLimits, cost: model.cost, ...(model.type ? { type: model.type } : {}) };
+  const typed = model.type === 'image' ? { output: model.output }
+    : model.type === 'classifier' ? { contextWindow: model.contextWindow }
+      : { reasoning: model.reasoning, thinkingLevelMap: model.thinkingLevelMap, promptCache: model.promptCache,
+        contextWindow: model.contextWindow, maxTokens: model.maxTokens, samplingParams: model.samplingParams, compat: model.compat };
+  return JSON.parse(JSON.stringify({ ...base, ...typed },
     (key, value: unknown) => /^(headers|apikey|authorization|credentials?|env)$/i.test(key) ? undefined : value)) as JsonValue;
 }
 
@@ -33,7 +36,7 @@ const ExtensionModelResult = defineEntry<JsonObject>('dcode.extension-model-resu
 const ExtensionModelSpend = defineDoc<{usages:Record<string,JsonValue>}>({kind:'dcode.extension-model-spend',version:1,scope:'task',initial:()=>({usages:{}})});
 // 这里只存原模型子任务的消费回执；累计数仍只有官方UsageDoc。
 const ModelSpendAccounted = defineDocFamily<{done:boolean},null>({kind:'dcode.extension-model-accounted',version:1,scope:'conversation',history:'latest',fork:'current',family:true,initial:()=>({done:false})});
-const Action = defineDocFamily<{fingerprint:string;applied:boolean;entryId:number},string>({kind:'dcode.extension-action',version:1,scope:'session',family:true,initial:fingerprint=>({fingerprint,applied:false,entryId:-1})});
+const Action = defineDocFamily<{fingerprint:string;applied:boolean;entryId:number;nameChanged?:boolean},string>({kind:'dcode.extension-action',version:1,scope:'session',family:true,initial:fingerprint=>({fingerprint,applied:false,entryId:-1})});
 const Turn = defineDocFamily<{ started: boolean; finished: boolean; messages: JsonValue[] }, null>({ kind: 'dcode.extension-turn', version: 1, scope: 'session', family: true, initial: () => ({ started: false, finished: false, messages: [] }) });
 const RequestRound=defineDoc<{assistant:number}>({kind:'dcode.extension-request-round',version:1,scope:'task',initial:()=>({assistant:0})});
 type Descriptor = { name: string; description: string; parameters: TSchema; exposure: string; defaultActive?: boolean; constrainedSampling?: import('@earendil-works/pi-ai').ConstrainedSamplingConfig | false; hasPrepareArguments?: boolean };
@@ -41,9 +44,35 @@ type NestedInput = { caller: string; call: ToolCall };
 type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' };
 type RuntimeBinding = { harness: Harness; root: Conversation; ownedModel?: DurableModelRouting['withOwnedModelInvocation'] };
 type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; signal?: AbortSignal; aborted: boolean; seq: number };
+type ModelAvailabilityCall = { origin: Worker; controller: AbortController };
+type ExtensionUserOptions = { deliverAs: 'steer' | 'followUp'; expandPromptTemplates: boolean };
+type ExtensionUserAdmission = { ownerTaskId?: TaskId; isCurrent: () => boolean };
+type ExtensionUserMessageSubmitter = (content: unknown, options: ExtensionUserOptions, actionId: string, context: Context, admission: ExtensionUserAdmission) => Promise<void>;
 type VirtualRegistration = { provider: string; id: string; handle: string; origin: Worker; model?: Model<Api> };
 const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const virtualKey = (provider: string, id: string) => JSON.stringify([provider, id]);
+const modelTypes: readonly ModelType[] = ['chat', 'image', 'classifier'];
+const validProviderId = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+  && value.length <= 128 && !/[\x00-\x1f]/.test(value);
+async function entriesInTransaction(tx: Tx, conversationId: ConversationId): Promise<EntryRecord[]> {
+  const entries: EntryRecord[] = []; let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanEntries({ conversationId }, 200, cursor);
+    entries.push(...page.items); cursor = page.next;
+  } while (cursor !== undefined);
+  return entries.sort((left, right) => left.id - right.id);
+}
+function sessionNameFromEntries(entries: readonly EntryRecord[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry.kind !== ExtensionEntry.kind || !entry.data || typeof entry.data !== 'object' || Array.isArray(entry.data)) continue;
+    const data = entry.data as JsonObject;
+    if (data.action !== 'name' || !data.value || typeof data.value !== 'object' || Array.isArray(data.value)) continue;
+    const name = (data.value as JsonObject).name;
+    return typeof name === 'string' ? name.trim() || undefined : undefined;
+  }
+  return undefined;
+}
 function virtualDefinition(value: unknown): Omit<VirtualModelDefinition, 'route'> {
   const def = bounded(value, 64 * 1024) as Record<string, unknown>;
   const text = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f]/.test(v);
@@ -115,9 +144,12 @@ export class CodingExtensions {
   #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; abort?: () => void }>();
   #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: AssistantMessage[] }>();
   #modelCalls = new Map<string, ModelCall>();
+  #modelAvailabilityCalls = new Map<string, ModelAvailabilityCall>();
   #virtuals = new Map<string, VirtualRegistration>();
   #providerClaims = new Map<string, { origin: Worker; handle: string; claim: object }>();
   #events = new Map<string, { api?: HookApi; context: Context }>();
+  #shutdownScope?: string;
+  #shutdownFlushed?: () => void;
   #tools: Descriptor[] = [];
   #active: string[] = [];
   #declarations: string[] = [];
@@ -125,10 +157,11 @@ export class CodingExtensions {
   #resourceEpoch=randomUUID();
   #arguments = new Map<string,ArgumentMemo>();
   #generation = new Map<AbortSignal,HookApi>();
-  #closing?: Promise<void>;
+  #closing?: { shutdownFlushed: Promise<void>; done: Promise<void> };
   #initializing?: Promise<void>;
   #packageInstructions = '';
   #packagePrompts: { name: string; content: string; filePath: string }[] = [];
+  #submitUserMessage?: ExtensionUserMessageSubmitter;
   #closed = true;
   #armed = false;
   readonly #models: ModelRuntime;
@@ -352,6 +385,7 @@ export class CodingExtensions {
   }
   get packageResources() { return { instructions: this.#packageInstructions, prompts: this.#packagePrompts }; }
   attach(harness: Harness, root: Conversation, ownedModel?: DurableModelRouting['withOwnedModelInvocation']): void { this.#binding = { harness, root, ownedModel }; }
+  setUserMessageSubmitter(submit: ExtensionUserMessageSubmitter): void { this.#submitUserMessage = submit; }
   useRegistry(registry: Registry): void { this.#registry = registry; }
   #argumentKey(call:Pick<ToolCall,'name'|'arguments'>):string{return `${call.name}/${createHash('sha256').update(JSON.stringify(call.arguments)).digest('hex')}`;}
   async #prepareArguments(call:ToolCall, api:HookApi, ctx:Context):Promise<void>{
@@ -452,13 +486,15 @@ export class CodingExtensions {
     finally { this.#events.delete(scope); }
   }
   async prepareInput(input: InputPreparation, api: ToolExecutionApi, ctx: Context, expand: (text: string) => string): Promise<PreparedInput> {
-    if (!this.#worker || this.#closed) return { content: typeof input.content === 'string' ? expand(input.content) : input.content.map((part, index) => index === 0 && part.type === 'text' ? { ...part, text: expand(part.text) } : part), handled: false };
+    const applyExpansion = (text: string) => input.expandPromptTemplates === false ? text : expand(text);
+    if (!this.#worker || this.#closed) return { content: typeof input.content === 'string' ? applyExpansion(input.content) : input.content.map((part, index) => index === 0 && part.type === 'text' ? { ...part, text: applyExpansion(part.text) } : part), handled: false };
     const scope=`input/${api.taskId}/${input.requestId}`; this.#calls.set(scope, { api, context: ctx, nested: [], models: [] });
     try {
-      const result = await this.#request('input', { text: input.text, images: input.images, mode: input.mode }, ctx.abortSignal, { scope }) as { action: string; text?: string; images?: ImageContent[] };
+      const result = await this.#request('input', { text: input.text, images: input.images, mode: input.mode, source: input.source, expandPromptTemplates: input.expandPromptTemplates }, ctx.abortSignal, { scope }) as { action: string; text?: string; images?: ImageContent[] };
       if(!['continue','transform','handled'].includes(result.action)||(result.action==='transform'&&typeof result.text!=='string'))throw new CodingResourcesUnavailable();
       if (result.action === 'handled') return { content: input.content, handled: true };
-      const text = expand(result.action === 'transform' ? String(result.text) : input.text);
+      const inputText = result.action === 'transform' ? String(result.text) : input.text;
+      const text = applyExpansion(inputText);
       const images = parseWorkImages(result.images ?? input.images);
       const references = typeof input.content === 'string' ? [] : input.content.filter(part => part.type === 'text').slice(1);
       const content: import('@earendil-works/pi-durable').UserInput = [{ type: 'text', text }, ...references, ...images];
@@ -511,11 +547,11 @@ export class CodingExtensions {
     }, ctx);
     return [...messages, ...result.messages];
   }
-  async prepare(cwd: string, expectedEnabled = this.#enabled()) {
+  async prepare(cwd: string, expectedEnabled = this.#enabled(), sessionStartReason: 'startup' | 'resume' | 'reload' = 'startup') {
     if (expectedEnabled !== this.#enabled()) throw new CodingResourcesUnavailable();
     if (!this.#enabled()) {
       if (this.#worker && this.#binding && (await this.#binding.harness.inspect(context)).tasks.length) throw new CodingResourcesUnavailable();
-      await this.close(); this.#armed = false; this.#packageInstructions = ''; this.#packagePrompts = [];
+      await this.close('reload'); this.#armed = false; this.#packageInstructions = ''; this.#packagePrompts = [];
       return { remove: [this.#extension()], tools: null };
     }
     if (this.#worker && !this.#closed) {
@@ -523,7 +559,8 @@ export class CodingExtensions {
       const current = await this.#request('configuration', {}) as {configuration:string};
       if (current.configuration !== this.#configuration) {
         if (this.#binding && (await this.#binding.harness.inspect(context)).tasks.some(({record})=>!['dcode.input-preparation','dcode.input-receipt'].includes(record.kind))) throw new CodingResourcesUnavailable();
-        await this.close();
+        sessionStartReason = 'reload';
+        await this.close('reload');
       }
     }
     if (!this.#worker) {
@@ -531,7 +568,7 @@ export class CodingExtensions {
       this.#armed = true; this.#closed = false; this.#closing = undefined; this.#tools = []; this.#active = [];this.#arguments.clear();this.#resourceEpoch=randomUUID();
       const worker = new Worker(extensionWorkerSource, { eval: true, execArgv: [], stdout: true, stderr: true,
         env: { ...process.env, PI_CODING_AGENT_DIR: this.#agentDir, PI_OFFLINE: '1', NODE_TEST_CONTEXT: undefined },
-        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'), streamFactory: import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),
+        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sessionStartReason, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'), streamFactory: import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),
           builtins: this.#builtins.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters, exposure: 'direct' })) } });
       this.#worker = worker; worker.stdout.resume(); worker.stderr.resume();
       worker.on('message', (message: Record<string, unknown>) => this.#message(message,worker));
@@ -557,7 +594,8 @@ export class CodingExtensions {
     const entries: EntryRecord[] = []; let cursor: Cursor | undefined;
     do { const page = await this.#binding.root.entries({}, 200, cursor, context); entries.push(...page.items); cursor = page.next; } while (cursor !== undefined);
     entries.sort((a, b) => a.id - b.id);
-    return { sessionId: this.#sessionId, entries, messages: formal.messages, model: model ? modelMetadata(model) : undefined, modelCatalog: { all: this.#models.getModels().map(modelMetadata), available: this.#models.getAvailableSnapshot().map(modelMetadata) }, thinkingLevel: agent.thinkingLevel, systemPrompt: agent.instructions ?? '', ...extra };
+    return { sessionId: this.#sessionId, entries, messages: formal.messages, model: model ? modelMetadata(model) : undefined,
+      modelCatalog: this.#catalog(), thinkingLevel: agent.thinkingLevel, systemPrompt: agent.instructions ?? '', ...extra };
   }
   async #request(method: string, value: unknown, signal?: AbortSignal, extra: object = {}): Promise<unknown> {
     const worker = this.#worker; if (!worker || (this.#closed && method !== 'close')) throw new CodingResourcesUnavailable();
@@ -587,7 +625,18 @@ export class CodingExtensions {
     } finally { signal?.removeEventListener('abort', abort); }
   }
   #catalog() {
-    return { all: this.#models.getModels().map(modelMetadata), available: this.#models.getAvailableSnapshot().map(modelMetadata) };
+    return {
+      all: this.#models.getModels().map(modelMetadata),
+      available: this.#models.getAvailableSnapshot().map(modelMetadata),
+      // Provider metadata is a read-only host projection; never send Provider/auth objects to the Worker.
+      providerNames: this.#models.getProviders().map(provider => ({ id: provider.id, name: provider.name })),
+      registeredProviderIds: [...this.#models.getRegisteredProviderIds()],
+      byType: {
+        chat: this.#models.getModelsOfType('chat').map(modelMetadata),
+        image: this.#models.getModelsOfType('image').map(modelMetadata),
+        classifier: this.#models.getModelsOfType('classifier').map(modelMetadata),
+      },
+    };
   }
   #removeVirtuals(): void {
     for (const [key, own] of this.#virtuals) {
@@ -622,7 +671,9 @@ export class CodingExtensions {
   }
   #message(message: Record<string, unknown>, origin: Worker): void {
     if (origin !== this.#worker) return;
-    if (message.type === 'result') {
+    if (message.type === 'shutdown-flushed') {
+      if (message.scope === this.#shutdownScope) this.#shutdownFlushed?.();
+    } else if (message.type === 'result') {
       const pending = this.#pending.get(Number(message.id)); if (!pending) return; this.#pending.delete(Number(message.id));
       // route不发布工具/状态；不能在回执已摘pending后又等publication，丢掉可取消等待的认领。
       if (message.ok === true && pending.abort) pending.resolve(message.value);
@@ -653,7 +704,9 @@ export class CodingExtensions {
     }
   }
   async #host(method: string, value: unknown, callId: string, origin: Worker): Promise<unknown> {
-    if (this.#closed || origin !== this.#worker || !this.#binding) throw new CodingResourcesUnavailable();
+    const shutdownEvent = this.#closed && origin === this.#worker && callId === this.#shutdownScope && this.#events.has(callId);
+    if ((this.#closed && !shutdownEvent) || origin !== this.#worker || !this.#binding) throw new CodingResourcesUnavailable();
+    if (shutdownEvent && !['entry', 'message', 'name', 'label'].includes(method)) throw new CodingResourcesUnavailable();
     const payload = bounded(value, 1024 * 1024) as JsonObject;
     if (method === 'model-complete' || method === 'model-stream' || method === 'model-cancel') {
       const caller = this.#calls.get(callId);
@@ -698,6 +751,40 @@ export class CodingExtensions {
     const caller = this.#calls.get(callId); const event = this.#events.get(callId);
     if (!caller && !event) throw new CodingResourcesUnavailable();
     const ctx = caller?.context ?? event!.context;
+    // typed目录可用性属于只读host operation；与当前scope关联，关闭与传入signal都能中止原Runtime认证检查。
+    if (method === 'model-available-cancel') {
+      const actionId = payload.actionId;
+      const prefix = `${callId}/model-availability/`;
+      const suffix = typeof actionId === 'string' && actionId.startsWith(prefix) ? actionId.slice(prefix.length) : '';
+      if (!/^[1-9]\d*$/.test(suffix)) throw new CodingResourcesUnavailable();
+      const pending = this.#modelAvailabilityCalls.get(actionId as string);
+      if (!pending) return { cancelled: false };
+      if (pending.origin !== origin) throw new CodingResourcesUnavailable();
+      pending.controller.abort();
+      return { cancelled: true };
+    }
+    if (method === 'model-available-of-type') {
+      const actionId = payload.actionId;
+      const prefix = `${callId}/model-availability/`;
+      const suffix = typeof actionId === 'string' && actionId.startsWith(prefix) ? actionId.slice(prefix.length) : '';
+      const type = payload.type;
+      const provider = payload.provider;
+      if (ctx.abortSignal?.aborted || !/^[1-9]\d*$/.test(suffix) || !modelTypes.includes(type as ModelType)
+        || (provider !== undefined && !validProviderId(provider)) || this.#modelAvailabilityCalls.has(actionId as string)) throw new CodingResourcesUnavailable();
+      const controller = new AbortController();
+      const pending: ModelAvailabilityCall = { origin, controller };
+      const abortFromOwner = () => controller.abort();
+      ctx.abortSignal?.addEventListener('abort', abortFromOwner, { once: true });
+      this.#modelAvailabilityCalls.set(actionId as string, pending);
+      try {
+        const models = await this.#models.getAvailableOfType(type as ModelType, provider as string | undefined, { signal: controller.signal });
+        if (controller.signal.aborted || ctx.abortSignal?.aborted || origin !== this.#worker || this.#closed) throw new CodingResourcesUnavailable();
+        return { models: models.map(modelMetadata) };
+      } finally {
+        ctx.abortSignal?.removeEventListener('abort', abortFromOwner);
+        if (this.#modelAvailabilityCalls.get(actionId as string) === pending) this.#modelAvailabilityCalls.delete(actionId as string);
+      }
+    }
     if (method === 'provider-register' || method === 'provider-unregister') {
       if (!this.#providerHeaders || ctx.abortSignal?.aborted || typeof payload.provider !== 'string' || !payload.provider.trim()
         || payload.provider.length > 128 || /[\x00-\x1f]/.test(payload.provider)
@@ -737,28 +824,57 @@ export class CodingExtensions {
     }
     const commit = caller ? caller.api.commit.bind(caller.api) : async <T>(change: (tx: import('@earendil-works/pi-durable').Tx) => Promise<T>, ownContext: Context) => {
       let value!: T; await this.#binding!.harness.commit(async tx => {
-        if (this.#closed || this.#worker!==origin || ownContext.abortSignal?.aborted) throw new CodingResourcesUnavailable();
+        if ((this.#closed && !shutdownEvent) || this.#worker!==origin || ownContext.abortSignal?.aborted) throw new CodingResourcesUnavailable();
         if (event?.api) { const task = await tx.task(event.api.taskId); if (!task || task.state.status === 'terminal' || 'abort' in task) throw new CodingResourcesUnavailable(); }
         value = await change(tx);
       }, ownContext); return value;
     };
+    if (method === 'name' && typeof payload.name !== 'string') throw new CodingResourcesUnavailable();
     if (method === 'entry' || method === 'message' || method === 'name' || method === 'label') {
+      let nameReply: { entries: EntryRecord[]; nameChanged: boolean } | undefined;
       await commit(async tx => {
         const actionId=typeof payload.actionId==='string'?payload.actionId:''; if(!actionId) throw new CodingResourcesUnavailable();
         const fingerprint=createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-        const receipt=await tx.doc(Action,actionId,fingerprint); if(receipt.fingerprint!==fingerprint) throw new CodingResourcesUnavailable(); if(receipt.applied)return;
+        const receipt=await tx.doc(Action,actionId,fingerprint); if(receipt.fingerprint!==fingerprint) throw new CodingResourcesUnavailable();
+        if(receipt.applied){if(method==='name')nameReply={entries:await entriesInTransaction(tx,this.#binding!.root.id),nameChanged:false};return;}
         const value = payload;
         const message = method === 'message' && typeof payload.message === 'object' && payload.message ? payload.message as JsonObject : undefined;
         if (method === 'message' && (!message || typeof message.customType !== 'string' || !message.customType.length || message.customType.length > 128 || typeof message.display !== 'boolean')) throw new CodingResourcesUnavailable();
         const content = message?.content;
         const model = message && (typeof content === 'string' || Array.isArray(content)) ? [{ role: 'user' as const, content: content as import('@earendil-works/pi-durable').UserInput, timestamp: Date.now() }] : undefined;
+        if(method==='name'){
+          const entries=await entriesInTransaction(tx,this.#binding!.root.id);
+          const name=String(payload.name).replace(/[\r\n]+/g,' ').trim();
+          const changed=sessionNameFromEntries(entries)!==(name||undefined);
+          receipt.nameChanged=changed;receipt.applied=true;
+          if(changed){
+            const entry=await tx.appendEntry(ExtensionEntry,this.#binding!.root.id,{data:{action:method,value:{...payload,name}}});
+            receipt.entryId=entry.id;nameReply={entries:[...entries,entry].sort((left,right)=>left.id-right.id),nameChanged:true};
+          }else{
+            nameReply={entries,nameChanged:false};
+          }
+          return;
+        }
         const entry=await tx.appendEntry(ExtensionEntry,this.#binding!.root.id,{data:{action:method,value},...(model?{model}:{})}); receipt.entryId=entry.id;receipt.applied=true;
-      }, ctx); return {};
+      }, ctx);
+      // 变化判定随 Durable action receipt 原子提交；普通状态快照的新鲜度不能替代事件认领。
+      if (method === 'name') return nameReply ?? { entries: (await this.#state()).entries, nameChanged: false };
+      return {};
     }
     if (method === 'user') {
-      if (typeof payload.content !== 'string' && !Array.isArray(payload.content)) throw new CodingResourcesUnavailable();
-      const id = typeof payload.actionId === 'string' ? payload.actionId : undefined; if (!id) throw new CodingResourcesUnavailable();
-      await this.#binding.root.submit({ type: 'input', content: payload.content as import('@earendil-works/pi-durable').UserInput, requestId: id, whenBusy: 'followUp' }, ctx); return {};
+      const id = typeof payload.actionId === 'string' ? payload.actionId : undefined;
+      const options = payload.options;
+      if (!id || !this.#submitUserMessage || (typeof payload.content !== 'string' && !Array.isArray(payload.content))
+        || (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options)
+          || Object.keys(options).some(key => !['deliverAs', 'expandPromptTemplates'].includes(key))
+          || (options.deliverAs !== undefined && options.deliverAs !== 'steer' && options.deliverAs !== 'followUp')
+          || (options.expandPromptTemplates !== undefined && typeof options.expandPromptTemplates !== 'boolean')))) throw new CodingResourcesUnavailable();
+      await this.#submitUserMessage(payload.content, {
+        deliverAs: options?.deliverAs === 'steer' ? 'steer' : 'followUp',
+        expandPromptTemplates: options?.expandPromptTemplates === true,
+      }, id, ctx, { ownerTaskId: caller?.api.taskId ?? event?.api?.taskId,
+        isCurrent: () => !this.#closed && this.#worker === origin && !ctx.abortSignal?.aborted });
+      return {};
     }
     if (method === 'compact') {
       const admitted = await this.#binding.root.compact(typeof payload.instructions === 'string' ? payload.instructions : undefined, ctx);
@@ -773,19 +889,44 @@ export class CodingExtensions {
     }
     throw new CodingResourcesUnavailable();
   }
-  #fail(): void { this.#closed = true; this.#removeVirtuals(); this.#removeProviderHeaders(); for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear(); }
-  close(): Promise<void> {
+  #abortModelAvailability(origin?: Worker): void {
+    for (const call of this.#modelAvailabilityCalls.values()) if (!origin || call.origin === origin) call.controller.abort();
+  }
+  #fail(): void {
+    this.#closed = true; this.#abortModelAvailability(); this.#removeVirtuals(); this.#removeProviderHeaders();
+    for (const pending of this.#pending.values()) pending.reject(new CodingResourcesUnavailable()); this.#pending.clear();
+  }
+  beginClose(reason: 'quit' | 'reload' | 'resume' = 'quit'): { shutdownFlushed: Promise<void>; done: Promise<void> } {
     if (this.#closing) return this.#closing;
-    const worker = this.#worker; if (!worker) return Promise.resolve();
+    const worker = this.#worker;
+    if (!worker) return { shutdownFlushed: Promise.resolve(), done: Promise.resolve() };
     // 在等待关闭前提升代次；旧回调不能提交新任务，取消由同一 Harness 所有权级联。
     this.#closed = true;
+    this.#abortModelAvailability(worker);
     this.#removeVirtuals();
     this.#removeProviderHeaders();
     for (const pending of this.#pending.values()) pending.abort?.();
-    this.#closing = (async () => {
-      try { await this.#request('close', {}); await this.#publication; }
+    const shutdownScope = `shutdown/${this.#sessionId}/${randomUUID()}`;
+    this.#shutdownScope = shutdownScope;
+    this.#events.set(shutdownScope, { context });
+    let resolveShutdownFlushed!: () => void;
+    const shutdownFlushed = new Promise<void>(resolve => { resolveShutdownFlushed = resolve; });
+    this.#shutdownFlushed = resolveShutdownFlushed;
+    const done = (async () => {
+      try { await this.#request('close', { reason }, undefined, { scope: shutdownScope }); await this.#publication; }
       finally { await worker.terminate(); this.#worker = undefined; this.#fail(); }
     })();
-    return this.#closing;
+    const closing = { shutdownFlushed, done };
+    this.#closing = closing;
+    void done.finally(() => {
+      this.#events.delete(shutdownScope);
+      if (this.#shutdownScope === shutdownScope) this.#shutdownScope = undefined;
+      if (this.#shutdownFlushed === resolveShutdownFlushed) this.#shutdownFlushed = undefined;
+      resolveShutdownFlushed();
+    }).catch(() => {});
+    return closing;
+  }
+  close(reason: 'quit' | 'reload' | 'resume' = 'quit'): Promise<void> {
+    return this.beginClose(reason).done;
   }
 }

@@ -24,6 +24,10 @@ const ownedProcesses = new WeakMap();
  */
 export async function launchApp(stateDir, extraEnv, entrypoint = ".", options = {}) {
   const dir = stateDir ?? mkdtempSync(join(tmpdir(), "dcode-e2e-"));
+  // 普通场景预建 profile；冷启动验收可关闭此步，验证主进程自己的异步准备路径。
+  if (options.prepareUserData !== false) {
+    await mkdir(join(dir, "userdata"), { recursive: true, mode: 0o700 });
+  }
   if (extraEnv?.DCODE_VALIDATION_ASSEMBLY === "" && options.prebindProject !== false) {
     // 普通装配也必须用真实隔离项目；资源加载不能落到 fixture 的真实 Home。
     const stateFile = join(dir, 'dcode-prototype-state.json');
@@ -56,7 +60,11 @@ export async function launchApp(stateDir, extraEnv, entrypoint = ".", options = 
     electron.launch({
       executablePath: electronBinary,
       // 经典 thumb 场景必须固定实际系统控件形态；仅本次进程的易失参数域，不写用户全局偏好。
-      args: [entrypoint, ...(options.classicScrollbars && process.platform === "darwin" ? ["-AppleShowScrollBars", "Always"] : [])],
+      args: [
+        `--user-data-dir=${join(dir, "userdata")}`,
+        entrypoint,
+        ...(options.classicScrollbars && process.platform === "darwin" ? ["-AppleShowScrollBars", "Always"] : []),
+      ],
       cwd: join(import.meta.dirname, "../.."),
       env: {
         ...env,

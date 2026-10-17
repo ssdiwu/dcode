@@ -30,6 +30,8 @@ def main():
                           "state_directory": str(state)}, ensure_ascii=False))
         return
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Electron 的 GPU／网络辅助进程会在 ready 回调前读取 userData；先准备同一隔离 profile 目录。
+    (state / "userdata").mkdir(parents=True, exist_ok=True, mode=0o700)
     # 防止同一固定入口同时构建/启动两个实例；锁只覆盖启动过程，不删除用户数据。
     with (state / "launch.lock").open("a+") as lock:
         try:
@@ -60,7 +62,7 @@ def main():
         subprocess.run([npm, "run", "build"], cwd=root, env=env, check=True, timeout=120)
         env["DCODE_STATE_DIR"] = str(state)
         with (state / "runtime.log").open("ab") as log:
-            proc = subprocess.Popen([str(electron), str(root)], cwd=root, env=env,
+            proc = subprocess.Popen([str(electron), f"--user-data-dir={state / 'userdata'}", str(root)], cwd=root, env=env,
                                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
         record.write_text(json.dumps({"pid": proc.pid, "source": str(root),

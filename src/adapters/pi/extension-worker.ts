@@ -14,7 +14,9 @@ const calls = new Map(), replies = new Map(), children = new Set(), closings = n
 const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
 const virtualModels = new Map(), virtualHandles = new Map();
 const providerHandles = new Map();
-let serial = 0, activated = new Set(), active = [], builtins = [], actions = [], errors = [];
+let serial = 0, activated = new Set(), active = [], builtins = [], errors = [];
+const actionsByScope = new Map();
+const closingScopes = new Set();
 const nativeSpawn = cp.spawn;
 cp.spawn = (...args) => {
   if (closed) throw new Error('Resource session closed');
@@ -35,11 +37,77 @@ const rpc = (method, value, callId) => new Promise((resolve, reject) => {
   const id = ++serial; replies.set(id, { resolve, reject });
   parentPort.postMessage({ type: 'host', id, method, value: safe(value), callId });
 });
-const queue = (method, value) => { const current=invocation.getStore(); const scope=current?.id;
+const trackAction = (scope, action) => {
+  let pending = actionsByScope.get(scope);
+  if (!pending) { pending = new Set(); actionsByScope.set(scope, pending); }
+  pending.add(action);
+};
+const forgetActions = (scope, batch) => {
+  const pending=actionsByScope.get(scope); if(!pending)return;
+  for(const action of batch)pending.delete(action);
+  if(!pending.size&&actionsByScope.get(scope)===pending)actionsByScope.delete(scope);
+};
+const queue = (method, value, afterCommit) => { const current=invocation.getStore(); const scope=current?.id;
   if(current?.pure)throw new Error('Argument preparation must be pure');
-  const result = rpc(method, { ...value, actionId: scope + '/' + (++current.counter) }, scope); result.catch(() => {}); actions.push(result); return result; };
-const flush = async () => { const current = actions; actions = []; await Promise.all(current); };
+  const pending = rpc(method, { ...value, actionId: scope + '/' + (++current.counter) }, scope);
+  const result = afterCommit ? pending.then(afterCommit) : pending;
+  result.catch(() => {}); trackAction(scope, result); return result; };
+const commandContext = () => {
+  const context=runner.createCommandContext();
+  const unavailable=new Proxy({}, {get:()=>()=>{throw new Error('Extension command UI is unavailable in D Code');}});
+  return new Proxy(context,{get(target,key){
+    // 读取原 SDK getter 以保留 stale runner 检查；D Code 命令没有专属 UI，公开合同仍为 boolean。
+    if(key==='hasUI'){Reflect.get(target,key,target);return false;}
+    if(key==='ui'){Reflect.get(target,key,target);return unavailable;}
+    return Reflect.get(target,key,target);
+  }});
+};
+const flush = async () => {
+  // 动作归属于创建它的 invocation；普通工具的 finally 不能取走另一会话事件的关闭批次。
+  const scope=scopeOf();
+  while (actionsByScope.get(scope)?.size) {
+    const current=[...actionsByScope.get(scope)];
+    try { await Promise.all(current); }
+    catch(error) {
+      // 已经开始 shutdown 的同 scope 普通 flush 可能先遇到拒绝；保留整批记录给 allSettled close drain。
+      if(!closingScopes.has(scope))forgetActions(scope,current);
+      throw error;
+    }
+    forgetActions(scope,current);
+  }
+};
+const flushClosingActions = async scope => {
+  // shutdown scope 与普通事件共享同一待完成事实，但不共享消费权；即使另一个同 scope flush 已短路，也等待全部动作和派生动作 settle。
+  closingScopes.add(scope);
+  let failed = false, failure;
+  while (actionsByScope.get(scope)?.size) {
+    const current = [...actionsByScope.get(scope)];
+    for (const outcome of await Promise.allSettled(current)) if (outcome.status === 'rejected' && !failed) {
+      failed = true; failure = outcome.reason;
+    }
+    forgetActions(scope,current);
+  }
+  return { failed, failure };
+};
 const unavailable = () => { throw new Error('This operation requires the D Code formal interface'); };
+// JSON 会静默删除函数与非枚举字段；先产出有限普通对象，再交给宿主二次校验。
+const validateUserMessageOptions = options => {
+  if (options === undefined) return undefined;
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(options))) throw new Error('Invalid sendUserMessage options');
+  const normalized = {};
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !['deliverAs', 'expandPromptTemplates'].includes(key)) throw new Error('Invalid sendUserMessage options');
+    const descriptor = Object.getOwnPropertyDescriptor(options, key);
+    if (!descriptor || !('value' in descriptor)) throw new Error('Invalid sendUserMessage options');
+    const value = descriptor.value;
+    if (value === undefined) continue;
+    if (key === 'deliverAs' && value !== 'steer' && value !== 'followUp') throw new Error('Invalid sendUserMessage options');
+    if (key === 'expandPromptTemplates' && typeof value !== 'boolean') throw new Error('Invalid sendUserMessage options');
+    normalized[key] = value;
+  }
+  return normalized;
+};
 const optional = file => { try { return fs.lstatSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
 const inside = (root, file) => { const rel = path.relative(root, file); return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
 const scoped = file => { const actual = fs.realpathSync(file); if (!inside(workerData.cwd, actual)) throw new Error('Resource outside project'); return actual; };
@@ -118,6 +186,14 @@ function refreshSession() {
       sessionView = sdk.SessionManager.inMemory(workerData.cwd, { id: state.sessionId }, entries);
 
 }
+const entriesRevision = entries => Array.isArray(entries)
+  ? entries.reduce((last, entry) => Number.isSafeInteger(entry?.id) ? Math.max(last, entry.id) : last, 0) : 0;
+const applyEntriesSnapshot = (entries, minimumRevision = entriesRevision(state.entries)) => {
+  if (!Array.isArray(entries) || entriesRevision(entries) < minimumRevision) return false;
+  state.entries = entries;
+  refreshSession();
+  return true;
+};
 async function initialize() {
   sdk = await import(workerData.sdk);
   // SDK 单条 abort 会异步发送取消；同线程连接关闭须先等这条真实通知完成，不能先 abort 全运输。
@@ -320,13 +396,73 @@ async function initialize() {
   streamFactory = (await import(workerData.streamFactory))?.createAssistantMessageEventStream;
   if (typeof streamFactory !== 'function') throw new Error('Public event stream unavailable');
   const modelRegistry = new sdk.ModelRegistry(modelRuntime);
-  for (const name of ['stream', 'streamSimple', 'complete', 'completeSimple', 'classify', 'generateImages', 'getApiKeyAndHeaders', 'getProviderAuth', 'getApiKeyForProvider', 'registerProvider', 'unregisterProvider', 'registerVirtualModel', 'unregisterVirtualModel']) modelRegistry[name] = unavailable;
+  for (const name of ['refresh', 'getError', 'hasConfiguredAuth', 'getApiKeyAndHeaders', 'getProviderAuthStatus', 'getProvider',
+    'stream', 'streamSimple', 'complete', 'completeSimple', 'classify', 'generateImages', 'getProviderAuth', 'getApiKeyForProvider',
+    'isUsingOAuth', 'registerProvider', 'unregisterProvider', 'registerVirtualModel', 'unregisterVirtualModel',
+    'getRegisteredProviderConfig', 'getRegisteredNativeProvider']) modelRegistry[name] = unavailable;
   // 同步兼容 facade 只读本次宿主发布的完整 chat 帧，不另查认证、不从当前模型猜目录。
   modelRegistry.getAll = () => safe(state.modelCatalog?.all ?? []);
   modelRegistry.getAvailable = () => safe(state.modelCatalog?.available ?? []);
   modelRegistry.find = (provider, id) => {
     const model = state.modelCatalog?.all.find(model => model.provider === provider && model.id === id);
     return model ? safe(model) : undefined;
+  };
+  // Worker ModelRuntime 没有宿主凭据或完整 provider 装配；typed 同步读取必须使用宿主按类型发布的安全帧。
+  const modelTypes = new Set(['chat', 'image', 'classifier']);
+  const validProvider = provider => typeof provider === 'string' && provider.trim().length > 0 && provider.length <= 128 && !/[\x00-\x1f]/.test(provider);
+  const typedCatalog = type => {
+    if (!modelTypes.has(type)) return unavailable();
+    const models = state.modelCatalog?.byType?.[type];
+    return Array.isArray(models) ? models : [];
+  };
+  // Provider display names and registration IDs belong to the host catalog; the Worker runtime is deliberately unconfigured.
+  modelRegistry.getProviderDisplayName = provider => {
+    if (typeof provider !== 'string') return unavailable();
+    return state.modelCatalog?.providerNames?.find(item => item?.id === provider)?.name ?? provider;
+  };
+  modelRegistry.getRegisteredProviderIds = () => safe(state.modelCatalog?.registeredProviderIds ?? []);
+  modelRegistry.getModelsOfType = (type, provider) => {
+    if (!modelTypes.has(type) || (provider !== undefined && !validProvider(provider))) return unavailable();
+    const models = typedCatalog(type);
+    return safe(provider === undefined ? models : models.filter(model => model.provider === provider));
+  };
+  modelRegistry.getModelOfType = (type, provider, modelId) => {
+    if (!modelTypes.has(type) || !validProvider(provider) || typeof modelId !== 'string' || !modelId.trim() || modelId.length > 256) return unavailable();
+    const model = typedCatalog(type).find(model => model.provider === provider && model.id === modelId);
+    return model ? safe(model) : undefined;
+  };
+  modelRegistry.findOfType = (type, provider, modelId) => modelRegistry.getModelOfType(type, provider, modelId);
+  modelRegistry.getAvailableOfType = (type, provider, options = {}) => {
+    const own = invocation.getStore(), scope = scopeOf();
+    if (closed || !own || !scope || !modelTypes.has(type) || (provider !== undefined && !validProvider(provider))
+      || !options || typeof options !== 'object' || Array.isArray(options)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(options))
+      || Reflect.ownKeys(options).some(key => key !== 'signal')) return unavailable();
+    const signalDescriptor = Object.getOwnPropertyDescriptor(options, 'signal');
+    if (signalDescriptor && !('value' in signalDescriptor)) return unavailable();
+    const signal = signalDescriptor?.value === undefined ? calls.get(scope)?.signal : signalDescriptor.value;
+    if (signal !== undefined && (!signal || typeof signal.aborted !== 'boolean'
+      || typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) return unavailable();
+    if (signal?.aborted) return Promise.reject(new Error('Model availability cancelled'));
+    const actionId = scope + '/model-availability/' + (++own.counter);
+    let cancelFlight;
+    const abort = () => {
+      if (!cancelFlight) {
+        cancelFlight = rpc('model-available-cancel', { actionId }, scope);
+        cancelFlight.catch(() => {});
+      }
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    const pending = rpc('model-available-of-type', { actionId, type, ...(provider === undefined ? {} : { provider }) }, scope)
+      .then(reply => {
+        if (signal?.aborted) throw new Error('Model availability cancelled');
+        if (!reply || !Array.isArray(reply.models)) return unavailable();
+        return safe(reply.models);
+      }).finally(async () => {
+        signal?.removeEventListener('abort', abort);
+        if (cancelFlight) await cancelFlight.catch(() => {});
+      });
+    pending.catch(() => {}); trackAction(scope, pending.then(() => undefined, () => undefined)); return pending;
   };
   modelRegistry.complete = (model, input, options = {}) => {
     const pending = (async () => {
@@ -443,18 +579,33 @@ async function initialize() {
     return (...args) => sessionView[key](...args);
   } });
   runner = new sdk.ExtensionRunner(loaded.extensions, loaded.runtime, workerData.cwd, sessionManager, modelRegistry);
+  // D Code commands share the normal non-UI session context; session-tree and reload controls must fail, not silently no-op.
+  const unsupportedCommandControl = async () => { throw new Error('Extension command session control is unavailable in D Code'); };
+  runner.bindCommandContext({ waitForIdle: unsupportedCommandControl, newSession: unsupportedCommandControl,
+    fork: unsupportedCommandControl, navigateTree: unsupportedCommandControl, switchSession: unsupportedCommandControl,
+    reload: unsupportedCommandControl });
   runner.onError(() => errors.push('extension-event-failed'));
   const registration = (method, payload) => {
     if (closed || invocation.getStore()?.pure || !scopeOf()) return unavailable();
     // SDK的注册API返回void；在原资源/事件flush处等宿主确认，不能先把本地函数表当可用目录。
-    const pending = rpc(method, payload, scopeOf()).then(reply => { state.modelCatalog = reply.catalog; });
-    pending.catch(() => {}); actions.push(pending);
+    const scope=scopeOf();
+    const pending = rpc(method, payload, scope).then(reply => { state.modelCatalog = reply.catalog; });
+    pending.catch(() => {}); trackAction(scope, pending);
   };
   runner.bindCore({
     sendMessage: (message, options) => queue('message', { message, options }),
-    sendUserMessage: (content, options) => queue('user', { content, options }),
+    sendUserMessage: (content, options) => queue('user', { content, options: validateUserMessageOptions(options) }),
     appendEntry: (customType, data) => queue('entry', { customType, data }),
-    setSessionName: name => queue('name', { name }), getSessionName: () => sessionView?.getSessionName(),
+    setSessionName: name => {
+      if (typeof name !== 'string') return unavailable();
+      // 对齐 Pi SessionManager.appendSessionInfo：元数据行内化并去首尾空白后才进入 Durable。
+      const normalized = name.replace(/[\r\n]+/g, ' ').trim();
+      queue('name', { name: normalized }, reply => {
+        if (!reply || !Array.isArray(reply.entries) || typeof reply.nameChanged !== 'boolean') return unavailable();
+        applyEntriesSnapshot(reply.entries);
+        if (reply.nameChanged) return runner.emit({ type: 'session_info_changed', name: sessionView?.getSessionName() });
+      });
+    }, getSessionName: () => sessionView?.getSessionName(),
     setLabel: (id, label) => queue('label', { id, label }),
     getActiveTools: () => [...active], getAllTools: allTools, getSettings: () => settings,
     setActiveTools: names => { active = [...new Set(names)]; syncTools(); }, refreshTools: syncTools,
@@ -497,9 +648,12 @@ async function initialize() {
       registration('virtual-unregister',{provider,modelId:id,handle:own.handle});
     } });
   builtins = workerData.builtins; active = settingsManager.getDefaultTools() ?? builtins.map(t => t.name); syncTools();
-  await runner.emit({ type: 'session_start', reason: 'startup' });
+  const sessionStartReason = ['startup', 'resume', 'reload'].includes(workerData.sessionStartReason)
+    ? workerData.sessionStartReason : 'startup';
+  await runner.emit({ type: 'session_start', reason: sessionStartReason });
   if (runner.hasHandlers('resources_discover')) {
-    const discovered = await runner.emitResourcesDiscover(workerData.cwd, 'startup');
+    const resourcesDiscoverReason = sessionStartReason === 'reload' ? 'reload' : 'startup';
+    const discovered = await runner.emitResourcesDiscover(workerData.cwd, resourcesDiscoverReason);
     const paths = (entries, skills = false) => {
       if (entries.length > 128) throw new Error('Resource count limit');
       return entries.map(entry => {
@@ -524,23 +678,50 @@ async function initialize() {
 async function request(message) {
   if (message.method === 'close') {
     closed = true; for (const controller of calls.values()) controller.abort();
-    // close 先等既有 execute 及其 modelPending 的 host RPC 真实结算，再回 close reply／关端口，防 Root terminate 抢杀流消费者收尾；不 join 全局 actions 或 provider 回调。
+    const reasons = ['quit', 'reload', 'new', 'resume', 'fork'];
+    const reason = reasons.includes(message.value?.reason) ? message.value.reason : 'quit';
+    const scope = typeof message.scope === 'string' ? message.scope : 'lifecycle/shutdown';
+    closingScopes.add(scope);
+    let failed = false, failure;
+    const rememberFailure = error => { if (!failed) { failed = true; failure = error; } };
+    const settleAll = async operations => {
+      for (const outcome of await Promise.allSettled(operations)) if (outcome.status === 'rejected') rememberFailure(outcome.reason);
+    };
+    try {
+      if (runner) {
+        // Durable owner 仍开放时发关闭事件；即使扩展回调失败，也排空已认领的同批正式记录后才交出 owner。
+        await invocation.run({ id: scope, counter: 0, pure: false }, async () => {
+          try { await runner.emit({ type: 'session_shutdown', reason }); } catch (error) { rememberFailure(error); }
+          const drained = await flushClosingActions(scope);
+          if (drained.failed) rememberFailure(drained.failure);
+        });
+      } else {
+        const drained = await flushClosingActions(scope);
+        if (drained.failed) rememberFailure(drained.failure);
+      }
+    } catch (error) { rememberFailure(error); }
+    finally { parentPort.postMessage({ type: 'shutdown-flushed', scope }); }
+    // Harness 此时才可关闭；之后继续完成实际 MCP 运输、既有 execute/model 请求和子进程收束，不让前面的扩展错误跳过清理。
     const finishing = [...executions].map(promise => promise.catch(() => undefined));
     const settling = [...modelPending.values()].flatMap(own => [...own]).map(promise => promise.catch(() => undefined));
     // 从真实 transport.start 起认领；client 尚在 connecting 也不能漏掉它。SDK 仍完成自己的清理。
-    await Promise.all([...transports].map(transport=>transport.close()));
+    await settleAll([...transports].map(transport=>Promise.resolve().then(()=>transport.close())));
     // MCP调用可依赖transport关闭才结束；先发起真实close，再join，不让新流桥反锁既有MCP收束。
-    await Promise.all(finishing); await Promise.all(settling);
-    if (runner) { await runner.emit({ type: 'session_shutdown' }); runner.invalidate(); }
+    await settleAll(finishing); await settleAll(settling);
     // 原生 SDK 关闭后，仍由本线程持有的实际子进程也必须终止；不按旧 PID 文本清理别人的进程。
-    for (const child of children) if (child.exitCode === null) child.kill();
-    await Promise.all([...closings]);
+    for (const child of children) if (child.exitCode === null) { try { child.kill(); } catch (error) { rememberFailure(error); } }
+    await settleAll([...closings]);
+    if (runner) { try { runner.invalidate(); } catch (error) { rememberFailure(error); } }
+    forgetActions(scope,[...(actionsByScope.get(scope)??[])]);closingScopes.delete(scope);
+    if (failed) throw failure;
     return {};
   }
   if (closed) throw new Error('Resources unavailable');
   if (message.state) {
-    state = message.state;
-    refreshSession();
+    const minimumRevision = entriesRevision(state.entries);
+    state = { ...message.state, entries: state.entries };
+    // Host 状态异步读回后才送到线程；保留已确认的最高entry id，不能被晚到旧快照回滚。
+    applyEntriesSnapshot(message.state.entries, minimumRevision);
   }
   if (message.method === 'init') return initialize();
   if (!runner) throw new Error('Resources unavailable');
@@ -563,7 +744,17 @@ async function request(message) {
   }
   if (message.method === 'configuration') return {configuration:configuration()};
   if (message.method === 'input') {
-    const result = await runner.emitInput(message.value.text, message.value.images, 'rpc', message.value.mode);
+    const text=typeof message.value.text==='string'?message.value.text:'';
+    if(message.value.expandPromptTemplates===true&&text.startsWith('/')){
+      const spaceIndex=text.indexOf(' '),name=spaceIndex===-1?text.slice(1):text.slice(1,spaceIndex),args=spaceIndex===-1?'':text.slice(spaceIndex+1);
+      const command=runner.getCommand(name);
+      if(command){
+        try{await command.handler(args,commandContext());await flush();syncTools();return {action:'handled'};}
+        catch(error){runner.emitError({extensionPath:'command:'+name,event:'command',error:error instanceof Error?error.message:String(error)});await flush();throw new Error('Extension command failed');}
+      }
+    }
+    const source = message.value.source === 'extension' ? 'extension' : 'rpc';
+    const result = await runner.emitInput(text, message.value.images, source, message.value.mode);
     await flush(); syncTools(); return result;
   }
   if (message.method === 'agent-start') {

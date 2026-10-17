@@ -2,8 +2,8 @@
 // 不承担任务业务状态；运行协调在 application，执行在注入的后端（mock 或 Pi，一次运行只装配一种）。
 
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } from "electron";
-import { join } from "node:path";
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { DCodeApplication } from "@/application";
 import { assembleExecution, resolveConfiguredSources } from "./assembly";
 import { ProviderLoginController } from "./provider-login";
@@ -14,6 +14,20 @@ import { isValidOnlineStatus, validateOperationInput, type AppSnapshot, type Aut
 import { createBackendFromSelection, AuthFlowRegistry, ProviderLoginService } from "@/adapters/pi";
 import type { CredentialCipher } from "@/adapters/pi";
 import type { ExecutionBackend } from "@/application";
+
+/**
+ * Electron 启动时会较早创建 GPU／网络辅助进程。等到 ready 回调里再改 userData，
+ * 这些进程已按系统默认路径启动；隔离目录必须在 app.whenReady 前绑定并准备好。
+ */
+async function prepareUserDataBeforeReady(): Promise<void> {
+  const stateDir = process.env.DCODE_STATE_DIR;
+  if (!stateDir) return;
+  const userDataDir = resolve(stateDir, "userdata");
+  // 启动器须通过初始命令行把路径交给 Electron；主进程此处异步补齐后再设路径，不能晚改子进程参数。
+  await mkdir(userDataDir, { recursive: true, mode: 0o700 });
+  app.setPath("userData", userDataDir);
+}
+const userDataReady = prepareUserDataBeforeReady();
 
 // 统一诊断只保留事件、错误类别和系统错误码；不输出错误正文、用户内容或凭据。
 function diagnose(event: string, cause: unknown): void {
@@ -42,9 +56,8 @@ let flushStarted = false;
 let flushDone = false;
 
 async function createWindow(): Promise<void> {
-  // 测试隔离：DCODE_STATE_DIR 指定独立状态目录（含 Chromium profile、持久化状态与 Pi 运行记录）
+  // 业务状态与 Electron / Chromium profile 共用本次隔离根，但由各自明确的子目录持有。
   const stateDir = process.env.DCODE_STATE_DIR ?? app.getPath("userData");
-  if (process.env.DCODE_STATE_DIR) app.setPath("userData", join(stateDir, "userdata"));
   const storage = new JsonFileStorage(stateDir, diagnose);
   // 凭据加密能力（注入 pi）：safeStorage.encryptString / decryptString；加密不可用时只允许"明确失败"
   const cipher: CredentialCipher = {
@@ -495,7 +508,7 @@ async function createWindow(): Promise<void> {
 }
 
 // 集成后保留主树的 Promise 检查：初始化失败必须有明确结果，不能留下未处理拒绝和空窗口。
-app.whenReady().then(createWindow).catch((error: unknown) => {
+void userDataReady.then(() => app.whenReady()).then(createWindow).catch((error: unknown) => {
   diagnose("startup-failed", error);
   if (!backgroundE2E) dialog.showErrorBox("D Code", "无法打开工作界面。当前工作未开始，请关闭后重新打开。 / Unable to open the workspace. Work has not started; close and reopen D Code.");
   app.exit(1);

@@ -1116,6 +1116,7 @@ export class DCodeApplication {
         target: this.targetOf(session),
         operationId: block.operationId,
         text: block.text,
+        ...(block.images?.length ? { images: block.images } : {}),
         references: identityOnlyReferences(block.references),
         mode: block.mode,
         expected,
@@ -1362,6 +1363,7 @@ export class DCodeApplication {
         target: this.targetOf(session),
         operationId: block.operationId,
         text: block.text,
+        ...(block.images?.length ? { images: block.images } : {}),
         references: identityOnlyReferences(block.references),
         mode: block.mode,
         expected,
@@ -2291,6 +2293,7 @@ export class DCodeApplication {
           target: this.targetOf(session),
           operationId: block.operationId,
           text: block.text,
+          ...(block.images?.length ? { images: block.images } : {}),
           // 与 checkReceipt / lookUpOnly 同口径按历史身份复原引用：漏掉引用会让带引用的
           // 已接收发送被 #lookup 判成另一份输入，把 accepted 改写成 conflict（2026-10-11 E2E 实测）。
           references: identityOnlyReferences(block.references),
@@ -2417,9 +2420,17 @@ export class DCodeApplication {
     // 不把同一历史条目再次追加（投影 id 由 entry.id 派生，见 projectEntry）。
     const known = new Set(blocks.map((b) => b.id));
     for (const entry of view.entries) {
+      const block = projectEntry(entry);
+      // extension submit 的状态写在同一会话回执中；重开或后续观测只刷新已有用户块，不追加第二份输入。
+      if (block?.kind === 'message' && block.role === 'user' && block.operationId?.startsWith('pi-extension/')) {
+        const index = blocks.findIndex(current => current.kind === 'message' && current.role === 'user' && current.operationId === block.operationId);
+        const original = blocks[index];
+        if (original?.kind === 'message' && JSON.stringify({ ...block, id: original.id, at: original.at }) !== JSON.stringify(original)) {
+          blocks[index] = { ...block, id: original.id, at: original.at }; appended = true;
+        }
+      }
       if (entry.id <= through) continue;
       max = Math.max(max, entry.id);
-      const block = projectEntry(entry);
       if (block && !known.has(block.id)) {
         known.add(block.id);
         blocks.push(block);
@@ -2562,6 +2573,9 @@ function idleRun(sessionId: string): RunState {
 /** 把执行端 entry 投影为时间线块；未知 kind 跳过。 */
 function projectEntry(entry: ExecutionView['entries'][number]): TimelineBlock | null {
   const at = Date.now();
+  if (entry.extensionInput) return { kind: 'message', id: `pi-ext-input-${entry.id}`, role: 'user', text: entry.extensionInput.text,
+    references: [], ...(entry.extensionInput.images?.length ? { images: entry.extensionInput.images } : {}), streaming: false, at, operationId: entry.extensionInput.operationId, mode: entry.extensionInput.mode,
+    receipt: toSendReceipt({ status: 'accepted', operationId: entry.extensionInput.operationId, submissionId: entry.extensionInput.submissionId, processing: entry.extensionInput.processing }) };
   if (entry.extensionMessage?.display) return {kind:'extension-message',id:`pi-ext-${entry.id}`,customType:entry.extensionMessage.customType,text:entry.extensionMessage.text,at};
   if (entry.kind === "pi.assistant") {
     // 助手正文走正式字段（主树已补合同），没有正文的条目不产生空泡

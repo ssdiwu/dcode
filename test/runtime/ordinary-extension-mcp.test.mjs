@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
+import { ROOT_CONVERSATION_ID, ToolTask } from '@earendil-works/pi-durable';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
-import { createRealPiBackend, ModelSetupStore } from '../../src/adapters/pi/index.ts';
+import { createRealPiBackend, ModelSetupStore, PiExecutionSession } from '../../src/adapters/pi/index.ts';
 import { prepareCodingProject, startCodingLoopback, codingKey, codingModel } from '../e2e/ordinary-coding-fixture.mjs';
-import { until } from './fixtures.ts';
+import { controlledModels, until } from './fixtures.ts';
 import { start as startHttpMcp } from '../e2e/ordinary-http-mcp-fixture.mjs';
 import { Script } from 'node:vm';
+import { Worker } from 'node:worker_threads';
 import { createProvider } from '@earendil-works/pi-ai/models';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { extensionWorkerSource } from '../../src/adapters/pi/extension-worker.ts';
@@ -252,6 +253,110 @@ export const ignored = 0;`});
   } finally {await f.dispose();}
 });
 
+await test('扩展 session_info_changed 只在 Durable 名称改变后触发，事件上下文读取已保存名称且只读重开不重放', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});let session=f.session;
+  try{
+    await writeFile(join(f.project,'.pi/extensions/session-info.ts'),`export default function(pi){
+      pi.on('input',()=>{
+        pi.setSessionName('  Session\\ntitle  ');
+        pi.setSessionName('Session title');
+        return {action:'continue'};
+      });
+      pi.on('session_info_changed',(event,ctx)=>pi.appendEntry('observed-session-info',{
+        eventName:event.name,sessionManagerName:ctx.sessionManager.getSessionName(),apiName:pi.getSessionName()
+      }));
+    }`);
+    assert.equal((await session.submit(f.input)).status,'accepted');
+    await until(async()=>(await session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=>(await session.read()).phase==='ready');
+    let view=await session.read();
+    const names=view.entries.filter(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.action==='name');
+    const observed=view.entries.filter(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='observed-session-info');
+    assert.equal(observed.length,1,'连续设置同一规范化名称只触发一次元数据事件');
+    assert.equal(names.length,1,'重复名称不再追加等价的会话元数据');
+    assert.deepEqual(observed[0].data.value.data,{eventName:'Session title',sessionManagerName:'Session title',apiName:'Session title'});
+    assert.ok(names[0].id<observed[0].id,'SDK event follows the Durable name entry');
+
+    const next={...f.input,operationId:'extension-name-same-value',text:'same-name follow-up',expected:view.control};
+    assert.equal((await session.submit(next)).status,'accepted');
+    await until(async()=>(await session.lookupReceipt(next)).processing==='done');
+    await until(async()=>(await session.read()).phase==='ready');
+    view=await session.read();
+    assert.equal(view.entries.filter(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='observed-session-info').length,1,
+      'same normalized title does not emit another metadata-change event');
+    const requests=f.server.requests.length;
+    await session.close();session=await f.backend.open({...f.opening,initialize:false});
+    const reopened=await session.read();
+    assert.equal(f.server.requests.length,requests,'read-only reopen must not execute or send a model request');
+    assert.equal(reopened.entries.filter(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='observed-session-info').length,1,
+      'read-only reopen reads the recorded event result without replaying its handler');
+  }finally{await session.close();await f.dispose();}
+});
+
+await test('扩展 Worker 的晚到普通状态快照不能回滚已确认的 Durable 会话名称', {timeout:30000}, async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dcode-extension-state-revision-'));
+  const projectPath=join(root,'project');await mkdir(projectPath,{recursive:true});
+  const project=await realpath(projectPath),agentDir=join(root,'app'),extensionDir=join(project,'.pi/extensions');
+  await mkdir(extensionDir,{recursive:true});await mkdir(agentDir,{recursive:true});
+  await writeFile(join(project,'.pi/settings.json'),JSON.stringify({extensions:['./extensions/observe-session.mjs']}));await writeFile(join(project,'.pi/mcp.json'),'{}');
+  await writeFile(join(extensionDir,'observe-session.mjs'),`export default function(pi){
+    pi.on('input',event=>{
+      if(event.text==='rename')pi.setSessionName('New Name');
+      if(event.text==='observe-late-state')pi.appendEntry('observed-late-state',{name:pi.getSessionName()});
+      return {action:'handled'};
+    });
+    pi.on('session_info_changed',(event,ctx)=>pi.appendEntry('event-saw-name',{name:ctx.sessionManager.getSessionName()}));
+  }`);
+  const oldEntries=[{id:1,kind:'dcode.extension-entry',data:{action:'name',value:{name:'Old Name'}},model:[]}];
+  const newEntries=[...oldEntries,{id:2,kind:'dcode.extension-entry',data:{action:'name',value:{name:'New Name'}},model:[]}];
+  const worker=new Worker(extensionWorkerSource,{eval:true,execArgv:[],env:{...process.env,PI_CODING_AGENT_DIR:agentDir,PI_OFFLINE:'1',NODE_TEST_CONTEXT:undefined},workerData:{
+    cwd:project,agentDir,sdk:import.meta.resolve('@earendil-works/pi-coding-agent'),
+    streamFactory:import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),builtins:[]
+  }});
+  const messages=[],waiters=[];
+  const waitFor=predicate=>{
+    const index=messages.findIndex(predicate);if(index>=0)return Promise.resolve(messages.splice(index,1)[0]);
+    return new Promise(resolve=>waiters.push({predicate,resolve}));
+  };
+  worker.on('message',message=>{
+    const index=waiters.findIndex(waiter=>waiter.predicate(message));
+    if(index>=0)waiters.splice(index,1)[0].resolve(message);else messages.push(message);
+  });
+  const state=entries=>({sessionId:'worker-state-test',entries,messages:[],systemPrompt:'',modelCatalog:{all:[],available:[]},thinkingLevel:'off'});
+  const request=(id,method,entries,value={})=>worker.postMessage({type:'request',id,method,value,state:state(entries),scope:'test-scope-'+id});
+  try{
+    request(1,'init',oldEntries,{});
+    const initialized=await waitFor(message=>message.type==='result'&&message.id===1);
+    assert.equal(initialized.ok,true);
+
+    request(2,'input',oldEntries,{text:'rename',source:'rpc',mode:'steer'});
+    const nameWrite=await waitFor(message=>message.type==='host'&&message.method==='name');
+    // Durable 已写入，但先让普通 Host 请求带着新快照到达，延后名称 RPC 的正式回执。
+    request(3,'configuration',newEntries,{});
+    assert.equal((await waitFor(message=>message.type==='result'&&message.id===3)).ok,true);
+    worker.postMessage({type:'reply',id:nameWrite.id,ok:true,value:{entries:newEntries,nameChanged:true}});
+    const eventOrInputResult=await waitFor(message=>(message.type==='host'&&message.method==='entry'&&message.value?.customType==='event-saw-name')
+      ||(message.type==='result'&&message.id===2));
+    assert.equal(eventOrInputResult.type,'host','a newer ordinary snapshot must not suppress an undelivered name-change event');
+    const changedEvent=eventOrInputResult;
+    assert.equal(changedEvent.value.data.name,'New Name');
+    worker.postMessage({type:'reply',id:changedEvent.id,ok:true,value:{}});
+    assert.equal((await waitFor(message=>message.type==='result'&&message.id===2)).ok,true);
+
+    // 模拟 Host 在异步状态读取后才投递的旧请求快照：它到达时新名称已确认。
+    request(4,'configuration',oldEntries,{});
+    assert.equal((await waitFor(message=>message.type==='result'&&message.id===4)).ok,true);
+    request(5,'input',oldEntries,{text:'observe-late-state',source:'rpc',mode:'steer'});
+    const observed=await waitFor(message=>message.type==='host'&&message.method==='entry'&&message.value?.customType==='observed-late-state');
+    assert.equal(observed.value.data.name,'New Name','late old request must not replace the current read-only session view');
+    worker.postMessage({type:'reply',id:observed.id,ok:true,value:{}});
+    assert.equal((await waitFor(message=>message.type==='result'&&message.id===5)).ok,true);
+
+    worker.postMessage({type:'request',id:6,method:'close',value:{}});
+    assert.equal((await waitFor(message=>message.type==='result'&&message.id===6)).ok,true);
+  }finally{await worker.terminate();await rm(root,{recursive:true,force:true});}
+});
+
 await test('扩展 handled：原正式被动回执，不造模型回复；暂停重开只读查原 operation 零重处理', {timeout:30000}, async()=>{
   const f=await fixture({calls:[]}); let session=f.session;
   try {
@@ -286,6 +391,432 @@ await test('可见扩展消息不冒充新用户输入；同文本不同 operati
     assert.equal(starts(view).length,2);assert.ok(starts(view).every(e=>e.data.value.data.prompt===f.input.text));
     assert.equal(view.entries.filter(e=>e.kind==='pi.user').length,2);assert.deepEqual(f.server.errors,[]);
   }finally{await f.dispose();}
+});
+
+await test('扩展 sendUserMessage 复用 Durable 输入准备并遵守模板选项与扩展来源', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[],loopbackOptions:{callsOverride:[['send_followups',{}]]},subsequentCalls:[undefined]});
+  try{
+    await mkdir(join(f.project,'.pi/prompts'),{recursive:true});
+    await writeFile(join(f.project,'.pi/prompts/actual.md'),'EXPANDED $ARGUMENTS');
+    await writeFile(join(f.project,'.pi/extensions/send-followups.ts'),`import {Type} from 'typebox';export default function(pi){
+      pi.on('input',event=>{pi.appendEntry('send-user-input',{source:event.source,mode:event.streamingBehavior,text:event.text});return {action:'transform',text:event.text+' hooked'};});
+      pi.registerTool({name:'send_followups',label:'send followups',description:'Use the formal input path',parameters:Type.Object({}),execute:async()=>{
+        await pi.sendUserMessage('/actual plain',{deliverAs:'followUp'});
+        await pi.sendUserMessage('/actual expanded',{deliverAs:'followUp',expandPromptTemplates:true});
+        await pi.sendUserMessage([{type:'text',text:'/actual blocks'},{type:'text',text:'second part'}]);
+        await pi.sendUserMessage([{type:'text',text:'/actual image'},{type:'image',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII='}]);
+        return {content:[{type:'text',text:'both extension inputs admitted'}]};
+      }});
+    }`);
+    assert.equal((await f.session.submit(f.input)).status,'accepted');
+    try{await until(async()=>f.server.requests.length===5);}catch(error){const view=await f.session.read();throw new Error(`Extension inputs stopped: ${error.message}; requests=${f.server.requests.length}; pending=${view.pendingInputs}; phase=${view.phase}; userEntries=${view.entries.filter(e=>e.kind==='pi.user').length}`);}
+    try{await until(async()=>{const view=await f.session.read();return view.pendingInputs===0&&view.phase==='ready'&&view.entries.filter(e=>e.kind==='pi.user').length===5;});}
+    catch(error){const view=await f.session.read();throw new Error(`Extension input path did not settle: ${error.message}; requests=${f.server.requests.length}; pending=${view.pendingInputs}; phase=${view.phase}; userEntries=${view.entries.filter(e=>e.kind==='pi.user').length}`);}
+    const view=await f.session.read();
+    const users=view.entries.filter(e=>e.kind==='pi.user').map(e=>e.model?.find(m=>m.role==='user')?.content);
+    assert.equal(users.length,5);
+    const extensionInputViews=view.entries.filter(e=>e.extensionInput);
+    assert.equal(extensionInputViews.length,4,'同会话 ExecutionView 暴露扩展正式接收的用户消息给桌面投影');
+    assert.deepEqual(extensionInputViews.map(e=>e.extensionInput.text),['/actual plain','/actual expanded','/actual blocks\nsecond part','/actual image']);
+    assert.ok(extensionInputViews.every(e=>e.extensionInput.submissionId>0));
+    assert.ok(JSON.stringify(f.server.requests[2].body.messages).includes('/actual plain hooked'),'SDK default must not expand prompt templates');
+    assert.ok(JSON.stringify(f.server.requests[3].body.messages).includes('EXPANDED expanded hooked'),'explicit template expansion follows the input transform');
+    assert.ok(f.server.requests[4].body.messages.some(m=>m.role==='user'&&JSON.stringify(m.content).includes('/actual blocks\\nsecond part hooked')),'text content parts use the SDK newline normalization');
+    const events=view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='send-user-input').map(e=>e.data.value.data);
+    assert.deepEqual(events.map(e=>({source:e.source,mode:e.mode})),[
+      {source:'rpc',mode:'followUp'},{source:'extension',mode:'followUp'},{source:'extension',mode:'followUp'},{source:'extension',mode:'followUp'},{source:'extension',mode:'followUp'},
+    ]);
+    assert.deepEqual(f.server.errors,[]);
+    const requestCount=f.server.requests.length,acceptedInputs=extensionInputViews.map(entry=>entry.extensionInput);
+    await f.session.pause();await f.session.close();
+    f.session=await f.backend.open({...f.opening,initialize:false});
+    const reopened=await f.session.read();assert.equal(reopened.phase,'paused');assert.equal(f.server.requests.length,requestCount);
+    for(const admitted of acceptedInputs){
+      const found=await f.session.lookupReceipt({target:f.target,operationId:admitted.operationId,text:admitted.text,...(admitted.images?.length?{images:admitted.images}:{}),references:[],mode:admitted.mode,expected:reopened.control});
+      assert.equal(found.status,'accepted');assert.equal(found.processing,admitted.images?.length?'unanswered':'done');
+    }
+    assert.equal(f.server.requests.length,requestCount,'暂停、关闭与只读重开不重放已完成扩展输入');
+    assert.equal((await f.session.read()).entries.filter(e=>e.extensionInput).length,4);
+  }finally{await f.dispose();}
+});
+
+await test('显式展开的扩展注册命令由同一 Durable 输入处理；不发送原命令正文或静默执行会话控制', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[],loopbackOptions:{callsOverride:[['extension_command_sender',{}]]}});
+  try{
+    await writeFile(join(f.project,'.pi/extensions/commands.ts'),`import {Type} from 'typebox';export default function(pi){
+      pi.on('input',event=>{if(event.text.startsWith('/known '))pi.appendEntry('command-input-leaked-to-model',{text:event.text});});
+      pi.registerCommand('known',{description:'Controlled durable extension command',handler:async(args,ctx)=>{pi.sendMessage({customType:'command-result',content:'COMMAND_ARGS '+args,display:true});}});
+      pi.registerCommand('tree-control',{description:'Unsupported session control must reject',handler:async(_args,ctx)=>{await ctx.newSession();}});
+      pi.registerCommand('headless-control',{description:'Headless command context preserves SDK boolean contract',handler:async(_args,ctx)=>{if(ctx.hasUI!==false)throw new Error('D Code command context must expose hasUI=false');pi.sendMessage({customType:'headless-command-result',content:'HEADLESS_COMMAND',display:true});}});
+      pi.registerCommand('ui-control',{description:'Unsupported UI must reject',handler:async(_args,ctx)=>{if(ctx.hasUI!==false)throw new Error('D Code command context must expose hasUI=false');ctx.ui.notify('not supported');}});
+      pi.registerTool({name:'extension_command_sender',label:'send extension command',description:'Explicitly expand registered commands through sendUserMessage',parameters:Type.Object({}),execute:async()=>{await pi.sendUserMessage('/known nested args',{deliverAs:'followUp',expandPromptTemplates:true});await pi.sendUserMessage('/headless-control',{deliverAs:'followUp',expandPromptTemplates:true});return {content:[{type:'text',text:'command inputs accepted '+JSON.stringify(pi.getCommands().map(command=>command.invocationName))}]};}});
+    }`);
+    assert.equal((await f.session.submit(f.input)).status,'accepted');
+    await until(async()=>f.server.requests.length===2);
+    await until(async()=>(await f.session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=>{const current=await f.session.read();const command=current.entries.find(entry=>entry.extensionInput?.text==='/known nested args')?.extensionInput;return command&&['done','unanswered'].includes(command.processing);});
+    let view=await f.session.read();
+    const commandMessage=view.entries.find(entry=>entry.extensionMessage?.customType==='command-result');
+    assert.ok(commandMessage,JSON.stringify({commands:view.entries.filter(entry=>entry.toolResult?.name==='extension_command_sender').map(entry=>entry.toolResult.text),entries:view.entries.map(entry=>({kind:entry.kind,extensionMessage:entry.extensionMessage,data:entry.data,tool:entry.toolResult?.name}))}));assert.equal(commandMessage.extensionMessage.text,'COMMAND_ARGS nested args');
+    assert.equal(view.entries.some(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='command-input-leaked-to-model'),false,'注册命令在input事件前分派，不将命令文本交给普通模型输入处理');
+    assert.equal(f.server.requests.length,2,'命令handler的sendMessage不隐式产生新模型请求');
+    const commandInput=view.entries.find(entry=>entry.extensionInput?.text==='/known nested args')?.extensionInput;
+    assert.ok(commandInput);assert.equal(commandInput.processing,'done');
+
+    await until(async()=>{const current=await f.session.read();return current.entries.some(entry=>entry.extensionInput?.text==='/headless-control'&&entry.extensionInput.processing==='done');});
+    view=await f.session.read();const headless=view.entries.find(entry=>entry.extensionInput?.text==='/headless-control')?.extensionInput;
+    assert.ok(headless);assert.equal((await f.session.lookupReceipt({target:f.target,operationId:headless.operationId,text:headless.text,references:[],mode:headless.mode,expected:view.control})).processing,'done','合法 headless 命令应按 SDK boolean 属性走成功分支');
+    assert.ok(view.entries.some(entry=>entry.extensionMessage?.customType==='headless-command-result'&&entry.extensionMessage.text==='HEADLESS_COMMAND'));
+    assert.equal(f.server.requests.length,2,'headless 命令副作用仍不产生模型请求');
+
+    const unsupported={...f.input,operationId:'unsupported-command-control',text:'/tree-control',expected:view.control};
+    assert.equal((await f.session.submit(unsupported)).status,'accepted');
+    await until(async()=>['done','unanswered'].includes((await f.session.lookupReceipt(unsupported)).processing));
+    view=await f.session.read();
+    assert.equal((await f.session.lookupReceipt(unsupported)).processing,'unanswered','不支持的命令会话控制必须沿已接收路径显式失败');
+    assert.ok(view.entries.some(entry=>entry.kind==='dcode.preparation-error'));
+    assert.equal(f.server.requests.length,2,'命令失败不把原命令静默发送给模型');
+    const unsupportedUI={...f.input,operationId:'unsupported-command-ui',text:'/ui-control',expected:view.control};
+    assert.equal((await f.session.submit(unsupportedUI)).status,'accepted');
+    await until(async()=>(await f.session.lookupReceipt(unsupportedUI)).processing==='unanswered');
+    view=await f.session.read();assert.ok(view.entries.filter(entry=>entry.kind==='dcode.preparation-error').length>=2);
+    assert.equal(f.server.requests.length,2,'未接入命令UI action明确失败而不静默完成');
+    assert.deepEqual(f.server.errors,[]);
+  }finally{await f.dispose();}
+});
+
+await test('暂停后显式继续时 session_start 可提交一次 Durable 输入且只读重开不执行', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});let session=f.session;
+  const extension=join(f.project,'.pi/extensions/resume-start.ts');
+  try{
+    await writeFile(extension,`export default function(pi){
+      pi.on('session_start',event=>pi.appendEntry('resume-start-event',{seen:'initial',reason:event.reason}));
+    }`);
+    assert.equal((await session.submit(f.input)).status,'accepted');
+    await until(async()=>(await session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=>(await session.read()).phase==='ready');
+    const requestsBeforePause=f.server.requests.length;
+    await session.pause();await session.close();
+    // 改变已装配扩展的真实字节，令明确继续重新装配；只读重开本身仍不得加载或执行它。
+    await writeFile(extension,`export default function(pi){let sent=false;
+      pi.on('session_start',event=>{pi.appendEntry('resume-start-event',{seen:'continued',reason:event.reason});if(!sent){sent=true;pi.sendUserMessage('EXTENSION_SESSION_START_AFTER_RESUME',{deliverAs:'followUp'});}});
+    }`);
+    session=await f.backend.open({...f.opening,initialize:false});
+    const reopened=await session.read();assert.equal(reopened.phase,'paused');
+    assert.equal(f.server.requests.length,requestsBeforePause,'只读重开不得执行 session_start');
+    assert.deepEqual(reopened.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='resume-start-event').map(e=>e.data.value.data),[
+      {seen:'initial',reason:'startup'},
+    ],'只读重开只读旧 session_start 结果，不再装载扩展');
+    const resumed=await session.resume(reopened.control);
+    assert.ok(['running','ready'].includes(resumed.phase));
+    try{await until(async()=>f.server.requests.length===requestsBeforePause+1);}catch(error){
+      const view=await session.read();
+      throw new Error(`resume extension input did not reach HTTP: ${error.message}; requests=${f.server.requests.length}/${requestsBeforePause}; phase=${view.phase}; pending=${view.pendingInputs}; users=${view.entries.filter(e=>e.kind==='pi.user').length}; startEvents=${JSON.stringify(view.entries.filter(e=>e.data?.value?.customType==='resume-start-event').map(e=>e.data.value.data))}; preparationErrors=${view.entries.filter(e=>e.kind==='dcode.preparation-error').length}`);
+    }
+    await until(async()=>{const view=await session.read();return view.phase==='ready'&&view.entries.filter(e=>e.kind==='pi.user').length===2;});
+    const view=await session.read();
+    assert.equal(view.entries.filter(e=>e.kind==='pi.user').length,2);
+    assert.equal(view.entries.filter(e=>e.extensionInput?.text==='EXTENSION_SESSION_START_AFTER_RESUME').length,1);
+    assert.deepEqual(view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='resume-start-event').map(e=>e.data.value.data),[
+      {seen:'initial',reason:'startup'},
+      {seen:'continued',reason:'resume'},
+    ],'新资源运行应把 SDK 公开的显式接续原因交给 session_start');
+    assert.equal(f.server.requests.slice(requestsBeforePause).filter(r=>JSON.stringify(r.body.messages).includes('EXTENSION_SESSION_START_AFTER_RESUME')).length,1);
+    assert.equal(f.server.requests.length,requestsBeforePause+1);
+    assert.deepEqual(f.server.errors,[]);
+  }finally{await session.close();await f.dispose();}
+});
+
+await test('扩展资源实际变化后 session_start 与 resources_discover 标记 SDK reload 原因', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});
+  const extension=join(f.project,'.pi/extensions/reload-start.ts');
+  try{
+    await writeFile(extension,`export default function(pi){
+      pi.on('session_start',event=>pi.appendEntry('resource-start-reason',{version:1,reason:event.reason}));
+      pi.on('resources_discover',event=>pi.appendEntry('resource-discovery-reason',{version:1,reason:event.reason}));
+    }`);
+    assert.equal((await f.session.submit(f.input)).status,'accepted');
+    await until(async()=> (await f.session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=> (await f.session.read()).phase==='ready');
+
+    await writeFile(extension,`export default function(pi){
+      pi.on('session_start',event=>pi.appendEntry('resource-start-reason',{version:2,reason:event.reason}));
+      pi.on('resources_discover',event=>pi.appendEntry('resource-discovery-reason',{version:2,reason:event.reason}));
+    }`);
+    const current=await f.session.read();
+    const next={...f.input,operationId:'extension-after-resource-reload',text:'reload extension resources',expected:current.control};
+    assert.equal((await f.session.submit(next)).status,'accepted');
+    await until(async()=> (await f.session.lookupReceipt(next)).processing==='done');
+    await until(async()=> (await f.session.read()).phase==='ready');
+    const view=await f.session.read();
+    assert.deepEqual(view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='resource-start-reason').map(e=>e.data.value.data),[
+      {version:1,reason:'startup'},
+      {version:2,reason:'reload'},
+    ]);
+    assert.deepEqual(view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='resource-discovery-reason').map(e=>e.data.value.data),[
+      {version:1,reason:'startup'},
+      {version:2,reason:'reload'},
+    ]);
+    assert.equal(view.entries.filter(entry=>entry.kind==='pi.user').length,2,'资源reload不建立额外正式用户输入');
+    assert.deepEqual(f.server.errors,[]);
+  }finally{await f.dispose();}
+});
+
+await test('session_shutdown 按资源重载、暂停待恢复及最终关闭传递原因且不重放输入', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});let session=f.session;let reopened;let afterClose;
+  const extension=join(f.project,'.pi/extensions/shutdown-lifecycle.ts');
+  const observed=join(f.project,'.pi/shutdown-events.ndjson');
+  const source=version=>`import { appendFileSync } from 'node:fs';
+  export default function(pi){
+    pi.on('session_shutdown',async event=>{
+      appendFileSync(${JSON.stringify(observed)},JSON.stringify({version:${version},reason:event.reason})+'\\n');
+      await pi.appendEntry('shutdown-reason',{version:${version},reason:event.reason});
+    });
+  }`;
+  const shutdownRows=view=>view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='shutdown-reason').map(e=>e.data.value.data);
+  const readShutdowns=async()=>{
+    try{return (await readFile(observed,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line));}
+    catch(error){if(error?.code==='ENOENT')return [];throw error;}
+  };
+  try{
+    await writeFile(extension,source(1));
+    assert.equal((await session.submit(f.input)).status,'accepted');
+    await until(async()=>(await session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=>(await session.read()).phase==='ready');
+
+    await writeFile(extension,source(2));
+    const beforeReload=await session.read();
+    const next={...f.input,operationId:'extension-shutdown-reload',text:'reload shutdown reason',expected:beforeReload.control};
+    assert.equal((await session.submit(next)).status,'accepted');
+    await until(async()=>(await session.lookupReceipt(next)).processing==='done');
+    await until(async()=>(await session.read()).phase==='ready');
+    assert.deepEqual(shutdownRows(await session.read()),[{version:1,reason:'reload'}],
+      'shutdown回调的正式扩展记录必须在reload替换旧Worker前提交');
+    assert.deepEqual(await readShutdowns(),[{version:1,reason:'reload'}],
+      '资源变化关闭旧Worker时必须向旧扩展传递Pi session_shutdown(reload)');
+
+    const requestsAfterReload=f.server.requests.length;
+    await session.pause();
+    await session.close();
+    reopened=await f.backend.open({...f.opening,initialize:false});
+    const paused=await reopened.read();
+    assert.equal(paused.phase,'paused');
+    assert.deepEqual(shutdownRows(paused),[
+      {version:1,reason:'reload'},
+      {version:2,reason:'resume'},
+    ],'暂停时shutdown事件的正式扩展记录须在Harness关闭前提交');
+    const afterReadonlyReopen=await readShutdowns();
+    assert.deepEqual(afterReadonlyReopen,[{version:1,reason:'reload'},{version:2,reason:'resume'}],
+      '暂停关闭旧Worker须以resume原因收束；只读重开不装载扩展或再发事件');
+    assert.equal(f.server.requests.length,requestsAfterReload,'只读重开不得重新请求模型');
+
+    const resumed=await reopened.resume(paused.control);
+    assert.ok(['running','ready'].includes(resumed.phase));
+    await until(async()=>(await reopened.read()).phase==='ready');
+    assert.equal((await reopened.read()).entries.filter(e=>e.kind==='pi.user').length,2,'明确继续不重放已完成输入');
+    await reopened.close();
+    afterClose=await f.backend.open({...f.opening,initialize:false});
+    const closed=await afterClose.read();
+    assert.deepEqual(shutdownRows(closed),[
+      {version:1,reason:'reload'},
+      {version:2,reason:'resume'},
+      {version:2,reason:'quit'},
+    ],'最终关闭时shutdown事件的正式扩展记录须在Harness关闭前提交');
+    assert.deepEqual(await readShutdowns(),[
+      {version:1,reason:'reload'},
+      {version:2,reason:'resume'},
+      {version:2,reason:'quit'},
+    ],'最终关闭须传递quit；关闭后的只读重开不重复事件');
+    assert.equal(f.server.requests.length,requestsAfterReload,'暂停、只读重开、继续与关闭不重发模型请求');
+    assert.deepEqual(f.server.errors,[]);
+  }finally{
+    await Promise.allSettled([session?.close(),reopened?.close(),afterClose?.close(),f.dispose()]);
+  }
+});
+
+await test('session_shutdown 有动作拒绝时仍排空同批记录并清理自有子进程', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});
+  const extension=join(f.project,'.pi/extensions/shutdown-rejected-action.ts');
+  const pidFile=join(f.root,'shutdown-child.pid'),stoppedFile=join(f.root,'shutdown-child-stopped');
+  let childPid;
+  const childScript=`const fs=require('node:fs');process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(stoppedFile)},'SIGTERM');process.exit(0)});fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.stdout.write('ready');setInterval(()=>{},1000);`;
+  try{
+    await writeFile(extension,`import {spawn} from 'node:child_process';export default function(pi){
+      pi.on('session_start',async()=>{
+        const child=spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:['ignore','pipe','ignore']});
+        await new Promise((resolve,reject)=>{child.once('error',reject);child.stdout.once('data',resolve);});
+      });
+      pi.on('session_shutdown',async event=>{
+        pi.sendUserMessage('SHUTDOWN_REJECTED_INPUT');
+        pi.appendEntry('shutdown-drained',{reason:event.reason});
+      });
+    }`);
+    assert.equal((await f.session.submit(f.input)).status,'accepted');
+    await until(async()=>(await f.session.lookupReceipt(f.input)).processing==='done');
+    await until(async()=>(await f.session.read()).phase==='ready');
+    const requestCount=f.server.requests.length;
+    const closing=f.session.close();
+    await until(async()=>{
+      try{childPid=Number(await readFile(pidFile,'utf8'));return Number.isSafeInteger(childPid)&&childPid>0;}
+      catch(error){if(error?.code==='ENOENT')return false;throw error;}
+    });
+    await assert.rejects(closing,'a rejected new input from session_shutdown remains visible as a close failure');
+    assert.equal((await readFile(stoppedFile,'utf8')),'SIGTERM','close must kill and join the actual child owned by the extension Worker');
+    assert.equal(f.server.requests.length,requestCount,'rejected shutdown input must not start a model request');
+    await readonlyStorageCopy(f,async storage=>{
+      const entries=(await storage.scanEntries({conversationId:ROOT_CONVERSATION_ID},200,undefined,context)).items;
+      assert.equal(entries.filter(entry=>entry.kind==='pi.user').length,1,'rejected shutdown input must not enter Durable history');
+      assert.ok(!entries.flatMap(entry=>entry.model??[]).some(message=>message.role==='user'&&JSON.stringify(message.content).includes('SHUTDOWN_REJECTED_INPUT')));
+      assert.ok(entries.some(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='shutdown-drained'
+        &&entry.data.value.data?.reason==='quit'),'allowed shutdown metadata action must be persisted in the original Durable conversation');
+    });
+  }finally{
+    if(childPid){try{await readFile(stoppedFile,'utf8');}catch{try{process.kill(childPid,'SIGKILL');}catch{}}}
+    try{await f.dispose();}catch{}
+    await rm(f.root,{recursive:true,force:true});
+  }
+});
+
+await test('session_shutdown 批次不被在途工具的普通 flush 抢走', {timeout:45000}, async()=>{
+  const f=await fixture({calls:[['shutdown_scope_gate',{}]],connectMcp:false});
+  const extension=join(f.project,'.pi/extensions/shutdown-scope-gate.ts');
+  const toolEntered=join(f.root,'shutdown-scope-tool-entered'),releaseTool=join(f.root,'shutdown-scope-release-tool');
+  const toolReturned=join(f.root,'shutdown-scope-tool-returned'),shutdownQueued=join(f.root,'shutdown-scope-queued');
+  const releaseShutdown=join(f.root,'shutdown-scope-release-event'),metadataWaiting=join(f.root,'shutdown-scope-metadata-waiting');
+  const releaseMetadata=join(f.root,'shutdown-scope-release-metadata');
+  let closeState='pending';
+  const writeRelease=file=>writeFile(file,'release');
+  const source=`import {Type} from 'typebox';import {appendFileSync} from 'node:fs';import {readFile} from 'node:fs/promises';
+    const waitForFile=async file=>{for(;;){try{await readFile(file);return;}catch(error){if(error?.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,5));}}};
+    export default function(pi){
+      pi.registerTool({name:'shutdown_scope_gate',label:'shutdown scope gate',description:'Hold the original tool while shutdown queues actions',parameters:Type.Object({}),execute:async()=>{
+        appendFileSync(${JSON.stringify(toolEntered)},'entered');await waitForFile(${JSON.stringify(releaseTool)});
+        appendFileSync(${JSON.stringify(toolReturned)},'returned');return {content:[{type:'text',text:'original tool returned'}]};
+      }});
+      pi.on('session_shutdown',async()=>{
+        pi.sendUserMessage('SHUTDOWN_SCOPE_REJECTED_INPUT');pi.setSessionName('Shutdown Scope Name');
+        appendFileSync(${JSON.stringify(shutdownQueued)},'queued');await waitForFile(${JSON.stringify(releaseShutdown)});
+      });
+      pi.on('session_info_changed',async event=>{
+        if(event.name!=='Shutdown Scope Name')return;
+        appendFileSync(${JSON.stringify(metadataWaiting)},'waiting');await waitForFile(${JSON.stringify(releaseMetadata)});
+        pi.appendEntry('shutdown-derived-name',{name:event.name});
+      });
+    }`;
+  try{
+    await writeFile(extension,source);
+    assert.equal((await f.session.submit(f.input)).status,'accepted');
+    await until(async()=>{try{await readFile(toolEntered);return true;}catch(error){if(error?.code==='ENOENT')return false;throw error;}});
+    const requestCount=f.server.requests.length;
+    const closing=f.session.close();
+    void closing.then(()=>{closeState='resolved';},()=>{closeState='rejected';});
+    await until(async()=>{try{await readFile(shutdownQueued);return true;}catch(error){if(error?.code==='ENOENT')return false;throw error;}});
+    await until(async()=>{try{await readFile(metadataWaiting);return true;}catch(error){if(error?.code==='ENOENT')return false;throw error;}});
+    await writeRelease(releaseTool);
+    await until(async()=>{try{await readFile(toolReturned);return true;}catch(error){if(error?.code==='ENOENT')return false;throw error;}});
+    await until(async()=>readonlyStorageCopy(f,async storage=>{
+      const tasks=(await storage.scanTasks({conversationId:ROOT_CONVERSATION_ID},200,undefined,context)).items;
+      return tasks.some(task=>task.kind===ToolTask.definition.name&&task.input.callId==='actual-tool-1'&&task.state.status==='terminal');
+    }));
+
+    // 先允许 shutdown event 返回，但把其 afterCommit 派生事件留在受控 Host 回调中。
+    await writeRelease(releaseShutdown);
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(closeState,'pending','close barrier must wait for the shutdown scope afterCommit callback, even after a tool finally flushes');
+    await writeRelease(releaseMetadata);
+    await assert.rejects(closing,'the rejected shutdown input remains the close failure after all allowed shutdown actions settle');
+    assert.equal(closeState,'rejected');
+    assert.equal(f.server.requests.length,requestCount,'closing an in-flight tool must not dispatch another model request');
+    await readonlyStorageCopy(f,async storage=>{
+      const entries=(await storage.scanEntries({conversationId:ROOT_CONVERSATION_ID},200,undefined,context)).items;
+      assert.equal(entries.filter(entry=>entry.kind==='pi.user').length,1);
+      assert.ok(!entries.flatMap(entry=>entry.model??[]).some(message=>message.role==='user'&&JSON.stringify(message.content).includes('SHUTDOWN_SCOPE_REJECTED_INPUT')));
+      assert.ok(entries.some(entry=>entry.kind==='dcode.extension-entry'&&entry.data?.value?.customType==='shutdown-derived-name'
+        &&entry.data.value.data?.name==='Shutdown Scope Name'),'the derived permitted metadata action must settle before shutdown-flushed');
+    });
+  }finally{
+    await Promise.allSettled([writeRelease(releaseTool),writeRelease(releaseShutdown),writeRelease(releaseMetadata)]);
+    try{await f.dispose();}catch{}
+    await rm(f.root,{recursive:true,force:true});
+  }
+});
+
+await test('worker 在 JSON 序列化前拒绝 sendUserMessage 的函数值和未知 undefined 选项', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});
+  try{
+    await mkdir(join(f.project,'.pi/prompts'),{recursive:true});
+    await writeFile(join(f.project,'.pi/prompts/actual.md'),'EXPANDED $ARGUMENTS');
+    await writeFile(join(f.project,'.pi/extensions/invalid-send-options.ts'),`export default function(pi){let sent=false;
+      pi.on('input',event=>{pi.appendEntry('send-option-input',{source:event.source,mode:event.streamingBehavior});return {action:'transform',text:event.text+' hooked'};});
+      pi.on('session_start',()=>{
+        if(sent)return;sent=true;
+        try{pi.sendUserMessage('MUST_NOT_SEND',{deliverAs:()=> 'steer'});}catch{pi.appendEntry('invalid-send-option-rejected',{kind:'function'});}
+        try{pi.sendUserMessage('MUST_NOT_SEND',{expandPromptTemplates:()=>true});}catch{pi.appendEntry('invalid-send-option-rejected',{kind:'function-template'});}
+        try{pi.sendUserMessage('MUST_NOT_SEND',{unsupported:undefined});}catch{pi.appendEntry('invalid-send-option-rejected',{kind:'undefined-key'});}
+        pi.sendUserMessage('VALID_UNDEFINED_DEFAULTS',{deliverAs:undefined,expandPromptTemplates:undefined});
+        const nonEnumerable={};Object.defineProperty(nonEnumerable,'deliverAs',{value:'steer'});Object.defineProperty(nonEnumerable,'expandPromptTemplates',{value:true});
+        pi.sendUserMessage('/actual preserved-options',nonEnumerable);
+      });
+    }`);
+    const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');
+    await until(async()=>{const view=await f.session.read();return view.phase==='ready'&&view.entries.filter(e=>e.kind==='pi.user').length===3;});
+    const view=await f.session.read();
+    const rejected=view.entries.filter(e=>e.data?.value?.customType==='invalid-send-option-rejected');
+    assert.deepEqual(rejected.map(e=>e.data.value.data.kind),['function','function-template','undefined-key']);
+    const users=view.entries.filter(e=>e.kind==='pi.user');
+    assert.equal(users.length,3,'三个非法调用没有进入 Durable 输入或 HTTP');
+    assert.equal(f.server.requests.filter(r=>JSON.stringify(r.body.messages).includes('MUST_NOT_SEND')).length,0);
+    assert.ok(f.server.requests.some(r=>JSON.stringify(r.body.messages).includes('VALID_UNDEFINED_DEFAULTS')));
+    assert.ok(f.server.requests.some(r=>JSON.stringify(r.body.messages).includes('EXPANDED preserved-options hooked')),'合法非枚举模板选项须在 JSON 序列化后保留');
+    const modes=view.entries.filter(e=>e.kind==='dcode.extension-entry'&&e.data?.value?.customType==='send-option-input').map(e=>e.data.value.data);
+    assert.deepEqual(modes,[{source:'rpc',mode:'followUp'},{source:'extension',mode:'followUp'},{source:'extension',mode:'steer'}]);
+    assert.deepEqual(f.server.errors,[]);
+  }finally{await f.dispose();}
+});
+
+await test('扩展输入查回期间原调用失效与未知 owner 均不能创建新收件', {timeout:30000}, async()=>{
+  const f=await fixture({calls:[]});
+  try{
+    const before=await f.session.read(), controller=new AbortController();let checks=0;
+    const canceled={abortSignal:controller.signal,value:()=>undefined,toString:()=> 'extension-cancel-context'};
+    const receipt=await f.session.submitExtensionMessage('CANCELED_DURING_LOOKUP',{deliverAs:'followUp',expandPromptTemplates:false},'cancel-before-admission',canceled,{
+      isCurrent:()=>{checks+=1;if(checks===2)controller.abort();return !controller.signal.aborted;},
+    });
+    assert.notEqual(receipt.status,'accepted');assert.ok(checks>=2,'在正式提交前重新核对原调用代次');
+    const inactive=await f.session.submitExtensionMessage('TERMINAL_OWNER_MUST_NOT_ADMIT',{deliverAs:'followUp',expandPromptTemplates:false},'terminal-owner',context,{
+      ownerTaskId:2147483647,isCurrent:()=>true,
+    });
+    assert.notEqual(inactive.status,'accepted');
+    const after=await f.session.read();assert.equal(after.entries.filter(e=>e.kind==='pi.user').length,before.entries.filter(e=>e.kind==='pi.user').length);
+    assert.equal(f.server.requests.length,0,'取消调用或失效 owner 不创建 Durable 输入／模型 HTTP');
+  }finally{await f.dispose();}
+});
+
+await test('扩展提交后存储丢失 ack 保持 unknown；按原 operation 查回而不重投', {timeout:30000}, async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'dcode-extension-lost-ack-'));
+  const models=controlledModels();let loseNextCommit=false,abortAfterCommit;
+  t.after(async()=>await rm(directory,{recursive:true,force:true}));
+  const unit=await PiExecutionSession.open({directory,cwd:directory,target:{workspaceId:'space',taskId:'task',sessionId:'lost-ack'},models:models.models,
+    agent:{model:{provider:models.model.provider,modelId:models.model.id}},needsInputPreparation:()=>true,
+    prepareInput:async input=>({content:input.content,handled:true}),
+    openStorage:async path=>{const storage=await openNodeJsonlStorage(path,context);return new Proxy(storage,{get(target,key){
+      if(key==='commit')return async(change,ctx)=>{const value=await target.commit(change,ctx);if(loseNextCommit){loseNextCommit=false;abortAfterCommit?.abort();throw new Error('Durable commit ack lost after settlement');}return value;};
+      const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
+    }});},
+  });
+  try{
+    const control=(await unit.read()).control;const actionId='extension-lost-ack';loseNextCommit=true;abortAfterCommit=new AbortController();
+    const cancelContext={abortSignal:abortAfterCommit.signal,value:()=>undefined,toString:()=> 'extension-lost-ack-context'};
+    const submitted=await unit.submitExtensionMessage('ONCE_ONLY_EXTENSION_INPUT',{deliverAs:'followUp',expandPromptTemplates:false},actionId,cancelContext,{isCurrent:()=>!abortAfterCommit.signal.aborted});
+    assert.equal(submitted.status,'unknown','写盘后丢回执不能声称未接收');
+    const input={target:unit.target,operationId:`pi-extension/${createHash('sha256').update(actionId).digest('hex')}`,
+      text:'ONCE_ONLY_EXTENSION_INPUT',references:[],mode:'follow-up',expected:control};
+    const found=await unit.lookupReceipt(input);assert.equal(found.status,'accepted');
+    const retry=await unit.submitExtensionMessage('ONCE_ONLY_EXTENSION_INPUT',{deliverAs:'followUp',expandPromptTemplates:false},actionId,context,{isCurrent:()=>true});
+    assert.equal(retry.status,'unknown','faulted owner 不重投未知的原 operation');
+    assert.equal((await unit.lookupReceipt(input)).submissionId,found.submissionId);
+    assert.equal(models.requests.length,0);
+  }finally{await unit.close();}
 });
 
 await test('原 native inbox 后续同文本输入不能借前次准备标记跳过真实启动', {timeout:30000}, async()=>{

@@ -57,6 +57,8 @@ export type ExecutionView = Readonly<{
     id: number;
     kind: string;
     data: unknown;
+    /** 扩展正式接收的输入，供桌面投影补齐原消息身份；不是第二份执行队列。 */
+    extensionInput?: { operationId: string; text: string; images?: readonly WorkImage[]; mode: 'steer' | 'follow-up'; submissionId: number; processing: 'queued' | 'placed' | 'done' | 'unanswered' };
     /** Pi 正式模型消息中的工具结果；诊断不能替代正文或数字出口。 */
     toolResult?: { name: string; callId: string; text: string; isError: boolean; exitCode?: number; changes: FileChange[]; changeNotice?: string; images?: readonly WorkImage[] };
     /** 已提交助手消息的正文；按原顺序拼接文本块，不含思考或工具调用块。 */

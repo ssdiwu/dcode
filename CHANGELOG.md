@@ -1,5 +1,39 @@
 # D Code 更新记录
 
+## 2026-10-16 普通扩展 provider 元数据读取（独立接收）
+
+扩展 `ModelRegistry.getProviderDisplayName` 与 `getRegisteredProviderIds` 改为读取同一会话宿主 `ModelRuntime` 的安全快照，避免落到 Worker 自己未配置的默认目录；Provider 对象、认证状态／配置与本地 `refresh` 保持明确拒绝。本片只增加只读元数据消费者，不扩成 provider 实例或认证接入；范围与验证结果见[普通扩展与 MCP 验证记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
+
+## 2026-10-16 普通桌面入口 userData 隔离修复（独立审查通过）
+
+固定 launcher 在 Electron 进程启动参数中提供隔离 `user-data-dir`；主进程异步建目录后才调用 `app.setPath`。隐藏冷启动 E2E 核对主进程与 GPU、网络、Renderer 三类进程的实际路径。完整八门均真实 exit 0，固定候选经 Standards／Spec／CodeQuality 独立三项 PASS；R5 普通 `.command` smoke 也核到三个 helper 使用临时 profile，但未核窗口可见性或焦点，不代表人工视觉接受。截图中的 ABA 变异 import 错误未在普通入口复现；范围和证据边界见[扩展关闭事件原因记录](doc/验证记录/扩展关闭事件原因-2026-10-16/README.md)。
+
+## 2026-10-16 普通扩展按类型模型目录读取（独立审查通过）
+
+扩展 `ModelRegistry` 的 chat／image／classifier 类型查询现读取宿主会话 `ModelRuntime` 目录；异步 `getAvailableOfType` 复用宿主认证过滤并支持 signal 取消。Worker 仅收到安全模型描述，`classify` 与 `generateImages` 仍拒绝执行；本片只接目录消费者，不宣称完整 SDK 接入。固定候选的架构／Spec／CodeQuality 独立三项通过，完整门槛八项真实 exit 0；范围与边界见[普通扩展与 MCP 验证记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
+
+## 2026-10-16 扩展关闭事件原因与原所有者收束
+
+扩展 Worker 按实际 teardown 原因发送 Pi 1.0.0 `session_shutdown.reason`：资源重载为 `reload`，暂停后供同一 Durable 会话显式继续为 `resume`，最终关闭为 `quit`。关闭回调可在专用关闭阶段经原 Durable owner 完成受限记录；宿主收到事件收束回执后关闭 Harness，同时继续取消并 join 在途模型／工具工作，防止 shutdown 写入越过关闭边界。只读重开不运行关闭回调，不新增输入或 HTTP。目标动作与完整门槛见[扩展关闭事件原因记录](doc/验证记录/扩展关闭事件原因-2026-10-16/README.md)；本片不表示完整 Pi SDK 已完成。
+
+第一固定候选的独立审查发现：若关闭事件同批包含被拒绝的新输入，原 Promise 聚合会提早交出 `shutdown-flushed` 并跳过运输／子进程清理。r2 独立审查又发现，在途工具的普通 `flush()` 可能抢走关闭批次。现以调用作用域分别跟踪 pending 动作，关闭侧即使与已开始的普通 flush 共享同一 scope，也会用 `allSettled` 等待完整批次及派生动作；随后继续资源清理，最后回报首个错误。固定旧候选上的两个并发红灯分别命中未清理子进程和 barrier 提前返回；修复后目标 3/3、完整八门全部 exit 0。当前固定候选仍待独立复核，不把旧候选或本次局部结果当作最终接收。
+
+## 2026-10-16 扩展启动事件恢复与重载原因
+
+普通 SDK 资源 Worker 按 Durable 会话实际来源发送 Pi 1.0.0 `session_start` 原因：新会话首次准备为 `startup`，既有会话只读重开后显式继续为 `resume`，活动实例检测到资源变化并重新装载为 `reload`；`resources_discover` 同步区分首次准备与重载。重开读取本身不装载扩展或重放启动事件。接收范围和未接入事件见[验证记录](doc/验证记录/扩展启动事件原因-2026-10-16/README.md)；不表示完整 Pi SDK 已完成。
+
+## 2026-10-16 扩展会话名称元数据事件（限定独立复核通过）
+
+扩展 `setSessionName` 的 Durable 事务现在按规范化后的名称变化追加元数据；同一 owner 连续设置相同名称只记录 no-op 回执，不重复追加或通知。Worker 按 Host 确认的变化回执投递 `session_info_changed`，晚到的普通状态快照仍不能抑制已确认但尚未送达的事件。r4 同名反例、完整门槛、固定桌面入口预检和第四轮独立 Standards／Spec／CodeQuality 审查均通过；本片不表示完整 Pi SDK 已接入。详见[会话元数据事件验证记录](doc/验证记录/扩展会话元数据事件-2026-10-16/README.md)。
+
+## 2026-10-15 普通扩展与 MCP 桌面恢复、固定入口补证
+
+普通扩展与 MCP 的普通桌面场景现同时覆盖运行中暂停和直接关窗；两者都验证真实子进程收束、只读重开不重连／不重发，以及明确继续不重放已完成扩展和 MCP 动作。固定 `.command` 入口现在透传参数；入口回归测试用临时假根与哨兵 Electron 检查参数转交，避免测试失败时启动真实应用。另在当前主目录运行启动器 `--check`，确认来源根、构建产物与品牌资源。完整检查与独立审查状态见[普通扩展与 MCP 记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
+
+## 2026-10-15 普通扩展注册命令与回执生命周期
+
+显式展开时按 Pi 注册命令语义优先分派，动作仍沿同一 Worker 与 Durable 回执收束；原 `/command args` 不重复送模型，未匹配沿原 input／模板路径。命令 context 保持 SDK `hasUI: boolean` 合同；未支持的 UI／会话树／reload 控制明确失败。补普通桌面命令入口、pause／直接 close／只读重开／明确继续不重放 handler 的端到端覆盖，并将 App 图片回执测试补到真实 queued／placed 查回分支。完整范围与边界见[普通扩展与 MCP 验证记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
+
 ## 2026-10-15 普通扩展 provider 公开请求头（验证中）
 
 原工厂可对已有受管chat来源声明有限公开headers，首次、工具内和后续实际请求沿同一Runtime消费Model.headers投影，保原身份、能力、认证和完整准入。当次准入改选重新取得最终物理模型投影；可信来源刷新按每个活客户端尝试，单会话冲突明确失效而不截断其它同步。撤销与关闭按本代认领恢复最新受管对象，Worker在JSON前拒绝会被静默丢弃的无效定义。

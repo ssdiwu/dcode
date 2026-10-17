@@ -127,6 +127,8 @@ export type TimelineBlock =
        * 用户原文字仍在 text 里原样保留；引用不改写它。
        */
       references?: readonly ReferenceSummary[];
+      /** 本会话正式扩展输入的图片身份，用于同 operation 回执查回。 */
+      images?: readonly import('./execution').WorkImage[];
     }
   | { kind: "extension-message"; id: string; customType: string; text: string; at: number }
   | { kind: "tool"; id: string; tool: ToolBlockData; at: number }
@@ -1002,7 +1004,8 @@ function isValidTimelineBlock(b: unknown): boolean {
         (b.operationId === undefined || isId(b.operationId)) &&
         (b.mode === undefined || b.mode === "steer" || b.mode === "follow-up") &&
         (b.receipt === undefined || isValidReceipt(b.receipt)) &&
-        (b.references === undefined || (Array.isArray(b.references) && b.references.every(isValidReferenceSummary)))
+        (b.references === undefined || (Array.isArray(b.references) && b.references.every(isValidReferenceSummary))) &&
+        (() => { try { if (b.images !== undefined) parseWorkImages(b.images); return true; } catch { return false; } })()
       );
     case "extension-message":
       return isStr(b.customType) && b.customType.length > 0 && b.customType.length <= 128 && isStr(b.text);

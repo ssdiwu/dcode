@@ -10,6 +10,8 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 
 [普通扩展与 MCP](ordinary-extension-mcp.test.mjs)使用实际 SDK、隔离项目／凭据与本地模型 HTTP 对端、真实 stdio／HTTP MCP，核注册工具／间接调用、错误与资源正文、输入处理／正式回执、配置刷新、暂停／直接关闭取消及不重放。桌面配置与真实渲染另见 `test/e2e/ordinary-extension-mcp.test.mjs`；本地协议服务不代表真实服务商、OAuth 或完整 SDK 兼容。
 
+[扩展类型化模型目录](ordinary-extension-typed-catalog.test.ts)使用真实 `CodingExtensions` Worker 与宿主 `ModelRuntime`，覆盖 chat/image/classifier 三类按类型读取、认证过滤的异步可用性与取消、provider 显示名／登记 ID 的宿主投影，以及 Provider／认证／refresh 操作的明确拒绝；不代表真实服务商、分类／图片请求或完整 SDK 已验收。
+
 [扩展主动模型](ordinary-extension-model-active.test.mjs)核普通工具内的单次complete及streamSimple：真实增量在final前到消费者，result-only／break不另发，独立model取消和原owner暂停／关闭分开，原结果、费用与只读重开不重放；[owned认领边界](durable-owned-model-lease.test.ts)用真实Harness／ToolTask／HTTP核身份、signal、模型ref快照及重复scope拒绝。桌面stream的运行工具正文和生命周期仍由对应E2E实际操作验证，完整源与审查状态见[流式模型记录](../../doc/验证记录/扩展流式模型-2026-10-15/README.md)，不据单个命令绿灯外推全SDK。
 
 从仓库根目录运行：

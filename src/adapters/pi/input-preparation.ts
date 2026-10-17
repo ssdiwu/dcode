@@ -5,7 +5,7 @@ import type { ImageContent } from '@earendil-works/pi-ai';
 import { taskToolApi } from './task-tool-api';
 
 export type PreparedInput = { content: UserInput; handled: boolean };
-export type InputPreparation = { requestId: string; innerRequestId: string; content: UserInput; text: string; images: ImageContent[]; mode: 'steer' | 'followUp' };
+export type InputPreparation = { requestId: string; innerRequestId: string; content: UserInput; text: string; images: ImageContent[]; mode: 'steer' | 'followUp'; source?: 'rpc' | 'extension'; expandPromptTemplates?: boolean };
 type ReceivedInput = InputPreparation & { receiptId: SubmissionId; previousTaskId?: TaskId };
 type Checkpoint = { phase: 'previous' } | { phase: 'call' } | { phase: 'interrupted' } | { phase: 'place'; prepared: PreparedInput };
 export const processedInputId = (requestId: string) => `dcode.processed-input/${requestId}`;

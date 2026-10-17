@@ -40,6 +40,8 @@ const Binding = defineDoc<{ identity: string; paused: boolean }>({ kind: 'dcode.
 const Intent = defineDocFamily<{ fingerprint: string }, string>({ kind: 'dcode.input-identity', version: 1, scope: 'session', family: true, initial: fingerprint => ({ fingerprint }) });
 class PreparationPaused extends Error {}
 
+export type ExecutionResourceShutdown = { shutdownFlushed: Promise<void>; done: Promise<void> };
+
 export type PiSessionOptions = {
   target: ExecutionTarget;
   directory: string;
@@ -49,11 +51,11 @@ export type PiSessionOptions = {
   /** 普通客户端沿原绑定目录恢复，不能把旧的相对路径工具迁到新目录。 */
   reuseStoredCwd?: boolean;
   /** 仅发送／明确继续装配资源，观察旧运行不得改写它的指令。 */
-  prepareExecution?: (cwd: string) => Promise<AgentChange>;
+  prepareExecution?: (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload') => Promise<AgentChange>;
   /** 每次只读重开只接上原 Harness 的读取，不启动资源。 */
   attachExecution?: (harness: Harness, root: Conversation, ownedModel?: DurableModelRouting['withOwnedModelInvocation']) => void;
   /** 先失效资源准备／在途回调，再等实际连接与调用收束。 */
-  closeExecutionResources?: () => Promise<void>;
+  beginCloseExecutionResources?: (reason: 'resume' | 'quit') => ExecutionResourceShutdown;
   /** 只有停止旧调度后的暂停/关闭、明确继续前可消费已确认费用；不执行资源代码。 */
   reconcileExecutionSpend?: (session: import('@earendil-works/pi-durable').Session, context: Context) => Promise<void>;
   /** 同次资源准备后转换尚未接收的正文；查回原回执和明确继续不重新展开旧输入。 */
@@ -70,6 +72,10 @@ export type PiSessionOptions = {
   openStorage?: (directory: string) => Promise<Storage>;
 };
 
+export type ExtensionInputOptions = { deliverAs: 'steer' | 'followUp'; expandPromptTemplates: boolean };
+export type ExtensionInputAdmission = { ownerTaskId?: TaskId; isCurrent: () => boolean };
+class ExtensionInputOwnerInactive extends Error {}
+
 /** 一个产品会话对应一个可独立暂停的真实 Pi Harness。 */
 export class PiExecutionSession implements ExecutionPort {
   readonly target: ExecutionTarget;
@@ -84,9 +90,11 @@ export class PiExecutionSession implements ExecutionPort {
   #instanceId = randomUUID();
   #revision = 0;
   #observation = 0;
+  #sessionStartReason: 'startup' | 'resume' = 'startup';
   #paused = false;
   #enabled = false;
   #pausing = false;
+  #resuming = false;
   #faulted = false;
   #closed = false;
   #closing = false;
@@ -122,6 +130,8 @@ export class PiExecutionSession implements ExecutionPort {
     this.#storage = this.#options.openStorage ? await this.#options.openStorage(this.#directory) : await openNodeJsonlStorage(this.#directory, context, { fsync: true });
     // 在 Harness.open 恢复在途任务之前核对归属，错误目标不能改变已有运行记录。
     const existingRoot = await this.#storage.conversation(ROOT_CONVERSATION_ID, context);
+    // 只读重开不加载扩展；下一次正式准备时应区分新启动与恢复已有会话。
+    this.#sessionStartReason = existingRoot ? 'resume' : 'startup';
     if (existingRoot) {
       const record = await this.#storage.findDocument({ kind: 'dcode.binding', scope: { kind: 'session' } }, 'current', context);
       const stored = record && await this.#storage.document(record.id, 'current', context);
@@ -214,7 +224,8 @@ export class PiExecutionSession implements ExecutionPort {
   }
   async #prepareExecution(): Promise<void> {
     if (this.#options.prepareExecution) {
-      const change = await this.#options.prepareExecution(this.#cwd);
+      const reason = this.#resuming ? 'resume' : this.#sessionStartReason;
+      const change = await this.#options.prepareExecution(this.#cwd, reason);
       this.#assertOpen();
       if (this.#paused || this.#pausing) throw new PreparationPaused('Execution preparation was superseded by pause');
       await this.#root.configure(change, context);
@@ -274,18 +285,18 @@ export class PiExecutionSession implements ExecutionPort {
     return { status: 'accepted', operationId: input.operationId, submissionId: stored.id, processing: stored.status };
   }
 
-  async #lookup(input: WorkInput): Promise<InputReceipt> {
+  async #lookup(input: WorkInput, ctx: Context = context): Promise<InputReceipt> {
     try {
       // 提交后丢失回执可能令 Session 不可继续写；从正式存储读回，不能用 submit/wait 代查。
-      const address = await this.#storage.findDocument({ kind: 'dcode.input-identity', scope: { kind: 'session' }, key: input.operationId }, 'current', context);
-      const intent = address && await this.#storage.document(address.id, 'current', context);
+      const address = await this.#storage.findDocument({ kind: 'dcode.input-identity', scope: { kind: 'session' }, key: input.operationId }, 'current', ctx);
+      const intent = address && await this.#storage.document(address.id, 'current', ctx);
       if (intent && (intent.version !== 1 || intent.value.fingerprint !== this.#fingerprint(input))) return { status: 'not-accepted', operationId: input.operationId, reason: 'conflict' };
-      const record = await this.#storage.submissionByRequest(this.#root.id, input.operationId, context);
+      const record = await this.#storage.submissionByRequest(this.#root.id, input.operationId, ctx);
       if (record) {
         if (!intent) throw new Error('Stored input identity is missing');
-        const preparation = await this.#storage.findDocument({kind:'dcode.input-preparation',scope:{kind:'session'},key:input.operationId},'current',context);
-        const prepared = preparation && await this.#storage.document(preparation.id,'current',context);
-        const inner = prepared ? await this.#storage.submissionByRequest(this.#root.id,String(prepared.value.innerRequestId ?? processedInputId(input.operationId)),context) : undefined;
+        const preparation = await this.#storage.findDocument({kind:'dcode.input-preparation',scope:{kind:'session'},key:input.operationId},'current',ctx);
+        const prepared = preparation && await this.#storage.document(preparation.id,'current',ctx);
+        const inner = prepared ? await this.#storage.submissionByRequest(this.#root.id,String(prepared.value.innerRequestId ?? processedInputId(input.operationId)),ctx) : undefined;
         return {...this.#accepted(input,record), ...(inner && record.status !== 'done' && record.status !== 'unanswered' ? {processing:inner.status} : {})};
       }
       return { status: 'not-accepted', operationId: input.operationId, reason: 'not-found' };
@@ -299,7 +310,105 @@ export class PiExecutionSession implements ExecutionPort {
   }
 
   submit(value: unknown): Promise<InputReceipt> {
-    const input = parseWorkInput(value);
+    return this.#submit(parseWorkInput(value), true, 'rpc');
+  }
+
+  /** SDK sendUserMessage submits through this same session owner; options only affect this new input. */
+  submitExtensionMessage(content: unknown, options: ExtensionInputOptions, actionId: string, ctx: Context, admission: ExtensionInputAdmission): Promise<InputReceipt> {
+    this.#assertOpen();
+    if (typeof actionId !== 'string' || !actionId || actionId.length > 4096) throw new Error('Invalid extension input identity');
+    const parts = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    if (!Array.isArray(parts) || parts.length > 256) throw new Error('Invalid extension input');
+    const textParts: string[] = [];
+    const imageParts: unknown[] = [];
+    for (const part of parts) {
+      if (!part || typeof part !== 'object' || Array.isArray(part)) throw new Error('Invalid extension input');
+      if (part.type === 'text' && typeof part.text === 'string') textParts.push(part.text);
+      else if (part.type === 'image') imageParts.push(part);
+      else throw new Error('Invalid extension input');
+    }
+    const text = textParts.join('\n');
+    if (text.length > 1_000_000) throw new Error('Invalid extension input');
+    const images = parseWorkImages(imageParts);
+    if (!text.trim() && images.length === 0) throw new Error('Invalid extension input');
+    const input: WorkInput = Object.freeze({
+      target: this.target,
+      operationId: `pi-extension/${createHash('sha256').update(actionId).digest('hex')}`,
+      text,
+      references: Object.freeze([]),
+      ...(images.length ? { images } : {}),
+      mode: options.deliverAs === 'steer' ? 'steer' : 'follow-up',
+      expected: Object.freeze({ instanceId: this.#instanceId, revision: this.#revision }),
+    });
+    return this.#submitExtensionInput(input, options.expandPromptTemplates, ctx, admission);
+  }
+
+  /** 资源准备会等待扩展事件；事件输入须沿同一 Durable 事务接收，不能重入当前 Session 串行尾。 */
+  async #submitExtensionInput(input: WorkInput, expandPromptTemplates: boolean, ctx: Context, admission: ExtensionInputAdmission): Promise<InputReceipt> {
+    this.#validateTarget(input);
+    this.#assertReferenceIntegrity(input.references);
+    this.#assertOpen();
+    const maySubmit = () => admission.isCurrent() && !ctx.abortSignal?.aborted && !this.#pausing && !this.#closing && !this.#closed
+      && (!this.#paused || this.#resuming) && this.#matches(input.expected);
+    if (!maySubmit()) return { status: 'not-accepted', operationId: input.operationId, reason: this.#paused ? 'paused' : 'stale-control' };
+    if (this.#faulted) return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
+    if (!this.#options.prepareInput) return { status: 'not-accepted', operationId: input.operationId, reason: 'execution-unavailable' };
+
+    const prior = await this.#lookup(input, ctx);
+    if (prior.status !== 'not-accepted' || prior.reason !== 'not-found') return prior;
+    if (!maySubmit()) return { status: 'not-accepted', operationId: input.operationId, reason: this.#paused ? 'paused' : 'stale-control' };
+
+    try {
+      let receipt!: SubmissionRecord;
+      await this.#harness.commit(async tx => {
+        const binding = await tx.doc(Binding);
+        if (!maySubmit()) throw new ExtensionInputOwnerInactive();
+        if (admission.ownerTaskId !== undefined) {
+          const owner = await tx.task(admission.ownerTaskId);
+          if (!owner || owner.state.status === 'terminal' || 'abort' in owner) throw new ExtensionInputOwnerInactive();
+        }
+        if (binding.paused && !this.#resuming) throw new PreparationPaused();
+        const order = await tx.doc(PreparationOrder);
+        const previousTaskId = order.lastTaskId as TaskId | undefined;
+        const innerRequestId = `dcode.prepared/${randomUUID()}`;
+        await tx.doc(Intent, input.operationId, this.#fingerprint(input));
+        await tx.doc(InnerReceipt, innerRequestId, input.operationId);
+        await tx.appendEntry(this.#root.id, { kind: 'dcode.extension-entry', data: { action: 'user-input', value: {
+          operationId: input.operationId, text: input.text, images: [...(input.images ?? [])], mode: input.mode === 'steer' ? 'steer' : 'follow-up',
+        } } });
+        receipt = await tx.createSubmission({ conversationId: this.#root.id, requestId: input.operationId, type: 'input', status: 'queued' });
+        const taskId = await tx.createTask(this.#inputPreparation.preparation, {
+          receiptId: receipt.id, requestId: input.operationId, innerRequestId,
+          ...(previousTaskId === undefined ? {} : { previousTaskId }),
+          content: this.#userContent(input), text: input.text, images: [...(input.images ?? [])],
+          mode: input.mode === 'steer' ? 'steer' as const : 'followUp' as const,
+          source: 'extension', expandPromptTemplates,
+        }, { conversationId: this.#root.id, ownership: { kind: 'conversation' } });
+        await tx.doc(Preparation, input.operationId, { taskId, innerRequestId });
+        order.lastTaskId = taskId;
+      }, ctx);
+      this.#enabled = true;
+      if (!this.#resuming) this.#harness.resume();
+      return this.#accepted(input, receipt);
+    } catch (error) {
+      // 只有事务内确认 owner 已失效才是确定未接收；回执等待中取消不能证明写盘尚未完成。
+      if (error instanceof ExtensionInputOwnerInactive) {
+        return { status: 'not-accepted', operationId: input.operationId, reason: 'stale-control' };
+      }
+      if (error instanceof PreparationPaused) {
+        return { status: 'not-accepted', operationId: input.operationId, reason: 'paused' };
+      }
+      if (error instanceof StorageRejected) {
+        const result = await this.#lookup(input);
+        if (result.status === 'not-accepted' && result.reason === 'not-found') return { ...result, reason: 'storage-rejected' };
+        return result;
+      }
+      this.#faulted = true;
+      return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
+    }
+  }
+
+  #submit(input: WorkInput, expandPromptTemplates: boolean, source: 'rpc' | 'extension'): Promise<InputReceipt> {
     this.#validateTarget(input);
     this.#assertReferenceIntegrity(input.references);
     return this.#serialize(async () => {
@@ -321,14 +430,14 @@ export class PiExecutionSession implements ExecutionPort {
             await tx.doc(InnerReceipt, innerRequestId, input.operationId);
             receipt = await tx.createSubmission({conversationId:this.#root.id,requestId:input.operationId,type:'input',status:'queued'});
             const taskId = await tx.createTask(this.#inputPreparation.preparation, { receiptId:receipt.id, requestId: input.operationId, innerRequestId, ...(previousTaskId===undefined?{}:{previousTaskId}), content: this.#userContent(input), text: input.text,
-              images: [...(input.images ?? [])], mode: input.mode === 'steer' ? 'steer' as const : 'followUp' as const }, { conversationId: this.#root.id, ownership: { kind: 'conversation' } });
+              images: [...(input.images ?? [])], mode: input.mode === 'steer' ? 'steer' as const : 'followUp' as const, source, expandPromptTemplates }, { conversationId: this.#root.id, ownership: { kind: 'conversation' } });
             await tx.doc(Preparation, input.operationId, {taskId,innerRequestId});order.lastTaskId=taskId;
           }, context);
           this.#enabled = true; this.#harness.resume();
           return this.#accepted(input,receipt);
         }
         await this.#prepareExecution();
-        const text = this.#options.transformInput?.(input.text) ?? input.text;
+        const text = expandPromptTemplates ? this.#options.transformInput?.(input.text) ?? input.text : input.text;
         // 未启用扩展时保原发送流程；展开明确失败仍发生在接收之前。
         await this.#harness.commit(async tx => { await tx.doc(Intent,input.operationId,this.#fingerprint(input)); },context);
         if (this.#pausing || this.#paused || !this.#matches(input.expected)) return {status:'not-accepted',operationId:input.operationId,reason:'paused'};
@@ -439,6 +548,18 @@ export class PiExecutionSession implements ExecutionPort {
       }));
       cursor = page.next;
     } while (cursor !== undefined);
+    for (const entry of entries) {
+      const data = entry.kind === 'dcode.extension-entry' && entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+        ? entry.data as Record<string, unknown> : undefined;
+      const value = data?.action === 'user-input' && data.value && typeof data.value === 'object' && !Array.isArray(data.value)
+        ? data.value as Record<string, unknown> : undefined;
+      if (typeof value?.operationId !== 'string' || !value.operationId.startsWith('pi-extension/')
+        || typeof value.text !== 'string' || value.text.length > 1_000_000
+        || (value.mode !== 'steer' && value.mode !== 'follow-up')) continue;
+      const receipt = await this.#storage.submissionByRequest(this.#root.id, value.operationId, context);
+      if (receipt?.type === 'input') entry.extensionInput = { operationId: value.operationId, text: value.text,
+        ...(Array.isArray(value.images) ? { images: parseWorkImages(value.images) } : {}), mode: value.mode, submissionId: receipt.id, processing: receipt.status };
+    }
     const agent = await this.#root.agent(context);
     // 公共扫描页不是界面先后次序；条目 id 是正式追加身份，不能把后续结果显示到先前工具之前。
     entries.sort((a, b) => a.id - b.id);
@@ -471,13 +592,14 @@ export class PiExecutionSession implements ExecutionPort {
     this.#revision += 1;
     this.#pausing = true;
     this.#paused = true;
-    const resources = this.#options.closeExecutionResources?.();
-    resources?.catch(() => {});
+    const resources = this.#options.beginCloseExecutionResources?.('resume');
+    resources?.done.catch(() => {});
     return this.#serialize(async () => {
       let failure: unknown;
       try { await this.#harness.commit(async tx => { (await tx.doc(Binding)).paused = true; }, context); } catch (error) { failure = error; }
+      try { await resources?.shutdownFlushed; } catch (error) { failure ??= error; }
       try { await this.#harness.close(context); } catch (error) { failure ??= error; }
-      try { await resources; } catch (error) { failure ??= error; }
+      try { await resources?.done; } catch (error) { failure ??= error; }
       if(!failure)try{await this.#reconcileStoppedSpend();}catch(error){failure=error;}
       if (failure) { this.#faulted = true; throw new Error('Pause could not confirm storage and shutdown', { cause: failure }); }
       this.#enabled = false;
@@ -534,9 +656,11 @@ export class PiExecutionSession implements ExecutionPort {
       if (!this.#matches(token) || this.#pausing) throw Object.assign(new Error('Stale resume request'), { name: "StaleControlError" });
       if (this.#faulted) throw new Error('Runtime storage requires reopen');
       if((await this.#harness.inspect(context)).scheduling==='paused')await this.#options.reconcileExecutionSpend?.(this.#harness,context);
-      // 明确继续时允许准备资源；暂停标记到正式继续提交前仍保留。
+      // 明确继续期间 session_start 可提交 Durable 输入，但暂停标记到正式继续提交前仍保留。
+      this.#resuming = true;
+      try {
       if (this.#options.prepareExecution) {
-        const change = await this.#options.prepareExecution(this.#cwd);
+        const change = await this.#options.prepareExecution(this.#cwd, 'resume');
         this.#assertOpen();
         if (!this.#matches(token) || this.#pausing) throw new Error('Resume superseded by pause');
         await this.#root.configure(change, context);
@@ -548,6 +672,9 @@ export class PiExecutionSession implements ExecutionPort {
       this.#enabled = true;
       this.#harness.resume();
       return this.#view();
+      } finally {
+        this.#resuming = false;
+      }
     });
   }
 
@@ -557,8 +684,8 @@ export class PiExecutionSession implements ExecutionPort {
     this.#closing = true;
     this.#paused = true;
     this.#revision += 1;
-    const resources = this.#options.closeExecutionResources?.();
-    resources?.catch(() => {});
+    const resources = this.#options.beginCloseExecutionResources?.('quit');
+    resources?.done.catch(() => {});
     this.#closeResult = this.#serialize(async () => {
       // 先等待 Pi 停止和存储关闭，再交出所有权；失败时保留认领，不能让新实例抢写。
       let failure:unknown;
@@ -567,8 +694,9 @@ export class PiExecutionSession implements ExecutionPort {
         // 直接关窗也要保原在途暂停事实；故障／已关闭的 Harness 仍须走原实际关闭，不能被采样挡住。
         if(inspection.tasks.length||inspection.submissions.length)await this.#harness.commit(async tx=>{(await tx.doc(Binding)).paused=true;},context);
       }catch(error){failure=error;}}
+      try{await resources?.shutdownFlushed;}catch(error){failure??=error;}
       try{await this.#harness.close(context);}catch(error){failure??=error;}
-      try{await resources;}catch(error){failure??=error;}
+      try{await resources?.done;}catch(error){failure??=error;}
       if(!failure)try{await this.#reconcileStoppedSpend();}catch(error){failure=error;}
       this.#stopRoutingRegistry?.(); this.#stopPreparationRegistry?.();
       try{await this.#storage.close(context);}catch(error){failure??=error;}
