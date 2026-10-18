@@ -1,3 +1,9 @@
+import { imageResponse, imagesInput, imagesOptions, imagesResult } from './images-bridge';
+import { validateGeneratedImages } from './image-validation';
+import { contextModelKey, deriveContextUsage } from './context-usage';
+import { classifierInput, classifierOptions, classifierResult } from './classifier-bridge';
+import type { OwnedModelResult } from './classifier-bridge';
+import { ownedNativeStream, validateNativeStreamOptions } from './native-model-stream';
 import { Worker } from 'node:worker_threads';
 import { mkdir, realpath } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -16,7 +22,7 @@ import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
 import type { InputPreparation, PreparedInput } from './input-preparation';
 import type { HookApi, EntryRecord, Cursor, TaskRecord, EntryId, Tx, ConversationId } from '@earendil-works/pi-durable';
-import type { AnyModel, Api, Model, ModelType, ImageContent, Message, AssistantMessage, Usage, Models } from '@earendil-works/pi-ai';
+import type { AnyModel, Api, Model, ModelType, ImageContent, Message, AssistantMessage, AssistantImages, Usage, Models } from '@earendil-works/pi-ai';
 
 // 只投影各类型模型的公开描述；认证材料与执行请求头仍由宿主 ModelRuntime 持有。
 function modelMetadata(model: AnyModel): JsonValue {
@@ -33,15 +39,18 @@ function modelMetadata(model: AnyModel): JsonValue {
 const context = BACKGROUND_CONTEXT;
 const ExtensionEntry = defineEntry<JsonObject>('dcode.extension-entry');
 const ExtensionModelResult = defineEntry<JsonObject>('dcode.extension-model-result');
+const ExtensionTypedModelResult = defineEntry<JsonObject>('dcode.extension-typed-model-result');
 const ExtensionModelSpend = defineDoc<{usages:Record<string,JsonValue>}>({kind:'dcode.extension-model-spend',version:1,scope:'task',initial:()=>({usages:{}})});
 // 这里只存原模型子任务的消费回执；累计数仍只有官方UsageDoc。
-const ModelSpendAccounted = defineDocFamily<{done:boolean},null>({kind:'dcode.extension-model-accounted',version:1,scope:'conversation',history:'latest',fork:'current',family:true,initial:()=>({done:false})});
+const ModelSpendAccounted = defineDocFamily<{done:boolean;response?:ImageResponseReceipt;publishedToOwner?:boolean;typedPublished?:boolean},null>({kind:'dcode.extension-model-accounted',version:1,scope:'conversation',history:'latest',fork:'current',family:true,initial:()=>({done:false})});
 const Action = defineDocFamily<{fingerprint:string;applied:boolean;entryId:number;nameChanged?:boolean},string>({kind:'dcode.extension-action',version:1,scope:'session',family:true,initial:fingerprint=>({fingerprint,applied:false,entryId:-1})});
 const Turn = defineDocFamily<{ started: boolean; finished: boolean; messages: JsonValue[] }, null>({ kind: 'dcode.extension-turn', version: 1, scope: 'session', family: true, initial: () => ({ started: false, finished: false, messages: [] }) });
 const RequestRound=defineDoc<{assistant:number}>({kind:'dcode.extension-request-round',version:1,scope:'task',initial:()=>({assistant:0})});
 type Descriptor = { name: string; description: string; parameters: TSchema; exposure: string; defaultActive?: boolean; constrainedSampling?: import('@earendil-works/pi-ai').ConstrainedSamplingConfig | false; hasPrepareArguments?: boolean };
 type NestedInput = { caller: string; call: ToolCall };
-type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' };
+type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' | 'stream' | 'classify' | 'generateImages' };
+type JsonSafe<T> = T extends string | number | boolean | null | undefined ? T : T extends object ? { [K in keyof T]: JsonSafe<T[K]> } : T;
+type ImageResponseReceipt = { childId:number; ownerId:number; conversationId:number; actionId:string; caller:string; requestId:string; metadata:JsonSafe<Omit<AssistantImages,'output'>> };
 type RuntimeBinding = { harness: Harness; root: Conversation; ownedModel?: DurableModelRouting['withOwnedModelInvocation'] };
 type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; signal?: AbortSignal; aborted: boolean; seq: number };
 type ModelAvailabilityCall = { origin: Worker; controller: AbortController };
@@ -101,8 +110,11 @@ function bounded(value: unknown, maxBytes = 8 * 1024 * 1024): unknown {
   if (!text || Buffer.byteLength(text) > maxBytes) throw new CodingResourcesUnavailable();
   return JSON.parse(text) as unknown;
 }
+const RESULT_ENVELOPE_BYTES = 16 * 1024 * 1024;
+// 只读SessionManager同时承接正式entries与当次context，允许有限的同图多处投影。
+const STATE_ENVELOPE_BYTES = 64 * 1024 * 1024;
 function toolResult(value: unknown): ToolExecutionResult {
-  const result = bounded(value) as Record<string, unknown>;
+  const result = bounded(value, RESULT_ENVELOPE_BYTES) as Record<string, unknown>;
   if (!result || typeof result !== 'object' || !Array.isArray(result.content)) throw new CodingResourcesUnavailable();
   for (const part of result.content as Record<string, unknown>[]) {
     if (!part || (part.type === 'text' ? typeof part.text !== 'string' : part.type !== 'image'
@@ -142,12 +154,13 @@ export class CodingExtensions {
   #publication: Promise<void> = Promise.resolve();
   #next = 0;
   #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; abort?: () => void }>();
-  #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: AssistantMessage[] }>();
+  #calls = new Map<string, { api: ToolExecutionApi; context: Context; nested: JsonValue[]; models: OwnedModelResult[] }>();
   #modelCalls = new Map<string, ModelCall>();
+  #imageResponses = new Map<number, ImageResponseReceipt>();
   #modelAvailabilityCalls = new Map<string, ModelAvailabilityCall>();
   #virtuals = new Map<string, VirtualRegistration>();
   #providerClaims = new Map<string, { origin: Worker; handle: string; claim: object }>();
-  #events = new Map<string, { api?: HookApi; context: Context }>();
+  #events = new Map<string, { api?: Pick<HookApi, 'taskId' | 'snapshot'>; context: Context }>();
   #shutdownScope?: string;
   #shutdownFlushed?: () => void;
   #tools: Descriptor[] = [];
@@ -255,6 +268,74 @@ export class CodingExtensions {
           if (!caller || caller.api.taskId !== task.input.ownerTaskId || owned.caller !== task.input.caller || (owned.task !== undefined && owned.task !== runtime.taskId)) throw new CodingResourcesUnavailable();
           owned.task = runtime.taskId;
           owned.signal = runtime.signal;
+          if (task.input.mode === 'generateImages') {
+            const model = runtime.models.getModelOfType('image', task.input.provider, task.input.modelId);
+            const binding = this.#binding, epoch = this.#resourceEpoch;
+            const current = () => !this.#closed && !owned.aborted && !runtime.signal.aborted
+              && owned.origin === this.#worker && this.#resourceEpoch === epoch
+              && this.#modelCalls.get(task.input.actionId) === owned && this.#calls.get(owned.caller) === caller && !caller.context.abortSignal?.aborted;
+            if (!model || !binding?.ownedModel || !model.output.includes('image')
+              || (imagesInput(task.input.input).input.some(part=>part.type==='image')&&!model.input.includes('image'))) throw new CodingResourcesUnavailable();
+            await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'execute' } }), ctx);
+            await binding.ownedModel(runtime, { provider: model.provider, modelId: model.id }, async () => {
+              const raw = await runtime.models.generateImages(model, imagesInput(task.input.input), { ...task.input.options, maxRetries: 0, signal: runtime.signal });
+              const metadata = imageResponse(raw);
+              if (metadata.api !== model.api || metadata.provider !== model.provider || metadata.model !== model.id) throw new CodingResourcesUnavailable();
+              const receipt:ImageResponseReceipt = { childId:runtime.taskId,ownerId:task.input.ownerTaskId,conversationId:runtime.conversationId,
+                actionId:task.input.actionId,caller:task.input.caller,requestId:`${runtime.taskId}/${task.input.actionId}`,metadata };
+              if (metadata.stopReason === 'stop' || metadata.usage || metadata.responseId) {
+                // 首个await解码之前认领已到响应；关闭封住旧Session时留给原停机维护，不丢真实费用。
+                this.#imageResponses.set(runtime.taskId,receipt);
+                try { await binding.harness.commit(tx => this.#saveImageResponse(tx,receipt), context); this.#imageResponses.delete(runtime.taskId); }
+                catch (error) { if (!this.#closed && !runtime.signal.aborted) throw error; return; }
+              }
+              let typed:AssistantImages;
+              try {
+                runtime.signal.throwIfAborted();
+                if(this.#closed || owned.aborted)throw new CodingResourcesUnavailable();
+                typed=imagesResult(raw);
+                if(typed.stopReason==='stop') {
+                  const pictures=typed.output.filter((part):part is ImageContent=>part.type==='image');
+                  if(!pictures.length)throw new Error('图片服务未返回可显示图片');
+                  await validateGeneratedImages(pictures,runtime.signal);
+                } else typed={...typed,output:typed.output.filter(part=>part.type==='text')};
+                bounded(typed, RESULT_ENVELOPE_BYTES);
+              } catch {
+                typed={...metadata,output:[],stopReason:runtime.signal.aborted?'aborted':'error',errorMessage:'图片核验未完成、内容无效或超过接收容量'};
+              }
+              const result = {operation:'generateImages',requestId:receipt.requestId,typed} as unknown as JsonObject;
+              await runtime.commit(async tx => {
+                const owner=await tx.task(task.input.ownerTaskId as TaskId);
+                // 解码完成不等于仍有发布权；关闭先认领或原工具已结束时只保响应回执。
+                const mayPublish=()=>current()&&!!owner&&!owner.abortRequested&&owner.state.status!=='terminal'&&owner.state.status!=='completing';
+                if(!mayPublish())throw new CodingResourcesUnavailable();
+                await this.#publishImageResult(tx,receipt,typed,mayPublish);
+                if(!mayPublish())throw new CodingResourcesUnavailable();
+                return { status:'terminal',outcome:{status:'completed',result} };
+              },ctx);
+            });
+            return;
+          }
+          if (task.input.mode === 'classify') {
+            const model = runtime.models.getModelOfType('classifier', task.input.provider, task.input.modelId);
+            if (!model || !this.#binding?.ownedModel) throw new CodingResourcesUnavailable();
+            await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'execute' } }), ctx);
+            if (owned.aborted || runtime.signal.aborted) throw new CodingResourcesUnavailable();
+            await this.#binding.ownedModel(runtime, { provider: model.provider, modelId: model.id }, async () => {
+              let typed = classifierResult(await runtime.models.classify(model, classifierInput(task.input.input), { ...task.input.options, maxRetries: 0, signal: runtime.signal }));
+              if (typed.api !== model.api || typed.provider !== model.provider || typed.model !== model.id) throw new CodingResourcesUnavailable();
+              // 容量拒绝也不能丢掉已确认费用；只裁答案，不编造成功或重发。
+              try { bounded(typed); } catch { typed = { ...typed, answers: {}, stopReason: 'error', errorMessage: '分类结果超过接收容量' }; }
+              const result = bounded({ operation: 'classify', requestId: `${runtime.taskId}/${task.input.actionId}`, typed }) as JsonObject;
+              await runtime.commit(async tx => {
+                await tx.appendEntry(ExtensionTypedModelResult, runtime.conversationId, { data: result });
+                const spend = await tx.doc(ExtensionModelSpend, task.input.ownerTaskId as TaskId);
+                if (typed.usage) spend.usages[String(runtime.taskId)] = bounded(typed.usage) as JsonValue;
+                return { status: 'terminal', outcome: { status: 'completed', result } };
+              }, ctx);
+            });
+            return;
+          }
           const model = runtime.models.getModel(task.input.provider, task.input.modelId);
           if (!model) throw new CodingResourcesUnavailable();
           // 先保存已进入请求的检查点；中断后不能把结果未知的付费请求再发一次。
@@ -271,10 +352,13 @@ export class CodingExtensions {
             return { status: 'terminal', outcome: { status: 'completed', result } };
           }, ctx);
           };
-          if (task.input.mode === 'streamSimple') {
+          if (task.input.mode === 'streamSimple' || task.input.mode === 'stream') {
             if (!this.#binding?.ownedModel) throw new CodingResourcesUnavailable();
             await this.#binding.ownedModel(runtime, { provider: model.provider, modelId: model.id }, async () => {
-              const stream = runtime.models.streamSimple(model, task.input.input as unknown as Parameters<Models['streamSimple']>[1], { ...task.input.options, signal: runtime.signal });
+              // 同一事件桥只区分 SDK 分派；原生参数不能被 simple 转换静默丢失。
+              const stream = task.input.mode === 'stream'
+                ? runtime.models.stream(model, task.input.input as unknown as Parameters<Models['stream']>[1], { ...task.input.options, signal: runtime.signal, [ownedNativeStream]: true } as Parameters<Models['stream']>[2])
+                : runtime.models.streamSimple(model, task.input.input as unknown as Parameters<Models['streamSimple']>[1], { ...task.input.options, signal: runtime.signal });
               let terminal: { type: 'done' | 'error'; reason: string } | undefined;
               for await (const event of stream) {
                 if (event.type === 'done' || event.type === 'error') terminal = { type: event.type, reason: event.reason };
@@ -298,15 +382,48 @@ export class CodingExtensions {
       abort: async (_task, runtime, ctx) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
     });
   }
+  async #saveImageResponse(tx:Tx,response:ImageResponseReceipt):Promise<void>{
+    const child=await tx.task(response.childId as TaskId);
+    const input=child?.input as unknown as ModelInput|undefined;
+    if(!child||child.kind!==this.#modelTask.definition.name||child.conversationId!==response.conversationId||child.owner!==response.ownerId
+      ||!input||input.mode!=='generateImages'||input.ownerTaskId!==response.ownerId||input.actionId!==response.actionId||input.caller!==response.caller
+      ||input.provider!==response.metadata.provider||input.modelId!==response.metadata.model)throw new CodingResourcesUnavailable();
+    const owner=await tx.task(response.ownerId as TaskId);
+    if(!owner||owner.conversationId!==child.conversationId||![ToolTask.definition.name,this.#nestedTask.definition.name].includes(owner.kind))throw new CodingResourcesUnavailable();
+    const receipt=await tx.doc(ModelSpendAccounted,child.conversationId,String(child.id),null);
+    if(receipt.response&&JSON.stringify(receipt.response)!==JSON.stringify(response))throw new CodingResourcesUnavailable();
+    if(!receipt.response)receipt.response=json(response);
+  }
+  async #publishImageResult(tx:Tx,response:ImageResponseReceipt,typed:AssistantImages,isCurrent:()=>boolean=()=>true):Promise<void>{
+    const receipt=await tx.doc(ModelSpendAccounted,response.conversationId as ConversationId,String(response.childId),null);
+    const spend=typed.usage?await tx.doc(ExtensionModelSpend,response.ownerId as TaskId):undefined;
+    if(!isCurrent())throw new CodingResourcesUnavailable();
+    if(!receipt.typedPublished){
+      await tx.appendEntry(ExtensionTypedModelResult,response.conversationId as ConversationId,{data:json({operation:'generateImages',requestId:response.requestId,typed}) as unknown as JsonObject});
+      receipt.typedPublished=true;
+    }
+    if(typed.usage&&spend)spend.usages[String(response.childId)]=json(typed.usage) as unknown as JsonValue;
+    receipt.publishedToOwner=true;
+    if(!isCurrent())throw new CodingResourcesUnavailable();
+  }
   /** 仅由原会话在调度停止后的暂停/关闭，或明确继续前调用；读取历史不对账。 */
   async reconcileModelSpend(session:Session,ctx:Context):Promise<void>{
+    const pending=[...this.#imageResponses.values()];
     await session.commit(async tx=>{
+      for(const response of pending)await this.#saveImageResponse(tx,response);
       const groups=new Map<number,TaskRecord<JsonValue,JsonValue,JsonValue>[]>();let cursor:Cursor|undefined;
+      const interrupted: {conversationId:ConversationId;data:JsonObject}[]=[];
       do{
-        const page=await tx.scanTasks({kind:this.#modelTask.definition.name,status:'terminal'},200,cursor);
+        const page=await tx.scanTasks({kind:this.#modelTask.definition.name},200,cursor);
         for(const child of page.items){
-          if(child.state.status!=='terminal'||child.state.outcome.status!=='completed')continue;
           const input=child.input as unknown as ModelInput;
+          const imageReceipt=input.mode==='generateImages'?await tx.doc(ModelSpendAccounted,child.conversationId,String(child.id),null):undefined;
+          if(child.state.status!=='terminal'||child.state.outcome.status!=='completed'){if(!imageReceipt?.response)continue;}
+          if(input.mode==='generateImages'&&imageReceipt?.response&&!imageReceipt.typedPublished){
+            // Durable表读取必须先于首个append；先收集，完成全部owner/正式工具核对后统一写。
+            interrupted.push({conversationId:child.conversationId,data:json({operation:'generateImages',requestId:imageReceipt.response.requestId,typed:{...imageReceipt.response.metadata,output:[],stopReason:'aborted',errorMessage:'图片响应已到但核验未完成；不自动重发'}}) as unknown as JsonObject});
+            imageReceipt.typedPublished=true;
+          }
           if(child.owner!==input.ownerTaskId)throw new CodingResourcesUnavailable();
           const own=groups.get(input.ownerTaskId)??[];own.push(child);groups.set(input.ownerTaskId,own);
         }cursor=page.next;
@@ -327,10 +444,14 @@ export class CodingExtensions {
         }else if(owner.kind===this.#nestedTask.definition.name){
           const call=(owner.input as unknown as NestedInput).call;name=call.name;callId=call.id;
         }else throw new CodingResourcesUnavailable();
-        const confirmed=children.map(child=>{
+        const confirmed=children.map((child,index)=>{
+          if(receipts[index].response)return receipts[index].response!.metadata.usage;
           if(child.state.status!=='terminal'||child.state.outcome.status!=='completed')throw new CodingResourcesUnavailable();
-          const message=(child.state.outcome.result as unknown as {message:AssistantMessage}).message;
-          if(message.role!=='assistant'||!message.usage)throw new CodingResourcesUnavailable();return message.usage;
+          const result=child.state.outcome.result as unknown as {message?:AssistantMessage;operation?:string;typed?:unknown};
+          if(result.operation==='classify')return classifierResult(result.typed).usage;
+          if(result.operation==='generateImages')return imagesResult(result.typed).usage;
+          const message=result.message;
+          if(message?.role!=='assistant'||!message.usage)throw new CodingResourcesUnavailable();return message.usage;
         });
         // 原SDK正常终态已经与ToolResult同事务记账；取消/unsafe恢复不经afterTool。
         let recorded:Usage|undefined;let entryCursor:Cursor|undefined;
@@ -340,17 +461,19 @@ export class CodingExtensions {
             if(result?.role==='toolResult'){if(result.toolName!==name)throw new CodingResourcesUnavailable();recorded=result.usage;}
           }entryCursor=page.next;
         }while(entryCursor);
-        if(recorded&&JSON.stringify(recorded)!==JSON.stringify(sumUsage(confirmed)))throw new CodingResourcesUnavailable();
+        if(recorded&&JSON.stringify(recorded)!==JSON.stringify(sumUsage(confirmed.filter((usage,index): usage is Usage => usage !== undefined&&(!receipts[index].response||receipts[index].publishedToOwner===true)))))throw new CodingResourcesUnavailable();
         const fresh:Usage[]=[];
         for(let index=0;index<children.length;index++){
           const receipt=receipts[index];
-          if(!receipt.done){if(!recorded)fresh.push(confirmed[index]);receipt.done=true;}
+          if(!receipt.done){if((!recorded||!!receipt.response&&!receipt.publishedToOwner)&&confirmed[index])fresh.push(confirmed[index]!);receipt.done=true;}
         }
         const addition=sumUsage(fresh);
         if(addition){const usage=await tx.doc(UsageDoc,owner.conversationId);const previous=Object.hasOwn(usage.tools,name)?usage.tools[name] as Usage:undefined;
           usage.tools={...usage.tools,[name]:sumUsage(previous?[previous,addition]:[addition])!};}
       }
+      for(const entry of interrupted)await tx.appendEntry(ExtensionTypedModelResult,entry.conversationId,{data:entry.data});
     },ctx);
+    for(const response of pending)if(this.#imageResponses.get(response.childId)===response)this.#imageResponses.delete(response.childId);
   }
   guardModels(models: ModelRuntime): ModelRuntime {
     return new Proxy(models, { get: (owner, key) => {
@@ -360,12 +483,13 @@ export class CodingExtensions {
         return (...args: unknown[]) => {
           if (this.#armed && this.#closed) throw new CodingResourcesUnavailable();
           this.#providerHeaders?.assertCurrent();
-          if (this.#worker && !this.#closed && ['stream','streamSimple','complete','completeSimple'].includes(String(key))) {
+          if (this.#worker && !this.#closed && ['stream','streamSimple','complete','completeSimple','classify','generateImages'].includes(String(key))) {
             const previous = (args[2] ?? {}) as { signal?: AbortSignal; onPayload?: (payload: unknown, model: unknown) => unknown; transformHeaders?: (headers: unknown, model: unknown) => unknown };
             args[2] = { ...previous,
               onPayload: async (payload: unknown, model: unknown) => { const prior = await previous.onPayload?.(payload, model); const before=prior??payload; const ctx=previous.signal?withAbortSignal(previous.signal,context):context;
                 const after=await this.#event('provider-body',before,previous.signal?this.#generation.get(previous.signal):undefined,ctx) as Record<string,unknown>;
                 const current=before as Record<string,unknown>;
+                if((key==='classify'||key==='generateImages')&&JSON.stringify(after)!==JSON.stringify(current))throw new CodingResourcesUnavailable();
                 for(const field of ['model','messages','contents','input','system','tools','tool_choice','thinking','reasoning','reasoning_effort','thinking_budget','thinking_budget_tokens','max_tokens','max_completion_tokens','max_output_tokens','extra_body']) if(JSON.stringify(after?.[field])!==JSON.stringify(current?.[field]))throw new CodingResourcesUnavailable();
                 return after; },
               transformHeaders: async (headers: unknown, model: unknown) => { const prior = await previous.transformHeaders?.(headers, model); const before=(prior??headers) as Record<string,unknown>;const ctx=previous.signal?withAbortSignal(previous.signal,context):context;
@@ -431,10 +555,10 @@ export class CodingExtensions {
       ...(descriptor.hasPrepareArguments?{prepareArguments:(args:unknown)=>{const key=this.#argumentKey({name:descriptor.name,arguments:args as JsonObject}),memo=this.#arguments.get(key);
         if(!memo||memo.failed||memo.source!==this.#configuration||memo.name!==descriptor.name||memo.inputHash!==key)throw new CodingResourcesUnavailable();return json(memo.prepared) as never;}}:{}),
       parameters: descriptor.parameters, ...(descriptor.constrainedSampling === undefined ? {} : {constrainedSampling:descriptor.constrainedSampling}), replay: 'unsafe', execute: async (args, api, ctx) => {
-        const nested: JsonValue[] = []; const models: AssistantMessage[] = []; const scope=`tool/${api.taskId}/${api.callId}`; this.#calls.set(scope, { api, context: ctx, nested, models });
+        const nested: JsonValue[] = []; const models: OwnedModelResult[] = []; const scope=`tool/${api.taskId}/${api.callId}`; this.#calls.set(scope, { api, context: ctx, nested, models });
         try {
           const result = toolResult(await this.#request('execute', { name: descriptor.name, id: api.callId, arguments: args }, ctx.abortSignal, {scope}));
-          return { ...result, ...(models.length ? { usage: sumUsage(models.map(message => message.usage)) } : {}), details: json({ ...(result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details : {}), nestedCalls: nested }) as JsonObject };
+          return { ...result, ...(models.length ? { usage: sumUsage(models.flatMap(message => message.usage ? [message.usage] : [])) } : {}), details: json({ ...(result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details : {}), nestedCalls: nested }) as JsonObject };
         } finally { this.#calls.delete(scope); }
       } }));
     return defineExtension({ name: this.#extensionName, tools, tasks: [this.#nestedTask, this.#modelTask], hooks: [
@@ -442,7 +566,7 @@ export class CodingExtensions {
         if (this.#closed) throw new CodingResourcesUnavailable();
         if (ctx.abortSignal) { this.#generation.set(ctx.abortSignal,api);ctx.abortSignal.addEventListener('abort',()=>this.#generation.delete(ctx.abortSignal!),{once:true}); }
         let messages = await this.#beforeTurn(request.messages, api, ctx);
-        const result = await this.#event('context', {}, api, ctx, { messages });
+        const result = await this.#event('context', { messages }, api, ctx);
         messages = (result as { messages: Message[] }).messages; return { messages };
       },afterResponse:async(message,api,ctx)=>{for(const call of message.content.filter(part=>part.type==='toolCall'))await this.#prepareArguments(call,api,ctx);},
       afterTools:async(assistant,_results,api,ctx)=>{await this.#binding!.harness.commit(async tx=>{(await tx.doc(RequestRound,api.taskId)).assistant=assistant;},ctx);}
@@ -467,8 +591,9 @@ export class CodingExtensions {
       })),
     ] });
   }
-  async #event(method: string, value: unknown, api: HookApi | undefined, ctx: Context, extra: object = {}) {
-    const digest = createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  async #event(method: string, value: unknown, api: Pick<HookApi, 'taskId' | 'snapshot'> | undefined, ctx: Context, extra: object = {}) {
+    // context正文只迁移传参位置；保原空对象摘要，原检查点恢复仍命中已保存Action回执。
+    const digest = createHash('sha256').update(JSON.stringify(method === 'context' ? {} : value)).digest('hex');
     let requestIdentity='';
     if(api&&this.#binding){
       const task=await this.#binding.harness.getTask(api.taskId,ctx);
@@ -547,7 +672,7 @@ export class CodingExtensions {
     }, ctx);
     return [...messages, ...result.messages];
   }
-  async prepare(cwd: string, expectedEnabled = this.#enabled(), sessionStartReason: 'startup' | 'resume' | 'reload' = 'startup') {
+  async prepare(cwd: string, expectedEnabled = this.#enabled(), sessionStartReason: 'startup' | 'resume' | 'reload' = 'startup', owner?: ToolExecutionApi, ownerContext: Context = context) {
     if (expectedEnabled !== this.#enabled()) throw new CodingResourcesUnavailable();
     if (!this.#enabled()) {
       if (this.#worker && this.#binding && (await this.#binding.harness.inspect(context)).tasks.length) throw new CodingResourcesUnavailable();
@@ -568,12 +693,14 @@ export class CodingExtensions {
       this.#armed = true; this.#closed = false; this.#closing = undefined; this.#tools = []; this.#active = [];this.#arguments.clear();this.#resourceEpoch=randomUUID();
       const worker = new Worker(extensionWorkerSource, { eval: true, execArgv: [], stdout: true, stderr: true,
         env: { ...process.env, PI_CODING_AGENT_DIR: this.#agentDir, PI_OFFLINE: '1', NODE_TEST_CONTEXT: undefined },
-        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sessionStartReason, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'), streamFactory: import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),
+        workerData: { cwd: await realpath(cwd), agentDir: this.#agentDir, sessionId: this.#sessionId, resourceEpoch: this.#resourceEpoch,
+          sessionStartReason, sdk: import.meta.resolve('@earendil-works/pi-coding-agent'), streamFactory: import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),
           builtins: this.#builtins.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters, exposure: 'direct' })) } });
       this.#worker = worker; worker.stdout.resume(); worker.stderr.resume();
       worker.on('message', (message: Record<string, unknown>) => this.#message(message,worker));
       worker.on('error',()=>{if(this.#worker===worker)this.#fail();}); worker.on('exit',()=>{if(this.#worker===worker)this.#fail();});
-      this.#initializing = this.#event('init', {}, undefined, context).then(value => {
+      // 首次发送／活动资源重载时，session_start 属于当前 Durable 输入准备任务；明确继续没有新输入任务，不借用旧 task。
+      this.#initializing = this.#event('init', {}, owner, ownerContext).then(value => {
         const resources = bounded(value, 1024 * 1024) as { configuration: string; packageInstructions: string; packagePrompts: { name: string; content: string; filePath: string }[] };
         if (typeof resources.packageInstructions !== 'string' || !Array.isArray(resources.packagePrompts)
           || resources.packagePrompts.some(item => !item || typeof item.name !== 'string' || typeof item.content !== 'string' || typeof item.filePath !== 'string')) throw new CodingResourcesUnavailable();
@@ -586,16 +713,24 @@ export class CodingExtensions {
     const extension = this.#extension();
     return { add: [extension], tools: [...this.#builtins, ...(extension.tools ?? [])].filter(tool => this.#declarations.includes(tool.name)) };
   }
-  async #state(extra: object = {}) {
+  async #state(extra: object = {}, request?: { id: number; worker: Worker }) {
     if (!this.#binding) throw new CodingResourcesUnavailable();
-    const agent = await this.#binding.root.agent(context);
+    const before = await this.#binding.root.agent(context);
+    const beforeModelKey = contextModelKey(before.model ? this.#models.getModel(before.model.provider, before.model.modelId) : undefined);
     const formal = await this.#binding.root.context(context);
-    const model = agent.model ? this.#models.getModel(agent.model.provider, agent.model.modelId) : undefined;
+    const tail = formal.entries.reduce((last, entry) => Math.max(last, entry.id), 0);
     const entries: EntryRecord[] = []; let cursor: Cursor | undefined;
-    do { const page = await this.#binding.root.entries({}, 200, cursor, context); entries.push(...page.items); cursor = page.next; } while (cursor !== undefined);
+    // ContextView已固定不可变head/tail；不把分页期间新追加的历史拼进旧上下文估算。
+    if (tail) do { const page = await this.#binding.root.entries({ maxEntryId: tail as EntryId }, 200, cursor, context); entries.push(...page.items); cursor = page.next; } while (cursor !== undefined);
     entries.sort((a, b) => a.id - b.id);
-    return { sessionId: this.#sessionId, entries, messages: formal.messages, model: model ? modelMetadata(model) : undefined,
-      modelCatalog: this.#catalog(), thinkingLevel: agent.thinkingLevel, systemPrompt: agent.instructions ?? '', ...extra };
+    const agent = await this.#binding.root.agent(context);
+    const model = agent.model ? this.#models.getModel(agent.model.provider, agent.model.modelId) : undefined;
+    const stateFrame = request ? { sessionId: this.#sessionId, resourceEpoch: this.#resourceEpoch,
+      threadId: request.worker.threadId, requestId: request.id } : undefined;
+    const contextUsage = stateFrame ? deriveContextUsage({ context: formal, entries, model,
+      frame: { ...stateFrame, requestId: String(stateFrame.requestId), beforeModelKey, afterModelKey: contextModelKey(model), entriesComplete: true } }) : undefined;
+    return { sessionId: this.#sessionId, entries, model: model ? modelMetadata(model) : undefined,
+      modelCatalog: this.#catalog(), thinkingLevel: agent.thinkingLevel, systemPrompt: agent.instructions ?? '', ...extra, stateFrame, contextUsage };
   }
   async #request(method: string, value: unknown, signal?: AbortSignal, extra: object = {}): Promise<unknown> {
     const worker = this.#worker; if (!worker || (this.#closed && method !== 'close')) throw new CodingResourcesUnavailable();
@@ -614,10 +749,10 @@ export class CodingExtensions {
     try {
       return await new Promise((resolve, reject) => {
         this.#pending.set(id, { resolve, reject, ...(method === 'virtual-route' ? { abort } : {}) });
-        void (method === 'close' ? Promise.resolve({}) : this.#state(extra)).then(state => {
+        void (method === 'close' ? Promise.resolve({}) : this.#state(extra, { id, worker })).then(state => {
           // 只读快照 await 期间可能被暂停／关闭取代；不能把早到但未认领的 abort 丢掉后再启动调用。
           if(signal?.aborted||this.#worker!==worker||(this.#closed&&method!=='close'))throw new CodingResourcesUnavailable();
-          worker.postMessage({type:'request',id,method,value:bounded(value),state:bounded(state),scope:'scope' in extra?extra.scope:undefined});
+          worker.postMessage({type:'request',id,method,value:bounded(value,method==='context'?STATE_ENVELOPE_BYTES:RESULT_ENVELOPE_BYTES),state:bounded(state,STATE_ENVELOPE_BYTES),scope:'scope' in extra?extra.scope:undefined});
         }).catch(() => {
           this.#pending.delete(id); reject(new CodingResourcesUnavailable());
         });
@@ -699,7 +834,11 @@ export class CodingExtensions {
       }
     } else if (message.type === 'host') {
       void this.#host(String(message.method), message.value, String(message.callId ?? ''), origin).then(value => {
-        if(this.#worker===origin) origin.postMessage({ type: 'reply', id: message.id, ok: true, value: bounded(value) });
+        if(this.#worker===origin){
+          // 封套拒绝也要回有限失败，不能让成功分支的序列化异常留下永不兑现的RPC。
+          try{origin.postMessage({ type:'reply',id:message.id,ok:true,value:bounded(value,['model-images','nested'].includes(String(message.method))?RESULT_ENVELOPE_BYTES:8*1024*1024) });}
+          catch{origin.postMessage({type:'reply',id:message.id,ok:false});}
+        }
       }, () => {if(this.#worker===origin)origin.postMessage({ type: 'reply', id: message.id, ok: false });});
     }
   }
@@ -708,7 +847,7 @@ export class CodingExtensions {
     if ((this.#closed && !shutdownEvent) || origin !== this.#worker || !this.#binding) throw new CodingResourcesUnavailable();
     if (shutdownEvent && !['entry', 'message', 'name', 'label'].includes(method)) throw new CodingResourcesUnavailable();
     const payload = bounded(value, 1024 * 1024) as JsonObject;
-    if (method === 'model-complete' || method === 'model-stream' || method === 'model-cancel') {
+    if (method === 'model-complete' || method === 'model-stream' || method === 'model-classify' || method === 'model-images' || method === 'model-cancel') {
       const caller = this.#calls.get(callId);
       if (!caller || !callId.startsWith('tool/') || caller.context.abortSignal?.aborted || typeof payload.actionId !== 'string' || !payload.actionId.startsWith(callId + '/')) throw new CodingResourcesUnavailable();
       if (method === 'model-cancel') {
@@ -719,19 +858,46 @@ export class CodingExtensions {
         }
         return {};
       }
-      if (typeof payload.provider !== 'string' || typeof payload.modelId !== 'string' || !payload.input || !Array.isArray((payload.input as JsonObject).messages) || !payload.options || typeof payload.options !== 'object' || Array.isArray(payload.options) || this.#modelCalls.has(payload.actionId)) throw new CodingResourcesUnavailable();
+      if (typeof payload.provider !== 'string' || typeof payload.modelId !== 'string' || !payload.input || (!['model-classify','model-images'].includes(method) && !Array.isArray((payload.input as JsonObject).messages)) || !payload.options || typeof payload.options !== 'object' || Array.isArray(payload.options) || this.#modelCalls.has(payload.actionId)) throw new CodingResourcesUnavailable();
       const options = payload.options as JsonObject;
+      if (method === 'model-classify') { classifierInput(payload.input); classifierOptions(options); }
+      if (method === 'model-images') { imagesInput(payload.input); imagesOptions(options); }
       if (['apiKey', 'headers', 'env', 'onPayload', 'transformHeaders', 'onResponse'].some(key => key in options) || (options.maxRetries !== undefined && options.maxRetries !== 0)) throw new CodingResourcesUnavailable();
+      if (method === 'model-stream' && payload.mode !== 'stream' && payload.mode !== 'streamSimple') throw new CodingResourcesUnavailable();
+      if (payload.mode === 'stream') {
+        const model = this.#models.getModel(String(payload.provider), String(payload.modelId));
+        if (!model) throw new CodingResourcesUnavailable();
+        validateNativeStreamOptions(model.api, options);
+      }
       const pending: ModelCall = { caller: callId, origin, aborted: false, seq: 0 };
       this.#modelCalls.set(payload.actionId, pending);
       try {
-        const child = await caller.api.createTask(this.#modelTask, {...payload,ownerTaskId:caller.api.taskId,mode:method==='model-stream'?'streamSimple':'complete'} as unknown as ModelInput, { ownership: { kind: 'task', taskId: caller.api.taskId } }, caller.context);
+        const child = await caller.api.createTask(this.#modelTask, {...payload,ownerTaskId:caller.api.taskId,mode:method==='model-classify'?'classify':method==='model-images'?'generateImages':method==='model-stream'?payload.mode:'complete'} as unknown as ModelInput, { ownership: { kind: 'task', taskId: caller.api.taskId } }, caller.context);
         pending.task = child;
         if (pending.aborted) await this.#binding.harness.abortTask(child, context);
         const settled = await caller.api.waitForTask(child, caller.context);
         const outcome = settled.state.outcome;
-        if (outcome.status !== 'completed' || !outcome.result || !('message' in outcome.result)) throw new CodingResourcesUnavailable();
+        if (method === 'model-images') {
+          if(origin!==this.#worker||this.#closed||caller.context.abortSignal?.aborted)throw new CodingResourcesUnavailable();
+          let typed:AssistantImages;
+          if(outcome.status==='completed'&&outcome.result?.operation==='generateImages')typed=imagesResult(outcome.result.typed);
+          else {
+            const saved=await this.#binding.harness.snapshot(ModelSpendAccounted,settled.conversationId,String(child),context);
+            if(!saved?.response)throw new CodingResourcesUnavailable();
+            typed={...saved.response.metadata,output:[],stopReason:'aborted',errorMessage:'图片核验已中断，已确认费用保留'};
+            // 原工具仍在原scope等待时才发布；afterTool已开始或原owner失效则交停机维护。
+            await this.#binding.harness.commit(async tx=>{
+              const owner=await tx.task(caller.api.taskId);
+              const current=()=>!this.#closed&&this.#calls.get(callId)===caller&&!caller.context.abortSignal?.aborted&&!!owner&&!owner.abortRequested&&owner.state.status!=='terminal'&&owner.state.status!=='completing';
+              if(!current())throw new CodingResourcesUnavailable();
+              await this.#publishImageResult(tx,saved.response!,typed,current);
+            },context);
+          }
+          caller.models.push(typed);return {typed};
+        }
+        if (outcome.status !== 'completed' || !outcome.result || (method !== 'model-classify' && !('message' in outcome.result))) throw new CodingResourcesUnavailable();
         if (origin !== this.#worker || this.#closed || pending.aborted || caller.context.abortSignal?.aborted) throw new CodingResourcesUnavailable();
+        if (method === 'model-classify') { const typed=classifierResult(outcome.result.typed);caller.models.push(typed);return { typed }; }
         const message = outcome.result.message as unknown as AssistantMessage;
         caller.models.push(message);
         return { message, ...(method === 'model-stream' ? { terminal: outcome.result.terminal, taskId: child, seq: ++pending.seq } : {}) };
@@ -744,7 +910,7 @@ export class CodingExtensions {
       const settled = await caller.api.waitForTask(child, caller.context);
       const outcome = settled.state.outcome;
       const result = outcome && 'result' in outcome && outcome.result ? outcome.result : { content: [{ type: 'text' as const, text: '内部工具未完成' }], isError: true };
-      caller.nested.push(bounded({ toolCall: call, result, taskId: child }) as JsonValue);
+      caller.nested.push(bounded({ toolCall: call, result, taskId: child },RESULT_ENVELOPE_BYTES) as JsonValue);
       const details = result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details as JsonObject : {};
       return { toolCall: call, result: { ...result, ...(details.structuredContent === undefined ? {} : { structuredContent: details.structuredContent }) }, isError: result.isError ?? false };
     }

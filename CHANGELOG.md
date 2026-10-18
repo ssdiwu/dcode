@@ -1,5 +1,29 @@
 # D Code 更新记录
 
+## 2026-10-18 普通扩展上下文用量（完整门槛与限定独立复核通过）
+
+普通`ctx.getContextUsage()`同步读取原Durable有效上下文与物理模型的SDK估算；完整帧、资源身份与传输序号防迟到回滚，保unknown／null／0区别及安全副本。原正式工具结果进入下一HTTP，暂停／关闭／只读重开与明确继续已定向核验；完整九门已通过（runtime581／contracts14／完整隐藏E2E149、源码同源），独立Standards／Spec／CodeQuality三项PASS、无本片剩余阻塞；压缩执行及完整SDK父范围继续保留。见[上下文用量记录](doc/验证记录/扩展上下文用量-2026-10-18/README.md)。
+
+## 2026-10-18 普通扩展图片消费者（完整门槛与限定独立复核通过）
+
+原受管OpenRouter图片消费者沿原工具Durable任务、当次typed准入与认证执行；实际图片在有限后台线程核验，响应回执先保真实费用，暂停／关闭后不发布未核图或重放原请求。独立反馈修复结果封套不足和解码已结束后的发布交错；原容量、原断言和实际失败证据均保留。新固定源206/02bb4e完成完整九门（runtime556／contracts14／隐藏E2E148、无fail／skip／cancel，各真实exit0及前后同源），独立三项与最后记录复核均PASS、无本片剩余阻塞。范围与边界见[扩展图片记录](doc/验证记录/扩展图片-2026-10-18/README.md)。仅受控SDK／HTTP及普通隐藏UI，不等于真实账户、所有图片API、完整SDK或整个产品；未提交或发布。
+
+## 2026-10-18 普通扩展分类消费者（限定独立复核通过）
+
+普通扩展`ModelRegistry.classify`沿活动原工具及Durable子任务执行，保已配置typed目录与chat／Auto分离；每次请求核真实类型、来源、认证、额度与暂停相位，维持原SDK有限结果、零重试和唯一任务用量。支持成功、带费用错误、usage缺席、独立取消、在途暂停／关闭及只读重开不重发。两处独立发现的Worker对象输入缺陷已保旧代码目标红及修后绿；修后完整九门同源通过（runtime525／contracts14／隐藏E2E139），固定502文件及261证据经独立Standards／Spec／CodeQuality三项PASS。首轮关闭超时后续未再现，根因仍未知，未称修复或环境问题。详见[扩展分类记录](doc/验证记录/扩展分类-2026-10-18/README.md)；其余SDK消费者、真实账户及整个产品仍未验收，未提交或发布。
+
+## 2026-10-18 扩展原生stream与正常桌面可见窗口（限定独立复核通过）
+
+扩展工具的 `ModelRegistry.stream` 沿现有owned模型子任务同步返回真实流；有限openai-completions参数交真正SDK native消费者，保持partial、result-only／break、单次取消和原owner暂停／关闭／只读重开／明确继续的同一所有权。API、思考档位或未接选项不兼容时在请求前有限失败；不降成simple、静默删参或借原生参数绕过权威模型裁定。未发出错误现有完整零Usage结构，关闭对账不再因缺字段阻塞。正常桌面Home／设置入口／原生退出／重开已补相称可见证据及限定独立复核；原生流完整九门及固定候选限定Standards／Spec／CodeQuality三项独立复核通过。详见[原生流记录](doc/验证记录/扩展原生流-2026-10-18/README.md)；其余API、typed和完整SDK父范围继续保留，未提交或发布。
+
+## 2026-10-18 普通扩展 `ExtensionAPI.exec` 与 Durable 子进程收束（独立审查通过）
+
+普通项目扩展可通过 Pi 1.0.0 `ExtensionAPI.exec` 在原 Durable 输入／工具／运行Hook owner 中执行一次性 argv 命令。命令保持 SDK `shell:false` 语义，真实 stdout／stderr／退出码沿原扩展结果返回；无活动 owner 的恢复期资源装配在 spawn 前拒绝。按独立审查意见补充 `ChildProcess.error` 处理：终止信号失败不是进程退出事实，owner 与 join 必须保留至真实 `close` 或 Pi SDK 的 exit／输出静默边界；受控重复 kill-error 回归验证关闭不会提前释放仍存活的子进程。安静继承管道后代的正常 flush 与活动关闭回归继续覆盖；MCP 长驻 stdio transport 保持原 transport close／drain。只读重开不启动命令，明确继续不重放中断命令。
+
+最终同一191项源码身份／`131495f632440d9ff417a0268a6804dcaf5c82603b5dea8a5ceaf55d26c51522` 的九项选定检查均真实 exit 0：架构正反32/32、架构源码、全类型检查、Lint、构建、runtime491/491、contracts14/14、隐藏桌面E2E129/129及主目录 launcher `--check`。完整台账与原始日志见[最终组合回执](</Users/diwu/.codex/visualizations/2026/10/02/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/Root-extension-exec-combined-qualification-20261018-r4/ledger.json>)。先前全量运行的 runtime 超时／取消及 E2E 失败均保留；runtime 入口改为串行后，原491项完整套件通过，没有改变断言或 timeout；E2E 目标失败的单项复跑通过后，完整套件也通过。没有把首轮失败归因为环境问题。
+
+桌面入口的假根 `.command`／`npm run desktop -- --check` 透传测试和主目录 launcher `--check` 均通过。本轮还在临时隔离 `HOME` 下通过正常 `.command` 路径完成构建并启动 Electron，launcher exit 0、隔离 `desktop-process.json` 记录了本次进程，观察时该精确进程仍存活，之后以 SIGTERM 正常收束。Mac 当时锁屏，Computer Use 无法读取可见窗口；因此只证明入口到 Electron 进程启动，不声称窗口渲染或人工视觉接受。回执见 `/Users/diwu/.codex/visualizations/2026/10/02/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/Root-extension-exec-normal-desktop-launch-20261018-r1/receipt.json`。附图中的 `ERR_IMPORT_ATTRIBUTE_MISSING` 仍指向 ABA 受控变异夹具启动前的 JSON 导入，不证明普通入口失败或成功。完整 Pi SDK、真实服务商账户／用户目录、前台人工视觉接受及整个产品仍未验收；固定候选经 `model_integration_review` 独立 Standards／Spec／CodeQuality 三项 PASS、无阻塞问题；审查报告见[Root-extension-exec-independent-review-20261018-r4.md](</Users/diwu/.codex/visualizations/2026/10/02/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/Root-extension-exec-independent-review-20261018-r4.md>)，完整验收恢复点为 `/Users/diwu/Workspace/Archives/dcode-prototype-implementation-2026-10-10/main-after-extension-exec-accepted-20261018-r2/manifest.json`。正常可见窗口与前台人工视觉接受仍未做；完整 Pi SDK、真实服务商账户／用户目录及整个产品仍未验收。范围、失败资格与证据见[普通扩展与MCP记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
+
 ## 2026-10-16 普通扩展 provider 元数据读取（独立接收）
 
 扩展 `ModelRegistry.getProviderDisplayName` 与 `getRegisteredProviderIds` 改为读取同一会话宿主 `ModelRuntime` 的安全快照，避免落到 Worker 自己未配置的默认目录；Provider 对象、认证状态／配置与本地 `refresh` 保持明确拒绝。本片只增加只读元数据消费者，不扩成 provider 实例或认证接入；范围与验证结果见[普通扩展与 MCP 验证记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。

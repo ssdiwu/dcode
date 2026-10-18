@@ -50,8 +50,8 @@ export type PiSessionOptions = {
   initialize?: boolean;
   /** 普通客户端沿原绑定目录恢复，不能把旧的相对路径工具迁到新目录。 */
   reuseStoredCwd?: boolean;
-  /** 仅发送／明确继续装配资源，观察旧运行不得改写它的指令。 */
-  prepareExecution?: (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload') => Promise<AgentChange>;
+  /** 仅发送／明确继续装配资源，观察旧运行不得改写它的指令；发送期事件沿同一 Durable 准备任务。 */
+  prepareExecution?: (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload', owner?: ToolExecutionApi, context?: Context) => Promise<AgentChange>;
   /** 每次只读重开只接上原 Harness 的读取，不启动资源。 */
   attachExecution?: (harness: Harness, root: Conversation, ownedModel?: DurableModelRouting['withOwnedModelInvocation']) => void;
   /** 先失效资源准备／在途回调，再等实际连接与调用收束。 */
@@ -110,7 +110,7 @@ export class PiExecutionSession implements ExecutionPort {
     this.#options = options;
     this.#directory = directory;
     this.#cwd = resolve(options.cwd);
-    this.#inputPreparation = createInputPreparation(async (input, api, ctx) => { await this.#prepareExecution(); return options.prepareInput ? options.prepareInput(input, api, ctx) : {content:input.content,handled:false}; }, () => !this.#paused && !this.#pausing && !this.#closing && !this.#closed, (id, ctx) => this.#harness.submission(id, ctx));
+    this.#inputPreparation = createInputPreparation(async (input, api, ctx) => { await this.#prepareExecution(api, ctx); return options.prepareInput ? options.prepareInput(input, api, ctx) : {content:input.content,handled:false}; }, () => !this.#paused && !this.#pausing && !this.#closing && !this.#closed, (id, ctx) => this.#harness.submission(id, ctx));
     this.#identity = JSON.stringify([this.target, this.#cwd]);
     this.#release = release;
   }
@@ -214,23 +214,23 @@ export class PiExecutionSession implements ExecutionPort {
       await this.#options.reconcileExecutionSpend(stopped,context);
     }finally{await stopped.close(context);}
   }
-  async #prepareRoutingForExecution(): Promise<void> {
+  async #prepareRoutingForExecution(ctx: Context = context): Promise<void> {
     if (!this.#routing) return;
-    const agent = await this.#root.agent(context);
+    const agent = await this.#root.agent(ctx);
     if (!agent.extensions.some((extension) => extension.name === this.#routing!.extension.name)) {
       // 旧记录读取不补写能力；只有已授权的发送、改选或明确继续才接入内部路由 hook。
-      await this.#root.configure({ extensions: { add: [this.#routing.extension] } }, context);
+      await this.#root.configure({ extensions: { add: [this.#routing.extension] } }, ctx);
     }
   }
-  async #prepareExecution(): Promise<void> {
+  async #prepareExecution(owner?: ToolExecutionApi, ctx: Context = context): Promise<void> {
     if (this.#options.prepareExecution) {
       const reason = this.#resuming ? 'resume' : this.#sessionStartReason;
-      const change = await this.#options.prepareExecution(this.#cwd, reason);
+      const change = await this.#options.prepareExecution(this.#cwd, reason, owner, ctx);
       this.#assertOpen();
       if (this.#paused || this.#pausing) throw new PreparationPaused('Execution preparation was superseded by pause');
-      await this.#root.configure(change, context);
+      await this.#root.configure(change, ctx);
     }
-    await this.#prepareRoutingForExecution();
+    await this.#prepareRoutingForExecution(ctx);
   }
   #matches(token: ControlToken): boolean { return token.instanceId === this.#instanceId && token.revision === this.#revision; }
   /**
@@ -507,6 +507,16 @@ export class PiExecutionSession implements ExecutionPort {
             } };
           }
         }
+        if (entry.kind === 'dcode.extension-typed-model-result') {
+          const data = entry.data as { operation?: 'classify' | 'generateImages'; requestId?: string; typed?: import('@earendil-works/pi-ai').ClassifierResult | import('@earendil-works/pi-ai').AssistantImages };
+          const typed = data?.typed;
+          // child身份只证同一操作；stop或带usage的结果才可发布已确认请求，用量缺席不补零。
+          if (!typed || typeof data.requestId !== 'string' || (typed.stopReason !== 'stop' && !typed.usage
+            && !(data.operation==='generateImages'&&'responseId' in typed&&typeof typed.responseId==='string'&&typed.responseId.length>0))) return projected;
+          return { ...projected, typedRequest: { operation: data.operation === 'generateImages' ? 'generateImages' as const : 'classify' as const, requestId: data.requestId,
+            provider: typed.provider, model: typed.model, result: typed.stopReason === 'stop' ? 'succeeded' as const : 'failed' as const,
+            ...(typed.usage ? { usage: { input: typed.usage.input, output: typed.usage.output, cacheRead: typed.usage.cacheRead, cacheWrite: typed.usage.cacheWrite } } : {}) } };
+        }
         if (entry.kind === 'dcode.extension-model-result') {
           const message = (entry.data as {message?: import('@earendil-works/pi-ai').AssistantMessage})?.message;
           if (!message || message.role !== 'assistant' || typeof message.provider !== 'string' || typeof message.model !== 'string') return projected;
@@ -660,7 +670,7 @@ export class PiExecutionSession implements ExecutionPort {
       this.#resuming = true;
       try {
       if (this.#options.prepareExecution) {
-        const change = await this.#options.prepareExecution(this.#cwd, 'resume');
+        const change = await this.#options.prepareExecution(this.#cwd, 'resume', undefined, context);
         this.#assertOpen();
         if (!this.#matches(token) || this.#pausing) throw new Error('Resume superseded by pause');
         await this.#root.configure(change, context);

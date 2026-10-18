@@ -181,7 +181,7 @@ export interface TaskUsageBySource {
 /**
  * 任务用量汇总：按任务归属聚合主会话与成员会话的真实请求记录。
  * · **只读**：查看或刷新不改变任务执行、不发送输入、不解除暂停；
- * · 同一 responseId 只计一次（重开与重复回执不重复计量）；
+ * · 同一真实请求事实身份只计一次（聊天为服务商responseId，分类为原Durable子任务，不伪造响应ID）；
  * · 无可归属记录时 totals 为 null，不补零；覆盖不完整时写明缺口。
  */
 export interface TaskUsageSummary {

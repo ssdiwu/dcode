@@ -1,3 +1,7 @@
+import { classifierErrorResult, imageErrorResult } from '@earendil-works/pi-ai/utils/model-operations';
+import type { ClassifierModel, ClassifierApi, ClassifierContext, ClassifierOptions, ClassifierResult, AnyModel, ImageModel, ImageApi, ImagesContext, ImagesOptions, AssistantImages } from '@earendil-works/pi-ai';
+import { ownedNativeStream, validateNativeStreamTarget } from './native-model-stream';
+import { confirmTypedAuth } from './typed-auth';
 // 真实供应商后端：自定义（BaseURL/ModelID + app 自管加密凭据）与预设供应商（Pi builtin 身份 + 目录模型）双路径。
 // 自定义沿用 OpenAI-compatible / Anthropic 静态登记；预设沿 builtin provider 的正式协议分发与 auth，
 // 模型对象按目录（builtin + 已生效 remote 合并）精确查取，绝不替新 id 瞎猜 api/endpoint。
@@ -39,11 +43,11 @@ function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, 
   extensions?.useRegistry(registry);
   return {
     models: extensions?.guardModels(models) ?? models,
-    prepareExecution: coding ? async (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload') => {
+    prepareExecution: coding ? async (cwd: string, sessionStartReason: 'startup' | 'resume' | 'reload', owner?: import('@earendil-works/pi-durable').ToolExecutionApi, ownerContext?: import('@earendil-works/chord').Context) => {
       // 扩展开启时由同一次 Loader 独占目录，基础扫描只保项目指令，不能绕过筛选或重复技能。
       const useExtensions = enabled();
       const resources = await loadCodingResources(cwd, agentDir, { instructionsOnly: useExtensions });
-      const prepared = await extensions!.prepare(cwd, useExtensions, sessionStartReason);
+      const prepared = await extensions!.prepare(cwd, useExtensions, sessionStartReason, owner, ownerContext);
       const packageResources = extensions!.packageResources;
       prompts = [...resources.prompts, ...packageResources.prompts.filter(prompt => !resources.prompts.some(previous => previous.name === prompt.name))];
       return { instructions: [resources.instructions, packageResources.instructions].filter(Boolean).join('\n\n'),
@@ -103,6 +107,8 @@ export interface RealPiBackendOptions {
    * 会话改选到它们时执行端必须能解析身份，否则只在这一条路上失效。
    */
   additionalSources?: readonly ConfiguredSourceModels[];
+  /** 显式隔离装配沿当前/额外来源共用同一端点覆盖；正常启动为空。 */
+  baseUrlOverrides?: Record<string, string>;
   /** 每次 SDK 请求前的完整准入门（应用层提供）；缺席 = 该实例不做请求前准入 */
   admitRequest?: SdkRequestAdmissionGate;
   diagnose?: (event: string, cause: unknown) => void;
@@ -326,6 +332,7 @@ type ProviderStreamOptions = {
   sessionRef: { current: string };
   registered: RegisteredModels;
   modelsClient: SessionModelsClient;
+  credentials: import('@earendil-works/pi-ai').CredentialStore;
 };
 
 // 未装配准入门时仍使用 SDK 原参数；已裁定时模型和逐档参数一起消费，null 与缺席分开。
@@ -382,7 +389,8 @@ export function withRequestAdmission(
     } catch (err) {
       const cleaned = sanitizeError(err, key);
       diagnose("sdk-request-start-throw", cleaned);
-      out.push({ type: "error", reason: "error", error: { role: "assistant", content: [], stopReason: "error", errorMessage: cleaned instanceof Error ? cleaned.message : String(cleaned) } } as unknown as AssistantMessageEvent);
+      // 启动前的兼容拒绝也是未发出事实；保完整SDK零Usage，不能让原工具对账缺字段后阻塞关闭。
+      out.push(deniedEvent(request, cleaned instanceof Error ? cleaned.message : String(cleaned)));
       out.end();
       return;
     }
@@ -470,7 +478,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
   const buildForSession = async (sessionId: string) => {
   const sessionRef = { current: sessionId };
   const client = await ownedModels(credStore as import('@earendil-works/pi-ai').CredentialStore);
-  const streamOptions = { ...options, sessionRef, registered, modelsClient: client };
+  const streamOptions = { ...options, sessionRef, registered, modelsClient: client, credentials: credStore };
   const provider = createProvider({
     id: providerId,
     name: options.config.label,
@@ -497,14 +505,14 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
   // 当前选中的是自定义接入时，其它已配置来源也登记到同一条会话客户端。
   client.registerNativeProvider(provider);
   // 走的是和 preset 装配同一个登记循环，不另造一套。
-  registerAdditionalSources(client, additionalSources, providerId, { ...options, sessionRef, registered, currentProvider: provider });
-  return { client, provider, providerHeaders: new CodingProviderHeaders(client, [...registered.keys()]) };
+  registerAdditionalSources(client, additionalSources, providerId, { ...options, sessionRef, registered, credentials: credStore });
+  return { client, providerHeaders: new CodingProviderHeaders(client, [...registered.keys()]) };
   };
 
   /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
   // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
   // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown; providerHeaders: CodingProviderHeaders }[] = [];
+  const openedClients: { client: SessionModelsClient; sessionId: string; providerHeaders: CodingProviderHeaders }[] = [];
 
   return {
     kind: "pi",
@@ -518,7 +526,7 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
       // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
       for (const opened of openedClients) {
         try {
-          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, credentials: credStore });
           opened.providerHeaders.refresh(replaced);
         } catch (error) { failures.push(error); }
       }
@@ -536,7 +544,6 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
       openedClients.push({
         client: modelsClient,
         sessionId: context.target.sessionId,
-        provider: built.provider,
         providerHeaders: built.providerHeaders,
       });
       const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
@@ -655,8 +662,85 @@ function presetModelsOf(
 }
 
 /** 用扩展后的模型集合重建 provider（当前那一个模型必须仍是第一个，agent 初始配置指向它）。 */
-function providerWithModels(provider: unknown, models: readonly Model<Api>[]): unknown {
-  return { ...(provider as Record<string, unknown>), getModels: () => [...models], getAllModels: () => [...models] };
+function typedModelsOf(provider: RegisteredPresetProvider['provider'], override?: string): AnyModel[] {
+  return (provider.getAllModels?.() ?? []).filter(model => model.type === 'classifier' || model.type === 'image')
+    .map(model => override ? { ...model, baseUrl: override } : model);
+}
+
+/** 同一配置集合重建当前、额外及刷新后的provider；chat目录仍与typed身份分开。 */
+function managedPresetProvider(inner: RegisteredPresetProvider['provider'], models: readonly Model<Api>[], override: string | undefined, options: ProviderStreamOptions) {
+  const typed = typedModelsOf(inner, override);
+  return { ...inner,
+    stream: wrapStreamMethod('stream', inner, options) as typeof inner.stream,
+    streamSimple: wrapStreamMethod('streamSimple', inner, options) as typeof inner.streamSimple,
+    ...(inner.classify ? { classify: wrapClassifierMethod(inner, typed, options) } : {}),
+    ...(inner.generateImages ? { generateImages: wrapImagesMethod(inner, typed, options) } : {}),
+    getModels: () => [...models], getAllModels: () => [...models, ...typed],
+  };
+}
+
+function wrapClassifierMethod(inner: RegisteredPresetProvider['provider'], catalog: readonly AnyModel[], options: ProviderStreamOptions) {
+  const wrapped = async (model: ClassifierModel<ClassifierApi>, input: ClassifierContext, requestOptions?: ClassifierOptions): Promise<ClassifierResult> => {
+    const key = streamKeyOf(requestOptions), signal = requestOptions?.signal;
+    const current = () => {
+      signal?.throwIfAborted();
+      // 认证/目录刷新会建立新provider；旧prepared请求不能在新代次下沿旧认证/端点发出。
+      if (options.modelsClient.getRegisteredNativeProvider(model.provider)?.classify !== wrapped) throw new Error('分类来源已更新，请保留原工作重新核对');
+    };
+    try {
+      current();
+      const observed = withQuotaObservation(requestOptions ?? {}, options.observeQuota, options.diagnose ?? (() => undefined)) as ClassifierOptions;
+      const result = await inner.classify!(model, input, { ...observed, maxRetries: 0,
+        onPayload: async (payload, physical) => {
+          const transformed = await requestOptions?.onPayload?.(payload, physical);
+          current();
+          const verdict = await options.admitRequest?.({ sessionId: options.sessionRef.current, sourceId: model.provider, modelId: model.id, operation: 'classify' });
+          if (verdict && (!verdict.ok || verdict.target?.sourceId !== model.provider || verdict.target.modelId !== model.id)) throw new Error(verdict.reason ?? '分类身份未获准');
+          // SDK原认证读取后才到此回调；再次核原认证，避免读取窗口换账户后仍使用旧prepared key。
+          const canonical = catalog.find(one => one.type === 'classifier' && one.provider === model.provider && one.id === model.id);
+          if (!canonical || !await confirmTypedAuth(inner, options.credentials, canonical, model, requestOptions ?? {})) throw new Error('分类认证资料已变化或无法只读核实');
+          current();
+          return transformed ?? payload;
+        } });
+      return result.errorMessage ? { ...result, errorMessage: cleanErrorMessage(result.errorMessage, key) } : result;
+    } catch (error) {
+      const clean = sanitizeError(error, key);
+      return classifierErrorResult(model, clean, signal?.aborted);
+    }
+  };
+  return wrapped;
+}
+
+function wrapImagesMethod(inner: RegisteredPresetProvider['provider'], catalog: readonly AnyModel[], options: ProviderStreamOptions) {
+  const wrapped = async (model: ImageModel<ImageApi>, input: ImagesContext, requestOptions?: ImagesOptions): Promise<AssistantImages> => {
+    const key = streamKeyOf(requestOptions), signal = requestOptions?.signal;
+    const current = () => {
+      signal?.throwIfAborted();
+      // 认证/目录刷新会建立新provider；旧prepared请求不能在新代次下沿旧认证/端点发出。
+      if (options.modelsClient.getRegisteredNativeProvider(model.provider)?.generateImages !== wrapped) throw new Error('图片来源已更新，请保留原工作重新核对');
+    };
+    try {
+      current();
+      const observed = withQuotaObservation(requestOptions ?? {}, options.observeQuota, options.diagnose ?? (() => undefined)) as ImagesOptions;
+      const result = await inner.generateImages!(model, input, { ...observed, maxRetries: 0,
+        onPayload: async (payload, physical) => {
+          const transformed = await requestOptions?.onPayload?.(payload, physical);
+          current();
+          const verdict = await options.admitRequest?.({ sessionId: options.sessionRef.current, sourceId: model.provider, modelId: model.id, operation: 'generateImages' });
+          if (verdict && (!verdict.ok || verdict.target?.sourceId !== model.provider || verdict.target.modelId !== model.id)) throw new Error(verdict.reason ?? '图片身份未获准');
+          // SDK原认证读取后才到此回调；再次核原认证，避免读取窗口换账户后仍使用旧prepared key。
+          const canonical = catalog.find(one => one.type === 'image' && one.provider === model.provider && one.id === model.id);
+          if (!canonical || !await confirmTypedAuth(inner, options.credentials, canonical, model, requestOptions ?? {})) throw new Error('图片认证资料已变化或无法只读核实');
+          current();
+          return transformed ?? payload;
+        } });
+      return result.errorMessage ? { ...result, errorMessage: cleanErrorMessage(result.errorMessage, key) } : result;
+    } catch (error) {
+      const clean = sanitizeError(error, key);
+      return imageErrorResult(model, clean, signal?.aborted);
+    }
+  };
+  return wrapped;
 }
 
 /**
@@ -675,8 +759,7 @@ function registerAdditionalSources(
     admitRequest?: SdkRequestAdmissionGate;
     sessionRef: { current: string };
     registered: RegisteredModels;
-    /** 当前来源已包装好的 provider：刷新后要把同源新增模型重新挂回去 */
-    currentProvider?: unknown;
+    credentials: import('@earendil-works/pi-ai').CredentialStore;
   },
 ): string[] {
   const replaced: string[] = [];
@@ -684,17 +767,14 @@ function registerAdditionalSources(
     if (extra.providerId === currentProviderId) {
       // 当前来源同样要同步：目录刷新后**同源**新增的模型不在已打开客户端的模型集合里，
       // 会话改选到那个新 ID 就解析不到身份，请求发不出去（不是只有新来源受影响）。
-      if (extra.kind !== "preset" || extra.models.length === 0) continue;
+      if (extra.kind !== "preset") continue;
       const sameOverride = baseUrlOverrideFor(extra.providerId, options.baseUrlOverrides);
       const sameModels = sameOverride
         ? extra.models.map((m) => ({ ...m, baseUrl: sameOverride } as Model<Api>))
         : [...extra.models];
       options.registered.set(extra.providerId, sameModels);
-      const base = options.currentProvider as Record<string, unknown> | undefined;
-      if (base) {
-        modelsClient.registerNativeProvider({ ...base, getModels: () => sameModels, getAllModels: () => sameModels } as never);
-        replaced.push(extra.providerId);
-      }
+      modelsClient.registerNativeProvider(managedPresetProvider(extra.preset.provider, sameModels, sameOverride, { ...options, modelsClient }) as never);
+      replaced.push(extra.providerId);
       continue;
     }
     if (extra.kind === "custom") {
@@ -714,20 +794,14 @@ function registerAdditionalSources(
       replaced.push(extra.providerId);
       continue;
     }
-    if (extra.models.length === 0) continue;
+    if (extra.models.length === 0 && typedModelsOf(extra.preset.provider).length === 0) continue;
     const override = baseUrlOverrideFor(extra.providerId, options.baseUrlOverrides);
     // 该来源下可请求的全部已解析模型（不只当前那一个）：改选到同源的另一个模型也要真能请求。
     const models = override
       ? extra.models.map((m) => ({ ...m, baseUrl: override } as Model<Api>))
       : [...extra.models];
     options.registered.set(extra.providerId, models);
-    modelsClient.registerNativeProvider({
-      ...extra.preset.provider,
-      stream: wrapStreamMethod("stream", extra.preset.provider, { ...options, modelsClient }),
-      streamSimple: wrapStreamMethod("streamSimple", extra.preset.provider, { ...options, modelsClient }),
-      getModels: () => models,
-      getAllModels: () => models,
-    } as never);
+    modelsClient.registerNativeProvider(managedPresetProvider(extra.preset.provider, models, override, { ...options, modelsClient }) as never);
     replaced.push(extra.providerId);
   }
   return replaced;
@@ -747,7 +821,8 @@ function wrapStreamMethod(
     const request = admissionRequestOf(options.sessionRef.current, m, ctx);
     return withRequestAdmission(
       (chosen) => {
-        const admittedOptions = { ...((opts ?? {}) as StreamOptions & { env?: unknown; reasoning?: string }) };
+        const admittedOptions = { ...((opts ?? {}) as StreamOptions & { env?: unknown; reasoning?: string; [ownedNativeStream]?: boolean }) };
+        const native = admittedOptions[ownedNativeStream] === true;
         const actualModel = resolveRegisteredModel(options.registered, chosen);
         if (!actualModel) throw new Error('裁定模型已从执行端移除');
         if (request.requires?.includes('image-input') && !actualModel.input.includes('image')) throw new Error('该模型未核实支持图片输入');
@@ -757,8 +832,9 @@ function wrapStreamMethod(
         admittedOptions.maxTokens = budget.maxTokens;
         // 裁定在 SDK 已捕获 A/high 之后才到达，必须覆盖当次参数，而不只更新下一轮配置。
         // null/off 清除旧值；已核实的档位交给 SDK streamSimple 正式逐协议映射，不手拼原生参数。
-        const admittedMethod = chosen.thinkingLevel === undefined ? method : "streamSimple";
-        if (chosen.thinkingLevel !== undefined) {
+        if (native) validateNativeStreamTarget((m as Model<Api>).api, actualModel, chosen, admittedOptions);
+        const admittedMethod = native ? 'stream' : chosen.thinkingLevel === undefined ? method : "streamSimple";
+        if (!native && chosen.thinkingLevel !== undefined) {
           delete admittedOptions.reasoning;
           if (chosen.thinkingLevel !== null && chosen.thinkingLevel !== "off") admittedOptions.reasoning = chosen.thinkingLevel;
         }
@@ -778,6 +854,7 @@ function wrapStreamMethod(
         const fn = (inner as Record<string, unknown>)[admittedMethod] as (
           a: never, b: never, c: never,
         ) => ReturnType<typeof createAssistantMessageEventStream>;
+        delete admittedOptions[ownedNativeStream];
         return fn(m as never, ctx as never, withQuotaObservation(admittedOptions, options.observeQuota, diagnose) as never);
       },
       request,
@@ -817,14 +894,8 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
   const buildForSession = async (sessionId: string) => {
   const sessionRef = { current: sessionId };
   const modelsClient = await ownedModels(credStore as import('@earendil-works/pi-ai').CredentialStore);
-  const streamOptions = { ...options, sessionRef, registered, modelsClient };
-  const provider = {
-    ...inner,
-    stream: wrapStreamMethod("stream", inner, streamOptions) as typeof inner.stream,
-    streamSimple: wrapStreamMethod("streamSimple", inner, streamOptions) as typeof inner.streamSimple,
-    getModels: () => [model],
-    getAllModels: () => [model],
-  };
+  const streamOptions = { ...options, sessionRef, registered, modelsClient, credentials: credStore };
+
 
   // 当前 provider 只登记了被选中的那一个模型；同源的其它已解析模型也在同一份集合里，
   // 一起登记（会话改选到同源另一个模型时才解析得到身份）。
@@ -836,15 +907,16 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
   const ownModels = [model, ...presetModelsOf(ownExtra, baseUrlOverrideFor(providerId, options.baseUrlOverrides))];
   // 同源身份也要能换成真正的模型对象：裁定改用到同源另一个模型时不得解析不到。
   registered.set(providerId, ownModels);
-  modelsClient.registerNativeProvider(providerWithModels(provider, ownModels) as never);
-  registerAdditionalSources(modelsClient, additionalSources, providerId, { ...options, sessionRef, registered, currentProvider: provider });
-  return { client: modelsClient, provider, providerHeaders: new CodingProviderHeaders(modelsClient, [...registered.keys()]) };
+  const provider = managedPresetProvider(inner, ownModels, baseUrlOverrideFor(providerId, options.baseUrlOverrides), streamOptions);
+  modelsClient.registerNativeProvider(provider as never);
+  registerAdditionalSources(modelsClient, additionalSources, providerId, { ...options, sessionRef, registered, credentials: credStore });
+  return { client: modelsClient, providerHeaders: new CodingProviderHeaders(modelsClient, [...registered.keys()]) };
   };
 
   /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
   // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
   // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; provider: unknown; providerHeaders: CodingProviderHeaders }[] = [];
+  const openedClients: { client: SessionModelsClient; sessionId: string; providerHeaders: CodingProviderHeaders }[] = [];
 
   return {
     kind: "pi",
@@ -861,7 +933,7 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
       // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
       for (const opened of openedClients) {
         try {
-          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, currentProvider: opened.provider });
+          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, credentials: credStore });
           opened.providerHeaders.refresh(replaced);
         } catch (error) { failures.push(error); }
       }
@@ -879,7 +951,6 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
       openedClients.push({
         client: modelsClient,
         sessionId: context.target.sessionId,
-        provider: built.provider,
         providerHeaders: built.providerHeaders,
       });
       const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
@@ -960,6 +1031,7 @@ export function createBackendFromSelection(
       credentialSource: deps.directoryStore,
       observeQuota: deps.observeQuota,
       additionalSources: deps.additionalSources,
+      baseUrlOverrides: deps.baseUrlOverrides,
       admitRequest: deps.admitRequest,
       diagnose: deps.diagnose,
     });

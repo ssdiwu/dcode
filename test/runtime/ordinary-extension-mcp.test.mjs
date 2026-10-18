@@ -164,6 +164,198 @@ for (const access of [null, 'task-owner']) await test(`项目扩展未启用／�
   } finally { await f.dispose(); }
 });
 
+await test('Pi ExtensionAPI.exec 使用原 argv 与 cwd 返回实际 stdout/stderr/退出码，不经 shell', { timeout: 30000 }, async () => {
+  const f = await fixture({ calls: [], loopbackOptions: { callsOverride: [['extension_exec_probe', {}]] } });
+  const shellMarker = join(f.project, 'must-not-be-created-by-shell');
+  const argument = `literal;touch ${shellMarker}`;
+  const script = "process.stdout.write(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(1)}));process.stderr.write('exec-stderr');process.exitCode=7;";
+  try {
+    await writeFile(join(f.project, '.pi/extensions/exec-probe.ts'), `import {Type} from 'typebox';import {writeFile} from 'node:fs/promises';import {join} from 'node:path';export default function(pi){
+      pi.on('session_start',async(event,ctx)=>{if(event.reason!=='startup')return;const result=await pi.exec(${JSON.stringify(process.execPath)},['-e',"process.stdout.write('startup-exec')"],{cwd:ctx.cwd,signal:ctx.signal});
+        await writeFile(join(ctx.cwd,'startup-exec-result.json'),JSON.stringify(result));});
+      pi.registerTool({name:'extension_exec_probe',label:'exec probe',description:'Run one SDK-owned command',parameters:Type.Object({}),
+        execute:async(_id,_args,signal,_update,ctx)=>{const result=await pi.exec(process.execPath,['-e',${JSON.stringify(script)},${JSON.stringify(argument)}],{cwd:ctx.cwd,signal});
+          return {content:[{type:'text',text:JSON.stringify(result)}],details:result};}});
+    }`);
+    assert.equal((await f.session.submit(f.input)).status, 'accepted');
+    await until(async () => f.server.requests.length === 2 && (await f.session.lookupReceipt(f.input)).processing === 'done');
+    const view = await f.session.read();
+    const result = view.entries.find(entry => entry.toolResult?.name === 'extension_exec_probe')?.toolResult;
+    assert.ok(result, 'pi.exec tool result is saved under the original Durable tool call');
+    assert.equal(result.isError, false);
+    const returned=JSON.parse(result.text);
+    assert.equal(returned.code, 7, 'a nonzero child exit is returned as data, not hidden or treated as a thrown shell command');
+    assert.equal(returned.killed, false);
+    assert.equal(returned.stderr, 'exec-stderr');
+    assert.deepEqual(JSON.parse(returned.stdout), { cwd: await realpath(f.project), args: [argument] });
+    const startupResult=JSON.parse(await readFile(join(f.project,'startup-exec-result.json'),'utf8'));
+    assert.deepEqual(startupResult,{stdout:'startup-exec',stderr:'',code:0,killed:false},'session_start during a real Durable input inherits that invocation owner');
+    await assert.rejects(readFile(shellMarker), { code: 'ENOENT' }, 'shell metacharacters remain one literal argv value');
+    assert.ok(f.server.requests[1].body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('exec-stderr')),
+      'the original tool result reaches the following model request');
+    assert.deepEqual(f.server.errors, []);
+  } finally { await f.dispose(); }
+});
+
+await test('Pi ExtensionAPI.exec 的安静后代输出管道按 SDK 空闲窗口收束，不让 Worker.flush 永等 close', { timeout: 30000 }, async () => {
+  const f = await fixture({ calls: [], loopbackOptions: { callsOverride: [['extension_exec_quiet_descendant', {}]] } });
+  const pidFile = join(f.project, 'quiet-descendant.pid');
+  let descendantPid;
+  const childScript = `const {spawn}=require('node:child_process');const {writeFileSync}=require('node:fs');
+    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});
+    writeFileSync(${JSON.stringify(pidFile)},String(child.pid));process.stdout.write('parent-exited');process.exit(0);`;
+  const stopFixtureDescendant = async () => {
+    if (!descendantPid) {
+      try { descendantPid = Number(await readFile(pidFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (!descendantPid) return;
+    try { process.kill(descendantPid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await until(() => { try { process.kill(descendantPid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } });
+  };
+  try {
+    await writeFile(join(f.project, '.pi/extensions/quiet-descendant.ts'), `import {Type} from 'typebox';export default function(pi){
+      pi.registerTool({name:'extension_exec_quiet_descendant',label:'quiet descendant',description:'Child exits while a quiet descendant briefly retains inherited pipes',parameters:Type.Object({}),
+        execute:async(_id,_args,signal,_update,ctx)=>{const result=await pi.exec(process.execPath,['-e',${JSON.stringify(childScript)}],{cwd:ctx.cwd,signal});
+          return {content:[{type:'text',text:JSON.stringify(result)}],details:result};}});
+    }`);
+    assert.equal((await f.session.submit(f.input)).status, 'accepted');
+    await until(async () => f.server.requests.length === 2 && (await f.session.lookupReceipt(f.input)).processing === 'done');
+    const result = (await f.session.read()).entries.find(entry => entry.toolResult?.name === 'extension_exec_quiet_descendant')?.toolResult;
+    assert.ok(result, 'Worker.flush completed after the SDK command settled even though an inherited pipe remained open');
+    assert.equal(result.isError, false);
+    assert.equal(JSON.parse(result.text).stdout, 'parent-exited');
+    descendantPid = Number(await readFile(pidFile, 'utf8'));
+    assert.ok(descendantPid > 1);
+    assert.doesNotThrow(() => process.kill(descendantPid, 0), 'the test-owned quiet descendant still exists when the Worker call returns');
+  } finally {
+    await stopFixtureDescendant();
+    await f.dispose();
+  }
+});
+
+await test('Pi ExtensionAPI.exec 关闭活动调用时不等待安静继承管道的后代 close，重开只读不重跑', { timeout: 30000 }, async () => {
+  const f = await fixture({ calls: [], loopbackOptions: { callsOverride: [['extension_exec_quiet_descendant', {}]] } });
+  const pidFile = join(f.project, 'quiet-descendant-pids.jsonl');
+  let descendantPid, submitting;
+  const childScript = `const {spawn}=require('node:child_process');const {appendFileSync}=require('node:fs');
+    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});
+    appendFileSync(${JSON.stringify(pidFile)},String(child.pid)+'\\n');process.stdout.write('parent-exiting');process.exit(0);`;
+  const stopFixtureDescendant = async () => {
+    if (!descendantPid) {
+      try { descendantPid = Number((await readFile(pidFile, 'utf8')).trim().split('\n')[0]); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (!descendantPid) return;
+    try { process.kill(descendantPid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await until(() => { try { process.kill(descendantPid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } });
+  };
+  try {
+    await writeFile(join(f.project, '.pi/extensions/quiet-descendant-close.ts'), `import {Type} from 'typebox';export default function(pi){
+      pi.registerTool({name:'extension_exec_quiet_descendant',label:'quiet descendant',description:'A short-lived command leaves a quiet descendant holding inherited pipes',parameters:Type.Object({}),
+        execute:async(_id,_args,signal,_update,ctx)=>{await pi.exec(process.execPath,['-e',${JSON.stringify(childScript)}],{cwd:ctx.cwd,signal});
+          return {content:[{type:'text',text:'child complete'}]};}});
+    }`);
+    submitting = f.session.submit(f.input);
+    await until(async () => { try { await readFile(pidFile, 'utf8'); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } });
+    descendantPid = Number((await readFile(pidFile, 'utf8')).trim().split('\n')[0]);
+    assert.ok(descendantPid > 1);
+    let timeout;
+    await Promise.race([
+      f.session.close(),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Worker close waited past Pi exec’s quiet-pipe idle boundary')), 5000); }),
+    ]).finally(() => clearTimeout(timeout));
+    assert.doesNotThrow(() => process.kill(descendantPid, 0), 'only the owned direct child is stopped; this test-owned quiet descendant is still present at close completion');
+    const requestCount = f.server.requests.length;
+    f.session = await f.backend.open({ ...f.opening, initialize: false });
+    await f.session.read();
+    assert.equal((await f.session.lookupReceipt(f.input)).status, 'accepted', 'the original Durable input remains recoverable after close');
+    assert.equal(f.server.requests.length, requestCount, 'read-only reopen does not submit another model request');
+    assert.equal((await readFile(pidFile, 'utf8')).trim().split('\n').length, 1, 'read-only reopen does not rerun the interrupted command');
+  } finally {
+    await stopFixtureDescendant();
+    await submitting?.catch(() => {});
+    await f.dispose();
+  }
+});
+
+await test('Pi ExtensionAPI.exec 的 kill error 不是退出事实：owner 保留 join 直到真实进程结束', { timeout: 30000 }, async () => {
+  const f = await fixture({ calls: [], connectMcp: false, loopbackOptions: { callsOverride: [['extension_exec_kill_error', {}]] } });
+  const pidFile = join(f.project, 'kill-error-child.pid');
+  const killErrorFile = join(f.project, 'controlled-kill-error.json');
+  let childPid, submitting;
+  const childScript = `const {writeFileSync}=require('node:fs');writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+    process.stdout.write('child-started');setInterval(()=>{},1000);`;
+  let primaryError;
+  const stopFixtureChild = async () => {
+    if (!childPid) {
+      try { childPid = Number(await readFile(pidFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (!childPid) return;
+    try { process.kill(childPid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await until(() => { try { process.kill(childPid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } });
+  };
+  try {
+    await writeFile(join(f.project, '.pi/extensions/kill-error.ts'), `import {Type} from 'typebox';import {ChildProcess} from 'node:child_process';import {writeFileSync} from 'node:fs';export default function(pi){
+      pi.registerTool({name:'extension_exec_kill_error',label:'kill error',description:'A controlled ChildProcess kill failure is not process completion',parameters:Type.Object({}),execute:async(_id,_args,signal,_update,ctx)=>{
+        const original=ChildProcess.prototype.kill;
+        ChildProcess.prototype.kill=function(signal){if(signal===undefined||signal==='SIGTERM'){writeFileSync(${JSON.stringify(killErrorFile)},'EPERM');const error=new Error('controlled kill failure');error.code='EPERM';process.nextTick(()=>this.emit('error',error));return false;}return original.apply(this,arguments);};
+        try{const result=await pi.exec(process.execPath,['-e',${JSON.stringify(childScript)}],{cwd:ctx.cwd,signal});return {content:[{type:'text',text:JSON.stringify(result)}]};}
+        catch(error){return {content:[{type:'text',text:'command error: '+String(error?.message??error)}]};}
+      }});
+    }`);
+    submitting = f.session.submit(f.input);
+    await until(async () => { try { await readFile(pidFile, 'utf8'); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } });
+    childPid = Number(await readFile(pidFile, 'utf8'));
+    assert.ok(childPid > 1);
+    let closed = false;
+    const closing = f.session.close().then(() => { closed = true; return { ok: true }; }, error => { closed = true; return { ok: false, error: error?.message ?? String(error) }; });
+    await until(async () => { try { await readFile(killErrorFile, 'utf8'); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } });
+    assert.doesNotThrow(() => process.kill(childPid, 0), 'controlled kill error must leave the fixture child alive');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(closed, false, 'ChildProcess error alone cannot clear the Worker owner join');
+    process.kill(childPid, 'SIGTERM');
+    const outcome = await Promise.race([
+      closing,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('owner did not settle after the test-owned child really exited')), 5000)),
+    ]);
+    assert.equal(outcome.ok, true, outcome.error);
+    await until(() => { try { process.kill(childPid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } });
+    const requestCount = f.server.requests.length;
+    f.session = await f.backend.open({ ...f.opening, initialize: false });
+    await f.session.read();
+    assert.equal((await f.session.lookupReceipt(f.input)).status, 'accepted', 'the original Durable input remains recoverable');
+    assert.equal(f.server.requests.length, requestCount, 'read-only reopen does not submit another model request');
+  }
+  catch (error) { primaryError = error; }
+  let cleanupError;
+  try { await stopFixtureChild(); } catch (error) { cleanupError = error; }
+  await submitting?.catch(() => {});
+  try { await f.dispose(); } catch (error) { cleanupError ??= error; }
+  if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], 'kill-error regression and cleanup both failed');
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
+});
+
+await test('Pi ExtensionAPI.exec 在没有 Durable 调用的 resume 资源事件中启动前拒绝', { timeout: 30000 }, async () => {
+  const f = await fixture({ calls: [], loopbackOptions: { callsOverride: [] } });
+  const marker = join(f.project, 'unowned-exec-must-not-start');
+  try {
+    await writeFile(join(f.project, '.pi/extensions/resume-exec.ts'), `export default function(pi){
+      pi.on('session_start',async event=>{if(event.reason==='resume')await pi.exec(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(marker)},'started')`)}]);});
+    }`);
+    assert.equal((await f.session.submit(f.input)).status, 'accepted');
+    await until(async () => f.server.requests.length === 1 && (await f.session.lookupReceipt(f.input)).processing === 'done');
+    await f.session.pause();
+    await f.session.close();
+    const reopened = await f.backend.open({ ...f.opening, initialize: false });
+    const before = await reopened.read();
+    const requestsBeforeResume = f.server.requests.length;
+    await assert.rejects(reopened.resume(before.control), /未能载入|Resource|unavailable|preparation/i);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' }, 'the resume lifecycle event has no input/tool owner and must fail before spawn');
+    assert.equal(f.server.requests.length, requestsBeforeResume, 'resource preparation rejection must not send a model HTTP request');
+    f.session = reopened;
+  } finally { await f.dispose(); }
+});
+
 await test('真实 MCP 在途取消：服务器核到同 requestId 的取消，暂停／关闭实际收束，继续不重放', { timeout: 30000 }, async () => {
   const f = await fixture({ calls: [['mcp__fixture__wait', { token: 'parked' }]] });
   let session = f.session;
@@ -309,8 +501,9 @@ await test('扩展 Worker 的晚到普通状态快照不能回滚已确认的 Du
   }`);
   const oldEntries=[{id:1,kind:'dcode.extension-entry',data:{action:'name',value:{name:'Old Name'}},model:[]}];
   const newEntries=[...oldEntries,{id:2,kind:'dcode.extension-entry',data:{action:'name',value:{name:'New Name'}},model:[]}];
+  const sessionId='worker-state-test', resourceEpoch=randomUUID();
   const worker=new Worker(extensionWorkerSource,{eval:true,execArgv:[],env:{...process.env,PI_CODING_AGENT_DIR:agentDir,PI_OFFLINE:'1',NODE_TEST_CONTEXT:undefined},workerData:{
-    cwd:project,agentDir,sdk:import.meta.resolve('@earendil-works/pi-coding-agent'),
+    cwd:project,agentDir,sessionId,resourceEpoch,sdk:import.meta.resolve('@earendil-works/pi-coding-agent'),
     streamFactory:import.meta.resolve('@earendil-works/pi-ai/utils/event-stream'),builtins:[]
   }});
   const messages=[],waiters=[];
@@ -322,8 +515,8 @@ await test('扩展 Worker 的晚到普通状态快照不能回滚已确认的 Du
     const index=waiters.findIndex(waiter=>waiter.predicate(message));
     if(index>=0)waiters.splice(index,1)[0].resolve(message);else messages.push(message);
   });
-  const state=entries=>({sessionId:'worker-state-test',entries,messages:[],systemPrompt:'',modelCatalog:{all:[],available:[]},thinkingLevel:'off'});
-  const request=(id,method,entries,value={})=>worker.postMessage({type:'request',id,method,value,state:state(entries),scope:'test-scope-'+id});
+  const state=(id,entries)=>({sessionId,stateFrame:{sessionId,resourceEpoch,threadId:worker.threadId,requestId:id},entries,messages:[],systemPrompt:'',modelCatalog:{all:[],available:[]},thinkingLevel:'off'});
+  const request=(id,method,entries,value={})=>worker.postMessage({type:'request',id,method,value,state:state(id,entries),scope:'test-scope-'+id});
   try{
     request(1,'init',oldEntries,{});
     const initialized=await waitFor(message=>message.type==='result'&&message.id===1);

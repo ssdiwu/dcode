@@ -8,11 +8,11 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 
 [工作文件夹绑定](project-binding.test.mjs)使用拥有的真实临时目录与状态存储，核选择归属、目录失效、同次真实保存/重试、结果未知保护、查回只读与关闭/设置收束；mock后端只用来判别绑定没有启动工作。首次正常装配选择目录与实际SDK文件工具完整路径另见 `test/e2e/ordinary-coding-path.test.mjs`，界面/保存边界见 `test/e2e/project-binding.test.mjs`；原生可见选择器、真实用户项目和账户不在这些证据内。
 
-[普通扩展与 MCP](ordinary-extension-mcp.test.mjs)使用实际 SDK、隔离项目／凭据与本地模型 HTTP 对端、真实 stdio／HTTP MCP，核注册工具／间接调用、错误与资源正文、输入处理／正式回执、配置刷新、暂停／直接关闭取消及不重放。桌面配置与真实渲染另见 `test/e2e/ordinary-extension-mcp.test.mjs`；本地协议服务不代表真实服务商、OAuth 或完整 SDK 兼容。
+[普通扩展与 MCP](ordinary-extension-mcp.test.mjs)使用实际 SDK、隔离项目／凭据与本地模型 HTTP 对端、真实 stdio／HTTP MCP，核注册工具／间接调用、错误与资源正文、输入处理／正式回执、配置刷新、暂停／直接关闭取消及不重放；Pi `ExtensionAPI.exec` 另核原 argv／cwd／输出／退出码、活动 owner 收束、安静继承管道与 kill error。桌面配置与真实渲染另见 `test/e2e/ordinary-extension-mcp.test.mjs`；本地协议服务不代表真实服务商、OAuth 或完整 SDK 兼容。
 
 [扩展类型化模型目录](ordinary-extension-typed-catalog.test.ts)使用真实 `CodingExtensions` Worker 与宿主 `ModelRuntime`，覆盖 chat/image/classifier 三类按类型读取、认证过滤的异步可用性与取消、provider 显示名／登记 ID 的宿主投影，以及 Provider／认证／refresh 操作的明确拒绝；不代表真实服务商、分类／图片请求或完整 SDK 已验收。
 
-[扩展主动模型](ordinary-extension-model-active.test.mjs)核普通工具内的单次complete及streamSimple：真实增量在final前到消费者，result-only／break不另发，独立model取消和原owner暂停／关闭分开，原结果、费用与只读重开不重放；[owned认领边界](durable-owned-model-lease.test.ts)用真实Harness／ToolTask／HTTP核身份、signal、模型ref快照及重复scope拒绝。桌面stream的运行工具正文和生命周期仍由对应E2E实际操作验证，完整源与审查状态见[流式模型记录](../../doc/验证记录/扩展流式模型-2026-10-15/README.md)，不据单个命令绿灯外推全SDK。
+[扩展主动模型](ordinary-extension-model-active.test.mjs)核普通工具内的单次complete、streamSimple及有限openai-completions原生stream：原生分派、权威thinking与原生参数一致、同API改选及跨API／覆盖拒绝分别核真实HTTP和零请求；真实增量在final前到消费者，result-only／break不另发，独立model取消和原owner暂停／关闭分开，原结果、费用与只读重开不重放；[owned认领边界](durable-owned-model-lease.test.ts)用真实Harness／ToolTask／HTTP核身份、signal、模型ref快照及重复scope拒绝。桌面stream的运行工具正文和生命周期仍由对应E2E实际操作验证，streamSimple的完整源与审查状态见[流式模型记录](../../doc/验证记录/扩展流式模型-2026-10-15/README.md)，本轮原生stream另见[原生流记录](../../doc/验证记录/扩展原生流-2026-10-18/README.md)，不据单个命令绿灯外推全SDK。
 
 从仓库根目录运行：
 
@@ -35,3 +35,12 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 [普通virtual direct](ordinary-extension-virtual-direct.test.mjs)核真实工厂登记、原工具流、独立物理B的规范端点／认证／完整准入、原child／结果／费用，以及route等待中的暂停／关闭／只读恢复与不重放、原工具仍活时仅模型取消后的实际迟到回调丢弃、pure route写入前拒绝；[登记生命周期](coding-virtual-registration.test.ts)以真实Worker／ModelRuntime／Harness核物理冲突、注销、旧资源不删新同名项、失败回滚与非法定义。这里不把登记本身当执行成功；当前实际出口和独立状态见[virtual direct记录](../../doc/验证记录/扩展Virtual-Direct-2026-10-15/README.md)。
 
 [普通provider公开头](ordinary-provider-config-header.test.mjs)核首次／owned／后续真实HTTP消费及原身份／费用／关闭RO与同backend新会话隔离；[注册与认证边界](coding-provider-headers.test.ts)核真实SDK的原认证派生与动态私有头碰撞、登记与清理；[Worker边界](coding-provider-header-worker-boundary.test.ts)核原始值失真拒绝、实际重登记／注销与跨资源认领；[活会话刷新](ordinary-provider-header-live-refresh.test.mjs)核原S1/S2的新模型实际请求、能力与关闭隔离以及单会话失败不截断其它客户端；[准入当次改选](ordinary-provider-header-admission-switch.test.mjs)核同源和跨源A→B最终物理请求的公开头、认证与原上下文；不是任意provider配置或完整native消费者。当前结果与失败资格见[本片记录](../../doc/验证记录/扩展Provider-Headers-2026-10-15/README.md)。
+
+`ordinary-extension-classifier.test.mjs`使用真实受管预设/SDK/SystemOne HTTP/Worker/Durable/隔离加密存储验证分类结果、带费用错误、无usage、认证窗口变更及暂停/关闭/只读重开/明确继续不重发；`classifier-boundaries.test.ts`另核只读认证不会刷新或写档。普通桌面入口、正文和任务用量见`test/e2e/ordinary-extension-classifier.test.mjs`。完整SDK与真实外部账户仍另验。
+
+`ordinary-extension-images.test.mjs`核普通原工具的真实图片SDK/HTTP、保真图片、坏图与已确认费用、无usage、认证变化及HTTP／验证线程在途暂停关闭、独立模型取消、只读重开和同输入继续不重发。验证线程online交错只观察实际Node Worker事件，不在产品中加门；它证明核验资源已启动后的关闭，不冒称CPU/WASM计算中断性能。`image-validation.test.ts`另核五格式与动画容器、完整坏IDAT、MIME／base64／容量及真实success消息与取消交错；固定资产来自隔离生成器，未用真实用户图片。桌面实际渲染与用量在`test/e2e/ordinary-extension-images.test.mjs`单独验证。
+
+`image-validation-budget.test.mjs`是有限资源故障模型：实际不回消息Worker触发原10秒预算，必须真实exit才拒绝；它不替代真实SDK解码。近容量路径保原SDK的工具文本截断规则，同时核8MiB图片与1MiB文本的原结果、原图后续HTTP、费用和只读历史；内部JSON封套与raw图容量分别验证。
+
+
+`context-usage.test.mjs`从公开MemoryStorage／Harness／ContextView核有效消息、chat usage与后置贡献、edit失效、fork／reset／压缩后未知、typed费用排除、数值有限及未完成工具占位；Harness保持暂停，无模型／认证请求。`context-usage-worker-frames.test.mjs`用真实Worker与SDK Runner接收受控协议帧，核同tail改选、await后新窗口、迟到帧不回滚／不丢原operation、unknown替旧数、null／0区别、模型对象突变不污染原帧、迟到context仍消费原请求正文及实际资源关联拒绝；受控帧不是业务HTTP证据。`ordinary-context-usage.test.mjs`另经普通ModelRuntime／Durable／Worker和真实SDK受控HTTP核同步返回、副本隔离、2→3锚点与原结果进入下一请求，以及暂停／关闭／只读重开与继续不重放，另观察实际Host请求保迁移前context Action身份；该观察不冒称旧版本持久场景已完整重放；桌面实际配置／渲染仍由对应E2E单独验证。当前门槛和独立收口见[上下文用量记录](../../doc/验证记录/扩展上下文用量-2026-10-18/README.md)，不代表压缩执行或整个SDK通过。

@@ -73,9 +73,9 @@ type CatalogObservation = {
   cancellationSettled: boolean;
 };
 
-function isolatedProvider(provider: string, models: AnyModel[], available: boolean, onCheck?: (signal: AbortSignal) => Promise<AuthCheck | undefined>, displayName = provider): Provider {
-  const classify = async () => { throw new Error('Catalog reads must not classify'); };
-  const generateImages = async () => { throw new Error('Catalog reads must not generate images'); };
+function isolatedProvider(provider: string, models: AnyModel[], available: boolean, onCheck?: (signal: AbortSignal) => Promise<AuthCheck | undefined>, displayName = provider, onExecution = () => {}): Provider {
+  const classify = async () => { onExecution(); throw new Error('Catalog reads must not classify'); };
+  const generateImages = async () => { onExecution(); throw new Error('Catalog reads must not generate images'); };
   return createProvider({
     id: provider,
     name: displayName,
@@ -103,14 +103,16 @@ async function fixture(t: TestContext) {
   let slowAuthChecks = 0;
   let slowAuthAborted = false;
   let blockSlowAuth = false;
+  let modelExecutionAttempts = 0;
+  const onExecution = () => { modelExecutionAttempts++; };
   const runtime = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
   // 本资产只核宿主显式登记的三类模型，不让 ambient provider 或本机凭据影响可用性。
   for (const provider of runtime.getProviders()) runtime.registerNativeProvider({ ...provider,
     getModels: () => [], getAllModels: () => [], refreshModels: undefined,
     auth: { apiKey: { name: 'disabled ambient fixture', check: async () => undefined, resolve: async () => undefined } },
   });
-  const shared = isolatedProvider(credentialedProvider, [chatModel, classifierModel, imageModel], true, undefined, 'Host credentialed provider');
-  const unconfigured = isolatedProvider(unconfiguredProvider, [unconfiguredClassifier, unconfiguredImage], false);
+  const shared = isolatedProvider(credentialedProvider, [chatModel, classifierModel, imageModel], true, undefined, 'Host credentialed provider', onExecution);
+  const unconfigured = isolatedProvider(unconfiguredProvider, [unconfiguredClassifier, unconfiguredImage], false, undefined, undefined, onExecution);
   const cancellable = isolatedProvider(cancellableProvider, [cancellableClassifier], true, async signal => {
     if (!blockSlowAuth) return { type: 'api_key', source: 'isolated fixture' };
     slowAuthChecks++;
@@ -118,7 +120,7 @@ async function fixture(t: TestContext) {
     return await new Promise<AuthCheck | undefined>(resolve => {
       signal.addEventListener('abort', () => { slowAuthAborted = true; resolve(undefined); }, { once: true });
     });
-  });
+  }, undefined, onExecution);
   runtime.registerNativeProvider(shared); runtime.registerNativeProvider(unconfigured); runtime.registerNativeProvider(cancellable);
   await runtime.refresh({ allowNetwork: false });
 
@@ -159,8 +161,12 @@ async function fixture(t: TestContext) {
         const missingAuthClassifier=await registry.getAvailableOfType('classifier',${JSON.stringify(unconfiguredProvider)}, {signal:ctx.abortSignal});
         const missingAuthImage=await registry.getAvailableOfType('image',${JSON.stringify(unconfiguredProvider)}, {signal:ctx.abortSignal});
         let classifierExecutionRejected=false,imageExecutionRejected=false;
-        try{await registry.classify(classifier,{})}catch{classifierExecutionRejected=true;}
-        try{await registry.generateImages(image,{})}catch{imageExecutionRejected=true;}
+        // typed消费者公开合同以有限结果拒绝；目录事件没有工具owner，不能靠抛错作为唯一失败信号。
+        classifierExecutionRejected=(await registry.classify(classifier,{})).stopReason==='error';
+        const rejectedImage=await registry.generateImages(image,{});
+        // 无工具owner时先拒绝，尚未读取调用方model；不能把未核身份伪装成一次实际请求。
+        imageExecutionRejected=rejectedImage.stopReason==='error'&&Array.isArray(rejectedImage.output)&&rejectedImage.output.length===0
+          &&rejectedImage.usage===undefined&&rejectedImage.api===''&&rejectedImage.provider===''&&rejectedImage.model==='';
         const controller=new AbortController();
         const pending=registry.getAvailableOfType('classifier',${JSON.stringify(cancellableProvider)},{signal:controller.signal});
         await writeFile(join(project,'typed-catalog-auth-pending.json'),'pending');
@@ -213,7 +219,8 @@ async function fixture(t: TestContext) {
     } finally { clearInterval(keepAlive); await rm(directory, { recursive: true, force: true }); }
   });
   return { directory, project, runtime, harness, prepare, slowAuthChecks: () => slowAuthChecks,
-    slowAuthAborted: () => slowAuthAborted, blockSlowAuth: (enabled: boolean) => { blockSlowAuth = enabled; } };
+    slowAuthAborted: () => slowAuthAborted, modelExecutionAttempts: () => modelExecutionAttempts,
+    blockSlowAuth: (enabled: boolean) => { blockSlowAuth = enabled; } };
 }
 
 await test('普通扩展 typed model catalog 和 provider metadata 使用宿主目录，认证可取消且敏感/主动操作拒绝', { timeout: 30000 }, async t => {
@@ -251,6 +258,7 @@ await test('普通扩展 typed model catalog 和 provider metadata 使用宿主�
   assert.deepEqual(observation.missingAuthClassifier, []); assert.deepEqual(observation.missingAuthImage, []);
   assert.equal(observation.safe, true, 'Worker 仅收到公开模型描述，不得收到 headers/API key');
   assert.equal(observation.classifierExecutionRejected, true); assert.equal(observation.imageExecutionRejected, true);
+  assert.equal(f.modelExecutionAttempts(), 0, '目录事件的两类主动模型调用都必须在真正provider执行前有限拒绝');
   assert.equal(observation.cancellationSettled, true); assert.equal(f.slowAuthAborted(), true);
   assert.equal((await f.harness.inspect(context)).tasks.length, 0, '查询、认证可用性与取消没有产生模型子任务');
 });

@@ -195,6 +195,7 @@ async function harness(options: {
   lookup?: 'accepted' | 'not-found';
   /** 初始空名单必须来自 load，不以配置后清空冒充旧单模型兼容入口。 */
   configureCandidates?: boolean;
+  typedConfigured?: boolean;
 } = {}) {
   let quotaState: Mode = 'available';
   /** 逐候选额度：给出后压过整盘状态（造混合事实） */
@@ -264,6 +265,7 @@ async function harness(options: {
     undefined,
     {
       sourcePort: {
+        hasTypedModel: async () => options.typedConfigured === true,
         list: async () => {
           capabilityEntered.count += 1;
           await takeCapabilityGate();
@@ -376,6 +378,28 @@ async function harness(options: {
 const firstSession = async (app: DCodeApplication): Promise<string> =>
   (await app.getSnapshot()).sessions[0]!.id;
 
+for(const operation of ['classify','generateImages'] as const) await test(`${operation}准入精确保留typed身份，额度未知有界、耗尽等待及关闭后的迟到读取拒绝`, async t => {
+  const h = await harness({ typedConfigured: true }); t.after(() => h.app.flush());
+  const sessionId = await firstSession(h.app);
+  const request = { sessionId, sourceId: 'configured-classifier', modelId: 'typed-model', operation };
+  const before = (await h.app.getSnapshot()).sessionModels[sessionId];
+  h.setQuota('unknown');
+  const allowed = await h.app.admitSdkRequest(request);
+  assert.deepEqual(allowed.target, { sourceId: request.sourceId, modelId: request.modelId, thinkingLevel: null });
+  assert.equal(allowed.ok, true);
+  assert.deepEqual((await h.app.getSnapshot()).sessionModels[sessionId]?.choice, before?.choice);
+  h.setQuota('exhausted'); assert.equal((await h.app.admitSdkRequest(request)).ok, false);
+  h.setQuota('available'); assert.equal((await h.app.admitSdkRequest(request)).ok, false, '恢复额度不隐式继续');
+  assert.equal(h.submits(), 0, '分类准入不能重投原输入');
+  const second = await harness({ typedConfigured: true }); t.after(() => second.app.flush());
+  const other = { ...request, sessionId: await firstSession(second.app) };
+  second.holdQuotaReads(); const pending = second.app.admitSdkRequest(other);
+  await waitFor(() => second.quotaReadsPending(), '分类应真实停在额度读取');
+  second.app.beginClosing(); second.releaseQuotaReads(); assert.equal((await pending).ok, false);
+  const missing = await harness(); t.after(() => missing.app.flush());
+  assert.equal((await missing.app.admitSdkRequest({ ...request, sessionId: await firstSession(missing.app) })).ok, false, '无typed资料不凭chat能力放行');
+});
+
 /** 会话所在工作空间：引用归属必须与发送目标自洽，不能写死别的空间。 */
 const workspaceOf = async (app: DCodeApplication, sessionId: string): Promise<string> => {
   const snap = await app.getSnapshot();
@@ -383,13 +407,13 @@ const workspaceOf = async (app: DCodeApplication, sessionId: string): Promise<st
   return snap.tasks.find((t) => t.id === session.taskId)!.workspaceId;
 };
 
-const waitFor = async (predicate: () => boolean, message: string, timeoutMs = 5000): Promise<void> => {
+async function waitFor(predicate: () => boolean, message: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-};
+}
 
 /** 最后一条用户块：样例时间线里已有历史块，重试身份要取**本次发送**产生的那一条。 */
 const firstUserBlock = (snap: Awaited<ReturnType<DCodeApplication['getSnapshot']>>, sessionId: string) =>

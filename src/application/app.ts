@@ -1951,12 +1951,30 @@ export class DCodeApplication {
    * `admitRequest` 判定，按当次事实重核：不另立执行器、不另造历史，
    * 也不重投已接收的输入或重复已完成的工具——不放行时这一轮就此收束，已输出保持。
    */
-  async admitSdkRequest(input: { sessionId: string; sourceId: string; modelId: string; requires?: readonly WorkCapability[] }): Promise<{ ok: boolean; reason: string | null; target: SdkRequestTarget | null }> {
+  async admitSdkRequest(input: { sessionId: string; sourceId: string; modelId: string; requires?: readonly WorkCapability[]; operation?: 'classify' | 'generateImages' }): Promise<{ ok: boolean; reason: string | null; target: SdkRequestTarget | null }> {
     const deny = (reason: string): { ok: boolean; reason: string | null; target: SdkRequestTarget | null } => ({ ok: false, reason, target: null });
     const session = this.state.sessions.find((s) => s.id === input.sessionId);
     if (!session) return deny("会话不存在");
     if (this.closingStarted) return deny("应用正在关闭");
     const state = this.sessionModels.read(session.id);
+    if (input.operation === 'classify' || input.operation === 'generateImages') {
+      const type = input.operation === 'classify' ? 'classifier' : 'image';
+      const label = type === 'image' ? '图片' : '分类';
+      // 分类有自己的显式typed身份；不能经聊天Auto核准后把分类偷换成聊天请求。
+      const generation = this.sessionModels.generationOf(session.id);
+      const current = () => !this.closingStarted && !this.sessionModels.read(session.id).waitingExplicitContinue
+        && this.workContextFor(session, []).runnable && !this.authFlowOpenFor(input.sourceId)
+        && this.sessionModels.generationOf(session.id) === generation;
+      if (!current()) return deny(`当前工作或该来源认证不允许${label}`);
+      if (!await this.sessionModels.hasTypedModel(input.sourceId, input.modelId, type)) return deny(`该来源未配置可核对的${label}模型`);
+      const quota = await this.sessionModels.readQuota(input.sourceId, input.modelId);
+      if (!current() || !await this.sessionModels.hasTypedModel(input.sourceId, input.modelId, type) || !current()) return deny(`${label}读取期间工作或来源已变化`);
+      if (quota.state === 'exhausted') {
+        this.sessionModels.markWaitingExplicitContinue(session.id, `${label}模型额度已耗尽，工作已保留；需要明确继续`); this.commit();
+        return deny(`${label}模型额度已耗尽，等待明确继续`);
+      }
+      return { ok: true, reason: null, target: { sourceId: input.sourceId, modelId: input.modelId, thinkingLevel: null } };
+    }
     // 候选名单被**清空**，而这条会话**已经实际用过**某个模型、却还没形成「等待明确继续」：
     // 发送入口的空名单分支核的是「已形成的等待」与认证在途，这里核的是此刻的采用关系——
     // 名单都不存在了还照旧模型发请求，就等于把用户撤掉的配置当没撤。
@@ -2113,14 +2131,14 @@ export class DCodeApplication {
   /**
    * 从执行端的**真实观测**里发布本次请求事实：来源、模型、响应标识、结果与用量。
    *
-   * 只读 `view.entries` 中助手或工具内单次模型结果的 provider/model/responseId/usage——
+   * 只读 `view.entries` 中助手/工具模型结果及typedRequest的真实身份与usage——
    * 这些是 Pi 实际发出并保存下来的，不是计划值、不是界面选择、也不是额度推算。
    * 观察器在每次投影后调用；没有真实条目时什么都不发布（actual 保持 null）。
    */
   private publishRequestFacts(sessionId: string, view: ExecutionView): void {
-    // 一次观测 = 一批可核对的真实请求。按 responseId 恰好一次入账，
+    // 一次观测 = 一批可核对的真实请求；typed按原子任务身份，聊天按responseId恰好一次入账。
     // 会话累计按本轮视图求和（重复观测与重开都得到同一结果），不按轮询累加。
-    const attributions: { identity: ModelIdentity; responseId: string; result: "succeeded" | "failed"; usage: WorkUsage | null }[] = [];
+    const attributions: { identity: ModelIdentity; responseId?: string; operation?: 'chat' | 'classify' | 'generateImages'; requestId?: string; result: "succeeded" | "failed"; usage: WorkUsage | null }[] = [];
     let requests = 0;
     let input = 0;
     let output = 0;
@@ -2130,6 +2148,15 @@ export class DCodeApplication {
     // 不预设条目是「新→旧」还是「旧→新」——两种约定都出现过，
     // 反转一次就会把最旧那次当成"实际采用"（曾见：切到来源 B 后仍显示来源 A 的归属）。
     for (const entry of view.entries) {
+      if (entry.typedRequest) {
+        const fact = entry.typedRequest;
+        const sourceLabel = this.sessionModels.identityLabel(fact.provider) ?? fact.provider;
+        const usage = fact.usage ? { ...fact.usage, requests: 1 } : null;
+        attributions.push({ identity: { sourceId: fact.provider, modelId: fact.model, sourceLabel, modelLabel: fact.model, accountLabel: null },
+          operation: fact.operation, requestId: fact.requestId, result: fact.result, usage });
+        if (usage) { requests++; input += usage.input; output += usage.output; cacheRead += usage.cacheRead; cacheWrite += usage.cacheWrite; }
+        continue;
+      }
       if (entry.kind !== "pi.assistant" && entry.kind !== "dcode.extension-model-result") continue;
       if (!entry.provider || !entry.model || !entry.responseId) continue;
       const provider = entry.provider;

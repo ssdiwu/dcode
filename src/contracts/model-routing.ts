@@ -140,17 +140,16 @@ export interface RoutingOutcome {
   readonly quota: readonly QuotaFacts[];
 }
 
-/** 会话的真实请求归属记录。只由执行端观测到的助手条目发布，判定层不写。 */
-export interface RequestAttribution {
-  /** 真实响应标识：同时用作同一事实的去重键（重开与重复观测不重复计量） */
-  readonly responseId: string;
+/** 执行端已确认的结果/用量归属；聊天响应与typed子任务身份分开，判定层不写。 */
+export type RequestAttribution = {
   readonly sourceId: string;
   readonly sourceLabel: string;
   readonly modelId: string;
   readonly result: "succeeded" | "failed";
   /** 该次请求自己的用量，不是累计；该次没有用量字段时为 null（不补零） */
   readonly usage: WorkUsage | null;
-}
+} & ({ readonly operation?: 'chat'; readonly responseId: string; readonly requestId?: never }
+  | { readonly operation: 'classify' | 'generateImages'; readonly requestId: string; readonly responseId?: never });
 
 /** 会话的模型状态：选择方式与实际执行模型分别可辨，界面不提前宣布已切换。 */
 export interface SessionModelState {
@@ -164,7 +163,7 @@ export interface SessionModelState {
   /** 本次会话实际用掉的任务用量（来自真实请求记录的累加）；无真实记录为 null */
   readonly usage: WorkUsage | null;
   /** 逐次真实请求的归属：任务用量汇总与"尝试/最终"分别显示的依据。
-   *  同一 responseId 只记一次（重复观测与重开不重复计量）。 */
+   *  聊天按responseId、分类按原Durable子任务身份只记一次，不给typed伪造responseId。 */
   readonly requests: readonly RequestAttribution[];
   /** 本次会话选定的条件参数；只在能力资料已核实时存在 */
   readonly thinkingLevel: ThinkingLevel | null;
@@ -367,9 +366,12 @@ export function isSessionModelState(v: unknown): v is SessionModelState {
     const seen = new Set<string>();
     for (const r of v.requests) {
       if (!isRecord(r)) return false;
-      if (typeof r.responseId !== "string" || !r.responseId) return false;
-      if (seen.has(r.responseId)) return false;
-      seen.add(r.responseId);
+      if (r.operation !== undefined && r.operation !== 'chat' && r.operation !== 'classify' && r.operation !== 'generateImages') return false;
+      if (r.operation === 'classify' || r.operation === 'generateImages' ? typeof r.requestId !== 'string' || !r.requestId || r.responseId !== undefined
+        : typeof r.responseId !== 'string' || !r.responseId || r.requestId !== undefined) return false;
+      const key = r.operation === 'classify' || r.operation === 'generateImages' ? `${r.operation}:${r.requestId}` : `chat:${r.responseId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
       if (typeof r.sourceId !== "string" || !r.sourceId) return false;
       if (typeof r.sourceLabel !== "string" || !r.sourceLabel) return false;
       if (typeof r.modelId !== "string" || !r.modelId) return false;
@@ -377,7 +379,7 @@ export function isSessionModelState(v: unknown): v is SessionModelState {
       if (r.usage !== null && !isWorkUsage(r.usage)) return false;
     }
     // 已记录真实请求却拿不出实际采用：状态自相矛盾（界面会显示有用量却查不到是谁跑的）
-    if (Array.isArray(v.requests) && v.requests.length > 0 && (v.actual === null || typeof v.actualResponseId !== "string" || v.actualResponseId === "")) {
+    if (v.requests.some(r => r.operation === undefined || r.operation === 'chat') && (v.actual === null || typeof v.actualResponseId !== "string" || v.actualResponseId === "")) {
       return false;
     }
   }

@@ -9,7 +9,10 @@ import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { GenerationTask, ToolTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
-import { createRealPiBackend, ModelSetupStore } from '../../src/adapters/pi/index.ts';
+import { createProvider } from '@earendil-works/pi-ai/models';
+import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
+import * as anthropicMessages from '@earendil-works/pi-ai/api/anthropic-messages';
+import { createRealPiBackend, createPresetPiBackend, ProviderDirectoryStore, ModelSetupStore } from '../../src/adapters/pi/index.ts';
 import { prepareCodingProject, codingKey, codingModel } from '../e2e/ordinary-coding-fixture.mjs';
 import { until } from './fixtures.ts';
 
@@ -17,7 +20,7 @@ const toolName = 'owned_active_chat';
 const callId = 'owned-active-tool-1';
 
 // Only the remote boundary is scripted. Real SDK protocol conversion, tools, tasks and storage remain real.
-async function activeHttp({ nonce, method, hold, releaseable = false }) {
+async function activeHttp({ nonce, method, hold, releaseable = false, directKey = codingKey }) {
   const marker = 'OWNED_SINGLE_CHAT_INPUT_' + nonce;
   const innerText = 'OWNED_SINGLE_CHAT_RESULT_' + nonce;
   const outerText = 'OWNED_OUTER_RESULT_' + nonce;
@@ -28,7 +31,7 @@ async function activeHttp({ nonce, method, hold, releaseable = false }) {
     if (record.finished || res.destroyed) throw new Error('Owned held request cannot be completed twice or after close');
     if (!res.headersSent) res.writeHead(200, { 'content-type': 'text/event-stream' });
     // stream 已实际发过此前缀；放行只补余文，不在 complete 后拆字符串冒充流。
-    if (method !== 'streamSimple' || !record.partialSent)
+    if (!record.partialSent)
       sse(res, record.id, { role:'assistant', content:'OWNED_SINGLE_CHAT_RESULT_' }, null);
     sse(res, record.id, { content:nonce }, null);
     sse(res, record.id, {}, 'stop', { prompt_tokens:117, completion_tokens:13, total_tokens:130 });
@@ -45,7 +48,7 @@ async function activeHttp({ nonce, method, hold, releaseable = false }) {
       const kind = direct ? 'direct' : 'outer';
       const ordinal = requests.filter(item => item.kind === kind).length + 1;
       const id = 'owned-' + kind + '-' + nonce + '-' + ordinal;
-      const record = { kind, ordinal, id, body, authOk: req.headers.authorization === 'Bearer ' + codingKey,
+      const record = { kind, ordinal, id, body, authOk: req.headers.authorization === 'Bearer ' + (direct?directKey:codingKey),
         accepted: true, closedBeforeFinal: false, finished: false };
       requests.push(record);
       if (releaseable && kind === 'outer' && ordinal === 2 && !requests.find(item => item.kind === 'direct')?.finished)
@@ -58,7 +61,7 @@ async function activeHttp({ nonce, method, hold, releaseable = false }) {
       // In both cases the same recorded request was accepted before cancellation; no terminal result is sent.
       if (direct && hold) {
         held.set(record, res);
-        if (method === 'streamSimple') {
+        if (method === 'streamSimple' || method === 'stream') {
           res.writeHead(200, { 'content-type': 'text/event-stream' });
           sse(res, id, { role: 'assistant', content: 'OWNED_SINGLE_CHAT_RESULT_' }, null);
           record.partialSent = true;
@@ -121,11 +124,11 @@ export default function(pi) {
 }`;
 }
 
-async function fixture(method, { hold = false, releaseable = false, source = extensionSource } = {}) {
+async function fixture(method, { hold = false, releaseable = false, source = extensionSource, nativePreset = undefined } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-owned-model-')); const project = join(root, 'project');
   const nonce = randomUUID(); let remote; let backend; let session;
   try {
-    await prepareCodingProject(project); remote = await activeHttp({ nonce, method, hold, releaseable });
+    await prepareCodingProject(project); remote = await activeHttp({ nonce, method, hold, releaseable, directKey:nativePreset?.switchApi?codingKey+'-B':codingKey });
     await mkdir(join(project, '.pi/extensions'), { recursive: true });
     await writeFile(join(project, '.pi/mcp.json'), JSON.stringify({ mcpServers: {} }));
     await writeFile(join(project, '.pi/extensions/active-model.ts'), source(nonce, remote.marker));
@@ -139,13 +142,39 @@ async function fixture(method, { hold = false, releaseable = false, source = ext
       admissions.push({ ...request });
       return { ok: true, reason: null, target: { sourceId: request.sourceId, modelId: request.modelId, thinkingLevel: null } };
     } });
+    const dispatch={stream:0,streamSimple:0,bStream:0,bStreamSimple:0};
+    if(nativePreset){
+      const presetStore=new ProviderDirectoryStore({stateDir},cipher,{catalogBaseUrl:remote.origin+'/catalog'});
+      await presetStore.commitCredential('user-defined',{type:'api_key',key:codingKey});
+      const model={provider:'user-defined',id:codingModel,name:'Owned native stream',api:'openai-completions',baseUrl:remote.origin+'/v1',input:['text'],reasoning:true,
+        contextWindow:128000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0},thinkingLevelMap:{off:'none',high:'high'},compat:{supportsReasoningEffort:true},
+        ...(nativePreset.samplingParams?{samplingParams:nativePreset.samplingParams}:{})};
+      const preset={id:'user-defined',name:'Owned native preset',authKinds:['api_key'],provider:createProvider({id:'user-defined',name:'Owned native preset',models:[model],
+        auth:{apiKey:{name:'owned fixture key',check:async({credential})=>credential?.type==='api_key'?{type:'api_key',source:'owned fixture'}:undefined,
+          resolve:async({credential})=>credential?.type==='api_key'?{auth:{apiKey:credential.key},source:'owned fixture'}:undefined}},
+        api:{stream:(...args)=>{dispatch.stream++;return openaiCompletions.stream(...args);},streamSimple:(...args)=>{dispatch.streamSimple++;return openaiCompletions.streamSimple(...args);}}})};
+      let additionalSources;const switchedProvider='owned-native-b';
+      if(nativePreset.switchApi){
+        await presetStore.commitCredential(switchedProvider,{type:'api_key',key:codingKey+'-B'});
+        const switched={...model,provider:switchedProvider,api:nativePreset.switchApi};
+        const api=nativePreset.switchApi==='openai-completions'?openaiCompletions:anthropicMessages;
+        const other={id:switchedProvider,name:'Owned B',authKinds:['api_key'],provider:createProvider({id:switchedProvider,name:'Owned B',models:[switched],
+          auth:{apiKey:{name:'owned B key',check:async({credential})=>credential?.type==='api_key'?{type:'api_key',source:'owned B'}:undefined,
+            resolve:async({credential})=>credential?.type==='api_key'?{auth:{apiKey:credential.key},source:'owned B'}:undefined}},
+          api:{stream:(...args)=>{dispatch.bStream++;return api.stream(...args);},streamSimple:(...args)=>{dispatch.bStreamSimple++;return api.streamSimple(...args);}}})};
+        additionalSources=[{kind:'preset',providerId:switchedProvider,preset:other,models:[switched]}];
+      }
+      backend=createPresetPiBackend({stateDir,selection:{providerId:'user-defined',modelId:codingModel},model,preset,info:{id:model.id,name:model.name},store:presetStore,additionalSources,
+        admitRequest:async request=>{admissions.push({...request});const sourceId=nativePreset.switchApi&&admissions.length===2?switchedProvider:request.sourceId;
+          return {ok:true,reason:null,target:{sourceId,modelId:request.modelId,thinkingLevel:nativePreset.level}};}});
+    }
     const target = { workspaceId: 'space', taskId: 'task', sessionId: 'owned-active-model-session' };
     const opening = { target, title: 'Owned single model call', workFolder: project, model: null, initialize: true,
       projectAccess: 'task-owner', projectExtensionsEnabled: () => true };
     session = await backend.open(opening);
     const input = { target, operationId: 'owned-active-operation-' + nonce, text: 'Run the one owned active chat tool',
       mode: 'follow-up', references: [], expected: (await session.read()).control };
-    return { root, stateDir, nonce, remote, backend, opening, target, input, admissions, config, cipher,
+    return { method, dispatch, nativeSwitch:Boolean(nativePreset?.switchApi), root, stateDir, nonce, remote, backend, opening, target, input, admissions, config, cipher,
       get session() { return session; }, set session(value) { session = value; },
       async dispose() { try { await session?.close(); } finally { await remote.close(); await rm(root, { recursive: true, force: true }); } } };
   } catch (error) {
@@ -212,6 +241,11 @@ async function done(f) {
   await until(async () => (await f.session.read()).phase === 'ready');
 }
 function assertOriginalAdmission(f) {
+  if(f.nativeSwitch){
+    assert.equal(f.admissions.length,f.remote.requests.length+1,'改选先核捕获A，再核实际B；不得把两次准入误作两次HTTP');
+    assert.deepEqual(f.admissions.slice(0,3).map(item=>item.sourceId),['user-defined','user-defined','owned-native-b']);
+    assert.ok(f.admissions.every(item=>item.sessionId===f.target.sessionId&&item.modelId===codingModel));return;
+  }
   assert.equal(f.admissions.length, f.remote.requests.length, 'Each actual HTTP crosses the original provider admission wrapper once');
   assert.ok(f.admissions.every(item => item.sessionId === f.target.sessionId && item.sourceId === 'user-defined' && item.modelId === codingModel));
 }
@@ -233,7 +267,7 @@ for (const method of ['complete']) await test(`扩展主动单次chat ${method}�
     assert.ok(actualFact); assert.equal(actualFact.responseId,observed.message.responseId);
     assert.equal(actualFact.provider,observed.message.provider);assert.equal(actualFact.model,observed.message.model);
     assert.deepEqual(actualFact.usage,{input:117,output:13,cacheRead:0,cacheWrite:0});
-    if (method === 'streamSimple') {
+    if (method === 'streamSimple' || method === 'stream') {
       assert.equal(observed.synchronousStream, true); assert.ok(observed.eventTypes.includes('text_delta')); assert.ok(observed.eventTypes.includes('done'));
       assert.equal(observed.deltas, f.remote.innerText);
     }
@@ -339,7 +373,7 @@ await test('扩展void complete：真实HTTP扣住且handler已返回，原工�
   const f=await fixture('complete',{hold:true,releaseable:true,source:detachedExtensionSource});
   try {
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');
-    await until(()=>f.remote.direct().length===1);const parked=f.remote.direct()[0];assert.equal(parked.accepted,true);assert.equal(parked.finished,false);
+    await until(()=>f.remote.direct().length===1);const parked=f.remote.direct()[0];if(f.method==='stream'&&parked)assert.equal(parked.body.tool_choice,'none');assert.equal(parked.accepted,true);assert.equal(parked.finished,false);
     const phasePath=join(f.root,'project',detachedPhaseFile);
     await until(()=>readFile(phasePath,'utf8').then(text=>JSON.parse(text).phase==='handler-returned-microtask',error=>{if(error.code==='ENOENT')return false;throw error;}));
     assert.deepEqual(JSON.parse(await readFile(phasePath,'utf8')),{nonce:f.nonce,callId,phase:'handler-returned-microtask'});
@@ -524,10 +558,10 @@ await test('已确认费用但未停机收口的真实记录：只读重开及�
 // 下一 stream 片的有限资产；测试只记录拥有目录内的公开文本事件，不读取私密推理/外部用户数据。
 const streamTraceFile = 'owned-stream-observation.json';
 const streamPrefix = 'OWNED_SINGLE_CHAT_RESULT_';
-function streamExtensionSource(mode) {
+function streamExtensionSource(mode, method = 'streamSimple', nativeOptions = {}) {
   return (nonce, marker) => `import {Type} from 'typebox';import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';
 export default function(pi){pi.registerTool({name:${JSON.stringify(toolName)},label:'owned real stream',description:'Consume one actual owned SDK stream without another agent loop',
-parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,args,signal,onUpdate,ctx){
+parameters:Type.Object({method:Type.Literal(${JSON.stringify(method)})}),async execute(id,args,signal,onUpdate,ctx){
   if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
   const mode=${JSON.stringify(mode)},nonce=${JSON.stringify(nonce)},file=join(ctx.cwd,${JSON.stringify(streamTraceFile)});
   const trace={nonce,callId:id,mode,steps:[]};let writes=Promise.resolve();
@@ -536,8 +570,8 @@ parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,a
   const summary=result=>({role:result.role,provider:result.provider,model:result.model,responseId:result.responseId,stopReason:result.stopReason,
     text:result.content.filter(part=>part.type==='text').map(part=>part.text).join(''),usage:result.usage});
   const model=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!model)throw new Error('Original configured model missing');
-  const stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
-    {signal,maxRetries:0,maxTokens:32,temperature:0});
+  const stream=ctx.modelRegistry[${JSON.stringify(method)}](model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
+    {signal,maxRetries:0,maxTokens:32,temperature:0,...${JSON.stringify(method==='stream'?{toolChoice:'none',...nativeOptions}:nativeOptions)}});
   const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
   await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
   const resultPromise=stream.result(),resultReadback=stream.result();void resultReadback.catch(()=>{});let resultSettled=false;
@@ -602,7 +636,7 @@ async function streamCheckpoint(f,mode) {
 }
 async function assertHeldStream(f,accepted,mode) {
   await streamCheckpoint(f,mode);await until(()=>f.remote.direct().length===1);
-  const parked=f.remote.direct()[0];assert.equal(parked.accepted,true);assert.equal(parked.partialSent,true);
+  const parked=f.remote.direct()[0];if(f.method==='stream'&&parked)assert.equal(parked.body.tool_choice,'none');assert.equal(parked.accepted,true);assert.equal(parked.partialSent,true);
   assert.equal(parked.finished,false);assert.equal(parked.closedBeforeFinal,false);assert.equal(f.remote.outer().length,1);
   assert.deepEqual(f.remote.errors,[]);assertOriginalAdmission(f);
   const held=await heldOwnedStage(f); // 内部复用 copyOwnedRecords；不二次打开 live JSONL。
@@ -625,7 +659,7 @@ async function assertStreamCompleted(f,accepted,held,mode) {
   assert.equal(trace.steps.filter(step=>step.phase==='handler-returning').length,1);assert.equal(trace.steps.filter(step=>step.phase==='handler-error').length,0);
   const visible=(await f.session.read()).entries.filter(entry=>entry.toolResult?.name===toolName&&entry.toolResult.callId===callId);assert.equal(visible.length,1);assert.equal(visible[0].toolResult.isError,false);
   const observed=JSON.parse(visible[0].toolResult.text);assert.equal(observed.probe,'owned-real-stream');assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,callId);
-  assert.equal(observed.method,'streamSimple');assert.equal(observed.mode,mode);assert.equal(observed.synchronousStream,true);assert.equal(observed.resultReadbackConsistent,true);assert.equal(observed.signalSame,true);
+  assert.equal(observed.method,f.method);assert.equal(observed.mode,mode);assert.equal(observed.synchronousStream,true);assert.equal(observed.resultReadbackConsistent,true);assert.equal(observed.signalSame,true);
   assert.equal(observed.message.role,'assistant');assert.equal(observed.message.provider,'user-defined');assert.equal(observed.message.model,codingModel);
   assert.equal(observed.message.responseId,held.parked.id);assert.equal(observed.message.stopReason,'stop');assert.equal(observed.message.text,f.remote.innerText);
   assert.deepEqual(settled[0].message,observed.message);usageCounts(observed.message.usage,117,13);
@@ -657,8 +691,8 @@ async function assertStreamCompleted(f,accepted,held,mode) {
   await f.session.close();const restored=await records(f);assert.equal(restored.child.id,held.childId);assert.equal(restored.toolTask.id,held.ownerId);
   assert.deepEqual(restored.submissionIdentity,identity);assert.deepEqual(restored.usage,raw.usage);assert.equal(formalTool(restored).length,1);assert.equal(resultFact(restored,held.parked.id).length,1);
 }
-for(const mode of ['iterate','result-only','break'])await test(`扩展streamSimple/${mode}：同步公共流、真实partial门与原Task/result/usage一次收束`,{timeout:30000},async()=>{
-  const f=await fixture('streamSimple',{hold:true,releaseable:true,source:streamExtensionSource(mode)});
+for(const method of ['streamSimple','stream'])for(const mode of ['iterate','result-only','break'])await test(`扩展${method}/${mode}：同步公共流、真实partial门与原Task/result/usage一次收束`,{timeout:30000},async()=>{
+  const f=await fixture(method,{hold:true,releaseable:true,source:streamExtensionSource(mode,method)});
   try{
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const held=await assertHeldStream(f,accepted,mode);
     // 此刻已由实际SDK事件/消费者阶段与正式Task同时确认；不是 complete 完成后再人为拆字串。
@@ -673,8 +707,8 @@ function assertNoSuccessfulStreamFinal(child) {
     assert.equal(message.usage?.totalTokens??0,0,'没有真实终态usage不能补造费用');
   }
 }
-for(const stop of ['pause','close'])await test(`扩展streamSimple/partial后${stop}：原流有限取消、同HTTP关闭与只读重开不重放`,{timeout:30000},async()=>{
-  const f=await fixture('streamSimple',{hold:true,source:streamExtensionSource('iterate')});
+for(const method of ['streamSimple','stream'])for(const stop of ['pause','close'])await test(`扩展${method}/partial后${stop}：原流有限取消、同HTTP关闭与只读重开不重放`,{timeout:30000},async()=>{
+  const f=await fixture(method,{hold:true,source:streamExtensionSource('iterate',method)});
   try{
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const held=await assertHeldStream(f,accepted,'iterate');
     if(stop==='pause')assert.equal((await f.session.pause()).phase,'paused');else await f.session.close();
@@ -704,10 +738,10 @@ for(const stop of ['pause','close'])await test(`扩展streamSimple/partial后${s
 
 // 合法 model signal 的取消合同：不与非法/未经授权 options 的同步拒绝混为一类。
 const modelSignalReleaseFile = 'owned-model-signal-release.json';
-function modelSignalExtensionSource(mode) {
+function modelSignalExtensionSource(mode, method='streamSimple') {
   return (nonce, marker) => `import {Type} from 'typebox';import {writeFile,rename,readFile,watch} from 'node:fs/promises';import {join} from 'node:path';
 export default function(pi){pi.registerTool({name:${JSON.stringify(toolName)},label:'owned model signal',description:'Consume one cancelled model stream while its original tool stays alive',
-parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,args,signal,onUpdate,ctx){
+parameters:Type.Object({method:Type.Literal(${JSON.stringify(method)})}),async execute(id,args,signal,onUpdate,ctx){
   if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
   const mode=${JSON.stringify(mode)},nonce=${JSON.stringify(nonce)},file=join(ctx.cwd,${JSON.stringify(streamTraceFile)});
   const trace={nonce,callId:id,mode,steps:[]};let writes=Promise.resolve();
@@ -721,8 +755,8 @@ parameters:Type.Object({method:Type.Literal('streamSimple')}),async execute(id,a
   await note('tool-entered',{signalsDistinct:modelController.signal!==signal});
   if(mode==='pre-aborted'){modelController.abort(new Error('owned model cancelled before factory'));await note('model-pre-aborted');}
   let stream;
-  try{stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
-      {signal:modelController.signal,maxRetries:0,maxTokens:32,temperature:0});}
+  try{stream=ctx.modelRegistry[${JSON.stringify(method)}](model,{messages:[{role:'user',content:${JSON.stringify(marker)},timestamp:Date.now()}]},
+      {signal:modelController.signal,maxRetries:0,maxTokens:32,temperature:0,...${JSON.stringify(method==='stream'?{toolChoice:'none'}:{})}});}
   catch(error){await note('factory-threw');throw new Error('A legal cancelled model signal must return a finite public stream');}
   const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
   await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
@@ -804,11 +838,11 @@ async function modelSignalCheckpoint(f, mode) {
   assert.equal(f.remote.outer().length,1,'工具仍被本夹具保留，不能提前外层continuation');assert.deepEqual(f.remote.errors,[]);assertOriginalAdmission(f);
   return trace;
 }
-for(const mode of ['pre-aborted','model-only-abort'])await test(`扩展streamSimple/${mode}：合法单次signal有限收束，原工具仍活且HTTP不重放`,{timeout:30000},async()=>{
-  const f=await fixture('streamSimple',{hold:mode==='model-only-abort',source:modelSignalExtensionSource(mode)});
+for(const method of ['streamSimple','stream'])for(const mode of ['pre-aborted','model-only-abort'])await test(`扩展${method}/${mode}：合法单次signal有限收束，原工具仍活且HTTP不重放`,{timeout:30000},async()=>{
+  const f=await fixture(method,{hold:mode==='model-only-abort',source:modelSignalExtensionSource(mode,method)});
   try{
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');const trace=await modelSignalCheckpoint(f,mode);
-    const parked=f.remote.direct()[0];
+    const parked=f.remote.direct()[0];if(f.method==='stream'&&parked)assert.equal(parked.body.tool_choice,'none');
     if(mode==='model-only-abort'){
       assert.ok(parked);assert.equal(parked.accepted,true);assert.equal(parked.partialSent,true);assert.equal(parked.finished,false);
       await until(()=>parked.closedBeforeFinal);assert.equal(f.remote.direct()[0],parked,'关闭的是原已接收HTTP，不能换身份模拟取消');
@@ -850,5 +884,47 @@ for(const mode of ['pre-aborted','model-only-abort'])await test(`扩展streamSim
     await f.session.resume((await f.session.read()).control);await done(f);assert.equal(f.remote.requests.length,count,'明确继续也不自动重发已取消单次模型');
     await f.session.close();const restored=await records(f,undefined,mode==='pre-aborted');assert.equal(restored.toolTask.id,owner.id);assert.equal(restored.child?.id,raw.child?.id);
     assert.deepEqual(restored.submissionIdentity,identity);assert.deepEqual(restored.usage,raw.usage);assert.equal(formalTool(restored).length,1);
+  }finally{await f.dispose();}
+});
+
+await test('扩展原生stream：权威high与原生effort一致，真实SDK native分派和HTTP字段保真',{timeout:30000},async()=>{
+  const f=await fixture('stream',{hold:true,releaseable:true,source:streamExtensionSource('iterate','stream',{reasoningEffort:'high'}),nativePreset:{level:'high'}});
+  try{
+    const accepted=await f.session.submit(f.input);const held=await assertHeldStream(f,accepted,'iterate');
+    assert.equal(f.dispatch.stream,1,'真实provider native消费者必须被调用');assert.equal(f.dispatch.streamSimple,1,'仅外层正常Generation使用simple');
+    assert.equal(held.parked.body.reasoning_effort,'high');assert.equal(held.parked.body.tool_choice,'none');
+    f.remote.releaseDirect();await assertStreamCompleted(f,accepted,held,'iterate');assert.equal(f.dispatch.stream,1);assert.equal(f.dispatch.streamSimple,2);
+  }finally{await f.dispose();}
+});
+for(const variant of [
+  {name:'off拒绝原生high',level:null,options:{reasoningEffort:'high'}},
+  {name:'high拒绝缺少原生effort',level:'high',options:{}},
+  {name:'high拒绝原生low',level:'high',options:{reasoningEffort:'low'}},
+  {name:'拒绝调用方sampling覆盖',level:null,options:{samplingParams:{reasoning_effort:'high'}}},
+  {name:'拒绝canonical sampling覆盖',level:null,options:{},samplingParams:{reasoning_effort:'high'}},
+  {name:'拒绝跨API改选',level:null,options:{},switchApi:'anthropic-messages'},
+  {name:'拒绝未接思考预算',level:'high',options:{reasoningEffort:'high',thinkingBudgets:{high:4096}}},
+])await test(`扩展原生stream/${variant.name}：有限错误、零内层HTTP且原工具收束`,{timeout:30000},async()=>{
+  const f=await fixture('stream',{source:streamExtensionSource('iterate','stream',variant.options),nativePreset:{level:variant.level,samplingParams:variant.samplingParams,switchApi:variant.switchApi}});
+  try{
+    const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');await done(f);
+    const tool=(await f.session.read()).entries.find(entry=>entry.toolResult?.callId===callId);assert.ok(tool);
+    const observed=JSON.parse(tool.toolResult.text);assert.equal(observed.method,'stream');assert.equal(observed.message.stopReason,'error');assert.equal(observed.message.usage.totalTokens,0);
+    assert.equal(f.remote.direct().length,0);assert.equal(f.dispatch.stream,0);assert.equal(f.dispatch.bStream,0);assert.equal(f.dispatch.bStreamSimple,0);assert.equal(f.remote.outer().length,2);
+    const count=f.remote.requests.length;await f.session.close();f.session=await f.backend.open({...f.opening,initialize:false});await f.session.read();
+    assert.equal((await f.session.submit(f.input)).submissionId,accepted.submissionId);assert.equal(f.remote.requests.length,count,'拒绝不在重开时再发');
+  }finally{await f.dispose();}
+});
+
+await test('扩展原生stream：当次同API改选B保原生参数、实际响应及来源身份',{timeout:30000},async()=>{
+  const f=await fixture('stream',{hold:true,releaseable:true,source:streamExtensionSource('iterate','stream',{reasoningEffort:'high'}),nativePreset:{level:'high',switchApi:'openai-completions'}});
+  try{
+    const accepted=await f.session.submit(f.input);const held=await assertHeldStream(f,accepted,'iterate');
+    assert.equal(f.dispatch.stream,0,'裁定B后不再发捕获A的原生请求');assert.equal(f.dispatch.bStream,1);assert.equal(f.dispatch.bStreamSimple,0);
+    assert.equal(held.parked.authOk,true);assert.equal(held.parked.body.reasoning_effort,'high');assert.equal(held.parked.body.tool_choice,'none');
+    f.remote.releaseDirect();await done(f);const trace=await readStreamTrace(f);const message=trace.steps.find(step=>step.phase==='result-settled').message;
+    assert.equal(message.provider,'owned-native-b');assert.equal(message.model,codingModel);assert.equal(message.text,f.remote.innerText);assert.equal(message.responseId,held.parked.id);
+    assert.equal(f.remote.direct().length,1);assert.equal(f.remote.outer().length,2);const counts=f.remote.requests.length;await f.session.close();
+    f.session=await f.backend.open({...f.opening,initialize:false});await f.session.read();assert.equal((await f.session.submit(f.input)).submissionId,accepted.submissionId);assert.equal(f.remote.requests.length,counts);
   }finally{await f.dispose();}
 });

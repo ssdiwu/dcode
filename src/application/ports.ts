@@ -56,6 +56,8 @@ export type SdkRequestAdmissionGate = (request: {
   readonly sourceId: string;
   readonly modelId: string;
   readonly requires?: readonly import('@/contracts/index.ts').WorkCapability[];
+  /** typed 显式消费者不参与聊天 Auto；仍核相位、来源、能力种类及账户额度。 */
+  readonly operation?: 'classify' | 'generateImages';
 }) => Promise<SdkRequestAdmission>;
 
 /** 一次引用读取请求的归属：会话、其所属工作空间，以及该空间绑定的文件夹（可能含 `~`）。
@@ -94,4 +96,6 @@ export interface ModelSourceEntry {
  */
 export interface ModelSourcePort {
   list(): Promise<readonly ModelSourceEntry[]>;
+  /** 只核已配置来源的原生 typed 身份，不把它加入聊天列表或启动模型。 */
+  hasTypedModel?(request: { sourceId: string; modelId: string; type: 'classifier' | 'image' }): Promise<boolean>;
 }

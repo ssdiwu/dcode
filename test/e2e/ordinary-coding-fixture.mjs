@@ -66,7 +66,8 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
       // 仅测试对端分流一个真实主动complete；不能让内层HTTP占走外层工具脚本ordinal。
       if (ownedComplete && body.messages?.some(message => message.role === 'user' && message.content === ownedComplete.marker)) {
         const record = { ordinal:completeRequests.length + 1, responseId:ownedComplete.responseId, authOk,
-          model:body.model, accepted:true, finished:false, input:117, output:13, ...(expectedProviderHeader === undefined ? {} : {providerHeader}) };
+          model:body.model, accepted:true, finished:false, input:117, output:13, ...(expectedProviderHeader === undefined ? {} : {providerHeader}),
+          ...(body.tool_choice === undefined ? {} : {toolChoice:body.tool_choice}) };
         completeRequests.push(record);
         if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || !providerHeaderOk || record.ordinal !== 1) {
           errors.push('owned complete identity or duplicate invalid'); res.writeHead(400); res.end(); return;

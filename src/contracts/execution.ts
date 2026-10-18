@@ -64,6 +64,9 @@ export type ExecutionView = Readonly<{
     /** 已提交助手消息的正文；按原顺序拼接文本块，不含思考或工具调用块。 */
     assistantText?: string;
     extensionMessage?: { customType: string; text: string; display: boolean };
+    /** 原Durable分类结果身份；没有服务商responseId，不伪装成聊天助手。 */
+    typedRequest?: { operation: 'classify' | 'generateImages'; requestId: string; provider: string; model: string;
+      result: 'succeeded' | 'failed'; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number } };
     /**
      * 本条记录是否代表真实服务端失败（有限安全码，不携带原文/密钥/URL/HTTP 细节）：
      * - auth-failed：请求被服务端认作未授权/凭据无效（401 / invalid key 等）；

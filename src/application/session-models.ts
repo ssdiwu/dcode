@@ -307,6 +307,11 @@ export class SessionModelRegistry {
     };
   }
 
+  async hasTypedModel(sourceId: string, modelId: string, type: 'classifier' | 'image' = 'classifier'): Promise<boolean> {
+    try { return await this.#deps.sourcePort?.hasTypedModel?.({ sourceId, modelId, type }) === true; }
+    catch (error) { this.#deps.diagnose?.('typed-model-source-read-failed', error); return false; }
+  }
+
   // ---------- 路由判定 ----------
 
   /**
@@ -375,30 +380,33 @@ export class SessionModelRegistry {
   /**
    * 发布**一批真实请求**的事实。只由执行端的观测投影调用，判定层不调用它（判定不能冒充已用）。
    *
-   * · `attributions` 按时间从旧到新给出本次观测到的每条可核对请求；同一 responseId
+   * · `attributions` 按时间从旧到新给出本次观测到的每条可核对请求；同一真实请求事实身份
    *   **恰好一次**入账，重复观测与重开不重复计量，真实新增请求即使输入相同也照记。
    * · `totals` 只用于**核对**（观测口给出的总量），不作为写入依据：
    *   累计一律从合并后的逐次记录求和，因此重复观测、重开与视图变小都不会改变会话用量。
-   * · 实际采用取本批**最后一个**元素（调用方按视图的自然顺序给出，新→旧由它负责）；
-   *   没有可核对 responseId 的条目既不作归属也不计量。
+   * · 聊天实际采用只取已入账chat记录；typed结果只参与用量，不改聊天actual或选择。
+   *   聊天无responseId、分类无原子任务身份均不入账；无usage保持null。
    */
   noteRequests(sessionId: string, event: {
     attributions: readonly {
       identity: ModelIdentity;
-      responseId: string;
+      responseId?: string;
+      operation?: 'chat' | 'classify' | 'generateImages';
+      requestId?: string;
       result: "succeeded" | "failed";
       usage: WorkUsage | null;
     }[];
     totals: WorkUsage | null;
   }): SessionModelState {
     const state = this.read(sessionId);
-    const known = new Set(state.requests.map((r) => r.responseId));
+    const keyOf = (r: { operation?: 'chat' | 'classify' | 'generateImages'; requestId?: string; responseId?: string }) => r.operation === 'classify' || r.operation === 'generateImages' ? `${r.operation}:${r.requestId}` : `chat:${r.responseId}`;
+    const known = new Set(state.requests.map(keyOf));
     const appended: RequestAttribution[] = [];
     for (const a of event.attributions) {
-      if (!a.responseId || known.has(a.responseId)) continue;
-      known.add(a.responseId);
+      if (!(a.operation === 'classify' || a.operation === 'generateImages' ? a.requestId : a.responseId) || known.has(keyOf(a))) continue;
+      known.add(keyOf(a));
       appended.push({
-        responseId: a.responseId,
+        ...(a.operation === 'classify' || a.operation === 'generateImages' ? { operation: a.operation, requestId: a.requestId! } : { responseId: a.responseId! }),
         sourceId: a.identity.sourceId,
         sourceLabel: a.identity.sourceLabel,
         modelId: a.identity.modelId,
@@ -410,7 +418,8 @@ export class SessionModelRegistry {
     // 理由：重开或执行端换实例后视图可能只含更早的条目，若按批次取就会把"实际采用"
     // 回退成更旧的请求——而历史请求归属是不该被改写的（曾见：切到来源 B 后又显示来源 A）。
     const merged = appended.length > 0 ? [...state.requests, ...appended] : state.requests;
-    const newest = merged[merged.length - 1] ?? null;
+    // typed费用仍入同一逐次事实；它没有聊天响应，不改变当前聊天actual或选择。
+    const newest = [...merged].reverse().find(record => record.operation === undefined || record.operation === 'chat') ?? null;
     return this.#write(sessionId, {
       ...state,
       // 逐次记录里存的是扁平字段：实际采用按同一批字段还原身份
@@ -424,7 +433,7 @@ export class SessionModelRegistry {
             accountLabel: null,
           }
         : state.actual,
-      actualResponseId: newest ? newest.responseId : state.actualResponseId,
+      actualResponseId: newest ? newest.responseId ?? null : state.actualResponseId,
       lastResult: newest ? newest.result : state.lastResult,
       // 会话累计**从合并后的逐次记录求和**，不用本次观测给出的总量：
       // 重开或执行端换实例后视图可能只含更早的条目（A），按观测总量会让会话用量从 A+B 退回 A，

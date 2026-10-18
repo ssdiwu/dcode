@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { launchApp, ready, waitForSnapshot, killApp } from './helpers.mjs';
 import { prepareCodingProject, startCodingLoopback, codingKey, codingModel } from './ordinary-coding-fixture.mjs';
 import { evidenceDir } from './evidence-root.mjs';
+import { contextUsageIds, writeContextUsageExtension, contextUsageTrace, parseContextUsageResult, assertContextUsageObservation } from './ordinary-context-usage-fixture.mjs';
 
 async function events(project) {
   const names = (await readdir(project)).filter(name => /^mcp-events-\d+\.jsonl$/.test(name));
@@ -191,9 +192,29 @@ async function reopenReadonly(f, sessionId, requestCount) {
   assert.equal((await events(f.project)).filter(item => item.type === 'start').length, started);
   return snapshot;
 }
-async function withFixture({ calls, holdFinal = false, callsOverride, extensionSendsUserMessage = false, extensionImageMessage = false, holdImagePreparation = false, extensionCommand = false, holdExtensionCommand = false, ownedComplete = false, ownedStream = false, ownedVirtual = false, virtualWait = false, ownedProviderHeader = false }, action) {
+function desktopExecChildSource() {
+  return `import {appendFileSync} from 'node:fs';
+const [eventsPath]=process.argv.slice(2);let stopping=false;
+const record=event=>appendFileSync(eventsPath,JSON.stringify({event,pid:process.pid})+'\\n');
+record('start');process.on('SIGTERM',()=>{if(stopping)return;stopping=true;record('sigterm');process.exit(0);});
+setInterval(()=>{},1000);`;
+}
+function desktopExecExtensionSource({ hold = false, shellMarker, nodeExecutable }) {
+  const script = "process.stdout.write(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(1)}));process.stderr.write('exec-stderr');process.exitCode=7;";
+  const argument = `literal;touch ${shellMarker}`;
+  const args = hold
+    ? "[join(ctx.cwd,'extension-exec-child.mjs'),join(ctx.cwd,'extension-exec-events.jsonl')]"
+    : `['-e',${JSON.stringify(script)},${JSON.stringify(argument)}]`;
+  return `import {Type} from 'typebox';import {appendFile} from 'node:fs/promises';import {join} from 'node:path';
+export default function(pi){pi.registerTool({name:'extension_exec_probe',label:'exec probe',description:'Run one SDK-owned command',parameters:Type.Object({}),
+  execute:async(_id,_args,signal,_update,ctx)=>{if(!signal)throw new Error('Expected Durable owner signal');
+    const result=await pi.exec(${JSON.stringify(nodeExecutable)},${args},{cwd:ctx.cwd,signal});
+    await appendFile(join(ctx.cwd,'extension-exec-results.jsonl'),JSON.stringify(result)+'\\n');
+    return {content:[{type:'text',text:JSON.stringify(result)}],details:result};}});}`;
+}
+async function withFixture({ calls, holdFinal = false, callsOverride, extensionSendsUserMessage = false, extensionImageMessage = false, holdImagePreparation = false, extensionCommand = false, holdExtensionCommand = false, extensionExec = false, holdExtensionExec = false, ownedComplete = false, ownedStream = false, ownedStreamMethod = 'streamSimple', ownedVirtual = false, virtualWait = false, ownedProviderHeader = false, contextUsage = false }, action) {
   const root = await mkdtemp(join(tmpdir(), 'dcode-desktop-extension-mcp-'));
-  const f = { root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
+  const f = { streamMethod: ownedStreamMethod, root, stateDir: join(root, 'state'), project: null, nonce: randomUUID(), handle: null, proc: null, server: null };
   let primary; const secondary = [];
   try {
     const project = join(root, 'project'); await prepareCodingProject(project); f.project = await realpath(project);
@@ -208,11 +229,16 @@ async function withFixture({ calls, holdFinal = false, callsOverride, extensionS
     if(extensionImageMessage&&holdImagePreparation) f.releaseImagePreparation=()=>writeFile(join(f.project,'image-input-preparation-release'),'release');
     if(extensionCommand&&holdExtensionCommand) await writeFile(join(f.project,'.pi/extensions/commands.ts'),`import {appendFile} from 'node:fs/promises';import {join} from 'node:path';export default function(pi){pi.registerCommand('greet',{description:'Controlled interruptible desktop extension command',handler:async(args,ctx)=>{await appendFile(join(ctx.cwd,'desktop-command-attempts.jsonl'),JSON.stringify({args})+'\\n');await pi.sendMessage({customType:'desktop-command-result',content:'DESKTOP_COMMAND '+args,display:true});const signal=ctx.signal;if(!signal)throw new Error('Expected command owner signal');await new Promise((resolve,reject)=>{if(signal.aborted){reject(new Error('Command interrupted'));return;}signal.addEventListener('abort',()=>reject(new Error('Command interrupted')),{once:true});});}});}`);
     else if(extensionCommand) await writeFile(join(f.project,'.pi/extensions/commands.ts'),`export default function(pi){pi.registerCommand('greet',{description:'Controlled desktop extension command',handler:async(args)=>{pi.sendMessage({customType:'desktop-command-result',content:'DESKTOP_COMMAND '+args,display:true});}});}`);
+    if(extensionExec){
+      if(holdExtensionExec)await writeFile(join(f.project,'extension-exec-child.mjs'),desktopExecChildSource());
+      await writeFile(join(f.project,'.pi/extensions/exec-probe.ts'),desktopExecExtensionSource({hold:holdExtensionExec,shellMarker:join(f.project,'shell-marker-must-not-exist'),nodeExecutable:process.execPath}));
+    }
     if(ownedComplete) await writeFile(join(f.project,'.pi/extensions/active-complete.ts'),desktopActiveExtensionSource(f.nonce));
-    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : ownedProviderHeader ? desktopProviderHeaderExtensionSource(f.nonce) : desktopStreamExtensionSource(f.nonce)));
+    if(ownedStream) await writeFile(join(f.project,'.pi/extensions/active-stream.ts'),(ownedVirtual ? desktopVirtualExtensionSource(f.nonce,virtualWait) : ownedProviderHeader ? desktopProviderHeaderExtensionSource(f.nonce) : desktopStreamExtensionSource(f.nonce,ownedStreamMethod)));
     await writeFile(join(f.project, '.pi/mcp.json'), JSON.stringify({ mcpServers: { fixture: {
       command: process.execPath, args: [resolve(import.meta.dirname, 'ordinary-mcp-fixture.mjs'), f.project, f.nonce], exposure: 'direct', enabled: true,
     } } }));
+    if (contextUsage) await writeContextUsageExtension(f.project, f.nonce);
     f.server = await startCodingLoopback({ prefixCalls: calls(f.nonce), holdFinal, callsOverride,
       ...(ownedProviderHeader ? {expectedProviderHeader:f.nonce} : {}),
       // route等待例应当零inner；仍识别并记录意外inner，但不能套“已有held HTTP须结束”的旧stream前提。
@@ -382,6 +408,63 @@ for(const closing of ['pause','close'])test(`普通桌面扩展注册命令 ${cl
   assert.equal(finalBlocks.filter(block=>block.kind==='extension-message'&&block.customType==='desktop-command-result'&&block.text===expected).length,1);
   assert.equal(JSON.parse('['+(await readFile(join(f.project,'desktop-command-attempts.jsonl'),'utf8')).trim().split('\\n').join(',')+']').length,1,'明确恢复只收束中断回执，不自动重放 handler');
   assert.equal(f.server.requests.length,0);
+}));
+
+test('普通桌面 ExtensionAPI.exec：命令参数、工作目录、输出与非零出口沿原工具结果返回',async()=>withFixture({
+  calls:()=>[],callsOverride:[['extension_exec_probe',{}]],extensionExec:true,
+},async f=>{
+  const page=f.handle.page,input=`普通桌面扩展命令结果 ${f.nonce}`,composer=page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
+  await composer.fill(input);await composer.press('Enter');
+  const snapshot=await waitForSnapshot(page,value=>{
+    const sessionId=Object.keys(value.timelines).find(id=>value.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    const tool=sessionId&&value.timelines[sessionId].find(block=>block.kind==='tool'&&block.tool.name==='extension_exec_probe');
+    return f.server.requests.length===2&&tool?.tool.status==='done'&&value.runs[sessionId]?.status==='ready';
+  });
+  const sessionId=Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  assert.ok(sessionId);const tool=snapshot.timelines[sessionId].find(block=>block.kind==='tool'&&block.tool.name==='extension_exec_probe');assert.ok(tool);
+  const returned=JSON.parse(tool.tool.output);
+  assert.equal(returned.code,7);assert.equal(returned.killed,false);assert.equal(returned.stderr,'exec-stderr');
+  const expectedArg=`literal;touch ${join(f.project,'shell-marker-must-not-exist')}`;
+  assert.deepEqual(JSON.parse(returned.stdout),{cwd:f.project,args:[expectedArg]});
+  await visibleTool(page,tool);
+  await assert.rejects(readFile(join(f.project,'shell-marker-must-not-exist')),{code:'ENOENT'},'normal desktop command launch must preserve argv and shell:false');
+  assert.equal(f.server.requests[1].body.messages.filter(message=>message.role==='tool'&&httpMessageText(message).includes('exec-stderr')).length,1);
+  assert.deepEqual(f.server.errors,[]);
+}));
+
+for(const closing of ['pause','close'])test(`普通桌面 ExtensionAPI.exec ${closing}：暂停／关闭收束子进程，只读重开与继续不重放`,async()=>withFixture({
+  calls:()=>[],callsOverride:[['extension_exec_probe',{}]],extensionExec:true,holdExtensionExec:true,
+},async f=>{
+  const page=f.handle.page,input=`普通桌面扩展在途命令 ${closing} ${f.nonce}`;
+  await page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first().fill(input);
+  await page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first().press('Enter');
+  const running=await waitForSnapshot(page,async snapshot=>{
+    let events=[];try{events=(await readFile(join(f.project,'extension-exec-events.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);}catch(error){if(error.code!=='ENOENT')throw error;}
+    const sessionId=Object.keys(snapshot.timelines).find(id=>snapshot.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+    return events.some(item=>item.event==='start')&&!!sessionId;
+  },undefined,'pi.exec must create exactly one owned child before pause/close');
+  const sessionId=Object.keys(running.timelines).find(id=>running.timelines[id].some(block=>block.kind==='message'&&block.role==='user'&&block.text===input));
+  assert.ok(sessionId);assert.equal(f.server.requests.length,1);
+  if(closing==='pause')await pauseAndDrain(f,sessionId);else await closeAndDrain(f);
+  if(closing==='close'){assert.equal(f.proc.exitCode,0);assert.equal(f.proc.signalCode,null);}
+  const results=(await readFile(join(f.project,'extension-exec-results.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  assert.deepEqual(results,[{stdout:'',stderr:'',code:0,killed:true}]);
+  const events=(await readFile(join(f.project,'extension-exec-events.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter(item=>item.event==='start').length,1);assert.equal(events.filter(item=>item.event==='sigterm').length,1);
+  const requestCount=f.server.requests.length;
+  const reopened=await reopenReadonly(f,sessionId,requestCount);
+  assert.equal(reopened.runs[sessionId].status,'paused');
+  assert.equal((await readFile(join(f.project,'extension-exec-results.jsonl'),'utf8')).trim().split('\n').filter(Boolean).length,1);
+  const primary=f.handle.page.locator('button[data-slot="composer-primary"]');assert.match(await primary.getAttribute('aria-label'),/^继续执行$|^Resume$/);await primary.click();
+  const resumed=await waitForSnapshot(f.handle.page,value=>value.runs[sessionId]?.status==='ready',undefined,'继续后 Durable 中断分支应收束到可读状态');
+  assert.ok(resumed.runs[sessionId].errorNote==null);
+  const finalEvents=(await readFile(join(f.project,'extension-exec-events.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  const finalResults=(await readFile(join(f.project,'extension-exec-results.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  assert.equal(finalEvents.filter(item=>item.event==='start').length,1,'只读重开和明确继续不得重启已经中断的 child');
+  assert.equal(finalEvents.filter(item=>item.event==='sigterm').length,1);
+  assert.deepEqual(finalResults,[{stdout:'',stderr:'',code:0,killed:true}]);
+  assert.equal(resumed.timelines[sessionId].filter(block=>block.kind==='message'&&block.role==='user').length,1);
+  assert.deepEqual(f.server.errors,[]);
 }));
 
 test('普通桌面图片输入：App投影、自然回执刷新、显式查回与只读重开保留原图片operation',async()=>withFixture({
@@ -579,7 +662,7 @@ const desktopStreamInput=nonce=>'DESKTOP_STREAM_INPUT_'+nonce;
 const desktopStreamPrefix=nonce=>'DESKTOP_STREAM_PARTIAL_'+nonce;
 const desktopStreamText=nonce=>desktopStreamPrefix(nonce)+'\nDESKTOP_STREAM_FINAL_'+nonce;
 const desktopStreamTraceFile='desktop-owned-stream-trace.json';
-function desktopStreamExtensionSource(nonce) {return `import {Type} from 'typebox';import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';
+function desktopStreamExtensionSource(nonce,method='streamSimple') {return `import {Type} from 'typebox';import {writeFile,rename} from 'node:fs/promises';import {join} from 'node:path';
 export default function(pi){pi.registerTool({name:${JSON.stringify(desktopStreamToolName)},label:'desktop owned stream',description:'One actual owned SDK stream with a live desktop tool update',parameters:Type.Object({}),
 async execute(id,args,signal,onUpdate,ctx){
   if(!signal||ctx.signal!==signal||signal.aborted)throw new Error('Original tool signal missing');
@@ -587,8 +670,8 @@ async execute(id,args,signal,onUpdate,ctx){
   const note=(phase,data={})=>{trace.steps.push({seq:trace.steps.length+1,phase,...data});const bytes=JSON.stringify(trace);writes=writes.then(async()=>{await writeFile(file+'.tmp',bytes);await rename(file+'.tmp',file);});return writes;};
   await note('execute-start');
   const model=ctx.modelRegistry.find('user-defined',${JSON.stringify(codingModel)});if(!model)throw new Error('Configured chat model missing');
-  const stream=ctx.modelRegistry.streamSimple(model,{messages:[{role:'user',content:${JSON.stringify(desktopStreamInput(nonce))},timestamp:Date.now()}]},
-    {signal,maxRetries:0,maxTokens:32,temperature:0});
+  const stream=ctx.modelRegistry[${JSON.stringify(method)}](model,{messages:[{role:'user',content:${JSON.stringify(desktopStreamInput(nonce))},timestamp:Date.now()}]},
+    {signal,maxRetries:0,maxTokens:32,temperature:0,...${JSON.stringify(method==='stream'?{toolChoice:'none'}:{})}});
   const synchronousStream=typeof stream?.then!=='function'&&typeof stream?.[Symbol.asyncIterator]==='function'&&typeof stream?.result==='function';
   await note('factory-returned',{synchronousStream});if(!synchronousStream)throw new Error('Public synchronous stream contract missing');
   const eventTypes=[];let deltas='';
@@ -603,7 +686,7 @@ async execute(id,args,signal,onUpdate,ctx){
     const result=await stream.result();
     await note('result-settled',{stopReason:result.stopReason,signalAborted:signal.aborted});
     if(signal.aborted||result.stopReason!=='stop')throw new Error('Interrupted stream cannot publish completed tool success');
-    const observed={nonce:${JSON.stringify(nonce)},originalToolCallId:id,method:'streamSimple',synchronousStream,eventTypes,deltas,
+    const observed={nonce:${JSON.stringify(nonce)},originalToolCallId:id,method:${JSON.stringify(method)},synchronousStream,eventTypes,deltas,
       message:{role:result.role,provider:result.provider,model:result.model,responseId:result.responseId,stopReason:result.stopReason,
         text:result.content.filter(part=>part.type==='text').map(part=>part.text).join(''),usage:result.usage}};
     await note('handler-returning');return {content:[{type:'text',text:JSON.stringify(observed)}],details:{ownedModelObservation:observed}};
@@ -675,7 +758,7 @@ async function desktopStreamSuccess(f) {
   assert.equal(f.server.requests.length,2);assert.equal(f.server.completeRequests.length,1);assert.equal(f.server.completeRequests[0],held.direct);assert.equal(held.direct.finished,true);assert.equal(held.direct.closedBeforeFinal,false);
   assert.ok(f.server.requests.every(request=>request.authOk&&request.body.model===codingModel));assert.deepEqual(f.server.errors,[]);
   const tools=completed.timelines[held.sessionId].filter(block=>block.kind==='tool'&&block.tool.name===desktopStreamToolName);assert.equal(tools.length,1);const block=tools[0];
-  const observed=JSON.parse(block.tool.output);assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,'actual-tool-1');assert.equal(observed.method,'streamSimple');assert.equal(observed.synchronousStream,true);
+  const observed=JSON.parse(block.tool.output);assert.equal(observed.nonce,f.nonce);assert.equal(observed.originalToolCallId,'actual-tool-1');assert.equal(observed.method,f.streamMethod);assert.equal(observed.synchronousStream,true);
   assert.equal(observed.message.role,'assistant');assert.equal(observed.message.provider,'user-defined');assert.equal(observed.message.model,codingModel);assert.equal(observed.message.responseId,held.direct.responseId);
   assert.equal(observed.message.stopReason,'stop');assert.equal(observed.message.text,desktopStreamText(f.nonce));assert.equal(observed.deltas,desktopStreamText(f.nonce));
   assert.ok(observed.eventTypes.includes('start'));assert.ok(observed.eventTypes.includes('text_delta'));assert.equal(observed.eventTypes.filter(type=>type==='done').length,1);assert.ok(!observed.eventTypes.includes('error'));
@@ -741,6 +824,13 @@ for(const closing of ['pause','close'])test(`普通桌面streamSimple/partial后
   calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,
 },desktopStreamInterrupted(closing)));
 
+
+for(const closing of ['success','pause','close'])test(`普通桌面原生stream/${closing}：真实partial、原HTTP生命周期与只读重开`,async()=>withFixture({
+  calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedStreamMethod:'stream',
+},async f=>{
+  if(closing==='success')await desktopStreamSuccess(f);else await desktopStreamInterrupted(closing)(f);
+  assert.equal(f.server.completeRequests.length,1);assert.equal(f.server.completeRequests[0].toolChoice,'none','原生选项必须进入实际HTTP');
+}));
 
 const desktopVirtualTraceFile='desktop-virtual-route.json';
 function desktopVirtualExtensionSource(nonce,wait=false) {
@@ -835,3 +925,78 @@ test('普通桌面provider headers：配置绑定启用、三次真实HTTP消费
 for(const closing of ['pause','close'])test(`普通桌面provider headers/partial后${closing}：原HTTP收束、RO零执行、明确继续重装但不重放`,async()=>withFixture({
   calls:()=>[],callsOverride:[[desktopStreamToolName,{}]],ownedStream:true,ownedProviderHeader:true,
 },async f=>{await desktopStreamInterrupted(closing)(f);await assertDesktopProviderHeader(f,closing);}));
+
+
+test('普通桌面 getContextUsage：实际配置与同步快照→下一 HTTP→pause/close→只读重开→继续不重放', async () => {
+  for (const stopping of ['pause', 'close']) await withFixture({
+    calls: () => [], holdFinal: true, contextUsage: true,
+    callsOverride: [[contextUsageIds.tool, { sample: 'first' }], [contextUsageIds.tool, { sample: 'second' }]],
+  }, async f => {
+    const page = f.handle.page, input = `桌面上下文用量 ${stopping} ${f.nonce}`;
+    assert.deepEqual(await contextUsageTrace(f.project), [], '设置、绑定和保存启用意图不加载项目扩展');
+    assert.equal(f.server.requests.length, 0);
+    const composer = page.getByPlaceholder(/交代需求|Describe|追问、补充|Follow up/).first();
+    await composer.fill(input); await composer.press('Enter');
+    const held = await waitForSnapshot(page, snapshot => {
+      const sessionId = Object.keys(snapshot.timelines).find(id => snapshot.timelines[id].some(block => block.kind === 'message' && block.role === 'user' && block.text === input));
+      return sessionId && f.server.requests.length === 3 && snapshot.timelines[sessionId].filter(block => block.kind === 'tool' && block.tool.name === contextUsageIds.tool && block.tool.status === 'done').length === 2;
+    });
+    const sessionId = Object.keys(held.timelines).find(id => held.timelines[id].some(block => block.kind === 'message' && block.role === 'user' && block.text === input));
+    const tools = held.timelines[sessionId].filter(block => block.kind === 'tool' && block.tool.name === contextUsageIds.tool);
+    const identities = tools.map(block => ({ id: block.id, output: block.tool.output }));
+    for (let index = 0; index < 2; index++) {
+      const block = tools[index], result = parseContextUsageResult(block.tool.output);
+      assertContextUsageObservation(assert, result, { nonce: f.nonce, callId: contextUsageIds.calls[index], ordinal: index + 1, modelId: codingModel });
+      const next = f.server.requests[index + 1]; assert.equal(next.authOk, true); assert.equal(next.body.model, codingModel);
+      assert.equal(next.body.messages.filter(message => message.role === 'tool' && message.tool_call_id === contextUsageIds.calls[index] && httpMessageText(message) === block.tool.output).length, 1);
+      const rendered = await visibleTool(page, block);
+      assert.equal(await rendered.innerText(), block.tool.output);
+      await rendered.screenshot({ path: join(evidenceDir('ordinary-context-usage'), `${stopping}-before-close-${index}-${f.nonce}.png`) });
+    }
+    const trace = await contextUsageTrace(f.project), observedEvents = trace.filter(item => item.kind === 'event-observed');
+    assert.equal(observedEvents.length, 2);
+    for (let index = 0; index < 2; index++) {
+      assert.equal(observedEvents[index].toolCallId, contextUsageIds.calls[index]);
+      assertContextUsageObservation(assert, { nonce: f.nonce, ...observedEvents[index].observed }, { nonce: f.nonce, ordinal: index + 1, modelId: codingModel });
+    }
+    assert.equal(trace.filter(item => item.kind === 'tool-start').length, 2);
+    if (stopping === 'pause') {
+      const primary = page.locator('button[data-slot="composer-primary"]');
+      assert.match(await primary.getAttribute('aria-label'), /^暂停$|^Pause$/); await primary.click();
+      await waitForSnapshot(page, snapshot => snapshot.runs[sessionId]?.status === 'paused');
+    }
+    const closingProcess = f.proc;
+    await f.handle.close(); assert.equal(closingProcess.exitCode, 0, '原 Electron ChildProcess 必须真实正常退出');
+    assert.equal(f.server.requests.length, 3, '暂停／关闭不得新增模型请求');
+    const afterCloseTrace = await contextUsageTrace(f.project);
+    f.handle = await launchApp(f.stateDir, f.env, '.', { prebindProject: false }); f.proc = f.handle.app.process();
+    await ready(f.handle.page); await gotoSession(f.handle.page, sessionId);
+    const reopened = await f.handle.page.evaluate(() => window.dcode.getSnapshot());
+    assert.equal(reopened.runs[sessionId].status, 'paused');
+    const original = reopened.timelines[sessionId].find(block => block.kind === 'message' && block.role === 'user' && block.text === input);
+    assert.ok(original.operationId);
+    await f.handle.page.evaluate(({ sessionId, blockId }) => window.dcode.checkReceipt({ sessionId, blockId }), { sessionId, blockId: original.id });
+    await f.handle.page.evaluate(() => window.dcode.getSnapshot());
+    assert.equal(f.server.requests.length, 3, '只读重开、导航、快照及回查没有新 HTTP');
+    assert.deepEqual(await contextUsageTrace(f.project), afterCloseTrace, '只读重开不加载扩展，不执行 getContextUsage 事件／工具');
+    assert.deepEqual(reopened.timelines[sessionId].filter(block => block.kind === 'tool' && block.tool.name === contextUsageIds.tool).map(block => ({ id: block.id, output: block.tool.output })), identities);
+    await visibleTool(f.handle.page, reopened.timelines[sessionId].find(block => block.id === tools[1].id));
+    f.server.releaseFinal();
+    const primary = f.handle.page.locator('button[data-slot="composer-primary"]');
+    assert.match(await primary.getAttribute('aria-label'), /^继续执行$|^Resume$/); await primary.click();
+    await f.handle.page.getByText(f.server.nonce, { exact: true }).waitFor();
+    const done = await waitForSnapshot(f.handle.page, snapshot => snapshot.runs[sessionId]?.status === 'ready' && snapshot.runs[sessionId]?.pendingInputs === 0);
+    assert.equal(f.server.requests.length, 4);
+    assert.equal(done.timelines[sessionId].filter(block => block.kind === 'message' && block.role === 'user' && block.text === input).length, 1);
+    assert.deepEqual(done.timelines[sessionId].filter(block => block.kind === 'tool' && block.tool.name === contextUsageIds.tool).map(block => ({ id: block.id, output: block.tool.output })), identities);
+    const finalTrace = await contextUsageTrace(f.project);
+    assert.equal(finalTrace.filter(item => item.kind === 'tool-start').length, 2, '明确继续不能重放已完成的原工具');
+    assert.equal(finalTrace.filter(item => item.kind === 'tool-completed').length, 2);
+    assert.equal(f.server.requests[3].body.messages.filter(message => message.role === 'tool' && contextUsageIds.calls.includes(message.tool_call_id)).length, 2);
+    assert.deepEqual(f.server.errors, []);
+    await writeFile(join(evidenceDir('ordinary-context-usage'), `${stopping}-${f.nonce}.json`),JSON.stringify({nonce:f.nonce,stopping,sessionId,
+      contextWindow:contextUsageIds.contextWindow,tools:identities,requests:f.server.requests.map(request=>({ordinal:request.ordinal,model:request.body.model,authOk:request.authOk})),
+      observedEvents,normalProcessExit:closingProcess.exitCode,readonlyReopenZeroHttp:true,readonlyReopenZeroExtensionLoad:true,
+      explicitContinue:true,originalToolIdsAndBodiesRetained:true,completedToolExecutions:finalTrace.filter(item=>item.kind==='tool-completed').length},null,2));
+  });
+});

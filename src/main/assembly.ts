@@ -74,6 +74,12 @@ function modelSourcePortFrom(
   cachedRecord: () => ProviderDirectoryRecord | null = () => null,
 ): ModelSourcePort {
   return {
+    hasTypedModel: async ({ sourceId, modelId, type }): Promise<boolean> => {
+      const record = await directoryStore.read().catch(() => null);
+      const preset = catalog.preset(sourceId);
+      return record?.credentials[sourceId] !== undefined && preset !== undefined
+        && (preset.provider.getAllModels?.() ?? []).some(model => model.type === type && model.provider === sourceId && model.id === modelId);
+    },
     list: async (): Promise<readonly ModelSourceEntry[]> => {
       const view = await catalog.view();
       // 凭据存在性只读「是否已存加密凭据」这一个事实，不读凭据正文参与目录。
@@ -244,7 +250,7 @@ async function configuredSourceModels(
           const override = deps.baseUrlOverrides?.[providerId];
           return (override ? { ...r.model, baseUrl: override } : r.model) as never;
         });
-      if (models.length > 0) out.push({ kind: "preset", providerId, preset, models });
+      if (models.length > 0 || (preset.provider.getAllModels?.() ?? []).some(model => model.type === 'classifier' || model.type === 'image')) out.push({ kind: "preset", providerId, preset, models });
       continue;
     }
     // 保留下来的自定义接入：当前选中别的来源时它仍然有效，会话选中它也要真能请求。

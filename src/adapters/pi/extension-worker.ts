@@ -1,28 +1,112 @@
 /** 普通 SDK 扩展在资源线程装配；消息端口只传有限 JSON，不另建智能体循环。 */
 export const extensionWorkerSource = String.raw`
-const { parentPort, workerData } = require('node:worker_threads');
+const { parentPort, workerData, threadId } = require('node:worker_threads');
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { isProxy } = require('node:util').types;
+const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
+const signalAddListener = EventTarget.prototype.addEventListener;
+const signalRemoveListener = EventTarget.prototype.removeEventListener;
 const invocation = new AsyncLocalStorage();
 const scopeOf = () => invocation.getStore()?.id;
 const { syncBuiltinESMExports } = require('node:module');
-let runner, sdk, sessionView, streamFactory, closed = false, state = { messages: [], systemPrompt: '', model: undefined };
+let runner, sdk, sessionView, streamFactory, closed = false, state = { systemPrompt: '', model: undefined };
 const calls = new Map(), replies = new Map(), children = new Set(), closings = new Set(), transports = new Set();
 const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
 const virtualModels = new Map(), virtualHandles = new Map();
 const providerHandles = new Map();
 let serial = 0, activated = new Set(), active = [], builtins = [], errors = [];
+let lastStateRequest = 0;
 const actionsByScope = new Map();
+const childProcessesByScope = new Map();
 const closingScopes = new Set();
+// 与 Pi 1.0.0 waitForChildProcess 的安静输出管道边界保持一致。
+const commandExitStdioGraceMs = 100;
 const nativeSpawn = cp.spawn;
+const isDurableInvocationScope = scope => typeof scope === 'string' && /^(tool|input|event)\//.test(scope);
+const ownsInvocationCommand = args => {
+  const options = args.length >= 3 ? args[2] : args[1];
+  return options?.shell === false && Array.isArray(options?.stdio)
+    && options.stdio[0] === 'ignore' && options.stdio[1] === 'pipe' && options.stdio[2] === 'pipe';
+};
 cp.spawn = (...args) => {
   if (closed) throw new Error('Resource session closed');
+  const own = invocation.getStore(), scope = own?.id;
+  const commandProcess = ownsInvocationCommand(args);
+  const controller = commandProcess && isDurableInvocationScope(scope) ? calls.get(scope) : undefined;
+  if (commandProcess && (own?.pure || !isDurableInvocationScope(scope) || !controller || controller.signal.aborted)) {
+    throw new Error('Extension command requires an active Worker invocation');
+  }
   const child = nativeSpawn(...args); children.add(child);
-  const done = new Promise(resolve => child.once('close', () => { children.delete(child); closings.delete(done); resolve(); }));
-  closings.add(done); return child;
+  let resolveDone;
+  const done = new Promise(resolve => { resolveDone = resolve; });
+  let abortChild, escalation, postExitTimer, exited = false, settled = false;
+  let stdoutEnded = child.stdout === null, stderrEnded = child.stderr === null;
+  const settleChild = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(postExitTimer); clearTimeout(escalation);
+    child.removeListener('error', onError); child.removeListener('exit', onExit); child.removeListener('close', onClose);
+    child.stdout?.removeListener('data', onOutput); child.stderr?.removeListener('data', onOutput);
+    child.stdout?.removeListener('end', onStdoutEnd); child.stderr?.removeListener('end', onStderrEnd);
+    children.delete(child); closings.delete(done);
+    if (controller) {
+      controller.signal.removeEventListener('abort', abortChild);
+      const ownChildren = childProcessesByScope.get(scope);
+      ownChildren?.delete(done);
+      if (ownChildren && ownChildren.size === 0 && childProcessesByScope.get(scope) === ownChildren) childProcessesByScope.delete(scope);
+    }
+    resolveDone();
+  };
+  const allOutputEnded = () => stdoutEnded && stderrEnded;
+  const finalizeAfterExit = () => {
+    if (exited && allOutputEnded()) settleChild();
+  };
+  const armPostExitIdle = () => {
+    if (!exited || settled) return;
+    clearTimeout(postExitTimer);
+    postExitTimer = setTimeout(settleChild, commandExitStdioGraceMs);
+  };
+  const onOutput = () => armPostExitIdle();
+  const onStdoutEnd = () => { stdoutEnded = true; finalizeAfterExit(); };
+  const onStderrEnd = () => { stderrEnded = true; finalizeAfterExit(); };
+  const onError = error => {
+    // Node 也会用 error 报告 kill 失败；它不能代替实际退出或 SDK 的输出静默边界。
+    void error;
+  };
+  const onExit = () => { exited = true; finalizeAfterExit(); if (!settled) armPostExitIdle(); };
+  const onClose = () => settleChild();
+  // kill 失败可能在 SIGTERM 与后续 SIGKILL 各发一次 error；直到真实 close/SDK 静默前都需留监听和归属。
+  child.on('error', onError); child.once('exit', onExit); child.once('close', onClose);
+  // 先让 SDK 安装 stdout/stderr 消费者；额外监听只对齐它的 idle 收束，不能抢走首段输出。
+  queueMicrotask(() => {
+    if (settled) return;
+    child.stdout?.on('data', onOutput); child.stderr?.on('data', onOutput);
+    child.stdout?.once('end', onStdoutEnd); child.stderr?.once('end', onStderrEnd);
+    if (exited) { finalizeAfterExit(); if (!settled) armPostExitIdle(); }
+  });
+  closings.add(done);
+  if (controller) {
+    let ownChildren = childProcessesByScope.get(scope);
+    if (!ownChildren) { ownChildren = new Set(); childProcessesByScope.set(scope, ownChildren); }
+    ownChildren.add(done);
+    abortChild = () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      try { child.kill('SIGTERM'); } catch { /* the close join reports the actual child state */ }
+      // 与 Pi 1.0.0 execCommand 的 AbortSignal 收束一致；即使扩展未传自己的 signal，也不能让失主进程永久悬挂。
+      escalation = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          try { child.kill('SIGKILL'); } catch { /* close remains the authoritative completion signal */ }
+        }
+      }, 5000);
+    };
+    if (controller.signal.aborted) abortChild();
+    else controller.signal.addEventListener('abort', abortChild, { once: true });
+  }
+  return child;
 };
 syncBuiltinESMExports();
 const safe = value => JSON.parse(JSON.stringify(value));
@@ -65,16 +149,20 @@ const commandContext = () => {
 const flush = async () => {
   // 动作归属于创建它的 invocation；普通工具的 finally 不能取走另一会话事件的关闭批次。
   const scope=scopeOf();
-  while (actionsByScope.get(scope)?.size) {
-    const current=[...actionsByScope.get(scope)];
-    try { await Promise.all(current); }
-    catch(error) {
-      // 已经开始 shutdown 的同 scope 普通 flush 可能先遇到拒绝；保留整批记录给 allSettled close drain。
-      if(!closingScopes.has(scope))forgetActions(scope,current);
-      throw error;
+  let failed = false, failure;
+  while (actionsByScope.get(scope)?.size || childProcessesByScope.get(scope)?.size) {
+    const current=[...(actionsByScope.get(scope) ?? [])];
+    if (current.length) {
+      const outcomes = await Promise.allSettled(current);
+      for (const outcome of outcomes) if (outcome.status === 'rejected' && !failed) { failed = true; failure = outcome.reason; }
+      // 已经开始 shutdown 的同 scope 普通 flush 不消费拒绝批次，交给 allSettled close drain。
+      if (failed && closingScopes.has(scope)) break;
+      forgetActions(scope,current);
     }
-    forgetActions(scope,current);
+    const childProcesses = [...(childProcessesByScope.get(scope) ?? [])];
+    if (childProcesses.length) await Promise.all(childProcesses);
   }
+  if (failed) throw failure;
 };
 const flushClosingActions = async scope => {
   // shutdown scope 与普通事件共享同一待完成事实，但不共享消费权；即使另一个同 scope flush 已短路，也等待全部动作和派生动作 settle。
@@ -193,6 +281,17 @@ const applyEntriesSnapshot = (entries, minimumRevision = entriesRevision(state.e
   state.entries = entries;
   refreshSession();
   return true;
+};
+const readContextUsage = () => {
+  const value = state.contextUsage;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !['tokens','contextWindow','percent'].includes(key))
+    || !Number.isSafeInteger(value.contextWindow) || value.contextWindow <= 0 || value.contextWindow !== state.model?.contextWindow) return undefined;
+  if (value.tokens === null && value.percent === null) return { tokens: null, contextWindow: value.contextWindow, percent: null };
+  if (typeof value.tokens !== 'number' || !Number.isFinite(value.tokens) || value.tokens < 0
+    || typeof value.percent !== 'number' || !Number.isFinite(value.percent) || value.percent < 0) return undefined;
+  // 每次给有限副本；统计查询不能改宿主快照，也不发送RPC／模型请求。
+  return { tokens: value.tokens, contextWindow: value.contextWindow, percent: value.percent };
 };
 async function initialize() {
   sdk = await import(workerData.sdk);
@@ -496,7 +595,77 @@ async function initialize() {
     }
     return pending;
   };
-  modelRegistry.streamSimple = (model, input, options = {}) => {
+  const ownedTyped = (operation, type) => (model, input, options = {}) => {
+    const own = invocation.getStore(), scope = scopeOf(), controller = calls.get(scope);
+    let origin = { api: '', provider: '', id: '' };
+    // classify 的公开合同是有限结果且不 reject；拒绝不能伪装成 chat 或补造服务商响应标识。
+    const failure = (aborted, message) => ({ api: origin.api ?? '', provider: origin.provider ?? '', model: origin.id ?? '',
+      ...(operation === 'classify' ? { answers: {} } : { output: [] }), stopReason: aborted ? 'aborted' : 'error', errorMessage: message, timestamp: Date.now() });
+    let signal, cancelFlight, actionId, listening = false, scopeListening = false;
+    const scopeSignal = controller?.signal;
+    const aborted = value => value !== undefined && signalAborted.call(value);
+    const cancel = () => { if (!cancelFlight) { cancelFlight = rpc('model-cancel', { actionId }, scope); cancelFlight.catch(() => {}); } };
+    const pending = (async () => {
+      try {
+        if (!own || own.pure || !scope?.startsWith('tool/') || !controller || sealedModelScopes.has(scope)) return failure(false, 'Formal host operation rejected');
+        // 不在有限结果保护外读取扩展对象；accessor/Proxy 也不能借错误元数据或清理再次抛出。
+        if (!model || typeof model !== 'object' || isProxy(model) || ![Object.prototype, null].includes(Object.getPrototypeOf(model))) return failure(false, 'Unsupported typed model');
+        const fields = {};
+        for (const key of ['provider', 'id', 'api']) {
+          const field = Object.getOwnPropertyDescriptor(model, key);
+          if (!field || !('value' in field) || typeof field.value !== 'string') return failure(false, 'Unsupported typed model');
+          fields[key] = field.value;
+        }
+        if (!validProvider(fields.provider) || !fields.id.trim() || fields.id.length > 256 || fields.api.length > 128) return failure(false, 'Unsupported typed model');
+        const canonical = state.modelCatalog?.byType?.[type]?.find(entry => entry.provider === fields.provider && entry.id === fields.id);
+        origin = canonical ? { api: canonical.api, provider: canonical.provider, id: canonical.id } : fields;
+        if (!canonical) return failure(false, 'Configured typed model unavailable');
+        if (!options || typeof options !== 'object' || Array.isArray(options) || isProxy(options) || Object.getPrototypeOf(options) !== Object.prototype) return failure(false, 'Unsupported typed options');
+        let requested = scopeSignal;
+        const parameters = {};
+        for (const key of Reflect.ownKeys(options)) {
+          const field = Object.getOwnPropertyDescriptor(options, key);
+          // 逐键赋值前先核允许集；__proto__ 等未知键不能被对象setter静默丢弃后绕过宿主校验。
+          if (typeof key !== 'string' || !(operation === 'classify' ? ['signal', 'temperature', 'timeoutMs', 'maxRetries', 'maxRetryDelayMs'] : ['signal', 'timeoutMs', 'maxRetries', 'maxRetryDelayMs']).includes(key)
+            || !field || !('value' in field)) return failure(false, 'Unsupported typed options');
+          if (key === 'signal') requested = field.value === undefined ? scopeSignal : field.value;
+          else parameters[key] = field.value;
+        }
+        // 原生 brand 检查在赋值前完成，拒绝冒充signal的getter；后续不调用扩展覆盖的方法。
+        if (requested !== undefined) signalAborted.call(requested);
+        signal = requested;
+        const seen = new Set();
+        const check = value => {
+          if (value === undefined || value === null || typeof value === 'string' || typeof value === 'boolean') return;
+          if (typeof value === 'number' && Number.isFinite(value)) return;
+          if (!value || typeof value !== 'object' || seen.has(value) || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) throw new Error('Unsupported typed value');
+          seen.add(value); Object.values(value).forEach(check); seen.delete(value);
+        };
+        check(input); check(parameters);
+        if (aborted(signal) || aborted(scopeSignal)) return failure(true, 'Request was aborted');
+        actionId = scope + '/' + operation + '/' + (++own.counter);
+        if (signal) { signalAddListener.call(signal, 'abort', cancel, { once: true }); listening = true; }
+        if (signal !== scopeSignal) { signalAddListener.call(scopeSignal, 'abort', cancel, { once: true }); scopeListening = true; }
+        const reply = await rpc(operation === 'classify' ? 'model-classify' : 'model-images', { caller: scope, actionId, provider: origin.provider, modelId: origin.id, input, options: parameters }, scope);
+        // Host 已收口真实子任务；保留其已确认 usage，包括带费用的错误或取消。
+        return reply.typed;
+      } catch { return failure(aborted(signal) || aborted(scopeSignal), 'Formal typed model operation rejected'); }
+      finally {
+        if (listening) signalRemoveListener.call(signal, 'abort', cancel);
+        if (scopeListening) signalRemoveListener.call(scopeSignal, 'abort', cancel);
+        if (cancelFlight) await cancelFlight.catch(() => {});
+      }
+    })();
+    // 即使扩展忽略 Promise，原工具也要等真实 host 事务及取消收口后才能完成。
+    if (scope && controller) {
+      const joined = modelPending.get(scope) ?? new Set(); modelPending.set(scope, joined); joined.add(pending);
+      pending.then(() => joined.delete(pending), () => joined.delete(pending));
+    }
+    return pending;
+  };
+  modelRegistry.classify = ownedTyped('classify', 'classifier');
+  modelRegistry.generateImages = ownedTyped('generateImages', 'image');
+  const ownedStream = method => (model, input, options = {}) => {
     const own = invocation.getStore(); const scope = scopeOf();
     if (!own || own.pure || !scope?.startsWith('tool/') || !calls.has(scope) || sealedModelScopes.has(scope)) return unavailable();
     const controller = calls.get(scope);
@@ -542,7 +711,7 @@ async function initialize() {
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal !== scopeSignal) scopeSignal.addEventListener('abort', cancel, { once: true });
     modelStreams.set(actionId, record);
-    const hostCall = rpc('model-stream', { caller: scope, actionId, provider: model.provider, modelId: model.id, input, options: parameters }, scope);
+    const hostCall = rpc('model-stream', { caller: scope, actionId, provider: model.provider, modelId: model.id, input, options: parameters, mode: method }, scope);
     // modelPending join 真实 host RPC 至 settled；result-only、提前 break 或本地取消都不能提前解除这笔事务。
     const joined = modelPending.get(scope) ?? new Set(); modelPending.set(scope, joined); joined.add(hostCall);
     hostCall.then(() => joined.delete(hostCall), () => joined.delete(hostCall));
@@ -572,6 +741,8 @@ async function initialize() {
     });
     return stream;
   };
+  modelRegistry.streamSimple = ownedStream('streamSimple');
+  modelRegistry.stream = ownedStream('stream');
   sessionView = sdk.SessionManager.inMemory(workerData.cwd, { id: state.sessionId }); refreshSession();
   const readMethods = new Set(['getCwd','getSessionDir','getSessionId','getSessionFile','getLeafId','getLeafEntry','getEntry','getLabel','getBranch','buildContextEntries','buildSessionProjection','getHeader','getEntries','getTree','getSessionName']);
   const sessionManager = new Proxy(sessionView, { get(target, key) {
@@ -612,10 +783,11 @@ async function initialize() {
     getCommands: () => runner.getRegisteredCommands(), setModel: unavailable,
     getThinkingLevel: () => state.thinkingLevel ?? 'off', setThinkingLevel: unavailable,
   }, {
-    getModel: () => state.model, getScopedModels: () => [], isIdle: () => calls.size === 0,
+    // Context模型与用量同属宿主帧；不能把只读模型引用变成项目扩展的写入口。
+    getModel: () => state.model ? structuredClone(state.model) : undefined, getScopedModels: () => [], isIdle: () => calls.size === 0,
     isProjectTrusted: () => !closed, getSignal: () => calls.get(scopeOf())?.signal,
     abort: () => queue('abort', {}), hasPendingMessages: () => false, shutdown: () => queue('shutdown', {}),
-    getContextUsage: () => undefined, compact: options => { rpc('compact', { instructions: options?.customInstructions }, scopeOf()).then(() => options?.onComplete?.(), () => options?.onError?.(new Error('正式压缩未完成'))); },
+    getContextUsage: readContextUsage, compact: options => { rpc('compact', { instructions: options?.customInstructions }, scopeOf()).then(() => options?.onComplete?.(), () => options?.onError?.(new Error('正式压缩未完成'))); },
     getSystemPrompt: () => state.systemPrompt, executeTool, getCallableTools: callables,
   }, { registerProvider: (provider,config) => {
       if (closed || invocation.getStore()?.pure || !scopeOf() || typeof provider!=='string') return unavailable();
@@ -718,10 +890,19 @@ async function request(message) {
   }
   if (closed) throw new Error('Resources unavailable');
   if (message.state) {
-    const minimumRevision = entriesRevision(state.entries);
-    state = { ...message.state, entries: state.entries };
-    // Host 状态异步读回后才送到线程；保留已确认的最高entry id，不能被晚到旧快照回滚。
-    applyEntriesSnapshot(message.state.entries, minimumRevision);
+    const frame = message.state.stateFrame;
+    if (!Number.isSafeInteger(message.id) || message.id <= 0 || !frame || frame.requestId !== message.id
+      || frame.sessionId !== workerData.sessionId || message.state.sessionId !== workerData.sessionId
+      || frame.resourceEpoch !== workerData.resourceEpoch || frame.threadId !== threadId) throw new Error('Resource frame identity mismatch');
+    if (message.id > lastStateRequest) {
+      const minimumRevision = entriesRevision(state.entries);
+      const olderEntries = entriesRevision(message.state.entries) < minimumRevision;
+      // model和usage一起接收，unknown也覆盖旧数。requestId仅是传输顺序，不是Durable revision。
+      state = { ...message.state, entries: state.entries, contextUsage: olderEntries ? undefined : message.state.contextUsage };
+      applyEntriesSnapshot(message.state.entries, minimumRevision);
+      lastStateRequest = message.id;
+    }
+    // 迟到旧state不能回滚模型／窗口；原operation仍按其原scope处理，不能当作重复任务丢弃。
   }
   if (message.method === 'init') return initialize();
   if (!runner) throw new Error('Resources unavailable');
@@ -776,7 +957,9 @@ async function request(message) {
       toolCallId: message.value.id, input: message.value.arguments, ...message.value.result }); await flush(); return result ?? {};
   }
   if (message.method === 'context') {
-    const messages = await runner.emitContext(state.messages); await flush(); syncTools(); return { messages };
+    // 迟到state可丢，但当次请求正文必须独立保留；最新统计帧不能替代原Generation输入。
+    if (!Array.isArray(message.value?.messages)) throw new Error('Original context messages unavailable');
+    const messages = await runner.emitContext(message.value.messages); await flush(); syncTools(); return { messages };
   }
   if (message.method === 'execute') {
     const tool = runner.getAllRegisteredTools().find(t => t.definition.name === message.value.name);

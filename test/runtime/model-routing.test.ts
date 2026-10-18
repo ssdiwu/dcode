@@ -711,6 +711,27 @@ void describe("真实请求事实：实际采用、用量与等待明确继续",
     assert.equal(reopened.requests.length, 2);
   });
 
+  void it('分类无responseId仍按原请求身份计费一次，hydrate/旧视图不回退且不改chat实际模型', () => {
+    const registry = registryWith('available');
+    const chat = { identity: identity('a','m'), responseId:'chat-one', result:'succeeded' as const, usage:{input:2,output:1,cacheRead:0,cacheWrite:0,requests:1} };
+    const baseline = registry.noteRequests('typed', {attributions:[chat], totals:null});
+    const typed = { identity:identity('typed-provider','classifier'), operation:'classify' as const, requestId:'51/tool/7/classify/2', result:'failed' as const,
+      usage:{input:17,output:3,cacheRead:0,cacheWrite:0,requests:1} };
+    const one = registry.noteRequests('typed',{attributions:[typed],totals:null});
+    assert.equal(one.actualResponseId, baseline.actualResponseId); assert.deepEqual(one.actual,baseline.actual);
+    assert.equal(one.lastResult,baseline.lastResult); assert.deepEqual(one.choice,baseline.choice);
+    assert.deepEqual(one.usage,{input:19,output:4,cacheRead:0,cacheWrite:0,requests:2});
+    assert.equal(isSessionModelState(one),true);
+    assert.equal('responseId' in one.requests[1]!,false,'原子任务身份不能伪造服务商responseId');
+    assert.equal(isSessionModelState({...one,requests:[...one.requests,one.requests[1]]}),false);
+    assert.equal(isSessionModelState({...one,requests:[{...one.requests[1],requestId:''}]}),false);
+    const reopened=registryWith('available');reopened.hydrate(registry.toRecord(),undefined);
+    const repeat=reopened.noteRequests('typed',{attributions:[typed,chat],totals:null});assert.deepEqual(repeat.usage,one.usage);
+    const two=reopened.noteRequests('typed',{attributions:[{...typed,requestId:'52/tool/7/classify/3',usage:null}],totals:null});
+    assert.equal(two.requests.length,3);assert.deepEqual(two.usage,one.usage);
+    assert.equal(two.actualResponseId,'chat-one');
+  });
+
   void it("显式改选后下一次请求用新来源：上一次实际采用的模型不得盖住新选择", async () => {
     const registry = registryWith("available");
     registry.noteRequests("s1", {

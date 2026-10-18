@@ -139,7 +139,7 @@ export class DurableModelRouting {
       || cp.phase !== 'execute' || typeof input.ownerTaskId !== 'number' || task.owner !== input.ownerTaskId
       || typeof input.caller !== 'string' || !input.caller.startsWith('tool/') || typeof input.actionId !== 'string'
       || !input.actionId.startsWith(input.caller + '/') || typeof input.provider !== 'string' || typeof input.modelId !== 'string'
-      || identity({ provider: input.provider, modelId: input.modelId }) !== expected || !this.#runtime.getModel(input.provider, input.modelId)) {
+      || identity({ provider: input.provider, modelId: input.modelId }) !== expected || !(input.mode === 'classify' || input.mode === 'generateImages' ? this.#runtime.getModelOfType(input.mode === 'classify' ? 'classifier' : 'image', input.provider, input.modelId) : this.#runtime.getModel(input.provider, input.modelId))) {
       throw new Error('Owned model request does not match its committed owner and identity');
     }
     const lease = { taskId, conversationId, requested: expected };
