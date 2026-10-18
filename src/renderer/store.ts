@@ -106,8 +106,10 @@ export interface UiState {
   selectedSessionId: string | null;
   /** 草稿目标：选中任务但尚未创建会话 */
   draftTaskId: string | null;
+  /** 新工作草稿的可选父长期任务；只保存界面意图，正式父归属由首发接收方写入。 */
+  draftParentTaskId?: string | null;
   /** 上次现场：重开时恢复的位置 */
-  lastScene: { sessionId: string | null; draftTaskId: string | null } | null;
+  lastScene: { sessionId: string | null; draftTaskId: string | null; draftParentTaskId: string | null } | null;
   expandedWorkspaceIds: string[];
   /** 任务子任务展开（多选，纯导航） */
   expandedTaskIds: string[];
@@ -139,6 +141,7 @@ export interface UiState {
 const DEFAULT_UI: UiState = {
   selectedSessionId: null,
   draftTaskId: null,
+  draftParentTaskId: null,
   lastScene: null,
   expandedWorkspaceIds: [],
   expandedTaskIds: [],
@@ -238,14 +241,19 @@ function normalizeReferencesOfDraft(raw: unknown): Record<string, WorkReference[
 export function normalizeUiState(raw: unknown): UiState {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_UI };
   const value = raw as Partial<UiState> & Record<string, unknown>;
-  const scene = value.lastScene as { sessionId?: unknown; draftTaskId?: unknown } | null | undefined;
+  const scene = value.lastScene as { sessionId?: unknown; draftTaskId?: unknown; draftParentTaskId?: unknown } | null | undefined;
   return {
     ...DEFAULT_UI,
     ...value,
     selectedSessionId: typeof value.selectedSessionId === "string" ? value.selectedSessionId : null,
     draftTaskId: typeof value.draftTaskId === "string" ? value.draftTaskId : null,
+    draftParentTaskId: typeof value.draftParentTaskId === "string" ? value.draftParentTaskId : null,
     lastScene: scene && typeof scene === "object"
-      ? { sessionId: typeof scene.sessionId === "string" ? scene.sessionId : null, draftTaskId: typeof scene.draftTaskId === "string" ? scene.draftTaskId : null }
+      ? {
+        sessionId: typeof scene.sessionId === "string" ? scene.sessionId : null,
+        draftTaskId: typeof scene.draftTaskId === "string" ? scene.draftTaskId : null,
+        draftParentTaskId: typeof scene.draftParentTaskId === "string" ? scene.draftParentTaskId : null,
+      }
       : null,
     expandedWorkspaceIds: stringArray(value.expandedWorkspaceIds),
     expandedTaskIds: stringArray(value.expandedTaskIds),

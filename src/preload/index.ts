@@ -53,6 +53,7 @@ const bridge: DCodeBridge = {
   createWorkspace: (input) => invoke("createWorkspace", input),
   getSnapshot: () => invoke("getSnapshot", undefined),
   createTask: (input) => invoke("createTask", input),
+  lookupTaskCreation: (input) => invoke("lookupTaskCreation", input),
   moveTask: (input) => invoke("moveTask", input),
   createSession: (input) => invoke("createSession", input),
   sendMessage: (input) => invoke("sendMessage", input),

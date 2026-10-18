@@ -183,6 +183,11 @@ export class SessionModelRegistry {
     return this.#write(sessionId, freshState(sessionId, choice));
   }
 
+  /** 对象保存草案使用有限初值；保存未确认前不登记孤立的会话模型事实。 */
+  prepareInitial(sessionId: string): SessionModelState {
+    return structuredClone(freshState(sessionId, this.#defaultChoice));
+  }
+
   /** 读取某条会话的模型状态。**已固定的会话不会被后来的默认改写**；
    *  未固定（历史数据）才在读取这一刻按当前默认补一次并立刻固定下来。 */
   read(sessionId: string): SessionModelState {

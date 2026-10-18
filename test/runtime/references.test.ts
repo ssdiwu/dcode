@@ -347,7 +347,7 @@ async function raceApp(t: TestContext, root: string) {
   );
   t.after(() => app.flush());
   await app.init();
-  const task = await app.createTask({ workspaceId: 'ws-race', parentId: null, title: '竞态任务' });
+  const task = await app.createTask({ operationId: 'create-fixture-references.test-350', workspaceId: 'ws-race', parentId: null, title: '竞态任务' });
   // 引用经应用自己的公开能力取得：scope 来自该任务所属工作空间，根就是隔离根
   const captured = await new NodeReferencePort().capture(
     { ...referenceScopeInput('ws-race'), folders: [root] }, 'file', 'r0/src/greet.js',
@@ -484,8 +484,8 @@ void test('成员会话的引用在调端口前被拒：读取与提交端口调
   }, undefined, undefined, undefined, undefined, undefined, countingPort);
   t.after(() => app.flush());
   await app.init();
-  const task = await app.createTask({ workspaceId: 'ws-auth', parentId: null, title: '授权任务' });
-  const main = await app.createSession({ taskId: task.id });
+  const task = await app.createTask({ operationId: 'create-fixture-references.test-487', workspaceId: 'ws-auth', parentId: null, title: '授权任务' });
+  const main = (await app.getSnapshot()).sessions.find(item => item.id === task.mainSessionId)!;
   const sub = await app.createSession({ taskId: task.id }); // 已有会话后再建 → kind = sub
   assert.equal(sub.kind, 'sub', '夹具前提：第二个会话是成员会话');
 

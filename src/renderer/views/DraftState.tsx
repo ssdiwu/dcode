@@ -66,10 +66,16 @@ export function DraftState({
   focusKey: number;
 }) {
   const t = useT();
-  // 继续区：有真实历史的近期任务（按会话更新时间，最多 5 个）
+  // 继续区按任务去重，保留各任务最近会话；侧栏任务行仍始终进入主会话。
+  const seenRecentTasks = new Set<string>();
   const recent = snapshot.sessions
     .filter((s) => (snapshot.timelines[s.id] ?? []).length > 0)
     .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter((s) => {
+      if (seenRecentTasks.has(s.taskId)) return false;
+      seenRecentTasks.add(s.taskId);
+      return true;
+    })
     .slice(0, 5)
     .map((session) => {
       const task = snapshot.tasks.find((t) => t.id === session.taskId);

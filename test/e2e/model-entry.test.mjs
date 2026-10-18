@@ -18,7 +18,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
-import { launchApp, ready, cleanup, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, ready, cleanup, waitForSnapshot, gotoSession } from "./helpers.mjs";
 
 /** loopback 公共目录源：只回一份最小、可校验的目录；不含任何账户或额度数据。 */
 function startCatalogLoop() {
@@ -115,17 +115,8 @@ test("D 片：两层模型入口按来源分组可搜索、条件参数只用逐
     });
     assert.ok(session?.id, "应能建立会话");
 
-    // 通过真实点击进入会话：侧栏里点开所属任务，收起态下会自动定位到该任务的首条会话
-    const taskTitle = await page.evaluate(async (id) => {
-      const snap = await window.dcode.getSnapshot();
-      return snap.tasks.find((t) => t.id === id)?.title ?? "";
-    }, session.taskId);
-    await page.getByRole("treeitem", { name: taskTitle }).click();
-    const sessionTitle = await page.evaluate(async (id) => {
-      const snap = await window.dcode.getSnapshot();
-      return snap.sessions.find((s) => s.id === id)?.title ?? "";
-    }, session.id);
-    await page.getByText(sessionTitle, { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
+    // N03：任务行只进入主会话；按目标ID导航，成员从独立展开入口进入。
+    await gotoSession(page, session.id);
 
     // 空会话走草稿页 Composer（同样按 sessionId 归属）；入口是否可用以它本身的可见性为准
     await openModelEntry(page);

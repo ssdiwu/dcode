@@ -34,6 +34,14 @@ function locationOf(
 let operationCounter = 0;
 const newOperationId = () => `op-${Date.now().toString(36)}-${(operationCounter++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+function draftKeyOf(ui: Pick<UiState, "selectedSessionId" | "draftTaskId" | "draftParentTaskId">): string | null {
+  if (ui.selectedSessionId) return ui.selectedSessionId;
+  if (!ui.draftTaskId) return null;
+  return ui.draftParentTaskId
+    ? `draft:${ui.draftTaskId}:child:${ui.draftParentTaskId}`
+    : `draft:${ui.draftTaskId}`;
+}
+
 export default function App() {
   const t = useT();
   const snapshot = useSnapshot();
@@ -68,16 +76,17 @@ export default function App() {
   useEffect(() => {
     if (!snapshot || booted) return;
     const home = snapshot.workspaces.find((w) => w.builtinHome);
-    const homeDraft = { draftTaskId: home?.defaultTaskId ?? null, selectedSessionId: null };
+    const homeDraft = { draftTaskId: home?.defaultTaskId ?? null, draftParentTaskId: null, selectedSessionId: null };
 
     if (snapshot.settings.coldStart === "restore" && ui.lastScene) {
-      const { sessionId, draftTaskId } = ui.lastScene;
+      const { sessionId, draftTaskId, draftParentTaskId } = ui.lastScene;
       const session = sessionId ? snapshot.sessions.find((s) => s.id === sessionId) : null;
       const draftTask = draftTaskId ? snapshot.tasks.find((t) => t.id === draftTaskId) : null;
+      const validDraftTask = draftTask && (!draftParentTaskId || (draftTask.id === draftParentTaskId && draftTask.kind === "long"));
       if (session) {
         selectSession(session.id, snapshot, patch, ui);
-      } else if (draftTask) {
-        selectDraft(draftTask.id, snapshot, patch, ui);
+      } else if (validDraftTask) {
+        selectDraft(draftTask.id, snapshot, patch, ui, draftParentTaskId);
       } else if (sessionId || draftTaskId) {
         // 恢复目标已不存在：回退到 Home 默认任务的新草稿，并说明结果
         setUi((prev) => ({
@@ -200,7 +209,7 @@ export default function App() {
   // 修复：经桥重新读快照——IPC 返回时应用层状态已提交，必然包含新对象。
   const latestSnapshot = () => window.dcode.getSnapshot();
 
-  const draftKey = ui.selectedSessionId ?? (ui.draftTaskId ? `draft:${ui.draftTaskId}` : null);
+  const draftKey = draftKeyOf(ui);
   const draft = draftKey ? (ui.drafts[draftKey] ?? "") : "";
 
   // C01「新文字」vs 同次旧输入的事实来源：
@@ -245,7 +254,7 @@ export default function App() {
   const selectAndRecord = (partial: Partial<UiState>) => {
     setUi((prev) => {
       const next = { ...prev, ...partial, notice: partial.notice ?? null };
-      next.lastScene = { sessionId: next.selectedSessionId, draftTaskId: next.draftTaskId };
+      next.lastScene = { sessionId: next.selectedSessionId, draftTaskId: next.draftTaskId, draftParentTaskId: next.draftParentTaskId ?? null };
       return next;
     });
   };
@@ -254,9 +263,9 @@ export default function App() {
     const generation = ++navigationGeneration.current;
     void latestSnapshot().then((s) => { if (navigationGeneration.current === generation) selectSession(sessionId, s, (p) => selectAndRecord(p), ui); });
   };
-  const handleSelectDraft = (taskId: string) => {
+  const handleSelectDraft = (taskId: string, parentTaskId: string | null = null) => {
     const generation = ++navigationGeneration.current;
-    void latestSnapshot().then((s) => { if (navigationGeneration.current === generation) selectDraft(taskId, s, (p) => selectAndRecord(p), ui); });
+    void latestSnapshot().then((s) => { if (navigationGeneration.current === generation) selectDraft(taskId, s, (p) => selectAndRecord(p), ui, parentTaskId); });
   };
 
   const handleSend = async (references: readonly WorkReference[] = []) => {
@@ -289,7 +298,11 @@ export default function App() {
       // 引用随本次发送一起带走：用户原文字与引用内容在执行端分成独立内容块。
       const result = ui.selectedSessionId
         ? await window.dcode.sendMessage({ sessionId: ui.selectedSessionId, text, references: referencesAtSend, mode: effectiveMode, operationId })
-        : await window.dcode.sendMessage({ taskId: ui.draftTaskId ?? undefined, text, references: referencesAtSend, mode: effectiveMode, operationId });
+        : await window.dcode.sendMessage({
+          taskId: ui.draftTaskId ?? undefined,
+          ...(ui.draftParentTaskId ? { parentTaskId: ui.draftParentTaskId } : {}),
+          text, references: referencesAtSend, mode: effectiveMode, operationId,
+        });
       // 续跑一律基于最新界面状态（等待回执期间用户可能已继续编辑或切走）：
       // 只清与本次提交仍对应（同键、同身份、内容未被新编辑替换）的原稿，其余草稿不动；
       // 首发进入新会话也仅当用户仍停留在同一草稿且未开始新编辑——切走或已改写的不拉回。
@@ -306,15 +319,21 @@ export default function App() {
           ? clearAcceptedDraft(prev, operationId, versionAtSend, sendModeRef.current)
           : prev;
         if (!ui.selectedSessionId) {
-          const currentKey = next.selectedSessionId ?? (next.draftTaskId ? `draft:${next.draftTaskId}` : null);
+          const currentKey = draftKeyOf(next);
           if (currentKey === key && sameVersion) {
-            next = { ...next, selectedSessionId: result.sessionId, draftTaskId: null, notice: null };
-            next.lastScene = { sessionId: result.sessionId, draftTaskId: null };
+            next = { ...next, selectedSessionId: result.sessionId, draftTaskId: null, draftParentTaskId: null, notice: null };
+            next.lastScene = { sessionId: result.sessionId, draftTaskId: null, draftParentTaskId: null };
           }
         }
         return next;
       });
-    } catch {
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "";
+      if (message.includes("父任务草稿归属无效") || message.includes("Unknown task:")) {
+        // 目标确已失效是明确拒绝；保留草稿与父任务意图，不能标成“结果未知”诱导查回。
+        setUi((prev) => ({ ...prev, notice: t("draft.targetUnavailable") }));
+        return;
+      }
       // 传输中断或返回未过接收侧校验：发送结果未知，不当成确定未接收——
       // 原文与发送身份保留，本次发送身份并入待核对标记（C02：Enter 不把待核对旧发送当新输入；
       // 换发送方式也不会让它改成新身份重投——这是「发送结果未知」的正式边界，未知只在原消息回查）
@@ -387,12 +406,18 @@ export default function App() {
           setSettingsSection("appearance");
           patch({ view: "settings" });
         }}
-        onCreateTask={(workspaceId, parentId, title) => {
-          void window.dcode.createTask({ workspaceId, parentId, title }).then((task) => {
-            patch({ expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, workspaceId])] });
-            if (parentId) patch({ expandedTaskId: parentId });
-            handleSelectDraft(task.id);
-          });
+        onNewDraft={(workspaceId, parentTaskId) => {
+          const workspace = snapshot.workspaces.find((w) => w.id === workspaceId);
+          if (workspace) {
+            handleSelectDraft(parentTaskId ?? workspace.defaultTaskId, parentTaskId);
+            patch({ view: "session" });
+          }
+        }}
+        onTaskCreated={(created) => {
+          // 设置页内也能创建任务：保存或查回成功须同时退出设置页并定位已保存主会话。
+          patch({ view: "session", expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, created.workspaceId])] });
+          // 命名任务保存时已带唯一主会话；进入它后首条输入不能再建空间根任务。
+          handleSelectSession(created.mainSessionId);
         }}
         onMoveTask={(taskId, targetWorkspaceId) => void window.dcode.moveTask({ taskId, targetWorkspaceId })}
         onWorkspaceCreated={(workspace) => {
@@ -442,7 +467,7 @@ export default function App() {
         ) : isDraft || sessionEmpty ? (
           <DraftState
             snapshot={snapshot}
-            locationLabel={locationOf(snapshot, ui.selectedSessionId, ui.draftTaskId, t("nav.defaultTask"))}
+            locationLabel={`${locationOf(snapshot, ui.selectedSessionId, ui.draftTaskId, t("nav.defaultTask"))}${ui.draftParentTaskId ? ` / ${t("nav.newShortTask")}` : ""}`}
             draft={draft}
             focusKey={focusKey}
             onDraftChange={(text) => draftKey && patch({ drafts: { ...ui.drafts, [draftKey]: text } })}
@@ -557,12 +582,14 @@ function selectSession(
   patch({
     selectedSessionId: sessionId,
     draftTaskId: null,
+    draftParentTaskId: null,
     expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, task.workspaceId])],
     // 父任务的子任务区展开（多选集合），当前任务的会话列表进入手风琴
     expandedTaskIds: task.parentId
       ? [...new Set([...ui.expandedTaskIds, task.parentId])]
       : ui.expandedTaskIds,
-    expandedTaskId: task.id,
+    // 进入主会话不代替用户操作展开箭头；进入成员会话才显露所属成员列表。
+    expandedTaskId: session.kind === "sub" ? task.id : ui.expandedTaskId,
   });
 }
 
@@ -571,12 +598,15 @@ function selectDraft(
   snapshot: AppSnapshot,
   patch: (p: Partial<UiState>) => void,
   ui: UiState,
+  parentTaskId: string | null = null,
 ): void {
   const task = snapshot.tasks.find((t) => t.id === taskId);
   if (!task) return;
+  if (parentTaskId && (task.id !== parentTaskId || task.kind !== "long")) return;
   patch({
     selectedSessionId: null,
     draftTaskId: taskId,
+    draftParentTaskId: parentTaskId,
     expandedWorkspaceIds: [...new Set([...ui.expandedWorkspaceIds, task.workspaceId])],
     expandedTaskIds: task.parentId
       ? [...new Set([...ui.expandedTaskIds, task.parentId])]

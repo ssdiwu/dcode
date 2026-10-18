@@ -141,8 +141,8 @@ test('真实会话的 resume 在保存 flight 在途时被拒（不是 Unknown s
     await app.init();
     try {
       // 先真实建 task + session（公开接口，不触碰私有字段）
-      const task = await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'resume-test' });
-      const session = await app.createSession({ taskId: task.id });
+      const task = await app.createTask({ operationId: 'create-fixture-model-setup-concurrent.test-144', workspaceId: 'ws-home', parentId: null, title: 'resume-test' });
+      const session = (await app.getSnapshot()).sessions.find(item => item.id === task.mainSessionId);
 
       // 开始保存：门控在 store 提交段
       const pSave = app.configureModel(baseInput());
@@ -207,8 +207,8 @@ function fixtureApplication(store, fixture, storage = { async load() { return { 
 }
 
 async function openPausedPort(app) {
-  const task = await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'paused-config' });
-  const session = await app.createSession({ taskId: task.id });
+  const task = await app.createTask({ operationId: 'create-fixture-model-setup-concurrent.test-210', workspaceId: 'ws-home', parentId: null, title: 'paused-config' });
+  const session = (await app.getSnapshot()).sessions.find(item => item.id === task.mainSessionId);
   await app.pauseRun({ sessionId: session.id });
   return session;
 }

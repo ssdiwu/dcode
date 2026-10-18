@@ -71,6 +71,8 @@ export type PendingFirstSend = Readonly<{
 export interface PersistedState {
   /** 同次创建的持久回执；仅正式保存成功后加入，旧文件缺省为空，不迁移旧对象。 */
   workspaceBindingReceipts?: Record<string, { workspaceId: string; selectionId: string; name: string }>;
+  /** 任务与唯一主会话同次保存的创建身份；只读查回不再次创建。 */
+  taskCreationReceipts?: Record<string, { workspaceId: string; title: string; taskId: string; sessionId: string }>;
   workspaces: Workspace[];
   tasks: Task[];
   sessions: Session[];

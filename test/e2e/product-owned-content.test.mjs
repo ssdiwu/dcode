@@ -163,7 +163,7 @@ test('渲染失败页双语说明真实影响和下一步，不展示底层错�
   try {
     const { page } = handle;
     await ready(page);
-    await page.evaluate(() => window.dcode.createTask({ workspaceId: 'ws-home', parentId: null, title: '__controlled_render_failure__' }));
+    await page.evaluate(() => window.dcode.createTask({ operationId: 'controlled-render-failure-task', workspaceId: 'ws-home', parentId: null, title: '__controlled_render_failure__' }));
     await page.addInitScript(() => {
       const find = Array.prototype.find;
       Array.prototype.find = function (...args) {

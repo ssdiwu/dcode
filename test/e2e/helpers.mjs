@@ -175,6 +175,53 @@ export async function waitForSnapshot(page, predicate, arg, message = "snapshot 
   }
 }
 
+/** 当前任务行就是主会话入口；成员仍由独立展开箭头进入，纯导航不调运行API。 */
+export async function gotoSession(page, sessionId) {
+  const snapshot = await page.evaluate(() => window.dcode.getSnapshot());
+  const session = snapshot.sessions.find(item => item.id === sessionId);
+  const task = snapshot.tasks.find(item => item.id === session?.taskId);
+  if (!session || !task) throw new Error('Navigation target session/task missing');
+  const workspaceRow = page.locator(`[data-workspace-id="${task.workspaceId}"] > [role="treeitem"]`);
+  if (await workspaceRow.getAttribute('aria-expanded') !== 'true') await workspaceRow.click({ timeout: 15_000 });
+  const taskRow = page.locator(`[data-task-id="${task.id}"]`);
+  if (session.kind === 'main') {
+    await taskRow.click({ timeout: 15_000 });
+  } else {
+    if (await taskRow.getAttribute('aria-expanded') !== 'true') await taskRow.getByRole('button', { name: /展开|Expand/ }).click({ timeout: 15_000 });
+    await page.locator(`[data-session-id="${sessionId}"]`).click({ timeout: 15_000 });
+    await page.waitForFunction(id => document.querySelector(`[data-session-id="${id}"]`)?.getAttribute('aria-current') === 'true', sessionId, { timeout: 15_000 });
+  }
+  // 同名任务或成员不能靠标题蒙混过关：核本次真实选中ID，而不是把界面位置当运行状态。
+  await page.waitForFunction(id => {
+    try { return JSON.parse(localStorage.getItem('dcode-prototype-ui-v1') ?? '{}').selectedSessionId === id; }
+    catch { return false; }
+  }, sessionId, { timeout: 15_000 });
+  // 空正式会话显示草稿页，不制造不存在的时间线标题；两态都先核真实目标ID。
+  if ((snapshot.timelines[sessionId] ?? []).length === 0) {
+    await page.getByRole('heading', { name: /开始一项新工作|Start new work/ }).waitFor({ timeout: 15_000 });
+    await page.locator('main textarea').waitFor({ state: 'visible', timeout: 15_000 });
+  } else {
+    await page.locator('main header').getByText(session.title, { exact: true }).waitFor({ timeout: 15_000 });
+  }
+}
+
+/** 空间新工作草稿是独立入口；不把命名任务行当成无会话草稿，导航不能创建对象或执行。 */
+export async function gotoWorkspaceDraft(page, workspaceId) {
+  const snapshot = await page.evaluate(() => window.dcode.getSnapshot());
+  const workspace = snapshot.workspaces.find(item => item.id === workspaceId);
+  if (!workspace?.defaultTaskId) throw new Error('Workspace draft anchor missing');
+  const row = page.locator(`[data-workspace-id="${workspaceId}"] > [role="treeitem"]`);
+  await row.hover({ timeout: 15_000 });
+  await row.getByRole('button', { name: /在此空间新建任务|New task in/ }).click({ timeout: 15_000 });
+  await page.getByRole('menuitem', { name: /新工作草稿|New work draft/ }).click({ timeout: 15_000 });
+  await page.waitForFunction(taskId => {
+    const state = JSON.parse(localStorage.getItem('dcode-prototype-ui-v1') ?? '{}');
+    return state.draftTaskId === taskId && state.draftParentTaskId === null && state.selectedSessionId === null && state.view === 'session';
+  }, workspace.defaultTaskId, { timeout: 15_000 });
+  await page.getByRole('heading', { name: /开始一项新工作|Start new work/ }).waitFor({ timeout: 15_000 });
+}
+
+
 /** 只验证显式隔离装配已提供能力，不通过正常产品设置伪造配置。 */
 export async function assertValidationModel(page) {
   const snapshot = await page.evaluate(() => window.dcode.getSnapshot());

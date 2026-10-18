@@ -8,6 +8,8 @@ Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chor
 
 [工作文件夹绑定](project-binding.test.mjs)使用拥有的真实临时目录与状态存储，核选择归属、目录失效、同次真实保存/重试、结果未知保护、查回只读与关闭/设置收束；mock后端只用来判别绑定没有启动工作。首次正常装配选择目录与实际SDK文件工具完整路径另见 `test/e2e/ordinary-coding-path.test.mjs`，界面/保存边界见 `test/e2e/project-binding.test.mjs`；原生可见选择器、真实用户项目和账户不在这些证据内。
 
+[任务创建与草稿归属](task-creation.test.mjs)使用隔离的真实异步 JSON 存储与受控执行端口，核命名任务与唯一主会话的同次保存、原创建 ID 防重及只读查回、真实保存失败／应答丢失、并发排队及关闭等待、不可读启动不能误报未找到，以及空间和父任务首次输入的正式归属。它不证明 SDK 或窗口；三种界面入口另见 `test/e2e/local-task-ui.test.mjs`，同命名任务看差异后再次输入、真实工具／测试1→0／新差异、在途直接关闭和只读重开／明确继续另见 `test/e2e/ordinary-coding-path.test.mjs`。联合门槛与独立状态统一见[本地路径实施记录](../../doc/验证记录/本地开发路径核对-2026-10-19/实施与联合验证.md)。未保存且被强制终止的表单意图不承诺无损恢复，模型服务和原生文件夹选择器的受控部分不能外推为真实账户／用户项目接受。
+
 [普通扩展与 MCP](ordinary-extension-mcp.test.mjs)使用实际 SDK、隔离项目／凭据与本地模型 HTTP 对端、真实 stdio／HTTP MCP，核注册工具／间接调用、错误与资源正文、输入处理／正式回执、配置刷新、暂停／直接关闭取消及不重放；Pi `ExtensionAPI.exec` 另核原 argv／cwd／输出／退出码、活动 owner 收束、安静继承管道与 kill error。桌面配置与真实渲染另见 `test/e2e/ordinary-extension-mcp.test.mjs`；本地协议服务不代表真实服务商、OAuth 或完整 SDK 兼容。
 
 [扩展类型化模型目录](ordinary-extension-typed-catalog.test.ts)使用真实 `CodingExtensions` Worker 与宿主 `ModelRuntime`，覆盖 chat/image/classifier 三类按类型读取、认证过滤的异步可用性与取消、provider 显示名／登记 ID 的宿主投影，以及 Provider／认证／refresh 操作的明确拒绝；不代表真实服务商、分类／图片请求或完整 SDK 已验收。

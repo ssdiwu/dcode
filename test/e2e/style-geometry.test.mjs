@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, cleanup, ready, assertValidationModel, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, cleanup, ready, assertValidationModel, waitForSnapshot, gotoSession } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 
 const EVIDENCE = evidenceDir("style-geometry");
@@ -126,6 +126,7 @@ test("焦点目标可辨：Tab 持焦目标自身有清晰内描边（壳内 Ste
     const workspace = page.getByRole("treeitem", { name: "D Code" });
     await workspace.hover();
     await workspace.getByRole("button", { name: "在此空间新建任务" }).click();
+    await page.getByRole('menuitem', { name: '新建长期任务' }).click();
     const labelInput = page.getByPlaceholder("任务名称");
     await labelInput.focus();
     const inputFocus = await page.evaluate(() => {
@@ -200,15 +201,12 @@ test("选中与悬停可辨（真实行交互）：点击迁移选中，悬停�
     assert.equal(hovBg, "rgba(23, 23, 23, 0.05)", "悬停行应为 hover 浅色 0.05α");
     assert.notEqual(selBg, hovBg, "选中与悬停必须可辨");
 
-    // 真实点击迁移选中：进会话后，其会话行应为 selected（选择经桥异步落，等其真实完成）
-    await other.click();
-    const sessionRow = page.getByRole("treeitem", { name: "《设计中的设计》摘抄" });
-    await sessionRow.waitFor({ state: "visible" });
-    await page.waitForFunction(() =>
-      document.querySelector('[role="treeitem"].bg-selected')?.textContent?.includes("摘抄"),
-    );
+    // N03主会话由任务行呈现选中；真实目标ID和原selected颜色分别核实。
+    await gotoSession(page, 'session-readme-1');
+    const sessionRow = page.locator('[data-task-id="task-readme"]');
+    await page.waitForFunction(() => document.querySelector('[data-task-id="task-readme"]')?.classList.contains('bg-selected'), null, { timeout: 15_000 });
     const selBg2 = await sessionRow.evaluate((el) => getComputedStyle(el).backgroundColor);
-    assert.equal(selBg2, "rgba(23, 23, 23, 0.09)", "点击后选中态迁移到会话行");
+    assert.equal(selBg2, "rgba(23, 23, 23, 0.09)", "点击后主会话所属任务行呈现原选中态");
 
     // 深色主题：selected 深 0.12α
     await page.evaluate(() => window.dcode.updateSettings({ theme: "dark" }));

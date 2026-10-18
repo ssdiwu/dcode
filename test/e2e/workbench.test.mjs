@@ -9,7 +9,7 @@ async function dump(page, tag) {
   console.log(`[dump ${tag}]`, JSON.stringify(body));
 }
 
-test("草稿态：继续区定位、推荐动作只填草稿、手风琴单展开", async () => {
+test("草稿态：继续区定位、推荐动作只填草稿、任务行进入主会话", async () => {
   const { page, stateDir, close } = await launchApp();
   try {
     await ready(page);
@@ -32,14 +32,14 @@ test("草稿态：继续区定位、推荐动作只填草稿、手风琴单展�
     await page.getByRole("button", { name: "新会话" }).waitFor();
     await page.getByText("D Code / 字号设置改为步进器", { exact: true }).waitFor();
 
-    // 手风琴：点开另一个任务，前一个会话列表收起
+    // 任务名称行只进入主会话，主会话本身不重复列在成员层。
     await page.getByRole("treeitem", { name: "整理读书笔记" }).click();
-    await page.getByRole("treeitem", { name: "《设计中的设计》摘抄" }).waitFor();
+    await page.locator("main header").getByText("Home / 整理读书笔记", { exact: true }).waitFor();
     const tree = page.getByRole("tree", { name: "工作空间与任务" });
     assert.equal(
-      await tree.getByRole("treeitem", { name: /字号步进器与默认值/ }).count(),
+      await tree.getByRole("treeitem", { name: /《设计中的设计》摘抄/ }).count(),
       0,
-      "展开新任务时，原任务的会话列表应收起",
+      "主会话不应重复出现在成员列表",
     );
   } finally {
     await close();
@@ -65,21 +65,30 @@ test("开发任务全链：发送、工具折叠与展开、无审批路径、�
     await workspaceRow.hover();
     await plusButton.waitFor({ state: "visible" });
     await plusButton.click({ force: true });
+    await page.getByRole("menuitem", { name: "新建长期任务" }).click();
     await page.getByPlaceholder("任务名称").fill("E2E 冒烟任务");
     await page.getByRole("button", { name: "创建" }).click();
     await page.getByText("D Code / E2E 冒烟任务", { exact: true }).waitFor().catch(async (e) => {
       await dump(page, "after-create");
       throw e;
     });
+    const afterCreate = await page.evaluate(() => window.dcode.getSnapshot());
+    const createdTask = afterCreate.tasks.find((task) => task.title === "E2E 冒烟任务");
+    const mainSession = afterCreate.sessions.find((session) => session.taskId === createdTask?.id && session.kind === "main");
+    assert.ok(createdTask && mainSession, "命名长期任务保存时已有唯一主会话");
+    assert.equal(afterCreate.sessions.filter((session) => session.taskId === createdTask.id).length, 1);
 
     await page.getByPlaceholder("交代需求、提问或粘贴内容…").fill("把 Composer 的焦点反馈收进容器壳");
     await page.getByPlaceholder("交代需求、提问或粘贴内容…").press("Enter");
 
-    // 草稿首发：建立新的空间直属短期任务 + 主会话，发送已接收
+    // 已命名长期任务的首条输入进入刚保存的主会话，不再另建空间根任务。
     // 用户消息与 mock 回复的引用会重复出现该文案，取第一个（用户气泡）
     await page.getByText("把 Composer 的焦点反馈收进容器壳", { exact: true }).first().waitFor();
     await page.getByText("已接收", { exact: true }).first().waitFor();
     await assertValidationModel(page);
+    const afterSend = await page.evaluate(() => window.dcode.getSnapshot());
+    assert.equal(afterSend.tasks.length, afterCreate.tasks.length, "已有长期任务发送不再新建短期任务");
+    assert.ok((afterSend.timelines[mainSession.id] ?? []).some((block) => block.kind === "message" && block.role === "user" && block.text === "把 Composer 的焦点反馈收进容器壳"), "原文落在该主会话");
 
     // 执行中：纯导航不改变执行状态（无权限步骤：旧审批卡已移除，全链不等待用户确认）
     await page.getByRole("treeitem", { name: "整理读书笔记" }).click();
@@ -88,7 +97,7 @@ test("开发任务全链：发送、工具折叠与展开、无审批路径、�
       0,
       "权限审批卡属旧形态，全链不应出现",
     );
-    await page.getByRole("treeitem", { name: /把 Composer 的焦点反馈收进容器壳/ }).click();
+    await page.getByRole("treeitem", { name: "E2E 冒烟任务" }).click();
     await page.getByText("执行中", { exact: true }).first().waitFor();
 
     // 失败块自动展开：可见错误输出与复制按钮
@@ -119,6 +128,22 @@ test("开发任务全链：发送、工具折叠与展开、无审批路径、�
     // 本轮结束：运行回到 ready 相位——没有「已完成」徽标可显示（端口无完成相，界面不推断）
     await page.getByText("本轮结束。", { exact: true }).waitFor();
     await page.getByText("执行中", { exact: true }).waitFor({ state: "hidden" });
+
+    // 从真实呈现的差异关闭返回后，继续在原主会话追问；此处是隔离界面链，
+    // 真实 SDK 再次修改与测试由普通编码路径的相连场景另证。
+    const beforeFollowUp = await page.evaluate(() => window.dcode.getSnapshot());
+    const currentSessionId = JSON.parse(await page.evaluate(() => localStorage.getItem("dcode-prototype-ui-v1") ?? "{}" )).selectedSessionId;
+    const followUp = "看完差异后继续调整焦点反馈";
+    await page.getByPlaceholder("追问、补充或纠正…").fill(followUp);
+    await page.getByPlaceholder("追问、补充或纠正…").press("Enter");
+    await page.waitForFunction(({ sessionId, text }) => {
+      const ui = JSON.parse(localStorage.getItem("dcode-prototype-ui-v1") ?? "{}");
+      return ui.selectedSessionId === sessionId && document.body.innerText.includes(text);
+    }, { sessionId: currentSessionId, text: followUp });
+    const afterFollowUp = await page.evaluate(() => window.dcode.getSnapshot());
+    assert.equal(afterFollowUp.tasks.length, beforeFollowUp.tasks.length, "检查差异后追问不新建任务");
+    assert.equal(afterFollowUp.sessions.length, beforeFollowUp.sessions.length, "检查差异后追问仍在原主会话");
+    assert.ok((afterFollowUp.timelines[currentSessionId] ?? []).some((block) => block.kind === "message" && block.role === "user" && block.text === followUp && block.receipt?.status === "accepted"), "原主会话实际接收追问");
   } finally {
     await close();
     cleanup(stateDir);

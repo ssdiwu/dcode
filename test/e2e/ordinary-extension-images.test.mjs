@@ -5,7 +5,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {launchApp,ready,waitForSnapshot,killApp} from './helpers.mjs';
+import { gotoSession,launchApp,ready,waitForSnapshot,killApp} from './helpers.mjs';
 import {prepareCodingProject} from './ordinary-coding-fixture.mjs';
 import {startImageLoopback,imageExtensionSource,imageFixtureIds as ids,makeImageFixtureAssets,makeCapacityImageAssets} from './ordinary-image-fixture.mjs';
 import {evidenceDir} from './evidence-root.mjs';
@@ -59,18 +59,6 @@ async function enableResources(page, stateDir) {
   assert.equal(await group.getByRole('radio', { name: /^开启$|^On$/ }).isChecked(), true);
   assert.equal(JSON.parse(await readFile(join(stateDir, 'dcode-prototype-state.json'), 'utf8')).settings.projectExtensionsEnabled, true);
   await page.keyboard.press('Escape');
-}
-async function gotoSession(page, sessionId) {
-  const snapshot = await page.evaluate(() => window.dcode.getSnapshot());
-  const session = snapshot.sessions.find(item => item.id === sessionId);
-  const task = snapshot.tasks.find(item => item.id === session?.taskId); assert.ok(session && task);
-  const workspaceRow = page.locator(`[data-workspace-id="${task.workspaceId}"] > [role="treeitem"]`);
-  if (await workspaceRow.getAttribute('aria-expanded') !== 'true') await workspaceRow.click();
-  const taskRow = page.locator(`[data-task-id="${task.id}"]`);
-  if (await taskRow.getAttribute('aria-expanded') !== 'true') await taskRow.click();
-  const row = page.locator(`[data-session-id="${sessionId}"]`); await row.click();
-  await page.waitForFunction(id => document.querySelector(`[data-session-id="${id}"]`)?.getAttribute('aria-current') === 'true', sessionId);
-  await page.locator('main header').getByText(session.title, { exact: true }).waitFor();
 }
 
 async function openModel(page){

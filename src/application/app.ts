@@ -21,6 +21,9 @@ import type {
   WorkUsage,
   Workspace,
   ProjectFolderSelection,
+  CreatedTask,
+  TaskCreationIntent,
+  TaskCreationLookup,
   ModelIdentity,
 } from "@/contracts";
 import type { ModelSourcesView, QuotaFacts, SetDefaultModelChoiceResult, TaskUsageBySource, TaskUsageScopeEntry, TaskUsageSummary } from "@/contracts";
@@ -79,6 +82,12 @@ let counter = 0;
 const nextId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
 const POLL_MS = 500;
+
+type TaskCreationProposal = {
+  task: Task;
+  session: Session;
+  model: SessionModelState;
+};
 
 /**
  * 按历史留存的身份字段复原引用集合（正文留空）。
@@ -142,6 +151,10 @@ export class DCodeApplication {
   private stateSaveQueue: Promise<unknown> | null = null;
   private readonly workspaceFlights = new Map<string, Promise<Workspace>>();
   private readonly unknownWorkspaceBindings = new Map<string, { workspace: Workspace; task: Task; selectionId: string; name: string }>();
+  private readonly taskCreationFlights = new Map<string, { input: TaskCreationIntent; result: Promise<CreatedTask> }>();
+  private readonly unknownTaskCreations = new Map<string, TaskCreationProposal>();
+  /** 只有可靠读到原状态／确认不存在，才可把缺回执解释为not-found；种子展示不算。 */
+  private taskCreationHistoryReadable = false;
   private settingsSeq = 0;
   private readonly stateSaveFlights = new Set<Promise<unknown>>();
 
@@ -185,6 +198,7 @@ export class DCodeApplication {
 
   async init(): Promise<void> {
     const loaded = await this.storage.load();
+    this.taskCreationHistoryReadable = loaded.status === 'ok' || loaded.status === 'missing';
     let maySave = true;
     if (loaded.status === "ok") {
       this.state = normalizeLegacy(loaded.state);
@@ -251,11 +265,15 @@ export class DCodeApplication {
     // 首发在途关联是应用层内部协调状态，不通过桥暴露给界面
     delete base.pendingFirstSends;
     delete base.workspaceBindingReceipts;
+    delete base.taskCreationReceipts;
     delete base.runtimeCreationPending;
     delete base.modelCandidateScopeConfigured;
     const pending = this.unknownWorkspaceBindings.entries().next().value;
     base.pendingWorkspaceCreation = pending ? { operationId: pending[0], selectionId: pending[1].selectionId,
       name: pending[1].name, path: pending[1].workspace.folders[0] } : null;
+    const taskCreation = this.unknownTaskCreations.entries().next().value;
+    base.pendingTaskCreation = taskCreation ? { operationId: taskCreation[0], workspaceId: taskCreation[1].task.workspaceId,
+      title: taskCreation[1].task.title } : null;
     // 可用性唯一依据：宿主实际装配 + 已配置记录里**确有凭据**（clear 后 backend 仍在但
     // 缺凭据，必须恢复「缺模型 不可发送」，不能以 label/modelName 非 null 伪解锁；配置不发网络探针验证）。
     const effectiveAvailable = this.currentBackend.modelName !== null
@@ -560,12 +578,16 @@ export class DCodeApplication {
   }
 
   /** 入口处能定位到的既有会话（按 operationId 或显式 sessionId）；定位不到就是新会话。 */
-  private resolveEntrySession(input: { sessionId?: string; operationId?: string }): Session | null {
+  private resolveEntrySession(input: { sessionId?: string; taskId?: string; parentTaskId?: string; operationId?: string }): Session | null {
     if (input.operationId) {
       const located = this.locateByOperation(input.operationId);
       if (located) return located;
     }
-    if (!input.sessionId) return null;
+    if (!input.sessionId) {
+      const task = this.state.tasks.find(task => task.id === input.taskId);
+      return task && !task.isDefault && input.parentTaskId === undefined
+        ? this.state.sessions.find(session => session.taskId === task.id && session.kind === 'main') ?? null : null;
+    }
     return this.state.sessions.find((s) => s.id === input.sessionId) ?? null;
   }
 
@@ -973,6 +995,7 @@ export class DCodeApplication {
   /** 未核实的保存可能已提交；所有整表写入必须等待同身份查回，不能仅保护绑定这一条调用。 */
   private saveState(state: PersistedState): Promise<void> {
     if (this.unknownWorkspaceBindings.size) return Promise.reject(new Error('project-binding-save-unknown'));
+    if (this.unknownTaskCreations.size || this.unknownWorkspaceBindings.size) return Promise.reject(new Error('task-create-blocked'));
     return this.storage.save(state);
   }
 
@@ -986,28 +1009,130 @@ export class DCodeApplication {
     return run;
   }
 
-  async createTask(input: { workspaceId: string; parentId: string | null; title: string }): Promise<Task> {
-    const workspace = this.state.workspaces.find((w) => w.id === input.workspaceId);
-    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
-    if (input.parentId) {
-      const parent = this.state.tasks.find((t) => t.id === input.parentId);
-      if (!parent || parent.workspaceId !== input.workspaceId) throw new Error("Parent task not in workspace");
-      // 任务类型与父子归属分离：只有长期任务可再建短期子任务（树动作同步约束）
-      if (parent.kind !== "long") throw new Error("短期任务不能再建子任务");
+  createTask(input: TaskCreationIntent & { parentId: null }): Promise<CreatedTask> {
+    if (validateOperationInput('createTask', input)) return Promise.reject(new Error('task-create-invalid-target'));
+    if (!this.taskCreationHistoryReadable) return Promise.reject(new Error('task-create-unknown'));
+    const intent = { operationId: input.operationId, workspaceId: input.workspaceId, title: input.title.trim() };
+    const known = this.createdTask(input.operationId);
+    if (known) {
+      const receipt = this.state.taskCreationReceipts![input.operationId];
+      // 创建输入身份固定；其后合法移动/改名不能让同次创建变成另建或回滚对象。
+      if (receipt.workspaceId !== intent.workspaceId || receipt.title !== intent.title) return Promise.reject(new Error('task-create-conflict'));
+      return Promise.resolve(known);
     }
-    const task: Task = {
-      id: nextId("task"),
-      workspaceId: input.workspaceId,
-      parentId: input.parentId,
-      kind: input.parentId ? "short" : "long",
-      title: input.title.trim() || "未命名任务",
-      boundFolder: null,
-      isDefault: false,
-      updatedAt: Date.now(),
-    };
-    this.state.tasks.push(task);
-    this.commit();
-    return task;
+    const flight = this.taskCreationFlights.get(intent.operationId);
+    if (flight) return flight.input.workspaceId === intent.workspaceId && flight.input.title === intent.title
+      ? flight.result : Promise.reject(new Error('task-create-conflict'));
+    const unknown = this.unknownTaskCreations.get(intent.operationId);
+    if (unknown) {
+      if (unknown.task.workspaceId !== intent.workspaceId || unknown.task.title !== intent.title) return Promise.reject(new Error('task-create-conflict'));
+      return this.lookupTaskCreation({ operationId: intent.operationId }).then(result => {
+        if (result.status === 'created') return result.task;
+        throw new Error(result.status === 'unknown' ? 'task-create-unknown' : 'task-create-save-failed');
+      });
+    }
+    if (this.closingStarted) return Promise.reject(new Error('task-create-closing'));
+    // 本ID没有保存尝试，前项未知只会阻挡它，不能伪报本项结果未知。
+    if (this.unknownTaskCreations.size) return Promise.reject(new Error('task-create-blocked'));
+    // 命名任务不是工作草稿：任务、唯一主会话、模型初值和创建回执一起落盘后才发布。
+    const release = this.claimStateSave();
+    const result = this.serializeStateSave(async () => {
+      // 排队期间前次保存可能变未知；尚未发出本次写盘，不能进入“本次结果未知”的catch。
+      if (this.unknownTaskCreations.size || this.unknownWorkspaceBindings.size) throw new Error('task-create-blocked');
+      if (!this.state.workspaces.some(workspace => workspace.id === intent.workspaceId)) throw new Error('task-create-invalid-target');
+      const task: Task = { id: nextId('task'), workspaceId: intent.workspaceId, parentId: null, kind: 'long', title: intent.title,
+        boundFolder: null, isDefault: false, updatedAt: Date.now() };
+      const session: Session = { id: nextId('session'), taskId: task.id, title: intent.title, kind: 'main', updatedAt: Date.now() };
+      const proposal = { task, session, model: this.sessionModels.prepareInitial(session.id) };
+      const draft = this.persistedState();
+      draft.tasks.push(task); draft.sessions.push(session);
+      draft.timelines[session.id] = []; draft.runs[session.id] = idleRun(session.id);
+      draft.sessionModels[session.id] = proposal.model;
+      (draft.runtimeCreationPending ??= []).push(session.id);
+      draft.taskCreationReceipts = { ...draft.taskCreationReceipts,
+        [intent.operationId]: { workspaceId: task.workspaceId, title: task.title, taskId: task.id, sessionId: session.id } };
+      try { await this.saveState(draft); }
+      catch (cause) {
+        this.diagnose('task-create-save-failed', cause);
+        this.unknownTaskCreations.set(intent.operationId, proposal);
+        const observed = await this.readTaskCreation(intent.operationId, proposal);
+        if (observed === 'unknown') throw new Error('task-create-unknown');
+        if (observed === 'missing') {
+          this.unknownTaskCreations.delete(intent.operationId);
+          throw new Error('task-create-save-failed');
+        }
+      }
+      return this.publishTaskCreation(intent.operationId, proposal);
+    }).finally(() => {
+      this.taskCreationFlights.delete(intent.operationId); release();
+      if (this.unknownTaskCreations.size) this.publishTaskCreationSnapshot();
+      else this.scheduleSave(150);
+    });
+    this.taskCreationFlights.set(intent.operationId, { input: intent, result });
+    return result;
+  }
+
+  /** 只从已确认的产品对象和持久回执派生定位，不按名称或当前选中对象猜主会话。 */
+  private createdTask(operationId: string): CreatedTask | null {
+    const receipts = this.state.taskCreationReceipts ?? {};
+    const receipt = Object.hasOwn(receipts, operationId) ? receipts[operationId] : undefined;
+    if (!receipt) return null;
+    const task = this.state.tasks.find(task => task.id === receipt.taskId);
+    const main = this.state.sessions.find(session => session.id === receipt.sessionId && session.taskId === receipt.taskId && session.kind === 'main');
+    if (!task || !main || task.kind !== 'long' || task.parentId !== null || task.isDefault) throw new Error('task-create-unknown');
+    return { ...structuredClone(task), operationId, mainSessionId: main.id };
+  }
+
+  private async readTaskCreation(operationId: string, proposal: TaskCreationProposal): Promise<'saved' | 'missing' | 'unknown'> {
+    const observed = await this.storage.readCurrent?.().catch(() => null);
+    if (observed?.status !== 'ok' || !Array.isArray(observed.state.tasks) || !Array.isArray(observed.state.sessions)) return 'unknown';
+    const receipts = observed.state.taskCreationReceipts ?? {};
+    const receipt = Object.hasOwn(receipts, operationId) ? receipts[operationId] : undefined;
+    const tasks = observed.state.tasks.filter(task => task.id === proposal.task.id);
+    const sessions = observed.state.sessions.filter(session => session.id === proposal.session.id);
+    if (!receipt && !tasks.length && !sessions.length) return 'missing';
+    if (receipt?.taskId !== proposal.task.id || receipt.sessionId !== proposal.session.id || receipt.workspaceId !== proposal.task.workspaceId
+      || receipt.title !== proposal.task.title || tasks.length !== 1 || sessions.length !== 1
+      || JSON.stringify(tasks[0]) !== JSON.stringify(proposal.task) || JSON.stringify(sessions[0]) !== JSON.stringify(proposal.session)
+      || !observed.state.runs?.[proposal.session.id] || !observed.state.sessionModels?.[proposal.session.id]) return 'unknown';
+    return 'saved';
+  }
+
+  private publishTaskCreation(operationId: string, proposal: TaskCreationProposal): CreatedTask {
+    const known = this.createdTask(operationId);
+    if (known) return known;
+    const { task, session, model } = proposal;
+    this.state.tasks.push(task); this.state.sessions.push(session);
+    this.state.timelines[session.id] = []; this.state.runs[session.id] = idleRun(session.id);
+    (this.state.runtimeCreationPending ??= []).push(session.id);
+    this.sessionModels.pin(session.id, model.choice);
+    this.state.taskCreationReceipts = { ...this.state.taskCreationReceipts,
+      [operationId]: { workspaceId: task.workspaceId, title: task.title, taskId: task.id, sessionId: session.id } };
+    this.unknownTaskCreations.delete(operationId);
+    this.publishTaskCreationSnapshot();
+    return this.createdTask(operationId)!;
+  }
+
+  private publishTaskCreationSnapshot(): void {
+    const snapshot = this.snapshot();
+    for (const listener of this.listeners) listener(snapshot);
+  }
+
+  async lookupTaskCreation(input: { operationId: string }): Promise<TaskCreationLookup> {
+    if (validateOperationInput('lookupTaskCreation', input)) throw new Error('task-create-invalid-target');
+    if (!this.taskCreationHistoryReadable) return { operationId: input.operationId, status: 'unknown' };
+    const known = this.createdTask(input.operationId);
+    if (known) return { operationId: input.operationId, status: 'created', task: known };
+    const proposal = this.unknownTaskCreations.get(input.operationId);
+    if (!proposal) return { operationId: input.operationId, status: this.taskCreationFlights.has(input.operationId) ? 'unknown' : 'not-found' };
+    const observed = await this.readTaskCreation(input.operationId, proposal);
+    if (observed === 'unknown') return { operationId: input.operationId, status: 'unknown' };
+    if (observed === 'missing') {
+      this.unknownTaskCreations.delete(input.operationId); this.publishTaskCreationSnapshot();
+      return { operationId: input.operationId, status: 'not-found' };
+    }
+    // 查回只合入已保存事实，不调commit定时器、不写盘，也不初始化运行。
+    return { operationId: input.operationId, status: 'created', task: this.publishTaskCreation(input.operationId, proposal) };
   }
 
   async moveTask(input: { taskId: string; targetWorkspaceId: string }): Promise<void> {
@@ -1186,6 +1311,7 @@ export class DCodeApplication {
   async sendMessage(input: {
     sessionId?: string;
     taskId?: string;
+    parentTaskId?: string;
     text: string;
     mode: "steer" | "follow-up";
     operationId?: string;
@@ -1194,6 +1320,10 @@ export class DCodeApplication {
   }): Promise<SendResult> {
     const text = input.text.trim();
     if (!text) throw new Error("空消息不发送");
+    if (input.parentTaskId !== undefined) {
+      const parent = this.state.tasks.find(task => task.id === input.parentTaskId);
+      if (input.sessionId || input.taskId !== input.parentTaskId || !parent || parent.kind !== 'long') throw new Error('父任务草稿归属无效');
+    }
     // 关闭意图已认领：新输入立刻拒，不绕过最后一次收束
     if (this.closingStarted) return { sessionId: input.sessionId ?? "", receipt: { status: "not-accepted", operationId: input.operationId ?? "", reason: "storage-rejected" } };
     // 凭据已被清除（keyAction=clear）后，即便 backend 仍在也不得视为可执行——避免无 key 状态下真实发请求
@@ -1220,6 +1350,7 @@ export class DCodeApplication {
   async #sendMessageCore(input: {
     sessionId?: string;
     taskId?: string;
+    parentTaskId?: string;
     text: string;
     references?: readonly WorkReference[];
     mode: "steer" | "follow-up";
@@ -1248,7 +1379,9 @@ export class DCodeApplication {
       // 对象已建但接收未确认时不重复建对象。在途关联随 state 持久化，重开后仍复用。
       const draftTask = this.state.tasks.find((t) => t.id === input.taskId);
       if (!draftTask) throw new Error(`Unknown task: ${input.taskId}`);
-      const pending = this.state.pendingFirstSends[draftTask.id];
+      // 父任务短期草稿与同空间根草稿不能共用一个在途槽；旧根草稿键仍按原身份恢复。
+      const draftKey = input.parentTaskId === undefined ? draftTask.id : `child:${draftTask.id}`;
+      const pending = this.state.pendingFirstSends[draftKey];
       if (pending) {
         session = this.state.sessions.find((s) => s.id === pending.sessionId);
         // 同次重试（原文+模式未变）复用同一 operationId；内容变了就是新的发送身份
@@ -1258,12 +1391,17 @@ export class DCodeApplication {
         } else {
           operationId = input.operationId ?? nextId("op");
         }
-        this.state.pendingFirstSends[draftTask.id] = { sessionId: pending.sessionId, text, mode: input.mode, operationId };
+        this.state.pendingFirstSends[draftKey] = { sessionId: pending.sessionId, text, mode: input.mode, operationId };
       }
       if (!session) {
-        const task = this.newShortTask(draftTask.workspaceId, text);
-        session = this.newMainSession(task, text);
-        this.state.pendingFirstSends[draftTask.id] = { sessionId: session.id, text, mode: input.mode, operationId };
+        if (input.parentTaskId === undefined && !draftTask.isDefault) {
+          // 已命名任务的首条输入属于它自己的主会话，不能再造一个空间根任务。
+          session = this.state.sessions.find(item => item.taskId === draftTask.id && item.kind === 'main') ?? this.newMainSession(draftTask, text);
+        } else {
+          const task = this.newShortTask(draftTask.workspaceId, text, input.parentTaskId ?? null);
+          session = this.newMainSession(task, text);
+        }
+        this.state.pendingFirstSends[draftKey] = { sessionId: session.id, text, mode: input.mode, operationId };
       }
       // 两阶段次序：对象与首发关联先真实落盘，再进入执行端接收。
       // 保存失败/未知时不调用执行端、不丢目标、不重复建对象；重试复用本次关联（规格：冷启动与草稿态）。
@@ -1276,6 +1414,13 @@ export class DCodeApplication {
         for (const listener of this.listeners) listener(snap);
         return { sessionId: session.id, receipt: { status: "not-accepted", operationId, reason: "storage-rejected" } };
       }
+    }
+    if (input.taskId) {
+      const anchor = this.state.tasks.find(task => task.id === input.taskId);
+      const actual = this.state.tasks.find(task => task.id === session.taskId);
+      if (!anchor || !actual || actual.workspaceId !== anchor.workspaceId
+        || (input.parentTaskId !== undefined ? actual.parentId !== input.parentTaskId
+          : anchor.isDefault ? actual.parentId !== null : actual.id !== anchor.id)) throw new Error('发送身份与草稿父任务归属冲突');
     }
     // 业务接收方在推进执行前核对引用归属：目标工作空间、来源自洽与定位形状。
     // 不匹配即拒收——不推进执行、不改事实、不伪报接收。
@@ -1793,11 +1938,11 @@ export class DCodeApplication {
 
   // ---------- 执行端协调 ----------
 
-  private newShortTask(workspaceId: string, text: string): Task {
+  private newShortTask(workspaceId: string, text: string, parentId: string | null = null): Task {
     const task: Task = {
       id: nextId("task"),
       workspaceId,
-      parentId: null, // 空间直属短期任务：类型与 parentId 分离
+      parentId, // 空间根草稿和父任务草稿由显式归属区分，类型仍固定短期。
       kind: "short",
       title: text.slice(0, 24) || "未命名任务",
       boundFolder: null,

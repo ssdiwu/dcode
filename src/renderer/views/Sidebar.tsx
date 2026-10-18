@@ -1,18 +1,40 @@
 // 侧栏树：工作空间（根节点，始终可见）→ 任务（两级）→ 会话（单任务手风琴）。
 // 树的展开/收起与选择都是纯导航，不改变任何执行状态。
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ChevronRight, FolderClosed, MoreHorizontal, Plus, Settings as SettingsIcon } from "lucide-react";
-import type { AppSnapshot, Session, Task, Workspace, WorkspaceCreationIntent } from "@/contracts";
+import type { AppSnapshot, CreatedTask, Session, Task, TaskCreationIntent, Workspace, WorkspaceCreationIntent } from "@/contracts";
 import { Button, IconButton } from "../components/Button";
 import { useT } from "../i18n";
 import { Badge } from "../components/Badge";
-import { Dialog, Menu } from "../components/Menu";
+import { Menu } from "../components/Menu";
 import { WorkspaceDialog } from "../components/WorkspaceDialog";
+import { TaskDialog } from "../components/TaskDialog";
 
 export interface SidebarSelection {
   sessionId: string | null;
   draftTaskId: string | null;
+}
+
+// 只保存用户这次表单的身份与原文，供回执丢失后的只读查回；
+// 是否真正创建仍只取应用快照与 lookupTaskCreation，不把本地记录当产品对象。
+const TASK_INTENT_KEY = "dcode-task-creation-ui-v1";
+function validTaskCreationIntent(value: unknown): TaskCreationIntent | null {
+  if (!value || typeof value !== "object") return null;
+  const intent = value as Partial<TaskCreationIntent>;
+  if (typeof intent.operationId !== "string" || !intent.operationId || typeof intent.workspaceId !== "string" || !intent.workspaceId
+    || typeof intent.title !== "string" || !intent.title.trim() || intent.title.length > 120 || /[\u0000-\u001f]/u.test(intent.title)) return null;
+  return { operationId: intent.operationId, workspaceId: intent.workspaceId, title: intent.title };
+}
+function loadTaskCreationIntents(): TaskCreationIntent[] {
+  try {
+    const raw = localStorage.getItem(TASK_INTENT_KEY);
+    if (!raw) return [];
+    const value: unknown = JSON.parse(raw);
+    const candidates = Array.isArray(value) ? value : [value];
+    const intents = candidates.map(validTaskCreationIntent).filter((intent): intent is TaskCreationIntent => intent !== null);
+    return [...new Map(intents.map((intent) => [intent.operationId, intent])).values()];
+  } catch { return []; }
 }
 
 export function Sidebar({
@@ -27,7 +49,8 @@ export function Sidebar({
   onToggleTaskChildren,
   onExpandTask,
   onOpenSettings,
-  onCreateTask,
+  onNewDraft,
+  onTaskCreated,
   onMoveTask,
   onWorkspaceCreated,
 }: {
@@ -42,15 +65,36 @@ export function Sidebar({
   onToggleTaskChildren: (taskId: string) => void;
   onExpandTask: (taskId: string | null) => void;
   onOpenSettings: () => void;
-  onCreateTask: (workspaceId: string, parentId: string | null, title: string) => void;
+  onNewDraft: (workspaceId: string, parentTaskId: string | null) => void;
+  onTaskCreated: (task: CreatedTask) => void;
   onMoveTask: (taskId: string, targetWorkspaceId: string) => void;
   onWorkspaceCreated: (workspace: Workspace) => void;
 }) {
   const t = useT();
-  const [newTaskFor, setNewTaskFor] = useState<{ workspaceId: string; parentId: string | null } | null>(null);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskFor, setNewTaskFor] = useState<{ workspaceId: string; initialIntent?: TaskCreationIntent | null } | null>(null);
   const [newWorkspace, setNewWorkspace] = useState(false);
   const [workspaceIntent, setWorkspaceIntent] = useState<WorkspaceCreationIntent | null>(null);
+  const [heldTaskIntents, setHeldTaskIntents] = useState<TaskCreationIntent[]>(loadTaskCreationIntents);
+  const heldTaskIntentsRef = useRef(heldTaskIntents);
+  const taskDialogTrigger = useRef<HTMLElement | null>(null);
+  const pendingTaskIntents = snapshot.pendingTaskCreation
+    ? [snapshot.pendingTaskCreation, ...heldTaskIntents.filter((intent) => intent.operationId !== snapshot.pendingTaskCreation?.operationId)]
+    : heldTaskIntents;
+
+  const updateTaskIntent = (intent: TaskCreationIntent | null, operationId: string): boolean => {
+    const next = heldTaskIntentsRef.current.filter((item) => item.operationId !== operationId);
+    if (intent) next.push(intent);
+    try {
+      if (next.length) localStorage.setItem(TASK_INTENT_KEY, JSON.stringify(next));
+      else localStorage.removeItem(TASK_INTENT_KEY);
+      heldTaskIntentsRef.current = next;
+      setHeldTaskIntents(next);
+      return true;
+    } catch {
+      window.dispatchEvent(new CustomEvent("dcode:draft-persist-failed"));
+      return false;
+    }
+  };
 
   const sessionsByTask = useMemo(() => {
     const map = new Map<string, Session[]>();
@@ -99,14 +143,17 @@ export function Sidebar({
 
   const taskRow = (task: Task, depth: number) => {
     const sessions = sessionsByTask.get(task.id) ?? [];
+    const mainSession = sessions.find((session) => session.kind === "main");
+    const memberSessions = sessions.filter((session) => session.kind === "sub");
     const children = childTasks.get(task.id) ?? [];
-    const hasSessions = sessions.length > 0;
+    const hasSessions = memberSessions.length > 0;
     const hasChildren = children.length > 0;
     const expandable = hasSessions || hasChildren;
     // 会话列表是单手风琴；子任务展开是独立的多选集合
-    const sessionsExpanded = expandedTaskId === task.id;
+    const sessionsExpanded = hasSessions && expandedTaskId === task.id;
     const childrenExpanded = expandedTaskIds.includes(task.id);
-    const selected = selection.draftTaskId === task.id;
+    const expanded = sessionsExpanded || childrenExpanded;
+    const selected = selection.draftTaskId === task.id || selection.sessionId === mainSession?.id;
     const run = sessions.map((s) => snapshot.runs[s.id]).find((r) => r && r.status === "running");
 
     return (
@@ -114,7 +161,8 @@ export function Sidebar({
         <div
           role="treeitem"
           data-task-id={task.id}
-          aria-expanded={expandable ? sessionsExpanded || childrenExpanded : undefined}
+          aria-label={task.isDefault ? t("nav.defaultTask") : task.title}
+          aria-expanded={expandable ? expanded : undefined}
           // 键盘可达性：可点击目标须可聚焦并可用 Enter/Space 触发（主树 DESIGN 键盘路径要求）
           tabIndex={0}
           onKeyDown={(event) => {
@@ -130,20 +178,27 @@ export function Sidebar({
           }`}
           style={{ paddingLeft: `calc(${10 + depth * 14}px * var(--ui-scale))` }}
           onClick={() => {
-            if (hasChildren) onToggleTaskChildren(task.id);
-            if (hasSessions) {
-              onExpandTask(sessionsExpanded ? null : task.id);
-              if (!sessionsExpanded) onSelectSession(sessions[0].id);
-            } else if (!hasChildren) {
-              onSelectDraft(task.id);
-            }
+            // 任务名称始终定位主会话；展开由独立箭头承担，不能被最近更新的成员会话抢走。
+            if (mainSession) onSelectSession(mainSession.id);
+            else onSelectDraft(task.id);
           }}
         >
-          <ChevronRight
-            className={`size-3.5 shrink-0 text-subtlest transition-transform duration-100 ${
-              sessionsExpanded || childrenExpanded ? "rotate-90" : ""
-            } ${expandable ? "" : "invisible"}`}
-          />
+          {expandable ? (
+            <button
+              type="button"
+              aria-label={t(expanded ? "nav.collapseTask" : "nav.expandTask", { name: task.isDefault ? t("nav.defaultTask") : task.title })}
+              aria-expanded={expanded}
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-subtlest hover:bg-hover"
+              onClick={(event) => {
+                event.stopPropagation();
+                // 子任务与成员会话同属这一个展开动作；行本身不做展开。
+                if (hasChildren && childrenExpanded !== !expanded) onToggleTaskChildren(task.id);
+                if (hasSessions && sessionsExpanded !== !expanded) onExpandTask(expanded ? null : task.id);
+              }}
+            >
+              <ChevronRight className={`size-3.5 transition-transform duration-100 ${expanded ? "rotate-90" : ""}`} />
+            </button>
+          ) : <span className="size-6 shrink-0" aria-hidden="true" />}
           <span className={`flex-1 truncate text-ui-sm ${task.isDefault ? "text-subtlest" : ""}`}>
             {task.isDefault ? t("nav.defaultTask") : task.title}
           </span>
@@ -151,15 +206,14 @@ export function Sidebar({
           {/* 悬停或行/子控件持焦时可见：display:none 时 Tab 不可达，group-focus-within 补足键盘路径 */}
           <span className="hidden group-hover:flex group-focus-within:flex items-center shrink-0">
             {/* 任务类型显式声明：只有长期任务可再建短期子任务 */}
-            {task.kind === "long" && !task.isDefault && (
+            {task.kind === "long" && (
               <IconButton
                 icon={Plus}
                 label={t("nav.newSubTask")}
                 size={6}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setNewTaskFor({ workspaceId: task.workspaceId, parentId: task.id });
-                  setNewTaskTitle("");
+                  onNewDraft(task.workspaceId, task.id);
                 }}
               />
             )}
@@ -178,7 +232,7 @@ export function Sidebar({
         {childrenExpanded && children.map((child) => taskRow(child, depth + 1))}
         {sessionsExpanded && (
           <div>
-            {sessions.map((session) => {
+            {memberSessions.map((session) => {
               // 当前会话：文字回到前景色并加字重；其余会话保持说明色。
               // 「知道在哪里工作」靠这一处层级差，不靠给整行加框。
               const active = selection.sessionId === session.id;
@@ -242,15 +296,15 @@ export function Sidebar({
           <span className="flex-1 truncate text-ui-sm font-medium">{workspace.name}</span>
           {workspace.builtinHome && <Badge>{t("nav.defaultBadge")}</Badge>}
           <span className="hidden group-hover:flex group-focus-within:flex shrink-0">
-            <IconButton
-              icon={Plus}
-              label={t("nav.newTaskHere")}
-              size={6}
-              onClick={(event) => {
-                event.stopPropagation();
-                setNewTaskFor({ workspaceId: workspace.id, parentId: null });
-                setNewTaskTitle("");
-              }}
+            <Menu
+              trigger={<IconButton icon={Plus} label={t("nav.newTaskHere")} size={6} />}
+              items={[
+                { label: t("nav.newWorkDraft"), onSelect: () => onNewDraft(workspace.id, null) },
+                { label: t("nav.newLongTask"), disabled: pendingTaskIntents.length > 0, onSelect: (trigger) => {
+                  taskDialogTrigger.current = trigger;
+                  setNewTaskFor({ workspaceId: workspace.id });
+                } },
+              ]}
             />
           </span>
         </div>
@@ -282,6 +336,15 @@ export function Sidebar({
         {snapshot.workspaces.map(workspaceRow)}
       </div>
 
+      {pendingTaskIntents.length > 0 && (
+        <div className="shrink-0 px-2 pb-2">
+          {pendingTaskIntents.map((intent) => <Button key={intent.operationId} size="sm" variant="outline" className="w-full"
+            onClick={() => setNewTaskFor({ workspaceId: intent.workspaceId, initialIntent: intent })}>
+            {pendingTaskIntents.length === 1 ? t("task.check") : t("task.checkNamed", { name: intent.title })}
+          </Button>)}
+        </div>
+      )}
+
       {/* 底部只保留一条极弱上缘与设置入口；不再给整块加独立实色底栏 */}
       <div className="flex shrink-0 items-center justify-between border-t border-[var(--edge)] px-2 py-2">
         <Button size="sm" variant="ghost" onClick={onOpenSettings}>
@@ -292,45 +355,15 @@ export function Sidebar({
       </div>
 
       {newWorkspace && <WorkspaceDialog initialIntent={workspaceIntent} onClose={() => setNewWorkspace(false)} onCreated={onWorkspaceCreated} />}
-      {newTaskFor && (
-        <Dialog
-          title={newTaskFor.parentId ? t("nav.newShortTask") : t("nav.newLongTask")}
-          onClose={() => setNewTaskFor(null)}
-          actions={
-            <>
-              <Button variant="ghost" onClick={() => setNewTaskFor(null)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                variant="primary"
-                disabled={!newTaskTitle.trim()}
-                onClick={() => {
-                  onCreateTask(newTaskFor.workspaceId, newTaskFor.parentId, newTaskTitle);
-                  setNewTaskFor(null);
-                }}
-              >
-                {t("common.create")}
-              </Button>
-            </>
-          }
-        >
-          <input
-            value={newTaskTitle}
-            onChange={(event) => setNewTaskTitle(event.target.value)}
-            placeholder={t("nav.taskNamePlaceholder")}
-            className="input-surface w-full h-8 rounded-lg border border-border bg-input px-2.5 text-ui-base"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && newTaskTitle.trim() && !event.nativeEvent.isComposing) {
-                onCreateTask(newTaskFor.workspaceId, newTaskFor.parentId, newTaskTitle);
-                setNewTaskFor(null);
-              }
-            }}
-          />
-          <p className="mt-2 text-ui-sm text-subtlest">
-            {newTaskFor.parentId ? t("nav.shortTermHint") : t("nav.longTermHint")}
-          </p>
-        </Dialog>
-      )}
+      {newTaskFor && <TaskDialog
+        workspaceId={newTaskFor.workspaceId}
+        workspaceName={snapshot.workspaces.find((workspace) => workspace.id === newTaskFor.workspaceId)?.name ?? t("task.unknownWorkspace")}
+        initialIntent={newTaskFor.initialIntent}
+        restoreFocusTo={taskDialogTrigger.current}
+        onIntentChange={updateTaskIntent}
+        onClose={() => setNewTaskFor(null)}
+        onCreated={onTaskCreated}
+      />}
 
     </nav>
   );

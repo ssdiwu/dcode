@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import http from "node:http";
 import { join } from "node:path";
-import { launchApp, ready, cleanup, killApp, assertValidationModel, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, ready, cleanup, killApp, assertValidationModel, waitForSnapshot, gotoSession } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 
 const EVIDENCE = evidenceDir("composer-geometry");
@@ -1228,11 +1228,7 @@ test("收起态真实改选更短摘要：完整预算重新放得下时标签�
       return window.dcode.createSession({ taskId: snap.tasks[0].id });
     });
     assert.ok(session?.id, "前置：应能建立会话");
-    const taskTitle = await page.evaluate(async (id) => {
-      const snap = await window.dcode.getSnapshot();
-      return snap.tasks.find((t) => t.id === id)?.title ?? "";
-    }, session.taskId);
-    await page.getByRole("treeitem", { name: taskTitle }).click();
+    await gotoSession(page, session.id);
     await page.locator("main textarea").waitFor();
     const area = page.locator("main textarea");
 

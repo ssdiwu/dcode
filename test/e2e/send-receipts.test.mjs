@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, assertValidationModel, cleanup, ready, killApp, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, assertValidationModel, cleanup, ready, killApp, waitForSnapshot, gotoWorkspaceDraft } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 
 
@@ -429,15 +429,10 @@ test("首发未知：草稿 Enter 不重投，回查后同身份重试复用原�
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
     await assertValidationModel(page);
 
-    // 用无会话的新任务草稿做首发，草稿在接收未确认后可回取
-    const workspaceRow = page.getByRole("treeitem", { name: "D Code" });
-    await workspaceRow.hover();
-    const plusButton = workspaceRow.getByRole("button", { name: "在此空间新建任务" });
-    await plusButton.waitFor({ state: "visible" });
-    await plusButton.click({ force: true });
-    await page.getByPlaceholder("任务名称").fill("对象复用验证");
-    await page.getByRole("button", { name: "创建" }).click();
-    await page.getByText("D Code / 对象复用验证", { exact: true }).waitFor();
+    // 真实空间新工作草稿才在首发建root short/main；命名任务现在已预存main，不能拿它假扮旧草稿。
+    const workspaceId = await page.evaluate(async () => (await window.dcode.getSnapshot()).workspaces.find(w => w.name === 'D Code').id);
+    await gotoWorkspaceDraft(page, workspaceId);
+    const objectsBefore = await page.evaluate(() => window.dcode.getSnapshot());
 
     const text = "首发接收未确认后从草稿重发复用对象";
     const composer = page.getByPlaceholder(COMPOSER_PLACEHOLDER);
@@ -446,16 +441,25 @@ test("首发未知：草稿 Enter 不重投，回查后同身份重试复用原�
     await page.getByText("待核对", { exact: true }).waitFor();
 
     // 回到草稿（对象已建但接收未确认；原文保留在草稿键上）
-    await page.getByRole("treeitem", { name: "对象复用验证" }).click();
+    await gotoWorkspaceDraft(page, workspaceId);
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
     assert.equal(await page.getByPlaceholder(COMPOSER_PLACEHOLDER).inputValue(), text, "接收未确认后草稿应保留原文");
 
     const before = await page.evaluate(() => window.dcode.getSnapshot());
     const original = Object.entries(before.timelines).flatMap(([sid, blocks]) => blocks.map((b) => ({ sid, b }))).find(({ b }) => b.kind === "message" && b.text === text);
     assert.ok(original?.b.operationId);
+    assert.equal(before.tasks.length, objectsBefore.tasks.length + 1, '首发只建一个正式根短期任务');
+    assert.equal(before.sessions.length, objectsBefore.sessions.length + 1, '首发只建该任务唯一main');
+    const actualSession = before.sessions.find(item => item.id === original.sid);
+    const actualTask = before.tasks.find(item => item.id === actualSession.taskId);
+    assert.equal(actualSession.kind, 'main'); assert.equal(actualTask.kind, 'short');
+    assert.equal(actualTask.parentId, null); assert.equal(actualTask.workspaceId, workspaceId);
+
     await page.getByPlaceholder(COMPOSER_PLACEHOLDER).press("Enter");
     const guarded = await page.evaluate(() => window.dcode.getSnapshot());
     assert.equal(guarded.timelines[original.sid].find((b) => b.operationId === original.b.operationId).receipt.status, "unknown", "草稿 Enter 不得隐式重试待核对旧文");
+    assert.equal(Object.values(guarded.timelines).flat().filter(block => block.kind === 'message' && block.role === 'user' && block.text === text).length, 1, '旧文Enter不另造新输入身份');
+
     await page.getByRole("button", { name: text.slice(0, 24), exact: false }).first().click();
     await page.getByRole("button", { name: "回查", exact: true }).click();
     await page.getByText("未找到提交记录", { exact: false }).waitFor();
@@ -486,14 +490,9 @@ test("首发接收未确认后重开：复用同一任务、主会话与操作�
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
     await assertValidationModel(page);
 
-    const workspaceRow = page.getByRole("treeitem", { name: "D Code" });
-    await workspaceRow.hover();
-    const plusButton = workspaceRow.getByRole("button", { name: "在此空间新建任务" });
-    await plusButton.waitFor({ state: "visible" });
-    await plusButton.click({ force: true });
-    await page.getByPlaceholder("任务名称").fill("重开复用验证");
-    await page.getByRole("button", { name: "创建" }).click();
-    await page.getByText("D Code / 重开复用验证", { exact: true }).waitFor();
+    const workspaceId = await page.evaluate(async () => (await window.dcode.getSnapshot()).workspaces.find(w => w.name === 'D Code').id);
+    await gotoWorkspaceDraft(page, workspaceId);
+    const objectsBefore = await page.evaluate(() => window.dcode.getSnapshot());
 
     const composer = page.getByPlaceholder(COMPOSER_PLACEHOLDER);
     await composer.fill(text);
@@ -506,7 +505,10 @@ test("首发接收未确认后重开：复用同一任务、主会话与操作�
       .flatMap(([sid, blocks]) => blocks.map((b) => ({ sid, b })))
       .find(({ b }) => b.kind === "message" && b.role === "user" && b.text === text);
     assert.ok(found?.b.operationId, "首发消息块必须携带发送身份");
-    before = { sessionId: found.sid, operationId: found.b.operationId, tasks: snap.tasks.length, sessions: snap.sessions.length };
+    assert.equal(snap.tasks.length, objectsBefore.tasks.length + 1, '空间首发只新增一个任务');
+    assert.equal(snap.sessions.length, objectsBefore.sessions.length + 1, '空间首发只新增一个main');
+
+    before = { workspaceId, sessionId: found.sid, operationId: found.b.operationId, tasks: snap.tasks.length, sessions: snap.sessions.length };
     await first.close();
   } finally {
     await first.app.close().catch(() => {});
@@ -519,13 +521,15 @@ test("首发接收未确认后重开：复用同一任务、主会话与操作�
     await ready(page);
     await page.getByText("待核对", { exact: true }).waitFor();
 
-    await page.getByRole("treeitem", { name: "重开复用验证" }).click();
+    await gotoWorkspaceDraft(page, before.workspaceId);
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
     assert.equal(await page.getByPlaceholder(COMPOSER_PLACEHOLDER).inputValue(), text, "重开后草稿应保留原文");
 
     await page.getByPlaceholder(COMPOSER_PLACEHOLDER).press("Enter");
     const guarded = await page.evaluate(() => window.dcode.getSnapshot());
     assert.equal(guarded.timelines[before.sessionId].find((b) => b.operationId === before.operationId).receipt.status, "unknown");
+    assert.equal(Object.values(guarded.timelines).flat().filter(block => block.kind === 'message' && block.role === 'user' && block.text === text).length, 1, '只读重开草稿Enter不另建输入');
+
     await page.getByRole("button", { name: text.slice(0, 24), exact: false }).first().click();
     await page.getByRole("button", { name: "回查", exact: true }).click();
     await page.getByText("未找到提交记录", { exact: false }).waitFor();
@@ -572,14 +576,13 @@ test("等待回执期间继续编辑：旧回执不得清新稿，已切走不�
 
     // 应答未返回：textarea 仍可编辑 —— 原处改写为 B；再切到另一草稿写 C
     await composer.fill(textB);
-    const workspaceRow = page.getByRole("treeitem", { name: "D Code" });
-    await workspaceRow.hover();
-    const plusButton = workspaceRow.getByRole("button", { name: "在此空间新建任务" });
-    await plusButton.waitFor({ state: "visible" });
-    await plusButton.click({ force: true });
-    await page.getByPlaceholder("任务名称").fill("互不干扰验证");
-    await page.getByRole("button", { name: "创建" }).click();
-    await page.getByText("D Code / 互不干扰验证", { exact: true }).waitFor();
+    // 改去另一空间的正式新工作草稿，不借命名任务行冒充无会话草稿。
+    const otherDraft = await page.evaluate(async () => {
+      const snapshot = await window.dcode.getSnapshot();
+      const workspace = snapshot.workspaces.find(item => item.name === 'D Code');
+      return { workspaceId: workspace.id, taskId: workspace.defaultTaskId };
+    });
+    await gotoWorkspaceDraft(page, otherDraft.workspaceId);
     await page.getByPlaceholder(COMPOSER_PLACEHOLDER).fill(textC);
     const beforeReceipt = await page.evaluate(() => window.__dcodeCaptureDraft("before-receipt"));
     assert.equal(beforeReceipt.domValue, textC, "放行回执前，新草稿应已完整输入");
@@ -599,13 +602,16 @@ test("等待回执期间继续编辑：旧回执不得清新稿，已切走不�
 
     await page.evaluate(() => window.__dcodeCaptureDraft("after-receipt"));
 
-    // 用户不被拉回 A 的会话：当前仍是「互不干扰验证」草稿，C 仍在
+    // 用户不被拉回 A 的会话：当前仍是另一空间的原草稿，C 仍在
     await page.getByRole("heading", { name: "开始一项新工作" }).waitFor();
     assert.equal(
       await page.getByPlaceholder(COMPOSER_PLACEHOLDER).inputValue(),
       textC,
       "切走后的新草稿不得被旧回执覆盖",
     );
+    const stayed = await page.evaluate(() => JSON.parse(localStorage.getItem('dcode-prototype-ui-v1') ?? '{}'));
+    assert.equal(stayed.selectedSessionId, null, '旧回执不把用户拉回原会话');
+    assert.equal(stayed.draftTaskId, otherDraft.taskId, '另一空间草稿的实际锚点保留');
     const drafts = await page.evaluate(
       () => JSON.parse(localStorage.getItem("dcode-prototype-ui-v1") ?? "{}").drafts ?? {},
     );

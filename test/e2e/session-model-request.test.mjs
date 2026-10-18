@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchApp, ready, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, ready, waitForSnapshot, gotoSession } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 
 const evidence = evidenceDir("session-model-request");
@@ -63,21 +63,6 @@ async function openModelEntry(page) {
   await trigger.waitFor({ state: "visible", timeout: 30_000 });
   await trigger.click();
   await page.getByTestId("model-search").waitFor({ state: "visible", timeout: 15_000 });
-}
-
-/** 进入某条会话：点开所属任务，收起态下会定位到该任务的首条会话。 */
-async function gotoSession(page, sessionId) {
-  const taskTitle = await page.evaluate(async (id) => {
-    const snap = await window.dcode.getSnapshot();
-    const session = snap.sessions.find((s) => s.id === id);
-    return snap.tasks.find((t) => t.id === session?.taskId)?.title ?? "";
-  }, sessionId);
-  await page.getByRole("treeitem", { name: taskTitle }).click();
-  const title = await page.evaluate(async (id) => {
-    const snap = await window.dcode.getSnapshot();
-    return snap.sessions.find((s) => s.id === id)?.title ?? "";
-  }, sessionId);
-  await page.getByText(title, { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
 }
 
 /**

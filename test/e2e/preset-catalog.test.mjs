@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
-import { launchApp, ready, cleanup, killApp, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, ready, cleanup, killApp, waitForSnapshot, gotoSession } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
@@ -308,6 +308,25 @@ test("预设/目录/自定义协同完整路径：SDK login、Preset 应用发�
     catch (error) {
       primary ??= error;
       closeRecords.push({ phase, status: 'failed', error: { name: error.name, message: error.message }, at: Date.now() }); persistCloseRecords();
+      // 只在原15秒关闭已经失败后取有限只读事实，不改关闭期限，也不以回收或导航修订冒称修复。
+      let diagnosticTimer;
+      try {
+        const diagnostic = await Promise.race([
+          owned.page.evaluate(async () => {
+            const snapshot = await window.dcode.getSnapshot();
+            return { runs: Object.fromEntries(Object.entries(snapshot.runs).map(([id, run]) => [id, {
+              status: run.status, pendingInputs: run.pendingInputs,
+            }])), pendingTaskCreation: snapshot.pendingTaskCreation?.operationId ?? null,
+            pendingWorkspaceCreation: snapshot.pendingWorkspaceCreation?.operationId ?? null };
+          }),
+          new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve({ status: 'readonly-diagnostic-unavailable' }), 2000); }),
+        ]);
+        const proc = owned.app.process();
+        closeRecords.push({ phase, status: 'post-failure-readonly', diagnostic,
+          process: { pid: proc.pid, exitCode: proc.exitCode, signalCode: proc.signalCode }, at: Date.now() });
+      } catch (diagnosticError) {
+        closeRecords.push({ phase, status: 'post-failure-readonly-unavailable', errorName: diagnosticError.name, at: Date.now() });
+      } finally { clearTimeout(diagnosticTimer); persistCloseRecords(); }
       // 强制回收仅发生在真实关闭已经失败之后；仍保留原错误，不能把回收当作正常退出。
       try { await killApp(owned); closeRecords.push({ phase, status: 'owned-failure-recovered', at: Date.now() }); }
       catch (recovery) { closeRecords.push({ phase, status: 'recovery-failed', error: { name: recovery.name, message: recovery.message }, at: Date.now() }); }
@@ -867,33 +886,6 @@ test("P1-2 同一普通后端两条真实会话：S1 后续请求仍按 S1 身�
       );
       return after.sessions.find((x) => !beforeIds.includes(x.id));
     };
-    /**
-     * 进入指定会话：先点开**所属任务**把会话列表展开（会话是任务下的 treeitem），
-     * 再点该会话行。走已验证的侧栏真实导航，不用桥调用切会话。
-     */
-    const gotoSession = async (sessionId) => {
-      const info = await page.evaluate(async (id) => {
-        const snap = await window.dcode.getSnapshot();
-        const session = snap.sessions.find((s) => s.id === id);
-        const task = snap.tasks.find((t) => t.id === session?.taskId);
-        return { title: session?.title ?? "", taskTitle: task?.title ?? "" };
-      }, sessionId);
-      // 任务和首发会话可同名：.first() 会再次点任务行，只折叠列表而没有选回会话。
-      // 任务行持有展开状态，会话行持有当前状态；按这两个真实可访问性属性区分目标。
-      const taskRow = page.locator('[role="treeitem"][aria-expanded]').filter({
-        has: page.getByText(info.taskTitle, { exact: true }),
-      });
-      assert.equal(await taskRow.count(), 1, "所属任务行应唯一");
-      if (await taskRow.getAttribute("aria-expanded") !== "true") await taskRow.click();
-      const sessionRow = page.locator('[role="treeitem"]:not([aria-expanded])').filter({
-        has: page.getByText(info.title, { exact: true }),
-      });
-      assert.equal(await sessionRow.count(), 1, "目标会话行应唯一，不能误点同名任务");
-      await sessionRow.waitFor({ state: "visible", timeout: 20_000 });
-      await sessionRow.click();
-      await page.waitForFunction((title) => [...document.querySelectorAll('[role="treeitem"][aria-current="true"]')]
-        .some((row) => row.textContent?.trim() === title), info.title);
-    };
     /** 在**指定**会话里选定某个来源+模型（真实点模型入口里的条目），
      *  并等这条会话的 choice 真的提交（不按固定延时假定已落定）。 */
     const pickModel = async (sessionId, modelId) => {
@@ -1042,7 +1034,7 @@ test("P1-2 同一普通后端两条真实会话：S1 后续请求仍按 S1 身�
     assert.equal(s2Request.authOk, true, "S2 的请求用该来源自己的凭据");
 
     // 回到 S1 再发一次：必须仍按 S1 自己的身份与 gpt-4 发出
-    await gotoSession(s1.id);
+    await gotoSession(page, s1.id);
     // 仅有同名标题不能证明主区已到达：S1 首轮的当次随机回复必须在当前时间线可见。
     await page.getByText(s1Request.marker, { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
     // 回到 S1 时它此前那次真实回复仍在：已完成工作不被后开的 S2 顶掉，原输入也不重投
@@ -1097,28 +1089,6 @@ test("P1-2 同一普通后端两条真实会话：S1 后续请求仍按 S1 身�
 // ---------- item4：当前 custom 与会话选择分别成立 ----------
 // 只调用公开只读桥观察事实；设置、认证、导航、改选和输入都由真实 UI 完成。
 // 两个受控端点分别核协议、精确模型和独立认证，并返回本次随机 nonce。
-async function item4GotoOriginalSession(page, sessionId) {
-  const info = await page.evaluate(async (id) => {
-    const snapshot = await window.dcode.getSnapshot();
-    const session = snapshot.sessions.find((candidate) => candidate.id === id);
-    const task = snapshot.tasks.find((candidate) => candidate.id === session?.taskId);
-    return { sessionTitle: session?.title ?? null, taskTitle: task?.title ?? null };
-  }, sessionId);
-  assert.ok(info.sessionTitle && info.taskTitle, "原会话及其任务仍存在");
-  // 首发可能使任务与会话同名：任务行有 aria-expanded，会话行没有，不能取同名第一项。
-  const taskRow = page.locator('[role="treeitem"][aria-expanded]').filter({
-    has: page.getByText(info.taskTitle, { exact: true }),
-  });
-  assert.equal(await taskRow.count(), 1, "准确定位原会话所属任务");
-  if (await taskRow.getAttribute("aria-expanded") !== "true") await taskRow.click();
-  const sessionRow = page.locator('[role="treeitem"]:not([aria-expanded])').filter({
-    has: page.getByText(info.sessionTitle, { exact: true }),
-  });
-  assert.equal(await sessionRow.count(), 1, "准确定位原会话行");
-  await sessionRow.click();
-  await sessionRow.and(page.locator('[aria-current="true"]')).waitFor({ state: "visible" });
-  assert.equal(await sessionRow.getAttribute("aria-current"), "true", "导航已实际选中原会话");
-}
 
 async function item4AuthenticatePresetB(page) {
   await gotoSettings(page);
@@ -1258,7 +1228,7 @@ async function item4CustomAndPresetPath({ cold }) {
       // 此时 A 的真实客户端已开过且收到回复；B 通过真实认证入口加入，不全局 apply、不重建测试实例。
       await item4AuthenticatePresetB(page);
     }
-    await item4GotoOriginalSession(page, sessionId);
+    await gotoSession(page, sessionId);
     await page.getByText(first.request.marker, { exact: true }).waitFor();
     const beforePick = await page.evaluate(() => window.dcode.getSnapshot());
     item4AssertCurrentA(beforePick, customLoop);

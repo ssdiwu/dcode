@@ -16,7 +16,7 @@ export interface MenuItem {
   label: string;
   destructive?: boolean;
   disabled?: boolean;
-  onSelect?: () => void;
+  onSelect?: (trigger: HTMLElement | null) => void;
 }
 
 /** 焦点沿用原实现的回落链：优先触发钮；触发钮随行失焦隐藏时回落最近可见可聚焦祖先（如树行本体）。 */
@@ -57,6 +57,8 @@ export function Menu({
       <DropdownMenuContent
         align={align}
         side={side === "up" ? "top" : "bottom"}
+        // Portal 中的菜单项点击仍会沿 React 组件树冒泡到侧栏行；选择用途不能顺手展开空间。
+        onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           // 自管恢复：Radix 默认只聚焦触发钮本体；触发钮随行隐藏时需要回落到原行（原实现语义）
           event.preventDefault();
@@ -68,7 +70,7 @@ export function Menu({
             key={item.label}
             variant={item.destructive ? "destructive" : "default"}
             disabled={item.disabled}
-            onSelect={() => item.onSelect?.()}
+            onSelect={() => item.onSelect?.(triggerRef.current?.querySelector("button") ?? null)}
           >
             {item.label}
           </DropdownMenuItem>
@@ -83,11 +85,14 @@ export function Dialog({
   children,
   actions,
   onClose,
+  restoreFocusTo,
 }: {
   title: string;
   children: ReactNode;
   actions?: ReactNode;
   onClose: () => void;
+  /** 菜单项中打开对话框时，原菜单项会卸载；调用处可提供仍在树中的触发钮。 */
+  restoreFocusTo?: HTMLElement | null;
 }) {
   // 原实现的恢复语义：打开前的持焦点在渲染时捕获（打开对话框的动作发生后、面板挂载前）；
   // 行内触发钮隐藏时回落到最近可见可聚焦祖先（如树行本体）。
@@ -100,7 +105,7 @@ export function Dialog({
       <DialogContent
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          const previous = restoreRef.current;
+          const previous = restoreFocusTo ?? restoreRef.current;
           // 延后到 rAF：对话框输入框移除时浏览器会把焦点重置回 body，过早恢复会被盖掉；
           // 用户已另作选择（焦点在别处且不在 body）时不强拉
           requestAnimationFrame(() => {

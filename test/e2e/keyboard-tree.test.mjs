@@ -43,11 +43,13 @@ test("纯键盘路径：行与子控件可达可辨，激活不误触父行，�
     const plus = wsRow.getByRole("button", { name: "在此空间新建任务" });
     await plus.waitFor({ state: "visible" }); // focus-within 揭示，不经鼠标
 
-    // 2) Tab 到 + 按钮并 Enter：打开创建对话框；父行展开态不变
+    // 2) Tab 到 + 按钮并 Enter：先选明确的创建用途，父行展开态不变
     const plusFocused = await tabUntil((i) => i.role === "button" && i.label === "在此空间新建任务");
     assert.ok(plusFocused, "Tab 应能到达行内 + 按钮");
     assert.notEqual(plusFocused.shadow, "none", "持焦 + 按钮须有自身描边");
     const wsExpandedBefore = await wsRow.getAttribute("aria-expanded");
+    await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "新建长期任务" }).focus();
     await page.keyboard.press("Enter");
     await page.getByRole("dialog").waitFor();
     // 模态打开期间 Radix 会把背景内容 aria-hide（背景不再出现于可达性树），

@@ -131,8 +131,8 @@ async function authFixture(options = {}) {
   const app = new DCodeApplication(backend, { async load() { return { status: 'missing' }; }, async save() {} }, undefined, () => {}, store, () => backend);
   await app.init();
   assert.equal((await app.getSnapshot()).modelSetup.kind, 'preset', '当前供应商必须真实进入相位核对分支');
-  const task = await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'auth-admit' });
-  const session = await app.createSession({ taskId: task.id });
+  const task = await app.createTask({ operationId: 'create-fixture-auth-flow.test-134', workspaceId: 'ws-home', parentId: null, title: 'auth-admit' });
+  const session = (await app.getSnapshot()).sessions.find(item => item.id === task.mainSessionId);
   // 默认暂停：相位核对用例需要一个稳定端口。paused:false 时保持 idle，让「发送被接受」断言
   // 反映真实回执（mock 端口自身就会以 reason=paused 拒 steer，不能与认证门控混为一谈）。
   if (options.paused !== false) await app.pauseRun({ sessionId: session.id });
@@ -258,8 +258,8 @@ test('应用先同步认领关闭：拒绝新操作，已开始设置保存仍�
     async save(state) { if (armed) { armed = false; writeEntered.resolve(); await writeGate.promise; } saved.push(structuredClone(state)); },
   });
   await app.init();
-  const task = await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'closing' });
-  const session = await app.createSession({ taskId: task.id });
+  const task = await app.createTask({ operationId: 'create-fixture-auth-flow.test-261', workspaceId: 'ws-home', parentId: null, title: 'closing' });
+  const session = (await app.getSnapshot()).sessions.find(item => item.id === task.mainSessionId);
   armed = true;
   const settings = app.updateSettings({ fontSize: 13 });
   try {

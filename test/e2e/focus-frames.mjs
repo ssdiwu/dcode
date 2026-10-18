@@ -6,7 +6,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchApp, cleanup, ready, assertValidationModel } from "./helpers.mjs";
+import { launchApp, cleanup, ready, assertValidationModel, gotoSession } from "./helpers.mjs";
 import { evidenceDir } from "./evidence-root.mjs";
 
 const OUT = evidenceDir("focus-frames");
@@ -104,26 +104,17 @@ try {
     await page.keyboard.press("Escape");
     await page.getByRole("menu").waitFor({ state: "hidden" });
 
-    // 4) 真实 hover 与 selected（手风琴可能沿上轮保持展开：已见会话行则直接点它，不再 toggle 任务行）
+    // 4) 真实 hover 与 selected：主会话经任务行进入，选中像素也取同一任务行。
     const other = page.getByRole("treeitem", { name: "整理读书笔记" });
     await other.hover();
     const hoverBg = await other.evaluate((el) => getComputedStyle(el).backgroundColor);
     const expectHover = dark ? "rgba(245, 245, 244, 0.06)" : "rgba(23, 23, 23, 0.05)";
     if (hoverBg !== expectHover) throw new Error(`${tag}: 悬停底色不符（${hoverBg}）`);
     await shot(`${tag}-悬停行.png`, { target: "treeitem-hover", bg: hoverBg });
-    const sessionRow = page.getByRole("treeitem", { name: "《设计中的设计》摘抄" });
-    if ((await sessionRow.count()) > 0) {
-      await sessionRow.click();
-    } else {
-      await other.click();
-      await sessionRow.waitFor();
-    }
-    await page.waitForFunction(() =>
-      document.querySelector('[role="treeitem"].bg-selected')?.textContent?.includes("摘抄"),
-    );
-    const selectedBg = await page.evaluate(
-      () => getComputedStyle(document.querySelector('[role="treeitem"].bg-selected')).backgroundColor,
-    );
+    await gotoSession(page, "session-readme-1");
+    // 公共导航核本次selectedSessionId；N03主会话的选中行是task-readme，不再找主会话子行。
+    const selectedTaskRow = page.locator('[data-task-id="task-readme"]');
+    const selectedBg = await selectedTaskRow.evaluate((el) => getComputedStyle(el).backgroundColor);
     const expectSelected = dark ? "rgba(245, 245, 244, 0.12)" : "rgba(23, 23, 23, 0.09)";
     if (selectedBg !== expectSelected) throw new Error(`${tag}: 选中底色不符（${selectedBg}）`);
     await shot(`${tag}-选中行.png`, { target: "treeitem-selected", bg: selectedBg });

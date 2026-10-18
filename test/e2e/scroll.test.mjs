@@ -85,7 +85,7 @@ test("滚动边界：目标溢出才可滚、整页不动、几何关系成立�
     // 侧栏：造出真实溢出（25 个新任务），然后只滚侧栏
     await page.evaluate(async () => {
       for (let i = 0; i < 25; i++) {
-        await window.dcode.createTask({ workspaceId: "ws-home", parentId: null, title: `滚动压测任务 ${i + 1}` });
+        await window.dcode.createTask({ operationId: `scroll-load-task-${i}`, workspaceId: "ws-home", parentId: null, title: `滚动压测任务 ${i + 1}` });
       }
     });
     await page.getByRole("treeitem", { name: "滚动压测任务 25" }).waitFor();

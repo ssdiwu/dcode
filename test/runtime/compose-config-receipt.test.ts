@@ -131,6 +131,7 @@ await test('updateSettings: pending save 期间任何读取与普通更新都看
   );
   t.after(async () => { storage.releaseAll(); await app.flush(); });
   await app.init();
+  const prepared = await app.createTask({ operationId: 'settings-broadcast-fixture', workspaceId: 'ws-home', parentId: null, title: 'unrelated committed task' });
   const pushes: AppSnapshot[] = [];
   app.subscribe((snap) => pushes.push(snap));
 
@@ -143,7 +144,8 @@ await test('updateSettings: pending save 期间任何读取与普通更新都看
   assert.equal(storage.heldCount, 1, 'held save did not arrive');
   assert.equal((await app.getSnapshot()).settings.theme, 'system');
   const pushesBefore = pushes.length;
-  await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'unrelated committed task' });
+  // 命名任务现等待真实保存；用已有会话的普通改选触发同一广播，不等待被门控的写盘队列。
+  await app.setSessionModelChoice({ sessionId: prepared.mainSessionId, choice: { mode: 'auto' } });
   await waitFor(() => pushes.length > pushesBefore, 'unrelated update was not broadcast');
   const latest = pushes[pushes.length - 1];
   assert.equal(latest.settings.theme, 'system', 'unrelated broadcast must not expose the unsaved configuration');
@@ -253,6 +255,7 @@ await test('updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧
   );
   t.after(async () => { storage.releaseAll(); await app.flush(); });
   await app.init();
+  const prepared = await app.createTask({ operationId: 'settings-fifo-fixture', workspaceId: 'ws-home', parentId: null, title: 'unrelated committed task' });
 
   // A 受控挂起；B 也受控挂起；先放行 A（真实成功持久化）
   storage.holdNext();
@@ -268,7 +271,8 @@ await test('updateSettings: A 成功而 B 挂起期间普通 commit 不得把旧
   await waitFor(() => storage.heldCount === 1, 'held B save did not arrive');
 
   // B 未决期间的普通状态更新：其延迟保存不得在 B 之后用旧 settings 快照落盘
-  await app.createTask({ workspaceId: 'ws-home', parentId: null, title: 'unrelated committed task' });
+  // 命名任务现等待真实保存；用已有会话的普通改选触发同一广播，不等待被门控的写盘队列。
+  await app.setSessionModelChoice({ sessionId: prepared.mainSessionId, choice: { mode: 'auto' } });
   await new Promise((r) => setTimeout(r, 400)); // 覆盖 150ms 防抖与旧退避
   storage.releaseHeld(); // B 真实写入成功
   const secondResult = await second;

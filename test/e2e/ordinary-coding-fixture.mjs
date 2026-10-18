@@ -21,14 +21,17 @@ export async function prepareCodingProject(project) {
   await writeFile(join(project, 'check.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from './index.mjs';\ntest('actual addition', () => assert.equal(add(2, 3), 5));\n");
 }
 
-export async function startCodingLoopback({ holdFinal = false, prefixCalls = [], subsequentCalls = [], firstRoundCalls, callsOverride, expectedModels = [codingModel], expectedKey = codingKey, expectedCatalogHeader, expectedProviderHeader, ownedComplete } = {}) {
+export async function startCodingLoopback({ holdFinal = false, prefixCalls = [], subsequentCalls = [], firstRoundCalls, callsOverride, expectedModels = [codingModel], expectedKey = codingKey, expectedCatalogHeader, expectedProviderHeader, ownedComplete, followup } = {}) {
   const requests = [];
   const errors = [];
   const completeRequests = [];
   const ownedStreamHeld = new Set();
   const nonce = `coding-result-${randomUUID()}`;
   const held = new Set();
+  const followupRequests = [], followupHeld = new Set();
+  const followupNonce = `coding-followup-${randomUUID()}`;
   let finalReleased = !holdFinal;
+  let followupFinalReleased = !followup?.holdFinal;
   const calls = callsOverride ?? [
     ...prefixCalls,
     ['read', { path: 'index.mjs' }],
@@ -50,6 +53,18 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
     ];
     res.end(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n');
   };
+  const replyFollowup = (res, body, ordinal) => {
+    const call = followup.calls[ordinal - 1];
+    const delta = call ? { role: 'assistant', tool_calls: [{ index: 0, id: `followup-tool-${ordinal}`, type: 'function',
+      function: { name: call[0], arguments: JSON.stringify(call[1]) } }] } : { role: 'assistant', content: followupNonce };
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const chunks = [
+      { id: `followup-response-${ordinal}`, model: body.model, choices: [{ index: 0, delta, finish_reason: null }] },
+      { id: `followup-response-${ordinal}`, model: body.model, choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }],
+        usage: { prompt_tokens: ordinal, completion_tokens: 1, total_tokens: ordinal + 1 } },
+    ];
+    res.end(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n');
+  };
   const server = http.createServer((req, res) => {
     if (req.url === '/catalog') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"models":[],"providers":[]}'); return; }
     if (req.url !== '/v1/chat/completions' || req.method !== 'POST') { res.writeHead(404); res.end(); return; }
@@ -63,6 +78,19 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
       const catalogHeaderOk = expectedCatalogHeader === undefined || req.headers['x-dcode-catalog-secret'] === expectedCatalogHeader;
       const providerHeader = req.headers['x-dcode-provider-config'] ?? null;
       const providerHeaderOk = expectedProviderHeader === undefined || providerHeader === expectedProviderHeader;
+      // 只有真实新增用户正文命中追问标识才分派第二轮；暂停后重试首次最终回复不能偷跑追问工具。
+      if (followup && body.messages?.filter(message => message.role === 'user').at(-1)?.content === followup.marker) {
+        const ordinal = followupRequests.length + 1;
+        const record = { ordinal: requests.length + 1, followupOrdinal: ordinal, phase: 'followup', body, authOk, receivedAt: Date.now() };
+        requests.push(record); followupRequests.push(record);
+        if (!authOk || !expectedModels.includes(body.model) || !catalogHeaderOk || !providerHeaderOk || ordinal > followup.calls.length + 2) {
+          errors.push('followup request identity or count invalid'); res.writeHead(400); res.end(); return;
+        }
+        if (ordinal > followup.calls.length && !followupFinalReleased) {
+          const pending = { res, body, ordinal }; followupHeld.add(pending); res.once('close', () => followupHeld.delete(pending));
+        } else replyFollowup(res, body, ordinal);
+        return;
+      }
       // 仅测试对端分流一个真实主动complete；不能让内层HTTP占走外层工具脚本ordinal。
       if (ownedComplete && body.messages?.some(message => message.role === 'user' && message.content === ownedComplete.marker)) {
         const record = { ordinal:completeRequests.length + 1, responseId:ownedComplete.responseId, authOk,
@@ -109,8 +137,9 @@ export async function startCodingLoopback({ holdFinal = false, prefixCalls = [],
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  return { origin: `http://127.0.0.1:${address.port}`, requests, completeRequests, errors, nonce,
+  return { origin: `http://127.0.0.1:${address.port}`, requests, completeRequests, errors, nonce, followupRequests, followupNonce,
     releaseFinal() { finalReleased = true; for (const pending of held) reply(pending.res, pending.body, pending.ordinal); held.clear(); },
+    releaseFollowupFinal() { followupFinalReleased = true; for (const pending of followupHeld) replyFollowup(pending.res, pending.body, pending.ordinal); followupHeld.clear(); },
     releaseOwnedStream() {
       if (!ownedComplete?.stream || ownedStreamHeld.size !== 1) throw new Error('Exactly one actual stream response must be held');
       for (const pending of ownedStreamHeld) {

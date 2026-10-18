@@ -624,6 +624,8 @@ export type ApplicationOperationName = Exclude<
 export interface AppSnapshot {
   /** 应用持有的同次待核创建；只读投影，不是另一条创建队列或已保存对象。 */
   pendingWorkspaceCreation?: WorkspaceCreationIntent | null;
+  /** 同次命名任务保存待核意图；不是已创建对象或执行队列。 */
+  pendingTaskCreation?: TaskCreationIntent | null;
   workspaces: Workspace[];
   tasks: Task[];
   sessions: Session[];
@@ -663,12 +665,30 @@ export interface WorkspaceCreationIntent {
   path: string;
 }
 
+export interface TaskCreationIntent {
+  operationId: string;
+  workspaceId: string;
+  title: string;
+}
+
+/** 已确认保存的任务及其真实主会话定位，不隐式开始工作。 */
+export interface CreatedTask extends Task {
+  operationId: string;
+  mainSessionId: string;
+}
+
+export type TaskCreationLookup =
+  | { operationId: string; status: "created"; task: CreatedTask }
+  | { operationId: string; status: "not-found" | "unknown" };
+
 export interface DCodeOperations {
   getSnapshot(): Promise<AppSnapshot>;
   chooseProjectFolder(input: { operationId: string; requestId: string }): Promise<ProjectFolderSelection | null>;
   discardProjectFolder(input: { operationId: string }): Promise<void>;
   createWorkspace(input: { operationId: string; selectionId: string; name: string }): Promise<Workspace>;
-  createTask(input: { workspaceId: string; parentId: string | null; title: string }): Promise<Task>;
+  createTask(input: TaskCreationIntent & { parentId: null }): Promise<CreatedTask>;
+  /** 只读核对原命名任务创建，不补建对象、不发输入。 */
+  lookupTaskCreation(input: { operationId: string }): Promise<TaskCreationLookup>;
   moveTask(input: { taskId: string; targetWorkspaceId: string }): Promise<void>;
   // 首版不提供永久删除（507 选择可恢复归档 A）：deleteTask 已退出正式通路，
   // 归档／查看／恢复入口按 L01–L04 在独立切片落地。
@@ -680,6 +700,8 @@ export interface DCodeOperations {
   sendMessage(input: {
     sessionId?: string;
     taskId?: string;
+    /** 父任务短期草稿必须与taskId同锚点；缺省是空间新工作或既有任务输入。 */
+    parentTaskId?: string;
     text: string;
     /**
      * 本次发送携带的引用（身份 + 快照）。与 text 分开保存：用户原文字不被引用改写，
@@ -785,6 +807,7 @@ export const OP_NAMES = [
   "discardProjectFolder",
   "createWorkspace",
   "createTask",
+  "lookupTaskCreation",
   "moveTask",
   "createSession",
   "sendMessage",
@@ -1098,6 +1121,10 @@ export function isValidSnapshot(value: unknown): value is AppSnapshot {
   if (pending !== undefined && pending !== null && (!isRecord(pending) || !isId(pending.operationId) || !isId(pending.selectionId)
     || typeof pending.name !== 'string' || !pending.name.trim() || pending.name.length > 120 || /[\u0000-\u001f]/.test(pending.name)
     || typeof pending.path !== 'string' || !pending.path.startsWith('/') || pending.path.includes('\0'))) return false;
+  const taskCreation = value.pendingTaskCreation;
+  if (taskCreation !== undefined && taskCreation !== null && (!isRecord(taskCreation) || !isId(taskCreation.operationId)
+    || !isId(taskCreation.workspaceId) || typeof taskCreation.title !== 'string' || !taskCreation.title.trim()
+    || taskCreation.title.length > 120 || /[\u0000-\u001f]/.test(taskCreation.title))) return false;
   if (!Array.isArray(value.workspaces) || !value.workspaces.every(isValidWorkspace)) return false;
   if (!Array.isArray(value.tasks) || !value.tasks.every(isValidTask)) return false;
   if (!Array.isArray(value.sessions) || !value.sessions.every(isValidSession)) return false;
@@ -1148,9 +1175,13 @@ export function validateOperationInput(op: string, input: unknown): string | nul
         && input.name.trim().length > 0 && input.name.trim().length <= 120 && !/[\u0000-\u001f]/u.test(input.name)
         && Object.keys(input).every(key => ["operationId", "selectionId", "name"].includes(key)) ? null : "createWorkspace 载荷畸形";
     case "createTask":
-      return isRecord(input) && isId(input.workspaceId) && (input.parentId === null || isId(input.parentId)) && typeof input.title === "string"
+      return isRecord(input) && isId(input.operationId) && isId(input.workspaceId) && input.parentId === null
+        && typeof input.title === "string" && !!input.title.trim() && input.title.trim().length <= 120 && !/[\u0000-\u001f]/u.test(input.title)
+        && Object.keys(input).every(key => ["operationId", "workspaceId", "parentId", "title"].includes(key))
         ? null
         : "createTask 载荷畸形";
+    case "lookupTaskCreation":
+      return isRecord(input) && isId(input.operationId) && Object.keys(input).every(key => key === "operationId") ? null : "lookupTaskCreation 载荷畸形";
     case "moveTask":
       return isRecord(input) && isId(input.taskId) && isId(input.targetWorkspaceId) ? null : "moveTask 载荷畸形";
     case "createSession":
@@ -1162,7 +1193,8 @@ export function validateOperationInput(op: string, input: unknown): string | nul
         typeof input.text !== "string" ||
         input.text.trim().length === 0 ||
         (input.mode !== "steer" && input.mode !== "follow-up") ||
-        (input.operationId !== undefined && !isId(input.operationId))
+        (input.operationId !== undefined && !isId(input.operationId)) ||
+        (input.parentTaskId !== undefined && (!isId(input.parentTaskId) || input.parentTaskId !== input.taskId || input.sessionId !== undefined))
       ) {
         return "sendMessage 载荷畸形";
       }
@@ -1317,7 +1349,13 @@ export function isValidOpResponse(op: OpName, value: unknown): boolean {
     case "discardProjectFolder":
       return value === undefined;
     case "createTask":
-      return isValidTask(value);
+      return isValidTask(value) && isRecord(value) && isId(value.operationId) && isId(value.mainSessionId) && value.kind === "long" && value.parentId === null && value.isDefault === false
+        && Object.keys(value).every(key => ["id", "workspaceId", "parentId", "kind", "title", "boundFolder", "isDefault", "updatedAt", "operationId", "mainSessionId"].includes(key));
+    case "lookupTaskCreation":
+      return isRecord(value) && isId(value.operationId) && (value.status === "not-found" || value.status === "unknown"
+        ? Object.keys(value).every(key => ["operationId", "status"].includes(key))
+        : value.status === "created" && Object.keys(value).every(key => ["operationId", "status", "task"].includes(key)) && isValidOpResponse("createTask", value.task)
+          && isRecord(value.task) && value.task.operationId === value.operationId);
     case "createSession":
       return isValidSession(value);
     case "sendMessage":

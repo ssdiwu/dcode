@@ -14,7 +14,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchApp, assertValidationModel, ready, waitForSnapshot } from "./helpers.mjs";
+import { launchApp, assertValidationModel, ready, waitForSnapshot, gotoSession } from "./helpers.mjs";
 
 // 每次运行都换新随机标记：证明进请求的是本次读到的真实内容，而不是固定夹具串。
 const FILE_MARKER = `FILE-CONTENT-${randomBytes(6).toString("hex")}`;
@@ -165,9 +165,7 @@ async function waitForAccepted(page, demoDir) {
 }
 
 async function enterReferenceSession(page) {
-  await expandRow(page, "引用夹具");
-  await expandRow(page, "引用任务");
-  await clickHidden(page.getByRole("treeitem", { name: "引用会话" }));
+  await gotoSession(page, 'session-ref');
   // 等**真实的时间线内容**出现再交互：快照到达前视图会在草稿态/时间线之间切换，
   // Composer 随之重挂载（引用面板的展开状态会复位）。这里等的是实际消息，不是固定时长。
   await page.getByText("前置会话内容。", { exact: true }).waitFor({ timeout: 20_000 });
@@ -375,8 +373,7 @@ test("C05 新任务草稿与空会话：引用入口按各自归属接通，浏�
     assert.equal(draftBlock.references[0].snapshot.content, undefined, "历史不留引用正文");
 
     // ---------- 空时间线会话：归属是已有会话，入口同样可用 ----------
-    await expandRow(page, "空会话任务");
-    await clickHidden(page.getByRole("treeitem", { name: "空会话", exact: true }));
+    await gotoSession(page, 'session-empty');
     const emptyState = await page.evaluate(async () => {
       const s = await window.dcode.getSnapshot();
       return { sessions: s.sessions.map((x) => x.id), emptyBlocks: (s.timelines["session-empty"] ?? []).length };
