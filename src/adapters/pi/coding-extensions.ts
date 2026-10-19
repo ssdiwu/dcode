@@ -1,3 +1,7 @@
+import { bounded, json, modelMetadata, toolResult, startedResult, virtualDefinition, thinkingLevels, modelTypes, validProviderId, RESULT_ENVELOPE_BYTES, STATE_ENVELOPE_BYTES } from './coding-extension-protocol';
+import type { Descriptor } from './coding-extension-protocol';
+import { ExtensionModelResult, ExtensionTypedModelResult, ExtensionModelSpend, ModelSpendAccounted, sumUsage, settleNestedTool, saveImageResponse, publishImageResult, reconcileExtensionModelSpend, nestedExtensionTaskName, extensionModelTaskName } from './coding-extension-model-state';
+import type { NestedInput, ModelInput, ImageResponseReceipt } from './coding-extension-model-state';
 import { imageResponse, imagesInput, imagesOptions, imagesResult } from './images-bridge';
 import { validateGeneratedImages } from './image-validation';
 import { contextModelKey, deriveContextUsage } from './context-usage';
@@ -9,11 +13,11 @@ import { mkdir, realpath } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import type { Context, JsonValue } from '@earendil-works/chord';
-import { GenerationTask, ToolTask, ToolResultEntry, UsageDoc, defineDoc, defineDocFamily, defineEntry, defineExtension, defineTask, defineTool, hook } from '@earendil-works/pi-durable';
+import { GenerationTask, ToolTask, defineDoc, defineDocFamily, defineEntry, defineExtension, defineTask, defineTool, hook } from '@earendil-works/pi-durable';
 import type { Conversation, Harness, JsonObject, Registry, Session, TaskId, ToolExecutionApi, ToolExecutionResult, ToolHooks, ToolRegistration } from '@earendil-works/pi-durable';
 import { validateToolArguments } from '@earendil-works/pi-ai/utils/validation';
-import type { ToolCall, TSchema } from '@earendil-works/pi-ai';
-import type { ModelRuntime, BeforeAgentStartEventResult, VirtualModelDefinition, ModelRouteRequest } from '@earendil-works/pi-coding-agent';
+import type { ToolCall } from '@earendil-works/pi-ai';
+import type { ModelRuntime, ModelRouteRequest } from '@earendil-works/pi-coding-agent';
 import { CodingResourcesUnavailable } from './coding-resources';
 import { extensionWorkerSource } from './extension-worker';
 import type { CodingProviderHeaders } from './coding-provider-headers';
@@ -22,35 +26,13 @@ import type { DurableModelRouting } from './durable-routing';
 import { parseWorkImages } from '@/contracts/index.ts';
 import type { InputPreparation, PreparedInput } from './input-preparation';
 import type { HookApi, EntryRecord, Cursor, TaskRecord, EntryId, Tx, ConversationId } from '@earendil-works/pi-durable';
-import type { AnyModel, Api, Model, ModelType, ImageContent, Message, AssistantMessage, AssistantImages, Usage, Models } from '@earendil-works/pi-ai';
-
-// 只投影各类型模型的公开描述；认证材料与执行请求头仍由宿主 ModelRuntime 持有。
-function modelMetadata(model: AnyModel): JsonValue {
-  const base = { id: model.id, name: model.name, api: model.api, provider: model.provider, baseUrl: model.baseUrl,
-    input: model.input, inputLimits: model.inputLimits, cost: model.cost, ...(model.type ? { type: model.type } : {}) };
-  const typed = model.type === 'image' ? { output: model.output }
-    : model.type === 'classifier' ? { contextWindow: model.contextWindow }
-      : { reasoning: model.reasoning, thinkingLevelMap: model.thinkingLevelMap, promptCache: model.promptCache,
-        contextWindow: model.contextWindow, maxTokens: model.maxTokens, samplingParams: model.samplingParams, compat: model.compat };
-  return JSON.parse(JSON.stringify({ ...base, ...typed },
-    (key, value: unknown) => /^(headers|apikey|authorization|credentials?|env)$/i.test(key) ? undefined : value)) as JsonValue;
-}
+import type { Api, Model, ModelType, ImageContent, Message, AssistantMessage, AssistantImages, Usage, Models } from '@earendil-works/pi-ai';
 
 const context = BACKGROUND_CONTEXT;
 const ExtensionEntry = defineEntry<JsonObject>('dcode.extension-entry');
-const ExtensionModelResult = defineEntry<JsonObject>('dcode.extension-model-result');
-const ExtensionTypedModelResult = defineEntry<JsonObject>('dcode.extension-typed-model-result');
-const ExtensionModelSpend = defineDoc<{usages:Record<string,JsonValue>}>({kind:'dcode.extension-model-spend',version:1,scope:'task',initial:()=>({usages:{}})});
-// 这里只存原模型子任务的消费回执；累计数仍只有官方UsageDoc。
-const ModelSpendAccounted = defineDocFamily<{done:boolean;response?:ImageResponseReceipt;publishedToOwner?:boolean;typedPublished?:boolean},null>({kind:'dcode.extension-model-accounted',version:1,scope:'conversation',history:'latest',fork:'current',family:true,initial:()=>({done:false})});
 const Action = defineDocFamily<{fingerprint:string;applied:boolean;entryId:number;nameChanged?:boolean},string>({kind:'dcode.extension-action',version:1,scope:'session',family:true,initial:fingerprint=>({fingerprint,applied:false,entryId:-1})});
 const Turn = defineDocFamily<{ started: boolean; finished: boolean; messages: JsonValue[] }, null>({ kind: 'dcode.extension-turn', version: 1, scope: 'session', family: true, initial: () => ({ started: false, finished: false, messages: [] }) });
 const RequestRound=defineDoc<{assistant:number}>({kind:'dcode.extension-request-round',version:1,scope:'task',initial:()=>({assistant:0})});
-type Descriptor = { name: string; description: string; parameters: TSchema; exposure: string; defaultActive?: boolean; constrainedSampling?: import('@earendil-works/pi-ai').ConstrainedSamplingConfig | false; hasPrepareArguments?: boolean };
-type NestedInput = { caller: string; call: ToolCall };
-type ModelInput = { caller: string; actionId: string; ownerTaskId: number; provider: string; modelId: string; input: JsonObject; options: JsonObject; mode?: 'complete' | 'streamSimple' | 'stream' | 'classify' | 'generateImages' };
-type JsonSafe<T> = T extends string | number | boolean | null | undefined ? T : T extends object ? { [K in keyof T]: JsonSafe<T[K]> } : T;
-type ImageResponseReceipt = { childId:number; ownerId:number; conversationId:number; actionId:string; caller:string; requestId:string; metadata:JsonSafe<Omit<AssistantImages,'output'>> };
 type RuntimeBinding = { harness: Harness; root: Conversation; ownedModel?: DurableModelRouting['withOwnedModelInvocation'] };
 type ModelCall = { caller: string; origin: Worker; task?: import('@earendil-works/pi-durable').TaskId; signal?: AbortSignal; aborted: boolean; seq: number };
 type ModelAvailabilityCall = { origin: Worker; controller: AbortController };
@@ -58,11 +40,7 @@ type ExtensionUserOptions = { deliverAs: 'steer' | 'followUp'; expandPromptTempl
 type ExtensionUserAdmission = { ownerTaskId?: TaskId; isCurrent: () => boolean };
 type ExtensionUserMessageSubmitter = (content: unknown, options: ExtensionUserOptions, actionId: string, context: Context, admission: ExtensionUserAdmission) => Promise<void>;
 type VirtualRegistration = { provider: string; id: string; handle: string; origin: Worker; model?: Model<Api> };
-const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const virtualKey = (provider: string, id: string) => JSON.stringify([provider, id]);
-const modelTypes: readonly ModelType[] = ['chat', 'image', 'classifier'];
-const validProviderId = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
-  && value.length <= 128 && !/[\x00-\x1f]/.test(value);
 async function entriesInTransaction(tx: Tx, conversationId: ConversationId): Promise<EntryRecord[]> {
   const entries: EntryRecord[] = []; let cursor: Cursor | undefined;
   do {
@@ -82,66 +60,7 @@ function sessionNameFromEntries(entries: readonly EntryRecord[]): string | undef
   }
   return undefined;
 }
-function virtualDefinition(value: unknown): Omit<VirtualModelDefinition, 'route'> {
-  const def = bounded(value, 64 * 1024) as Record<string, unknown>;
-  const text = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f]/.test(v);
-  if (!def || typeof def !== 'object' || Array.isArray(def)
-    || Object.keys(def).some(key => !['provider', 'id', 'name', 'thinkingLevels', 'contextWindow', 'maxTokens', 'input'].includes(key))
-    || !text(def.provider, 128) || !text(def.id, 256) || !text(def.name, 256)
-    || ['contextWindow', 'maxTokens'].some(key => def[key] !== undefined && (!Number.isSafeInteger(def[key]) || (def[key] as number) < 0))
-    || (def.thinkingLevels !== undefined && (!Array.isArray(def.thinkingLevels) || def.thinkingLevels.length > 7 || def.thinkingLevels.some(level => !thinkingLevels.includes(level))))
-    || (def.input !== undefined && (!Array.isArray(def.input) || def.input.length > 2 || def.input.some(type => type !== 'text' && type !== 'image')))) throw new CodingResourcesUnavailable();
-  return def as unknown as Omit<VirtualModelDefinition, 'route'>;
-}
 type ArgumentMemo = {source:string;name:string;inputHash:string;prepared:JsonValue;failed:boolean};
-const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-function sumUsage(reported: readonly Usage[]): Usage | undefined {
-  if (!reported.length) return undefined;
-  const total = json(reported[0]);
-  for (const usage of reported.slice(1)) {
-    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const) total[key] += usage[key];
-    for (const key of ['reasoning', 'cacheWrite1h'] as const) if (usage[key] !== undefined) total[key] = (total[key] ?? 0) + usage[key];
-    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const) total.cost[key] += usage.cost[key];
-  }
-  return total;
-}
-function bounded(value: unknown, maxBytes = 8 * 1024 * 1024): unknown {
-  const text = JSON.stringify(value);
-  if (!text || Buffer.byteLength(text) > maxBytes) throw new CodingResourcesUnavailable();
-  return JSON.parse(text) as unknown;
-}
-const RESULT_ENVELOPE_BYTES = 16 * 1024 * 1024;
-// 只读SessionManager同时承接正式entries与当次context，允许有限的同图多处投影。
-const STATE_ENVELOPE_BYTES = 64 * 1024 * 1024;
-function toolResult(value: unknown): ToolExecutionResult {
-  const result = bounded(value, RESULT_ENVELOPE_BYTES) as Record<string, unknown>;
-  if (!result || typeof result !== 'object' || !Array.isArray(result.content)) throw new CodingResourcesUnavailable();
-  for (const part of result.content as Record<string, unknown>[]) {
-    if (!part || (part.type === 'text' ? typeof part.text !== 'string' : part.type !== 'image'
-      || typeof part.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(part.data)
-      || !['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'].includes(String(part.mimeType)))) throw new CodingResourcesUnavailable();
-  }
-  // 写正式结果前与投影接收同一图片合同，非法图片不能先污染历史、再使会话读取失败。
-  parseWorkImages((result.content as Record<string, unknown>[]).filter(part=>part.type==='image').map(part=>({type:'image',data:part.data,mimeType:part.mimeType})));
-  if (result.isError !== undefined && typeof result.isError !== 'boolean') throw new CodingResourcesUnavailable();
-  // coding-agent 的 content 合同不变，只在进入 Durable 1.3 时投影为 output。
-  return { output: result.content as NonNullable<ToolExecutionResult['output']>,
-    ...(result.isError === undefined ? {} : { isError: result.isError as boolean }),
-    ...((result.details === undefined && result.structuredContent === undefined) ? {} : { details: { ...(result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details as JsonObject : {}), ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent as JsonValue }) } }) };
-}
-
-type StartMessage = NonNullable<BeforeAgentStartEventResult['message']>;
-function startedResult(value: unknown) {
-  const result = bounded(value) as {messages:Message[];customMessages:StartMessage[]};
-  if(!Array.isArray(result.messages)||!Array.isArray(result.customMessages)||result.messages.some(m=>m.role!=='system'||typeof m.content!=='string'))throw new CodingResourcesUnavailable();
-  const customs=result.customMessages.map(value=>{
-    const message=bounded(value,1024*1024) as StartMessage;
-    if(!message||typeof message.customType!=='string'||!message.customType.length||message.customType.length>128||typeof message.display!=='boolean')throw new CodingResourcesUnavailable();
-    if(typeof message.content!=='string')toolResult({content:message.content});
-    return {message,model:{role:'user' as const,content:message.content,timestamp:Date.now()}};
-  });
-  return {system:result.messages,customs,messages:[...result.messages,...customs.map(item=>item.model)] as Message[]};
-}
 async function appendStartedMessages(tx:Tx,conversationId:ConversationId,started:ReturnType<typeof startedResult>,input:JsonObject) {
   // 同一次原输入消费保 CustomMessage 元数据与模型贡献；可见消息不是新输入，也不伪造助手。
   for(const {message,model} of started.customs)await tx.appendEntry(ExtensionEntry,conversationId,{data:json({action:'message',value:{message,source:'before_agent_start',input}}) as JsonObject,model:[model]});
@@ -191,35 +110,8 @@ export class CodingExtensions {
   constructor(builtins: readonly ToolRegistration[], agentDir: string, enabled: () => boolean, models: ModelRuntime, sessionId: string, providerHeaders?: CodingProviderHeaders) {
     this.#builtins = builtins; this.#agentDir = agentDir; this.#enabled = enabled; this.#models = models; this.#sessionId = sessionId;
     this.#providerHeaders = providerHeaders;
-    const settle = async (input: NestedInput, runtime: Parameters<NonNullable<ReturnType<typeof defineTask<NestedInput, { phase: 'call' | 'execute' }, ToolExecutionResult, ToolHooks>>['definition']['abort']>>[1], result: ToolExecutionResult, status: 'completed' | 'aborted' | 'failed', ctx: Context) => {
-      await runtime.commit(async tx => {
-        const spend = await tx.doc(ExtensionModelSpend, runtime.taskId);
-        const usage = sumUsage(Object.values(spend.usages) as unknown as Usage[]);
-        if (usage) result = {...result,usage};
-        // 内层是扩展真正发起的调用，不伪造模型 assistant；正式工具记录仍写入同一 Session。
-        await tx.appendEntry(ToolResultEntry, runtime.conversationId, {
-          model: [{ role: 'toolResult', toolName: input.call.name, toolCallId: input.call.id,
-            content: result.output ?? [], isError: result.isError ?? false, timestamp: Date.now(),
-            ...(result.details === undefined ? {} : { details: result.details }), ...(result.usage ? {usage:result.usage} : {}) }], data: { diagnostics: json([...(result.diagnostics ?? [])]) },
-        });
-        if (result.usage) {
-          // 复用公开工具用量文档；手动的内层工具任务没有SDK ToolTask自动记账步骤。
-          const tools = (await tx.doc(UsageDoc, runtime.conversationId)).tools;
-          const previous = Object.hasOwn(tools, input.call.name) ? tools[input.call.name] : undefined;
-          const fresh:Usage[]=[];
-          for(const [childId,value] of Object.entries(spend.usages)){
-            const receipt=await tx.doc(ModelSpendAccounted,runtime.conversationId,childId,null);
-            if(!receipt.done){fresh.push(value as unknown as Usage);receipt.done=true;}
-          }
-          const addition=Object.keys(spend.usages).length?sumUsage(fresh):result.usage;
-          // Chord文档是事务草稿，仅支持字段赋值；重建记录也保工具名为自有键。
-          if(addition)(await tx.doc(UsageDoc, runtime.conversationId)).tools = {...tools, [input.call.name]:sumUsage(previous ? [previous as Usage, addition] : [addition])!};
-        }
-        return { status: 'terminal', outcome: status === 'failed' ? { status, error: { code: 'extension-tool-interrupted', message: '内部工具中断，保留部分作用且不重放' }, result: json(result) } : { status, result: json(result) } };
-      }, ctx);
-    };
     this.#nestedTask = defineTask<NestedInput, { phase: 'call' | 'execute' }, ToolExecutionResult, ToolHooks>({
-      name: 'dcode.extension-tool', version: 2,
+      name: nestedExtensionTaskName, version: 2,
       // v1 的 call/execute 认领不变；已执行阶段仍按中断收束，不能借升级重放副作用。
       migrate(input, checkpoint, fromVersion) {
         if (fromVersion !== 1 || !input || typeof input !== 'object' || Array.isArray(input)
@@ -232,7 +124,7 @@ export class CodingExtensions {
           const registered = runtime.registry.tools().find(({ tool }) => tool.name === task.input.call.name)?.tool;
           const descriptor = this.#tools.find(tool => tool.name === task.input.call.name);
           if (!registered || descriptor?.exposure === 'hidden' || descriptor?.exposure === 'model-only' || ((descriptor?.exposure ?? 'direct') === 'direct' && !this.#active.includes(task.input.call.name))) {
-            await settle(task.input, runtime, { output: [{ type: 'text', text: '工具不在本次可调用范围内' }], isError: true }, 'completed', ctx); return;
+            await settleNestedTool(task.input, runtime, { output: [{ type: 'text', text: '工具不在本次可调用范围内' }], isError: true }, 'completed', ctx); return;
           }
           // 与直接工具同一参数校验、Runner 前后拦截及正式环境；只有认领后才执行副作用。
           let result: ToolExecutionResult;
@@ -260,14 +152,14 @@ export class CodingExtensions {
             if (runtime.signal.aborted) throw error;
             result = { output: [{ type: 'text', text: '扩展工具调用失败' }], isError: true };
           }
-          await settle(task.input, runtime, result, 'completed', ctx);
+          await settleNestedTool(task.input, runtime, result, 'completed', ctx);
         },
-        execute: async (task, runtime, ctx) => settle(task.input, runtime, { output: [{ type: 'text', text: '内部工具曾被中断，可能已产生部分作用；不会自动重放' }], isError: true }, 'failed', ctx),
+        execute: async (task, runtime, ctx) => settleNestedTool(task.input, runtime, { output: [{ type: 'text', text: '内部工具曾被中断，可能已产生部分作用；不会自动重放' }], isError: true }, 'failed', ctx),
       },
-      abort: async (task, runtime, ctx) => settle(task.input, runtime, { output: [{ type: 'text', text: '内部工具已取消，可能存在部分作用' }], isError: true }, 'aborted', ctx),
+      abort: async (task, runtime, ctx) => settleNestedTool(task.input, runtime, { output: [{ type: 'text', text: '内部工具已取消，可能存在部分作用' }], isError: true }, 'aborted', ctx),
     });
     this.#modelTask = defineTask<ModelInput, { phase: 'call' | 'execute' }, JsonObject>({
-      name: 'dcode.extension-model', version: 1, initial: () => ({ phase: 'call' }),
+      name: extensionModelTaskName, version: 1, initial: () => ({ phase: 'call' }),
       phases: {
         call: async (task, runtime, ctx) => {
           const owned = this.#modelCalls.get(task.input.actionId);
@@ -294,7 +186,7 @@ export class CodingExtensions {
               if (metadata.stopReason === 'stop' || metadata.usage || metadata.responseId) {
                 // 首个await解码之前认领已到响应；关闭封住旧Session时留给原停机维护，不丢真实费用。
                 this.#imageResponses.set(runtime.taskId,receipt);
-                try { await binding.harness.commit(tx => this.#saveImageResponse(tx,receipt), context); this.#imageResponses.delete(runtime.taskId); }
+                try { await binding.harness.commit(tx => saveImageResponse(tx,receipt), context); this.#imageResponses.delete(runtime.taskId); }
                 catch (error) { if (!this.#closed && !runtime.signal.aborted) throw error; return; }
               }
               let typed:AssistantImages;
@@ -317,7 +209,7 @@ export class CodingExtensions {
                 // 解码完成不等于仍有发布权；关闭先认领或原工具已结束时只保响应回执。
                 const mayPublish=()=>current()&&!!owner&&!owner.abortRequested&&owner.state.status!=='terminal'&&owner.state.status!=='completing';
                 if(!mayPublish())throw new CodingResourcesUnavailable();
-                await this.#publishImageResult(tx,receipt,typed,mayPublish);
+                await publishImageResult(tx,receipt,typed,mayPublish);
                 if(!mayPublish())throw new CodingResourcesUnavailable();
                 return { status:'terminal',outcome:{status:'completed',result} };
               },ctx);
@@ -390,98 +282,11 @@ export class CodingExtensions {
       abort: async (_task, runtime, ctx) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
     });
   }
-  async #saveImageResponse(tx:Tx,response:ImageResponseReceipt):Promise<void>{
-    const child=await tx.task(response.childId as TaskId);
-    const input=child?.input as unknown as ModelInput|undefined;
-    if(!child||child.kind!==this.#modelTask.definition.name||child.conversationId!==response.conversationId||child.owner!==response.ownerId
-      ||!input||input.mode!=='generateImages'||input.ownerTaskId!==response.ownerId||input.actionId!==response.actionId||input.caller!==response.caller
-      ||input.provider!==response.metadata.provider||input.modelId!==response.metadata.model)throw new CodingResourcesUnavailable();
-    const owner=await tx.task(response.ownerId as TaskId);
-    if(!owner||owner.conversationId!==child.conversationId||![ToolTask.definition.name,this.#nestedTask.definition.name].includes(owner.kind))throw new CodingResourcesUnavailable();
-    const receipt=await tx.doc(ModelSpendAccounted,child.conversationId,String(child.id),null);
-    if(receipt.response&&JSON.stringify(receipt.response)!==JSON.stringify(response))throw new CodingResourcesUnavailable();
-    if(!receipt.response)receipt.response=json(response);
-  }
-  async #publishImageResult(tx:Tx,response:ImageResponseReceipt,typed:AssistantImages,isCurrent:()=>boolean=()=>true):Promise<void>{
-    const receipt=await tx.doc(ModelSpendAccounted,response.conversationId as ConversationId,String(response.childId),null);
-    const spend=typed.usage?await tx.doc(ExtensionModelSpend,response.ownerId as TaskId):undefined;
-    if(!isCurrent())throw new CodingResourcesUnavailable();
-    if(!receipt.typedPublished){
-      await tx.appendEntry(ExtensionTypedModelResult,response.conversationId as ConversationId,{data:json({operation:'generateImages',requestId:response.requestId,typed}) as unknown as JsonObject});
-      receipt.typedPublished=true;
-    }
-    if(typed.usage&&spend)spend.usages[String(response.childId)]=json(typed.usage) as unknown as JsonValue;
-    receipt.publishedToOwner=true;
-    if(!isCurrent())throw new CodingResourcesUnavailable();
-  }
-  /** 仅由原会话在调度停止后的暂停/关闭，或明确继续前调用；读取历史不对账。 */
-  async reconcileModelSpend(session:Session,ctx:Context):Promise<void>{
-    const pending=[...this.#imageResponses.values()];
-    await session.commit(async tx=>{
-      for(const response of pending)await this.#saveImageResponse(tx,response);
-      const groups=new Map<number,TaskRecord<JsonValue,JsonValue,JsonValue>[]>();let cursor:Cursor|undefined;
-      const interrupted: {conversationId:ConversationId;data:JsonObject}[]=[];
-      do{
-        const page=await tx.scanTasks({kind:this.#modelTask.definition.name},200,cursor);
-        for(const child of page.items){
-          const input=child.input as unknown as ModelInput;
-          const imageReceipt=input.mode==='generateImages'?await tx.doc(ModelSpendAccounted,child.conversationId,String(child.id),null):undefined;
-          if(child.state.status!=='terminal'||child.state.outcome.status!=='completed'){if(!imageReceipt?.response)continue;}
-          if(input.mode==='generateImages'&&imageReceipt?.response&&!imageReceipt.typedPublished){
-            // Durable表读取必须先于首个append；先收集，完成全部owner/正式工具核对后统一写。
-            interrupted.push({conversationId:child.conversationId,data:json({operation:'generateImages',requestId:imageReceipt.response.requestId,typed:{...imageReceipt.response.metadata,output:[],stopReason:'aborted',errorMessage:'图片响应已到但核验未完成；不自动重发'}}) as unknown as JsonObject});
-            imageReceipt.typedPublished=true;
-          }
-          if(child.owner!==input.ownerTaskId)throw new CodingResourcesUnavailable();
-          const own=groups.get(input.ownerTaskId)??[];own.push(child);groups.set(input.ownerTaskId,own);
-        }cursor=page.next;
-      }while(cursor);
-      for(const [ownerId,children] of groups){
-        const receipts=await Promise.all(children.map(child=>tx.doc(ModelSpendAccounted,child.conversationId,String(child.id),null)));
-        if(receipts.every(receipt=>receipt.done))continue;
-        const owner=await tx.task(ownerId as import('@earendil-works/pi-durable').TaskId);
-        if(!owner||children.some(child=>child.conversationId!==owner.conversationId))throw new CodingResourcesUnavailable();
-        let name:string;let callId:string;
-        if(owner.kind===ToolTask.definition.name){
-          const input=owner.input as {assistant:number;callId:string};
-          const assistant=await tx.entry(input.assistant as EntryId);
-          const message=assistant?.model?.find(value=>value.role==='assistant');
-          const call=message?.role==='assistant'?message.content.find(value=>value.type==='toolCall'&&value.id===input.callId):undefined;
-          if(!call||call.type!=='toolCall')throw new CodingResourcesUnavailable();name=call.name;callId=call.id;
-          if(owner.state.status!=='terminal'&&owner.state.status!=='completing'&&(owner.state.checkpoint as JsonObject).replay!=='unsafe')throw new CodingResourcesUnavailable();
-        }else if(owner.kind===this.#nestedTask.definition.name){
-          const call=(owner.input as unknown as NestedInput).call;name=call.name;callId=call.id;
-        }else throw new CodingResourcesUnavailable();
-        const confirmed=children.map((child,index)=>{
-          if(receipts[index].response)return receipts[index].response!.metadata.usage;
-          if(child.state.status!=='terminal'||child.state.outcome.status!=='completed')throw new CodingResourcesUnavailable();
-          const result=child.state.outcome.result as unknown as {message?:AssistantMessage;operation?:string;typed?:unknown};
-          if(result.operation==='classify')return classifierResult(result.typed).usage;
-          if(result.operation==='generateImages')return imagesResult(result.typed).usage;
-          const message=result.message;
-          if(message?.role!=='assistant'||!message.usage)throw new CodingResourcesUnavailable();return message.usage;
-        });
-        // 原SDK正常终态已经与ToolResult同事务记账；取消/unsafe恢复不经afterTool。
-        let recorded:Usage|undefined;let entryCursor:Cursor|undefined;
-        do{const page=await tx.scanEntries({conversationId:owner.conversationId},200,entryCursor);
-          for(const entry of page.items)if(entry.byTaskId===owner.id&&entry.kind===ToolResultEntry.kind){
-            const result=entry.model?.find(value=>value.role==='toolResult'&&value.toolCallId===callId);
-            if(result?.role==='toolResult'){if(result.toolName!==name)throw new CodingResourcesUnavailable();recorded=result.usage;}
-          }entryCursor=page.next;
-        }while(entryCursor);
-        if(recorded&&JSON.stringify(recorded)!==JSON.stringify(sumUsage(confirmed.filter((usage,index): usage is Usage => usage !== undefined&&(!receipts[index].response||receipts[index].publishedToOwner===true)))))throw new CodingResourcesUnavailable();
-        const fresh:Usage[]=[];
-        for(let index=0;index<children.length;index++){
-          const receipt=receipts[index];
-          if(!receipt.done){if((!recorded||!!receipt.response&&!receipt.publishedToOwner)&&confirmed[index])fresh.push(confirmed[index]!);receipt.done=true;}
-        }
-        const addition=sumUsage(fresh);
-        if(addition){const usage=await tx.doc(UsageDoc,owner.conversationId);const previous=Object.hasOwn(usage.tools,name)?usage.tools[name] as Usage:undefined;
-          usage.tools={...usage.tools,[name]:sumUsage(previous?[previous,addition]:[addition])!};}
-      }
-      for(const entry of interrupted)await tx.appendEntry(ExtensionTypedModelResult,entry.conversationId,{data:entry.data});
-    },ctx);
-    for(const response of pending)if(this.#imageResponses.get(response.childId)===response)this.#imageResponses.delete(response.childId);
+  /** 原类继续持有响应认领；事务函数不持有另一份Harness或待入账队列。 */
+  async reconcileModelSpend(session: Session, ctx: Context): Promise<void> {
+    const pending = [...this.#imageResponses.values()];
+    await reconcileExtensionModelSpend(session, ctx, pending);
+    for (const response of pending) if (this.#imageResponses.get(response.childId) === response) this.#imageResponses.delete(response.childId);
   }
   guardModels(models: ModelRuntime): ModelRuntime {
     return new Proxy(models, { get: (owner, key) => {
@@ -901,7 +706,7 @@ export class CodingExtensions {
               const owner=await tx.task(caller.api.taskId);
               const current=()=>!this.#closed&&this.#calls.get(callId)===caller&&!caller.context.abortSignal?.aborted&&!!owner&&!owner.abortRequested&&owner.state.status!=='terminal'&&owner.state.status!=='completing';
               if(!current())throw new CodingResourcesUnavailable();
-              await this.#publishImageResult(tx,saved.response!,typed,current);
+              await publishImageResult(tx,saved.response!,typed,current);
             },context);
           }
           caller.models.push(typed);return {typed};

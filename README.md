@@ -71,7 +71,7 @@ runtime 全量测试固定串行：连续全量以四文件并发运行时，不
 | 入口 | 职责 |
 |---|---|
 | [架构约定](doc/架构约定.md) | 起步阶段模块归属、验证边界和工程验收 |
-| [协作与工作树入口](doc/协作约定.md) | 当前主目录由 Codex Root 接管单写与集成，独立几何树及历史候选的归属、冻结与恢复依据 |
+| [协作与工作树入口](doc/协作约定.md) | 当前主目录由协调者接管单写与集成，独立几何树及历史候选的归属、冻结与恢复依据 |
 | [architecture-policy.json](architecture-policy.json) | 模块依赖、公开入口与外部包许可清单的机器规则 |
 | [tools/architecture/](tools/architecture/check.mjs) | 只读检查器与其正反样例；不属于应用运行代码 |
 | [执行合同](src/contracts/index.ts) / [应用端口](src/application/index.ts) | 请求校验、接收回执及只读结果；宿主核对归属与授权后调用 |
