@@ -2,27 +2,22 @@
 
 ## 范围
 
-本片只接入 Pi 1.0.0 普通 ExtensionAPI 的 `session_start.reason` 与 `resources_discover.reason`，沿同一 Durable 会话及现有资源 Worker 生命周期传递原因，不增加会话、历史或执行所有者。新 Durable 会话首次正式准备资源时使用 `startup`；已存在会话在首次装载或明确继续时使用 `resume`；同一活跃会话发现扩展资源内容变化并重装 Worker 时使用 `reload`。只读重开本身不启动 Worker、不发事件。D Code 不持有可映射的 Pi 会话文件路径，因此不填造可选 `previousSessionFile`。
+本片接收 Pi 1.0 普通扩展启动及资源发现的原因映射。新 Durable 会话首次正式准备资源使用“首次启动”，既有会话首次装载或用户明确继续使用“恢复”，活跃会话实际资源变化后重装使用“重载”。资源发现只消费 SDK 规定的首次启动和重载两种原因。只读重开不创建资源线程、不发事件；没有可映射的会话文件路径时不编造该字段。
 
 ## 目标反例与实际结果
 
-修复前的受控反例使用原暂停／关闭／只读重开／明确继续 Runtime 路径。Pi 固定版本 SDK 明确要求重新装载时说明启动原因，但 Worker 将每次新建都写为 `startup`。测试实际观察到恢复后第二个 `session_start` 仍为 `startup`，而目标要求为 `resume`：真实 exit 1。原 Pi 1.0.0 包源码及测试文件身份保存在 `B/Root-coding-session-start-reason-red-20261016/`；该红项只改变目标断言，四个产品源文件在运行前后逐字节相同。
+旧实现把每次新线程都标成首次启动。原暂停、关闭、只读重开和明确继续路径实际观察第二次事件仍为首次启动，而应为恢复，目标断言失败；测试只增加判据，原产品字节未改变。
 
-修复后两条 Runtime 目标 2/2 通过：
-
-1. 新会话首次装载记录 `startup`；同一会话暂停、关闭并重开只读时没有新事件；用户明确继续后记录 `resume`，并验证原扩展 `sendUserMessage` 仍沿同一 Durable 输入路径恰好进入一次。
-2. 活跃 Worker 发现扩展文件实际变化时，按资源变更执行重新装载；`session_start` 与 `resources_discover` 均收到 `reload`，正式会话输入仍只有两条原操作。
-
-定向红证据在 `B/Root-coding-session-start-reason-red-20261016/`：真实 exit 1，第二个事件收到 `startup` 而目标为 `resume`。修复后 `B/Root-coding-session-start-reason-r4-focused-green-20261016/` 两条目标 2/2、真实 exit 0。
-
-资源重载用例最初把两个用户输入等同于两次 HTTP；受控 coding fixture 会为工具循环产生多个模型请求。该局部计数断言已改为核正式用户记录数及唯一重载事件，不改既有业务断言或期限。
+修后两条实际运行路径通过：新会话首次准备给正确原因，暂停关闭后的只读查看没有新事件，用户明确继续才给恢复原因，扩展发起的输入仍沿原 Durable 通路恰好接收一次；活动资源正文变化则给重载原因，正式输入数量和身份保持。最初测试误把两个用户输入等同两次模型请求，后按真实工具循环改为核正式用户记录与唯一重载事件，没有放宽业务期限。
 
 ## 完整门槛
 
-固定 `npm run verify` 覆盖按项目入口登记的八项门槛，完整租约原始输出、真实逐门 exit 及门前／门后身份在 `B/Root-coding-session-start-reason-full-gates-r1-20261016/`：架构正反 32/32、源码架构检查 83 项、TypeScript、Lint、构建、Runtime 481/481、契约 14/14、隐藏桌面 E2E 125/125。八门各自真实 exit 0，门前后及全轮 canonical 映射一致，189 项 SHA-256 aggregate `ab4cc85843337f819d4a1fd5bea72bb3a6e805b8e09d966dc13869bc2f61130c`；无 fail／skip／cancel。Lint 为 0 error、1 项既有 `Timeline.tsx` warning。r2 固定候选及完整证据经独立审查 Standards／Spec／CodeQuality 三项 PASS，Root 已接收本片限定范围；复核报告为 `B/Root-coding-session-start-reason-r2-independent-review-20261016.md`。该接收只覆盖本节所述事件原因映射，不代表完整 Pi SDK 或整产品通过。
+最终同源完整八项检查全部通过：运行集成481项、契约14项、隐藏界面125项，保留一项既有警告。固定候选的原始出口、完整记录和检查前后文件身份由独立审查核对，规范、要求、代码质量三项限定通过。旧失败不改为首次成功。
+
+[完整检查证据](/Users/diwu/.codex/visualizations/2026/10/02/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/Root-coding-session-start-reason-full-gates-r1-20261016/)；[最终独立审查](/Users/diwu/.codex/visualizations/2026/10/02/01a0fd5d-2c45-7783-bdeb-42ce2e19d2dd/Root-coding-session-start-reason-r2-independent-review-20261016.md)。原因来自打开原存储时记录的会话存在事实和原资源摘要变化，没有修改第三方 SDK。
 
 ## 实现依据与边界
 
-执行端在打开 Durable 存储时记录当前根是否已存在，并在正式资源准备／明确继续时把相应的 `startup` 或 `resume` 原因交给扩展 Worker。Worker 的实际资源摘要变化分支使用 `reload`；`resources_discover` 仅接受 SDK 规定的 `startup`／`reload` 两值。实现复用固定 `@earendil-works/pi-coding-agent` 1.0.0 的公开事件合同，没有修改第三方包。
+本片没有增加会话、正式历史或执行所有者，也不声称支持 SDK 原生的新建、分叉与所有会话文件语义。它不覆盖完整消息或压缩事件，不证明真实服务商、用户项目及人工接受。行为依据仍为[开发任务路径](../../../spec/开发任务路径.md)与[任务暂停与恢复](../../../spec/任务暂停与恢复.md)，当前复用边界见[Pi能力复用与演进](../../Pi能力复用与演进.md)。
 
-本片不覆盖 Pi SDK 的全部会话原因（例如 SDK 原生 `new`／`fork` 与会话文件地址）、全部消息／压缩事件、typed/native provider、vision、`exec` 或完整 SDK 接入；不证明真实服务商账户、前台人工接受或整体产品完成。完整 SDK 与整体产品仍未验收。
+详细原稿可由 Git 基线 `36a26048:doc/验证记录/扩展启动事件原因-2026-10-16/README.md` 回查；原始日志、图片和恢复数据保持原位，归并见 [更新记录](../../../CHANGELOG.md#2026-10-19-文档归并与职责清理)。
