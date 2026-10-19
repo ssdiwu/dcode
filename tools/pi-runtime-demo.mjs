@@ -13,7 +13,7 @@ const registry = createRegistry(); registry.install(CodingTools);
 const options = { target: { workspaceId: 'demo-space', taskId: 'demo-task', sessionId: 'demo-session' }, directory: join(directory, 'records'), cwd: directory, models: fixture.models, registry, agent: { model: { provider: fixture.model.provider, modelId: fixture.model.id } }, env: target => new NodeExecutionEnv({ cwd: target.cwd }) };
 let unit;
 try {
-  console.log('执行：真实 Pi Durable 1.0.0；模型：本地受控模型；数据：自动清理的隔离目录。');
+  console.log('执行：真实 Pi Durable 1.3.0；模型：本地受控模型；数据：自动清理的隔离目录。');
   unit = await PiExecutionSession.open(options);
   const input = { target: options.target, operationId: 'write-file', text: '在隔离目录写入一个文件', mode: 'steer', expected: (await unit.read()).control };
   const receipt = await unit.submit(input); console.log('输入回执：', receipt);

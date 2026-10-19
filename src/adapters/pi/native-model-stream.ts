@@ -14,8 +14,9 @@ export function validateNativeStreamOptions(api: string, options: Record<string,
 
 export function validateNativeStreamTarget(originalApi: unknown, model: Model<Api>, target: { thinkingLevel?: SdkRequestTarget['thinkingLevel'] }, options: Record<string, unknown>): void {
   if (originalApi !== 'openai-completions' || model.api !== originalApi) throw new Error('原生模型流不能跨协议改选');
-  // SDK 在末尾合并 samplingParams，可覆盖身份、正文和思考字段；未核等价的覆盖口不能旁路完整准入。
-  if (model.samplingParams && Object.keys(model.samplingParams).length) throw new Error('该模型的原生采样覆盖尚未接入');
+  // SDK 在末尾合并普通和分档 samplingParams，可覆盖身份、正文和思考字段；未核等价的覆盖口不能旁路完整准入。
+  if ((model.samplingParams && Object.keys(model.samplingParams).length)
+    || (model.samplingParamsByThinkingLevel && Object.keys(model.samplingParamsByThinkingLevel).length)) throw new Error('该模型的原生采样覆盖尚未接入');
   const level = target.thinkingLevel;
   if (level === undefined) throw new Error('原生模型流缺少权威思考裁定');
   if (level === null || level === 'off') {

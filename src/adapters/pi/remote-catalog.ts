@@ -95,6 +95,8 @@ function parseCatalogEntries(providerId: string, value: unknown): PersistedCatal
 export interface FetchCatalogOptions {
   baseUrl: string;
   providerId: string;
+  /** 只由本地固定 SDK 兼容适配提供，不能接受远端自报的身份。 */
+  remoteProviderId?: string;
   /** 仅当本地确有有效缓存正文时传入；304 语义才能成立 */
   etag?: string;
   signal?: AbortSignal;
@@ -104,7 +106,7 @@ export interface FetchCatalogOptions {
 
 /** 单供应商公共目录检查：不携带认证，无模型探针，无写入副作用。 */
 export async function fetchProviderCatalog(options: FetchCatalogOptions): Promise<CatalogFetchOutcome> {
-  const url = new URL(`/api/models/providers/${encodeURIComponent(options.providerId)}`, options.baseUrl);
+  const url = new URL(`/api/models/providers/${encodeURIComponent(options.remoteProviderId ?? options.providerId)}`, options.baseUrl);
   url.searchParams.set("types", "chat");
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();

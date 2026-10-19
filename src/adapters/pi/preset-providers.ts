@@ -1,4 +1,4 @@
-// 预设供应商登记：以 pi-ai 1.0.0 builtinProviders 为身份/auth/协议唯一权威来源。
+// 预设供应商登记：以锁定的 pi-ai builtinProviders 为身份/auth/协议唯一权威来源。
 // 关键边界：
 // - 不重建 42 家身份表；供应商名称、协议分发、auth 流程沿用 SDK 正式实现。
 // - credential 归 D Code 名下后，环境/文件凭据是旁路。策略明确且统一（不做源码文本探测：
@@ -16,6 +16,8 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 export interface RegisteredPresetProvider {
   readonly id: string;
   readonly name: string;
+  /** SDK 的公共目录查询身份；不改变已保存的 D Code 来源、凭据或运行身份。 */
+  readonly catalogProviderId?: string;
   readonly provider: Provider;
   readonly authKinds: ReadonlyArray<"api_key" | "oauth">;
 }
@@ -66,7 +68,16 @@ function wrapApiKeyAuth(original: ApiKeyAuth | undefined): ApiKeyAuth | undefine
  */
 export function registerPresetProviders(): RegisteredPresetProvider[] {
   const result: RegisteredPresetProvider[] = [];
-  for (const provider of builtinProviders()) {
+  for (const upstream of builtinProviders()) {
+    // Pi 1.3 将 Azure 的 provider id 改为 azure，但 API id 未变。
+    // 保 D Code 旧来源及加密键/会话/候选/历史；只适配同一官方供应商，不改用户 custom。
+    const legacyAzure = upstream.id === 'azure';
+    const id = legacyAzure ? 'azure-openai-responses' : upstream.id;
+    const provider: Provider = legacyAzure ? {
+      ...upstream, id,
+      getModels: () => upstream.getModels().map(model => ({ ...model, provider: id })),
+      ...(upstream.getAllModels ? { getAllModels: () => upstream.getAllModels!().map(model => ({ ...model, provider: id })) } : {}),
+    } : upstream;
     const authKinds: Array<"api_key" | "oauth"> = [];
     if (provider.auth.apiKey) authKinds.push("api_key");
     if (provider.auth.oauth) authKinds.push("oauth");
@@ -77,7 +88,7 @@ export function registerPresetProviders(): RegisteredPresetProvider[] {
         ...(provider.auth.oauth ? { oauth: provider.auth.oauth } : {}),
       },
     };
-    result.push({ id: provider.id, name: provider.name, provider: next, authKinds });
+    result.push({ id: provider.id, name: provider.name, provider: next, authKinds, ...(legacyAzure ? { catalogProviderId: upstream.id } : {}) });
   }
   return result;
 }

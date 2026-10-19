@@ -216,7 +216,7 @@ async function fixture(mode: Mode = 'owned', options: { holdTarget?: boolean; em
               observed.streamStopReason = message.stopReason;
             });
           } catch { observed.rejected = true; }
-          return { content: [{ type: 'text', text: 'real ToolTask admission probe finished' }] };
+          return { output: [{ type: 'text', text: 'real ToolTask admission probe finished' }] };
         }
         assert.ok(realTool.owner, '真实 ToolTask 必须由实际 Generation 创建');
         const generation = await api.getTask(realTool.owner, ctx); assert.equal(generation?.kind, 'pi.generation');
@@ -230,11 +230,11 @@ async function fixture(mode: Mode = 'owned', options: { holdTarget?: boolean; em
       if (options.admission) {
         const result = receipt.state.outcome.result as JsonObject;
         const message = result.message as unknown as AssistantMessage | undefined;
-        return { content: [{ type: 'text', text: message ? messageText(message) || `refused:${message.stopReason}` : 'model child admission probe finished' }],
+        return { output: [{ type: 'text', text: message ? messageText(message) || `refused:${message.stopReason}` : 'model child admission probe finished' }],
           ...(message && message.stopReason === 'stop' ? { usage: message.usage } : {}) };
       }
       const message = (receipt.state.outcome.result as JsonObject).message as unknown as AssistantMessage;
-      return { content: [{ type: 'text', text: messageText(message) || `refused:${message.stopReason}` }], ...(mode === 'owned' ? { usage: message.usage } : {}) };
+      return { output: [{ type: 'text', text: messageText(message) || `refused:${message.stopReason}` }], ...(mode === 'owned' ? { usage: message.usage } : {}) };
     },
   })] });
   const registry = createRegistry(); registry.install(routing.extension); registry.install(extension);

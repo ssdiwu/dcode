@@ -108,17 +108,19 @@ export function createSearchTools(agentDir: string) {
     name: tool.name, description: tool.description, parameters: tool.parameters, replay: 'safe',
     async execute(args, api, context) {
       if (!api.env) throw new Error('搜索工作目录不可用');
-      return await search(tool.name, args, api.env.cwd, agentDir, api.callId, context.abortSignal);
+      const { content, ...rest } = await search(tool.name, args, api.env.cwd, agentDir, api.callId, context.abortSignal);
+      return { ...rest, output: content };
     },
   }));
 }
 
-/** Durable 的 read 不支持图片；复用 coding-agent 的正式读取器及同一有界线程。 */
+/** 保留已验 coding-agent 读取器、图片接收校验及异步有界线程；不借升级更换路径所有者。 */
 export function createImageReadTool(agentDir: string) {
   const tool = createReadTool('.');
   return defineTool({ name: tool.name, description: tool.description, parameters: tool.parameters, replay: 'safe',
     async execute(args, api, context) {
       if (!api.env) throw new Error('读取工作目录不可用');
-      return search('read', args, api.env.cwd, agentDir, api.callId, context.abortSignal);
+      const { content, ...rest } = await search('read', args, api.env.cwd, agentDir, api.callId, context.abortSignal);
+      return { ...rest, output: content };
     } });
 }

@@ -9,9 +9,9 @@ import type { Api, AssistantMessage, Credential, DeferredHandle, Model, Provider
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { ModelRouteRequest } from '@earendil-works/pi-coding-agent';
-import { createRegistry, Harness } from '@earendil-works/pi-durable';
+import { createRegistry, Harness, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
 import type { GenerationCheckpoint, Storage } from '@earendil-works/pi-durable';
-import { StorageRejected } from '@earendil-works/pi-durable';
+import { StorageRequestError } from '@earendil-works/pi-durable';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
@@ -254,7 +254,7 @@ await test('真正 503 失败后的 Durable retry：reason/failed/state 同属�
   assert.ok(JSON.stringify(h.requests[1]!.body).includes('retry: write then continue'));
 });
 
-await test('路由计划/state 同事务被可靠拒绝：不留半份状态，也不落到真实模型请求', async (t) => {
+await test('路由计划/state 提交失败使 Session 失效：只读核原回执、无半份状态和真实模型请求', async (t) => {
   const h = await fixture(); t.after(() => h.close()); let kinds: string[] = [];
   const unit = await h.open('save-rejected', { openStorage: async (directory) => {
     const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
@@ -263,15 +263,28 @@ await test('路由计划/state 同事务被可靠拒绝：不留半份状态，�
         const routeWrites = writes.filter((write) => write.type === 'document.create' && write.record.kind.startsWith('dcode.virtual-route-'));
         if (routeWrites.length > 0) {
           kinds = routeWrites.map((write) => write.type === 'document.create' ? write.record.kind : '');
-          throw new StorageRejected('fixture routing state/plan rejected');
+          throw new StorageRequestError('fixture routing state/plan rejected');
         }
         return target.commit(writes, context);
       };
       const member = Reflect.get(target, key); return typeof member === 'function' ? member.bind(target) : member;
     } });
   } });
-  await h.send(unit);
-  await h.until(async () => (await unit.read()).pendingInputs === 0, '正式输入保留真实失败事实');
+  const input = await h.send(unit);
+  await h.until(async () => kinds.length === 2, '真实命中计划与状态同批提交失败');
+  // 1.3 的写入错误会关闭 Session；不得再用旧版同会话投影把它伪装成普通运行完成。
+  await assert.rejects(unit.read(), /Session failed/);
+  assert.equal((await unit.lookupReceipt(input)).status, 'accepted', '失败后经新只读 Storage 查回已接收的原输入，不另建输入');
+  await unit.close();
+  const storage = await openNodeJsonlStorage(join(h.root, 'runtime-save-rejected'), BACKGROUND_CONTEXT);
+  try {
+    const tasks = await storage.scanTasks({ conversationId: ROOT_CONVERSATION_ID }, 200, undefined, BACKGROUND_CONTEXT);
+    const scopes = [{ kind: 'conversation' as const, conversationId: ROOT_CONVERSATION_ID }, ...tasks.items.map(task => ({ kind: 'task' as const, taskId: task.id }))];
+    for (const scope of scopes) {
+      const documents = await storage.scanDocuments({ scope, at: 'current' }, 200, undefined, BACKGROUND_CONTEXT);
+      assert.deepEqual(documents.items.filter(record => record.kind.startsWith('dcode.virtual-route-')), [], '原子提交失败不能留下半份计划或状态');
+    }
+  } finally { await storage.close(BACKGROUND_CONTEXT); }
   assert.deepEqual(kinds.sort(), ['dcode.virtual-route-plan', 'dcode.virtual-route-state']);
   assert.equal(h.requests.length, 0); assert.equal(h.writes(), 0);
 });

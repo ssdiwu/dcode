@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { Harness, LiveDoc, createSession, createRegistry, defineDoc, defineDocFamily, defineExtension, StorageRejected, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
+import { Harness, LiveDoc, createSession, createRegistry, defineDoc, defineDocFamily, defineExtension, SessionFailed, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable';
 import type { UserInput } from '@earendil-works/pi-durable';
 import type { AgentChange, Conversation, Cursor, HarnessOptions, Storage, SubmissionRecord, TaskId, ToolExecutionApi } from '@earendil-works/pi-durable';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
@@ -96,6 +96,8 @@ export class PiExecutionSession implements ExecutionPort {
   #pausing = false;
   #resuming = false;
   #faulted = false;
+  #sessionFailed = false;
+  #failedCleanup?: Promise<void>;
   #closed = false;
   #closing = false;
   #closeResult?: Promise<void>;
@@ -185,6 +187,15 @@ export class PiExecutionSession implements ExecutionPort {
         : { ...(extensions && !Array.isArray(extensions) ? extensions : {}), add: [...(extensions && 'add' in extensions ? extensions.add ?? [] : []), this.#routing.extension] } };
     }
     this.#harness = await Harness.open(this.#storage, { models: this.#routing?.models ?? this.#options.models, registry, env: this.#options.env, settings: this.#options.settings ?? { retry: { maxRetries: 0 } } }, context);
+    const openedHarness = this.#harness;
+    // 1.3 的存储异常会主动关闭 Session；关闭通知只认本代，旧 pause 的正常关闭不污染新实例。
+    openedHarness.subscribeClose(() => {
+      // 无宿主 pause/close 意图的主动关闭先封锁旧实例；通知内不重入 Session，微任务才执行资源 join。
+      if (this.#harness === openedHarness && !this.#closing && !this.#pausing) queueMicrotask(() => this.#markSessionFailed(openedHarness));
+    });
+    void openedHarness.closed.then(end => {
+      if (end.reason === 'failed' && this.#harness === openedHarness) this.#markSessionFailed(openedHarness);
+    });
     this.#routing?.attach(this.#harness);
     this.#root = await this.#harness.root(context, { agent: { ...agent, cwd: this.#cwd }, init: async tx => { (await tx.doc(Binding)).identity = this.#identity; } });
     this.#options.attachExecution?.(this.#harness, this.#root, this.#routing?.withOwnedModelInvocation.bind(this.#routing));
@@ -285,28 +296,66 @@ export class PiExecutionSession implements ExecutionPort {
     return { status: 'accepted', operationId: input.operationId, submissionId: stored.id, processing: stored.status };
   }
 
-  async #lookup(input: WorkInput, ctx: Context = context): Promise<InputReceipt> {
-    try {
-      // 提交后丢失回执可能令 Session 不可继续写；从正式存储读回，不能用 submit/wait 代查。
-      const address = await this.#storage.findDocument({ kind: 'dcode.input-identity', scope: { kind: 'session' }, key: input.operationId }, 'current', ctx);
-      const intent = address && await this.#storage.document(address.id, 'current', ctx);
+  #markSessionFailed(harness: Harness): void {
+    if (harness !== this.#harness || this.#sessionFailed) return;
+    this.#sessionFailed = true; this.#faulted = true; this.#revision += 1;
+    // 失败本身触发资源收束；查询只等待真实 join，不通过 pause/close 交出目录认领或消费费用。
+    this.#failedCleanup = (async () => {
+      const resources = this.#options.beginCloseExecutionResources?.('resume');
+      resources?.done.catch(() => {});
+      // shutdown 回调无法再提交到失败 Session；它的错误不跳过真正运输/Worker 的收束。
+      await resources?.shutdownFlushed.catch(() => {});
+      // backend.close失败也须等物理资源join；保首个后端错误，不让后续收束错误取代它。
+      let failure: unknown;
+      try { await harness.close(context); } catch (error) { failure = error; }
+      try { await harness.closed; } catch (error) { failure ??= error; }
+      try { await resources?.done; } catch (error) { failure ??= error; }
+      if (failure) throw failure;
+    })();
+    void this.#failedCleanup.catch(() => {});
+  }
+
+  async #lookupStored(input: WorkInput, storage: Storage, ctx: Context): Promise<InputReceipt> {
+      const address = await storage.findDocument({ kind: 'dcode.input-identity', scope: { kind: 'session' }, key: input.operationId }, 'current', ctx);
+      const intent = address && await storage.document(address.id, 'current', ctx);
       if (intent && (intent.version !== 1 || intent.value.fingerprint !== this.#fingerprint(input))) return { status: 'not-accepted', operationId: input.operationId, reason: 'conflict' };
-      const record = await this.#storage.submissionByRequest(this.#root.id, input.operationId, ctx);
+      const record = await storage.submissionByRequest(this.#root.id, input.operationId, ctx);
       if (record) {
         if (!intent) throw new Error('Stored input identity is missing');
-        const preparation = await this.#storage.findDocument({kind:'dcode.input-preparation',scope:{kind:'session'},key:input.operationId},'current',ctx);
-        const prepared = preparation && await this.#storage.document(preparation.id,'current',ctx);
-        const inner = prepared ? await this.#storage.submissionByRequest(this.#root.id,String(prepared.value.innerRequestId ?? processedInputId(input.operationId)),ctx) : undefined;
+        const preparation = await storage.findDocument({kind:'dcode.input-preparation',scope:{kind:'session'},key:input.operationId},'current',ctx);
+        const prepared = preparation && await storage.document(preparation.id,'current',ctx);
+        const inner = prepared ? await storage.submissionByRequest(this.#root.id,String(prepared.value.innerRequestId ?? processedInputId(input.operationId)),ctx) : undefined;
         return {...this.#accepted(input,record), ...(inner && record.status !== 'done' && record.status !== 'unanswered' ? {processing:inner.status} : {})};
       }
       return { status: 'not-accepted', operationId: input.operationId, reason: 'not-found' };
-    } catch { return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' }; }
+  }
+
+  async #lookup(input: WorkInput, ctx: Context = context, recoverFailed = false): Promise<InputReceipt> {
+    if (!this.#sessionFailed) {
+      try { return await this.#lookupStored(input, this.#storage, ctx); }
+      catch { return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' }; }
+    }
+    if (!recoverFailed) return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
+    {
+      try {
+        await this.#failedCleanup;
+        const storage = this.#options.openStorage ? await this.#options.openStorage(this.#directory) : await openNodeJsonlStorage(this.#directory, ctx, { fsync: true });
+        try {
+          // 只开原目录的 Storage 读取；不创建 Harness、不 wait/submit/resume，也不初始化缺失的正式运行。
+          const root = await storage.conversation(ROOT_CONVERSATION_ID, ctx);
+          const address = await storage.findDocument({ kind: 'dcode.binding', scope: { kind: 'session' } }, 'current', ctx);
+          const binding = address && await storage.document(address.id, 'current', ctx);
+          if (!root || !binding || binding.version !== 1 || binding.value.identity !== this.#identity) throw new Error('Stored session identity changed');
+          return await this.#lookupStored(input, storage, ctx);
+        } finally { await storage.close(ctx); }
+      } catch { return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' }; }
+    }
   }
 
   lookupReceipt(value: unknown): Promise<InputReceipt> {
     const input = parseWorkInput(value);
     this.#validateTarget(input);
-    return this.#serialize(async () => { this.#assertOpen(); return this.#lookup(input); });
+    return this.#serialize(async () => { this.#assertOpen(); return this.#lookup(input, context, true); });
   }
 
   submit(value: unknown): Promise<InputReceipt> {
@@ -398,11 +447,7 @@ export class PiExecutionSession implements ExecutionPort {
       if (error instanceof PreparationPaused) {
         return { status: 'not-accepted', operationId: input.operationId, reason: 'paused' };
       }
-      if (error instanceof StorageRejected) {
-        const result = await this.#lookup(input);
-        if (result.status === 'not-accepted' && result.reason === 'not-found') return { ...result, reason: 'storage-rejected' };
-        return result;
-      }
+      if (error instanceof SessionFailed) this.#markSessionFailed(this.#harness);
       this.#faulted = true;
       return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
     }
@@ -418,9 +463,11 @@ export class PiExecutionSession implements ExecutionPort {
       if (this.#paused || this.#pausing) return { status: 'not-accepted', operationId: input.operationId, reason: 'paused' };
       if (!this.#matches(input.expected)) return { status: 'not-accepted', operationId: input.operationId, reason: 'stale-control' };
       if (this.#faulted) return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
+      let commitStarted = false;
       try {
         if (this.#options.prepareInput && this.#options.needsInputPreparation?.()) {
           let receipt!: SubmissionRecord;
+          commitStarted = true;
           await this.#harness.commit(async tx => {
             if (this.#pausing || this.#paused || !this.#matches(input.expected)) throw new PreparationPaused();
             const order = await tx.doc(PreparationOrder);
@@ -439,22 +486,24 @@ export class PiExecutionSession implements ExecutionPort {
         await this.#prepareExecution();
         const text = expandPromptTemplates ? this.#options.transformInput?.(input.text) ?? input.text : input.text;
         // 未启用扩展时保原发送流程；展开明确失败仍发生在接收之前。
+        commitStarted = true;
         await this.#harness.commit(async tx => { await tx.doc(Intent,input.operationId,this.#fingerprint(input)); },context);
         if (this.#pausing || this.#paused || !this.#matches(input.expected)) return {status:'not-accepted',operationId:input.operationId,reason:'paused'};
         const submission = await this.#root.submit({ type: 'input', content: this.#userContent({ ...input, text }), requestId: input.operationId, whenBusy: input.mode === 'steer' ? 'steer' : 'followUp' }, context);
         this.#enabled = true;
         return this.#accepted(input, await submission.status(context));
       } catch (error) {
+        // commit 的任何存储错误在 1.3 都是未知；即使并发 pause，也不能伪报确定未接收。
+        if (error instanceof SessionFailed) { this.#markSessionFailed(this.#harness); return {status:'unknown',operationId:input.operationId,reason:'storage-unavailable'}; }
+        // 首次存储失败可能原样抛 Error；进入 commit 后即使并发暂停，也须先查原回执，不能据异常类型猜未接受。
+        if (commitStarted && !(error instanceof PreparationPaused)) {
+          this.#faulted = true;
+          return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
+        }
         // 暂停在资源 await 期间已认领；正式 submit 尚未调用，不能伪成未知接收或存储故障。
         if (error instanceof PreparationPaused || this.#pausing || this.#paused) return { status: 'not-accepted', operationId: input.operationId, reason: 'paused' };
         // 准备资源在正式接收之前明确失败：不冒称已接收或存储丢失。
         if (error instanceof CodingResourcesUnavailable) return { status: 'not-accepted', operationId: input.operationId, reason: 'execution-unavailable' };
-        // 只有明确拒绝且确实无提交时才能报告未接收；其余错误保持未知，先核对原记录。
-        if (error instanceof StorageRejected) {
-          const result = await this.#lookup(input);
-          if (result.status === 'not-accepted' && result.reason === 'not-found') return { ...result, reason: 'storage-rejected' };
-          return result;
-        }
         this.#faulted = true;
         return { status: 'unknown', operationId: input.operationId, reason: 'storage-unavailable' };
       }
@@ -588,12 +637,12 @@ export class PiExecutionSession implements ExecutionPort {
       const task = inspection.tasks.find(item => item.record.id === slot.taskId)?.record;
       if (slot.status !== 'running' || !task || task.kind !== 'pi.tool' || task.conversationId !== this.#root.id
         || task.owner !== live?.run?.taskId || task.abortRequested || typeof slot.output !== 'string' || !slot.output
-        || !task.input || typeof task.input !== 'object' || Array.isArray(task.input) || task.input.callId !== slot.callId
+        || !task.input || typeof task.input !== 'object' || Array.isArray(task.input) || (task.input.kind !== undefined && task.input.kind !== 'model') || task.input.callId !== slot.callId
         || entries.some(entry => entry.toolResult?.callId === slot.callId)) continue;
       toolProgress.push({ taskId: task.id, callId: slot.callId, name: slot.name, text: slot.output,
         droppedBytes: slot.droppedBytes ?? 0, droppedLines: slot.droppedLines ?? 0 });
     }
-    return { target: this.target, control: { instanceId: this.#instanceId, revision: this.#revision }, observation: ++this.#observation, phase, execution: 'pi-durable-1.0.0', model: agent.model ?? null, entries, pendingInputs, toolProgress };
+    return { target: this.target, control: { instanceId: this.#instanceId, revision: this.#revision }, observation: ++this.#observation, phase, execution: 'pi-durable-1.3.0', model: agent.model ?? null, entries, pendingInputs, toolProgress };
   }
 
   pause(): Promise<ExecutionView> {
@@ -694,11 +743,12 @@ export class PiExecutionSession implements ExecutionPort {
     this.#closing = true;
     this.#paused = true;
     this.#revision += 1;
-    const resources = this.#options.beginCloseExecutionResources?.('quit');
+    const resources = this.#sessionFailed ? undefined : this.#options.beginCloseExecutionResources?.('quit');
     resources?.done.catch(() => {});
     this.#closeResult = this.#serialize(async () => {
       // 先等待 Pi 停止和存储关闭，再交出所有权；失败时保留认领，不能让新实例抢写。
       let failure:unknown;
+      try { await this.#failedCleanup; } catch (error) { failure = error; }
       if(!this.#faulted){try{
         const inspection=await this.#harness.inspect(context);
         // 直接关窗也要保原在途暂停事实；故障／已关闭的 Harness 仍须走原实际关闭，不能被采样挡住。

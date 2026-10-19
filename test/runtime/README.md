@@ -4,7 +4,11 @@
 
 [产品内容与装配回归](product-owned-content.test.mjs)验证正常初始化、旧记录／发送关联保全、无能力时不执行、隔离装配与双语错误。窗口完整路径及本片修因见 [清理交付记录](../../doc/阶段记录/2026-10-08-产品内容清理交付.md)。
 
-Pi 专项直接加载 `src/adapters/pi`，使用官方 Pi Durable / Pi AI / Chord `1.0.0`、真实异步 JSONL 与实际文件操作。只有模型服务边界使用受控 provider，不读模型凭据或用户配置，不发网络模型请求。运行数据由每例独立临时目录保存并在结束后清理。
+Pi 专项直接加载 `src/adapters/pi`，当前依赖固定官方 Pi Durable / Pi AI / Chord `1.3.0`、真实异步 JSONL 与实际文件操作；迁移是否完成以[Pi版本与升级](../../doc/Pi版本与升级.md)和PROGRESS的完整门槛／独立结论为准。只有模型服务边界使用受控 provider，不读真实模型凭据或用户配置，不发真实服务商模型请求。运行数据由每例独立临时目录保存并在结束后清理，失败需保留的合成现场按各例诊断标明。
+
+[1.3供应商兼容](pi130-provider-compatibility.test.mjs)核 D Code 原 Azure 来源／凭据键与新公共查询 ID 分离、旧资源 ETag 不复用、旧格式工具调用／结果进入同模型和跨模型真实 HTTP、Kimi 受管协议更新与同名 custom 不误迁。合成协议历史不等于旧盘；`test/compatibility/` 两个专项脚本另读实际旧1.0生成的隔离记录：`pi100-to-pi130.mjs` 接收旧native manifest、旧completing manifest、结果路径三个参数，`pi100-ordinary-to-pi130.mjs` 接收旧普通扩展 manifest、结果路径两个参数。两者都以 `node --import tsx` 启动，只在运行数据副本上核旧回执、正文、只读零请求和明确继续不重放，不包含在runtime默认通配。固定旧数据的生成脚本、生产SDK版本、来源与每次实际调用／出口在[迁移记录](../../doc/Pi版本与升级.md)的外部证据根保存；不能用新SDK捏造历史替代。
+
+[1.3运输生命周期](pi130-worker-transport.test.mjs)以实际资源Worker、同一公开MCP constructor／production包装和真实loopback HTTP，分别核send options的已取消signal零POST、token尚未放门时实际DELETE与关闭返回、活Worker随后真放认证门仍零迟发，以及另一场景中生产资源关闭后自然线程exit。只添加有限探针，不替换被测wrapper／SDK；强制失败清理不计成功退出。它是合成认证的消费反例，不能扩大为真实OAuth账户或整个MCP服务端取消的证明。
 
 [工作文件夹绑定](project-binding.test.mjs)使用拥有的真实临时目录与状态存储，核选择归属、目录失效、同次真实保存/重试、结果未知保护、查回只读与关闭/设置收束；mock后端只用来判别绑定没有启动工作。首次正常装配选择目录与实际SDK文件工具完整路径另见 `test/e2e/ordinary-coding-path.test.mjs`，界面/保存边界见 `test/e2e/project-binding.test.mjs`；原生可见选择器、真实用户项目和账户不在这些证据内。
 

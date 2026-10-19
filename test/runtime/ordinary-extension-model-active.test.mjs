@@ -44,7 +44,9 @@ async function activeHttp({ nonce, method, hold, releaseable = false, directKey 
     req.on('end', () => {
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString()); }
       catch { errors.push('invalid fixture request JSON'); res.writeHead(400); res.end(); return; }
-      const direct = body.messages?.some(message => message.role === 'user' && message.content === marker);
+      // native反例可能覆写messages；仍按该次内层独有的none选项辨认实际请求，不能把坏请求误计为外层。
+      const direct = body.messages?.some(message => message.role === 'user' && message.content === marker)
+        || (method === 'stream' && body.tool_choice === 'none');
       const kind = direct ? 'direct' : 'outer';
       const ordinal = requests.filter(item => item.kind === kind).length + 1;
       const id = 'owned-' + kind + '-' + nonce + '-' + ordinal;
@@ -148,7 +150,8 @@ async function fixture(method, { hold = false, releaseable = false, source = ext
       await presetStore.commitCredential('user-defined',{type:'api_key',key:codingKey});
       const model={provider:'user-defined',id:codingModel,name:'Owned native stream',api:'openai-completions',baseUrl:remote.origin+'/v1',input:['text'],reasoning:true,
         contextWindow:128000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0},thinkingLevelMap:{off:'none',high:'high'},compat:{supportsReasoningEffort:true},
-        ...(nativePreset.samplingParams?{samplingParams:nativePreset.samplingParams}:{})};
+        ...(nativePreset.samplingParams?{samplingParams:nativePreset.samplingParams}:{}),
+        ...(nativePreset.samplingParamsByThinkingLevel?{samplingParamsByThinkingLevel:nativePreset.samplingParamsByThinkingLevel}:{})};
       const preset={id:'user-defined',name:'Owned native preset',authKinds:['api_key'],provider:createProvider({id:'user-defined',name:'Owned native preset',models:[model],
         auth:{apiKey:{name:'owned fixture key',check:async({credential})=>credential?.type==='api_key'?{type:'api_key',source:'owned fixture'}:undefined,
           resolve:async({credential})=>credential?.type==='api_key'?{auth:{apiKey:credential.key},source:'owned fixture'}:undefined}},
@@ -166,7 +169,9 @@ async function fixture(method, { hold = false, releaseable = false, source = ext
       }
       backend=createPresetPiBackend({stateDir,selection:{providerId:'user-defined',modelId:codingModel},model,preset,info:{id:model.id,name:model.name},store:presetStore,additionalSources,
         admitRequest:async request=>{admissions.push({...request});const sourceId=nativePreset.switchApi&&admissions.length===2?switchedProvider:request.sourceId;
-          return {ok:true,reason:null,target:{sourceId,modelId:request.modelId,thinkingLevel:nativePreset.level}};}});
+          // 分档覆盖反例只在内层 owned 请求裁定 high；外层先正常进入真实扩展工具。
+          const thinkingLevel=nativePreset.innerLevelOnly&&admissions.length!==2?null:nativePreset.level;
+          return {ok:true,reason:null,target:{sourceId,modelId:request.modelId,thinkingLevel}};}});
     }
     const target = { workspaceId: 'space', taskId: 'task', sessionId: 'owned-active-model-session' };
     const opening = { target, title: 'Owned single model call', workFolder: project, model: null, initialize: true,
@@ -237,7 +242,14 @@ const usageCounts = (actual, input, output) => {
 const sumTokens = bucket => Object.values(bucket).reduce((sum, item) => sum + item.totalTokens, 0);
 const formalTool = raw => raw.messages.filter(message => message.role === 'toolResult' && message.toolName === toolName && message.toolCallId === callId);
 async function done(f) {
-  await until(async () => (await f.session.lookupReceipt(f.input)).processing === 'done');
+  try { await until(async () => (await f.session.lookupReceipt(f.input)).processing === 'done'); }
+  catch (error) {
+    const view=await f.session.read();
+    console.error('owned-model-failure',JSON.stringify({phase:view.phase,receipt:await f.session.lookupReceipt(f.input),dispatch:f.dispatch,
+      requests:f.remote.requests.map(item=>({kind:item.kind,ordinal:item.ordinal,model:item.body.model,finished:item.finished})),errors:f.remote.errors,
+      tools:view.entries.flatMap(entry=>entry.toolResult?[{name:entry.toolResult.name,isError:entry.toolResult.isError,text:entry.toolResult.text.slice(0,300)}]:[])}));
+    throw error;
+  }
   await until(async () => (await f.session.read()).phase === 'ready');
 }
 function assertOriginalAdmission(f) {
@@ -902,10 +914,11 @@ for(const variant of [
   {name:'high拒绝原生low',level:'high',options:{reasoningEffort:'low'}},
   {name:'拒绝调用方sampling覆盖',level:null,options:{samplingParams:{reasoning_effort:'high'}}},
   {name:'拒绝canonical sampling覆盖',level:null,options:{},samplingParams:{reasoning_effort:'high'}},
+  {name:'拒绝1.3分档sampling身份覆盖',level:'high',innerLevelOnly:true,options:{reasoningEffort:'high'},samplingParamsByThinkingLevel:{high:{model:'unauthorized-model',reasoning_effort:'low',messages:[]}}},
   {name:'拒绝跨API改选',level:null,options:{},switchApi:'anthropic-messages'},
   {name:'拒绝未接思考预算',level:'high',options:{reasoningEffort:'high',thinkingBudgets:{high:4096}}},
 ])await test(`扩展原生stream/${variant.name}：有限错误、零内层HTTP且原工具收束`,{timeout:30000},async()=>{
-  const f=await fixture('stream',{source:streamExtensionSource('iterate','stream',variant.options),nativePreset:{level:variant.level,samplingParams:variant.samplingParams,switchApi:variant.switchApi}});
+  const f=await fixture('stream',{source:streamExtensionSource('iterate','stream',variant.options),nativePreset:{level:variant.level,innerLevelOnly:variant.innerLevelOnly,samplingParams:variant.samplingParams,samplingParamsByThinkingLevel:variant.samplingParamsByThinkingLevel,switchApi:variant.switchApi}});
   try{
     const accepted=await f.session.submit(f.input);assert.equal(accepted.status,'accepted');await done(f);
     const tool=(await f.session.read()).entries.find(entry=>entry.toolResult?.callId===callId);assert.ok(tool);

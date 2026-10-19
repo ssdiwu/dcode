@@ -228,7 +228,7 @@ const configuration = () => {
 const metadata = () => runner.getAllRegisteredTools().map(({ definition: t, sourceInfo }) => ({
   name: t.name, description: t.description, parameters: t.parameters, exposure: t.exposure ?? 'direct',
   defaultActive: t.defaultActive, namespace: t.namespace, annotations: t.annotations, sourceInfo,
-  outputSchema: t.outputSchema, promptGuidelines: t.promptGuidelines, constrainedSampling: t.constrainedSampling, hasPrepareArguments: typeof t.prepareArguments === 'function',
+  outputSchema: t.outputSchema, promptGuidelines: t.promptGuidelines, reachesTools: t.reachesTools, constrainedSampling: t.constrainedSampling, hasPrepareArguments: typeof t.prepareArguments === 'function',
 }));
 const allTools = () => [...builtins, ...metadata()];
 const syncTools = () => {
@@ -237,7 +237,7 @@ const syncTools = () => {
   const declared = registered.filter(tool => active.includes(tool.name) && tool.exposure !== 'hidden' && tool.exposure !== 'codemode');
   const callable = registered.filter(tool => tool.exposure === 'codemode' || tool.exposure === 'deferred' || (tool.exposure === 'direct' && active.includes(tool.name)));
   const descriptions = {}, hidden = new Set();
-  const loadout = {declared,callable,registered,getExposure:name=>allTools().find(t=>t.name===name)?.exposure ?? 'direct',getNamespace:name=>allTools().find(t=>t.name===name)?.namespace};
+  const loadout = {declared,callable,registered,getExposure:name=>allTools().find(t=>t.name===name)?.exposure ?? 'direct',getNamespace:name=>allTools().find(t=>t.name===name)?.namespace,getPromptGuidelines:name=>allTools().find(t=>t.name===name)?.promptGuidelines ?? []};
   for (const tool of runner.getAllRegisteredTools()) if (active.includes(tool.definition.name) && tool.definition.prepareLoadout) {
     const next = tool.definition.prepareLoadout(loadout); if (next?.descriptions) Object.assign(descriptions,next.descriptions); for (const name of next?.hiddenDeclarations ?? []) hidden.add(name);
   }
@@ -299,14 +299,16 @@ async function initialize() {
   const {findPackageJSON}=require('node:module'),{pathToFileURL}=require('node:url');
   const mcpPackage=findPackageJSON('@earendil-works/pi-mcp',workerData.sdk);
   const manifest=JSON.parse(fs.readFileSync(mcpPackage,'utf8'));
-  if(manifest.version!=='1.0.0'||typeof manifest.exports?.['.']?.import!=='string')throw new Error('MCP public entry unavailable');
+  // 运输收束按本轮锁定的 MCP 公开入口接入，不能遗留旧版守卫使普通输入在初始化阶段全被拒绝。
+  if(manifest.version!=='1.3.0'||typeof manifest.exports?.['.']?.import!=='string')throw new Error('MCP public entry unavailable');
   const transportPort=await import(pathToFileURL(path.resolve(path.dirname(mcpPackage),manifest.exports['.'].import)).href);
   const notifications=new WeakMap(),closedTransports=new WeakMap();
   for(const Transport of [transportPort.StreamableHttpTransport,transportPort.StdioTransport]){
     const send=Transport.prototype.send,close=Transport.prototype.close,start=Transport.prototype.start;
     Transport.prototype.start=function(){if(closed)throw new Error('Resource session closed');transports.add(this);return start.call(this);};
-    Transport.prototype.send=function(message){
-      const flight=send.call(this,message);
+    Transport.prototype.send=function(message,options){
+      // 1.3按本次send signal阻止认证等待后的迟发，透明保留第二参，不能退回仅转发message。
+      const flight=send.call(this,message,options);
       if(message.method==='notifications/cancelled'){
         let pending=notifications.get(this);if(!pending){pending=new Set();notifications.set(this,pending);}pending.add(flight);
         flight.then(()=>pending.delete(flight),()=>pending.delete(flight));
@@ -317,7 +319,9 @@ async function initialize() {
       let result=closedTransports.get(this);if(result)return result;
       result=(async()=>{const pending=[...(notifications.get(this)??[])];let timer;
         try{await Promise.race([Promise.allSettled(pending),new Promise(resolve=>{timer=setTimeout(resolve,1000);})]);}finally{clearTimeout(timer);}
-        await close.call(this);await Promise.allSettled(pending);transports.delete(this);
+        // 1.3运输close使用已取得token并中止网络，不等待共享认证刷新。
+        // 再join挂在token上的send会反锁关闭；其拒绝已被跟踪，整个资源线程仍由宿主真实退出join。
+        await close.call(this);transports.delete(this);
       })();closedTransports.set(this,result);return result;
     };
   }
@@ -939,7 +943,7 @@ async function request(message) {
     await flush(); syncTools(); return result;
   }
   if (message.method === 'agent-start') {
-    const result = await runner.emitBeforeAgentStart(message.value.prompt, message.value.images, {cwd:workerData.cwd,forceSystemPrompt:state.systemPrompt});
+    const result = await runner.emitBeforeAgentStart({messageType:'user',prompt:message.value.prompt,images:message.value.images}, {cwd:workerData.cwd,forceSystemPrompt:state.systemPrompt});
     await flush(); syncTools();
     const messages = [];
     const next = result.systemPromptOptions.forceSystemPrompt ?? state.systemPrompt;

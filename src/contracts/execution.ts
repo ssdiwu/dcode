@@ -51,7 +51,7 @@ export type ExecutionView = Readonly<{
   control: ControlToken;
   observation: number;
   phase: 'ready' | 'running' | 'pausing' | 'paused' | 'faulted';
-  execution: 'pi-durable-1.0.0' | 'mock';
+  execution: 'pi-durable-1.3.0' | 'mock';
   model: { provider: string; modelId: string } | null;
   entries: ReadonlyArray<{
     id: number;

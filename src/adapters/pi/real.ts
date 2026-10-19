@@ -321,7 +321,12 @@ type SessionModelsClient = ModelRuntime;
 async function ownedModels(credentials: import('@earendil-works/pi-ai').CredentialStore): Promise<ModelRuntime> {
   const runtime = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
   // 无 await 间隙地替换全部内建认证；未配置来源不暴露可执行模型或环境凭据。
-  for (const preset of registerPresetProviders()) runtime.registerNativeProvider({ ...preset.provider, getModels: () => [], getAllModels: () => [] });
+  for (const preset of registerPresetProviders()) {
+    const empty = { ...preset.provider, getModels: () => [], getAllModels: () => [] };
+    // Azure旧来源是显式适配，SDK初始的原azure目录也须清空；否则未配置模型从另一ID漏回普通客户端。
+    if (preset.catalogProviderId && preset.catalogProviderId !== preset.id) runtime.registerNativeProvider({ ...empty, id: preset.catalogProviderId });
+    runtime.registerNativeProvider(empty);
+  }
   return runtime;
 }
 

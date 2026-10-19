@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BACKGROUND_CONTEXT as context, awaitWithContext } from '@earendil-works/chord/context';
-import { createRegistry, defineTool, defineExtension, StorageRejected } from '@earendil-works/pi-durable';
+import { createRegistry, defineTool, defineExtension, StorageRequestError, SessionFailed as Pi130SessionFailed } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import type { Storage } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
@@ -17,13 +17,13 @@ import type { PiSessionOptions } from '../../src/adapters/pi/index.ts';
 import type { WorkInput } from '../../src/contracts/index.ts';
 import { controlledModels, until } from './fixtures.ts';
 
-async function setup(t: TestContext, overrides: Partial<PiSessionOptions> = {}) {
+async function setup(t: TestContext, overrides: Partial<PiSessionOptions> = {}, expectedCloseError?: RegExp) {
   const directory = await mkdtemp(join(tmpdir(), 'dcode-pi-integration-'));
   const fixture = controlledModels();
   const options: PiSessionOptions = { directory: join(directory, 'runtime'), cwd: directory, target: { workspaceId: 'space', taskId: 'task', sessionId: 'session' }, models: fixture.models, agent: { model: { provider: fixture.model.provider, modelId: fixture.model.id } }, ...overrides };
   const units: PiExecutionSession[] = [];
   async function open() { const unit = await PiExecutionSession.open(options); units.push(unit); return unit; }
-  t.after(async () => { for (const unit of units.reverse()) await unit.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { try { for (const unit of units.reverse()) { if (expectedCloseError) await assert.rejects(unit.close(), expectedCloseError); else await unit.close(); } } finally { await rm(directory, { recursive: true, force: true }); } });
   return { directory, options, open, ...fixture };
 }
 async function input(unit: PiExecutionSession, operationId: string, text = 'synthetic instruction', mode: WorkInput['mode'] = 'steer', references: WorkInput['references'] = []): Promise<WorkInput> {
@@ -83,7 +83,7 @@ await test('member pause leaves independent lead execution running and new pause
 
 await test('busy steering and follow-up use Pi persisted inbox and do not abort the current model request', { timeout: 15000 }, async t => {
   const registry = createRegistry();
-  registry.install(defineExtension({ name: 'checkpoint', tools: [defineTool({ name: 'checkpoint', description: 'Test a real tool boundary', parameters: Type.Object({}), execute: async () => ({ content: [{ type: 'text', text: 'tool boundary reached' }] }) })] }));
+  registry.install(defineExtension({ name: 'checkpoint', tools: [defineTool({ name: 'checkpoint', description: 'Test a real tool boundary', parameters: Type.Object({}), execute: async () => ({ output: [{ type: 'text', text: 'tool boundary reached' }] }) })] }));
   const s = await setup(t, { registry }); const unit = await s.open();
   await unit.submit(await input(unit, 'first')); await until(() => s.requests.length === 1);
   const steer = await input(unit, 'steer', 'steering input', 'steer');
@@ -119,7 +119,7 @@ function faultStorage(state: { mode: 'none' | 'reject' | 'after-commit' | 'pause
     return new Proxy(storage, { get(target, key) {
       if (key === 'commit') return (async (writes, ctx) => {
         const trigger = !state.fired && state.mode !== 'none' && (state.mode === 'pause' || writes.some(write => write.type === 'submission'));
-        if (trigger) { state.fired = true; if (state.mode === 'reject' || state.mode === 'pause') throw new StorageRejected('injected rejection before durable write'); }
+        if (trigger) { state.fired = true; if (state.mode === 'reject' || state.mode === 'pause') throw new StorageRequestError('injected rejection before durable write'); }
         const seq = await target.commit(writes, ctx);
         if (trigger && state.mode === 'after-commit') throw new Error('injected response loss after actual commit');
         return seq;
@@ -130,13 +130,13 @@ function faultStorage(state: { mode: 'none' | 'reject' | 'after-commit' | 'pause
   };
 }
 
-await test('explicit storage rejection is not accepted; lost commit response stays unknown then resolves by read', { timeout: 15000 }, async t => {
+await test('commit failure is unknown until reliable readonly lookup; lost commit response retains accepted identity', { timeout: 15000 }, async t => {
   for (const mode of ['reject', 'after-commit'] as const) {
     const state: Parameters<typeof faultStorage>[0] = { mode: 'none', fired: false };
     const s = await setup(t, { openStorage: faultStorage(state) }); const unit = await s.open();
     const request = await input(unit, mode); state.mode = mode;
     const receipt = await unit.submit(request);
-    assert.equal(receipt.status, mode === 'reject' ? 'not-accepted' : 'unknown');
+    assert.equal(receipt.status, 'unknown', '1.3 commit前异常同样使Session失败，当下不能断言未接收');
     const lookup = await unit.lookupReceipt(request);
     assert.equal(lookup.status, mode === 'reject' ? 'not-accepted' : 'accepted');
     await unit.close(); const reopened = await s.open();
@@ -180,7 +180,7 @@ for (const replay of ['safe', 'unsafe'] as const) {
         if (replay === 'unsafe') await appendFile(file, 'effect\n');
         else await readFile(file, 'utf8');
         if (calls === 1) await awaitWithContext(new Promise<void>(() => undefined), ctx);
-        return { content: [{ type: 'text', text: 'safe read completed' }] };
+        return { output: [{ type: 'text', text: 'safe read completed' }] };
       },
     })] }));
     const s = await setup(t, { registry }); file = join(s.directory, 'effect.txt'); await writeFile(file, '');
@@ -205,4 +205,183 @@ await test('paused spend maintenance failure retains original close retry eligib
   await assert.rejects(unit.pause(),/could not confirm/);assert.equal(s.requests[0].settled,true);assert.equal(reconciliations,1);
   await unit.close();assert.equal(reconciliations,2,'执行过的原实例暂停维护失败后，close必须继续收口，不能清掉资格');
   const readonly=await s.open();await readonly.read();await readonly.close();assert.equal(reconciliations,2,'纯只读生命周期不执行维护');
+});
+
+
+await test('failed Session receipt lookup waits for actual storage close and resource join while retaining directory claim', { timeout: 15000 }, async t => {
+  const state: Parameters<typeof faultStorage>[0] = { mode: 'none', fired: false };
+  let closeEntered!: () => void; const closing = new Promise<void>(resolve => { closeEntered = resolve; });
+  let releaseStorage!: () => void; const storageGate = new Promise<void>(resolve => { releaseStorage = resolve; });
+  let releaseResources!: () => void; const resourceGate = new Promise<void>(resolve => { releaseResources = resolve; });
+  let opens = 0; let joined = false;
+  const base = faultStorage(state)!;
+  const s = await setup(t, { beginCloseExecutionResources: () => ({ shutdownFlushed: Promise.resolve(), done: resourceGate.then(() => { joined = true; }) }),
+    openStorage: async directory => {
+      const storage = await base(directory); const own = ++opens;
+      return new Proxy(storage, { get(target, key) {
+        if (key === 'close' && own === 1) return async (ctx: Parameters<Storage['close']>[0]) => { closeEntered(); await storageGate; await target.close(ctx); };
+        const value: unknown = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    } });
+  const unit = await s.open();
+  try {
+    const request = await input(unit, 'gated-failed-lookup'); state.mode = 'reject';
+    assert.equal((await unit.submit(request)).status, 'unknown'); await closing;
+    let settled = false; const lookup = unit.lookupReceipt(request).then(value => { settled = true; return value; });
+    await assert.rejects(PiExecutionSession.open(s.options), /live owner/);
+    assert.equal(opens, 1); assert.equal(settled, false); assert.equal(s.requests.length, 0);
+    releaseStorage();
+    await assert.rejects(PiExecutionSession.open(s.options), /live owner/);
+    assert.equal(joined, false); assert.equal(opens, 1); assert.equal(settled, false, 'closed通知不能替外部资源真实join');
+    releaseResources();
+    assert.deepEqual(await lookup, { status: 'not-accepted', operationId: request.operationId, reason: 'not-found' });
+    assert.equal(joined, true); assert.equal(opens, 2); assert.equal(s.requests.length, 0);
+  } finally { releaseStorage(); releaseResources(); await unit.close(); }
+});
+
+for (const operation of ['lookup', 'close'] as const) await test(`failed backend close still joins resources/${operation} before reporting failure`, { timeout: 15000 }, async t => {
+  const state: Parameters<typeof faultStorage>[0] = { mode: 'none', fired: false }; let opens = 0; let backendRejected = false; let joined = false;
+  let releaseResources!: () => void; const resourceGate = new Promise<void>(resolve => { releaseResources = resolve; });
+  const base = faultStorage(state)!;
+  const s = await setup(t, { beginCloseExecutionResources: () => ({ shutdownFlushed: Promise.resolve(), done: resourceGate.then(() => { joined = true; }) }), openStorage: async directory => {
+    const storage = await base(directory); opens++;
+    return new Proxy(storage, { get(target, key) {
+      if (key === 'close') return async (ctx: Parameters<Storage['close']>[0]) => { await target.close(ctx); if (state.fired) { backendRejected = true; throw new Error('fixture backend close unconfirmed'); } };
+      const value: unknown = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  } }, /close unconfirmed/);
+  const unit = await s.open(); const request = await input(unit, 'failed-close-' + operation); state.mode = 'reject';
+  try {
+    assert.equal((await unit.submit(request)).status, 'unknown'); await until(() => backendRejected);
+    let settled = false;
+    // 两种公开动作分开执行，避免close的同步closing标记先挡住排队中的lookup。
+    const pending = operation === 'lookup' ? unit.lookupReceipt(request) : unit.close();
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await assert.rejects(PiExecutionSession.open(s.options), /live owner/);
+    assert.equal(joined, false); assert.equal(opens, 1); assert.equal(s.requests.length, 0);
+    assert.equal(settled, false, '即使backend.close已抛错，当前公开动作也须等待真实资源join');
+    releaseResources();
+    if (operation === 'lookup') assert.deepEqual(await pending, { status: 'unknown', operationId: request.operationId, reason: 'storage-unavailable' });
+    else await assert.rejects(pending, /close unconfirmed/);
+    assert.equal(joined, true); assert.equal(opens, 1);
+    await assert.rejects(PiExecutionSession.open(s.options), /live owner/);
+    await assert.rejects(unit.close(), /close unconfirmed/);
+  } finally { releaseResources(); await assert.rejects(unit.close(), /close unconfirmed/); state.fired = false; }
+});
+
+for (const preparation of [false, true]) await test(`a saved submission with a lost raw commit response remains unknown when pause already claimed/${preparation ? 'prepared' : 'plain'}`, { timeout: 15000 }, async t => {
+  const sentinel = new Error('synthetic response loss after the target submission was saved');
+  const operationId = 'pause-after-real-submission-commit';
+  let committedSubmissionId: unknown;
+  let gateEntered = false;
+  let actualCommitCompleted = false;
+  let faultCount = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const events: string[] = [];
+  const rootSubmitErrors: unknown[] = [];
+  let effectFile = '';
+  let effectCalls = 0;
+  const registry = createRegistry();
+  registry.install(defineExtension({ name: 'commit-loss-effect-probe', tools: [defineTool({
+    name: 'commit-loss-effect-probe', description: 'Synthetic physical effect probe', parameters: Type.Object({}),
+    execute: async () => { effectCalls += 1; await appendFile(effectFile, 'synthetic effect\n'); return { output: [{ type: 'text', text: 'effect recorded' }] }; },
+  })] }));
+  const openStorage: PiSessionOptions['openStorage'] = async directory => {
+    const storage = await openNodeJsonlStorage(directory, context, { fsync: true });
+    return new Proxy(storage, { get(target, key) {
+      if (key === 'commit') return (async (writes, ctx) => {
+        const submission = writes.find(write => write.type === 'submission' && write.value.type === 'input' && write.value.requestId === operationId);
+        // 只拦本次正式 submission；先前 Intent、初始化、后续 pause/close 不注入。
+        if (!gateEntered && submission?.type === 'submission') {
+          committedSubmissionId = submission.value.id;
+          gateEntered = true; events.push('target-submission-at-storage');
+          await gate;
+          const seq = await target.commit(writes, ctx);
+          actualCommitCompleted = true; faultCount += 1; events.push('actual-storage-commit-complete');
+          void seq;
+          // 原始 Error 由 GuardedStorage 首次调用原样抛回；不主动注入 SessionFailed。
+          throw sentinel;
+        }
+        return target.commit(writes, ctx);
+      }) satisfies Storage['commit'];
+      const value: unknown = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  };
+  const s = await setup(t, { registry, openStorage,
+    ...(preparation ? { needsInputPreparation: () => true, prepareInput: async () => { throw new Error('Stored preparation must not execute during readonly verification'); } } : {}),
+    attachExecution: (_harness, root) => {
+    const submit = root.submit.bind(root);
+    // 透明观察既有公开通路：参数、成功值及失败对象原样传递，不制造 SDK 拒绝。
+    root.submit = async (...args) => {
+      try { return await submit(...args); }
+      catch (error) { rootSubmitErrors.push(error); throw error; }
+    };
+  } });
+  effectFile = join(s.directory, 'commit-loss-effect.txt');
+  const unit = await s.open();
+  const request = await input(unit, operationId);
+  const settle = <T,>(promise: Promise<T>) => promise.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error: error as unknown }));
+  const submitting = settle(unit.submit(request));
+  let pausing: ReturnType<typeof settle<Awaited<ReturnType<PiExecutionSession['pause']>>>> | undefined;
+  let readonlyUnit: PiExecutionSession | undefined;
+  try {
+    await until(() => gateEntered);
+    assert.equal(actualCommitCompleted, false, '暂停前必须实际停在同一 submission 的底层写入门');
+    assert.equal(s.requests.length, 0);
+    // pause() 在返回 Promise 之前同步置暂停认领；立即附接处理，避免目标异常变成 unhandled rejection。
+    pausing = settle(unit.pause()); events.push('pause-called-before-release');
+    release();
+    const [submitted, paused] = await Promise.all([submitting, pausing]);
+    assert.equal(actualCommitCompleted, true);
+    assert.equal(faultCount, 1);
+    assert.deepEqual(events, ['target-submission-at-storage', 'pause-called-before-release', 'actual-storage-commit-complete']);
+    assert.equal(rootSubmitErrors.length, preparation ? 0 : 1);
+    if (!preparation) {
+      assert.equal(rootSubmitErrors[0], sentinel, '证明普通 root.submit 收到的是首次原始 Error，而非后续 SessionFailed');
+      assert.equal(rootSubmitErrors[0] instanceof Pi130SessionFailed, false);
+    }
+    assert.equal(paused.ok, false, '失败 Session 不得声称暂停已可靠写盘');
+    if (paused.ok) throw new Error('Pause unexpectedly confirmed a saved pause');
+    assert.ok(paused.error instanceof Error);
+    assert.equal(paused.error.message, 'Pause could not confirm storage and shutdown');
+    assert.ok(paused.error.cause instanceof Pi130SessionFailed);
+    assert.equal(paused.error.cause.cause, sentinel);
+    const found = await unit.lookupReceipt(request);
+    assert.equal(found.status, 'accepted', '实际底层已保存，必须沿原 operationId 查回原正式回执');
+    if (found.status !== 'accepted') throw new Error('Original saved submission was not found');
+    assert.equal(found.operationId, request.operationId);
+    assert.equal(found.submissionId, committedSubmissionId);
+    assert.equal(s.requests.length, 0);
+    assert.equal(effectCalls, 0);
+    await assert.rejects(readFile(effectFile, 'utf8'), { code: 'ENOENT' });
+    await unit.close();
+    const beforeReadonly = await journal(s.options.directory);
+    // setup.open() 不接受覆盖参数；此处显式打开只读代，禁止为结束测试而 resume 或重发。
+    readonlyUnit = await PiExecutionSession.open({ ...s.options, initialize: false });
+    assert.equal((await readonlyUnit.read()).phase, 'paused');
+    const restored = await readonlyUnit.lookupReceipt(request);
+    assert.equal(restored.status, 'accepted');
+    if (restored.status !== 'accepted') throw new Error('Readonly reopen lost the original saved submission');
+    assert.equal(restored.operationId, request.operationId);
+    assert.equal(restored.submissionId, committedSubmissionId);
+    assert.deepEqual(await journal(s.options.directory), beforeReadonly, '查询与只读重开不写盘、不重放');
+    // close可将原Binding的paused=false收口为true；它不是上方只读查询动作，不据此声称close零元数据写入。
+    await readonlyUnit.close(); readonlyUnit = undefined;
+    assert.equal(s.requests.length, 0, '整个查回/关闭/只读重开阶段零模型调用');
+    assert.equal(effectCalls, 0);
+    await assert.rejects(readFile(effectFile, 'utf8'), { code: 'ENOENT' });
+    t.diagnostic(JSON.stringify({ targetSubmissionSaved: actualCommitCompleted, faultCount, preparation, originalErrorPropagated: preparation ? paused.error.cause.cause === sentinel : rootSubmitErrors[0] === sentinel, found: found.status, restored: restored.status, modelCalls: s.requests.length, effects: effectCalls }));
+    assert.equal(submitted.ok, true, '接收 API 应返回 unknown 回执，而非把原始存储异常抛给调用者');
+    // 旧 catch 的精确目标红：其返回 not-accepted/paused，但以上事实已证明原提交存在。
+    assert.deepEqual(submitted.value, { status: 'unknown', operationId: request.operationId, reason: 'storage-unavailable' });
+  } finally {
+    // 先释放门再收束，任何前置断言失败也不能把真实 commit 或关闭永久挂住。
+    release();
+    await submitting;
+    if (pausing) await pausing;
+    await readonlyUnit?.close();
+    await unit.close();
+  }
 });

@@ -37,7 +37,7 @@ function makeAttributionPort() {
       slot.observation += 1;
       return {
         target, control, observation: slot.observation, phase: slot.phase,
-        execution: 'pi-durable-1.0.0', model: null, entries: slot.entries, pendingInputs: 0,
+        execution: 'pi-durable-1.3.0', model: null, entries: slot.entries, pendingInputs: 0,
       };
     },
     async submit() {

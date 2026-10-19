@@ -261,7 +261,7 @@ const DICT = {
   "settings.providerTabPreset": ["预设供应商", "Preset providers"],
   "settings.providerTabCustom": ["自定义", "Custom"],
   "settings.presetProvider": ["供应商", "Provider"],
-  "settings.presetProviderHint": ["按 Pi 1.0.0 正式身份列出；地区与计划差异保留为独立条目", "Listed by their official Pi 1.0.0 identities; region and plan variants stay separate"],
+  "settings.presetProviderHint": ["按服务商列出；地区与套餐差异保留为独立条目", "Listed by provider; region and plan variants stay separate"],
   "settings.presetPickProvider": ["选择供应商", "Choose a provider"],
   "settings.presetAuth": ["认证", "Authentication"],
   "settings.presetAuthHint": ["密钥或账户授权只进入本机安全存储，不会在界面或日志回显", "Keys or account authorization go only to local secure storage; never shown or logged"],

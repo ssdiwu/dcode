@@ -222,7 +222,7 @@ export interface Settings {
   modelCandidates: readonly { readonly sourceId: string; readonly modelId: string }[];
 }
 
-/** 自定义接入的协议值（对应 Pi 1.0.0 已接入的 Chat Completions 系列）；自定义协议仍是高级入口，预设名称不是协议。 */
+/** 自定义接入的协议值（对应已接入的 Chat Completions 系列）；自定义协议仍是高级入口，预设名称不是协议。 */
 export type CustomProviderProtocol = "openai-completions" | "anthropic-messages";
 
 /** 自定义服务商配置（settings.model 的自定义入口）；modelId 为 provider 端真实 id；baseUrl 仅 http(s)、不允许 userinfo。 */
@@ -235,7 +235,7 @@ export interface ModelSetupInput {
   apiKey?: string;
 }
 
-/** 预设供应商选择：Pi 1.0.0 builtin 身份 + 目录中的具体模型；认证经 loginProvider 单独完成，不自绑密钥。 */
+/** 预设供应商选择：D Code 稳定来源身份 + 目录中的具体模型；认证经 loginProvider 单独完成，不自绑密钥。 */
 export interface PresetModelSelectionInput {
   kind: "preset";
   providerId: string;

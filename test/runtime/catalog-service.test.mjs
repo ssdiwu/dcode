@@ -213,7 +213,7 @@ test('已知 builtin ID 的在线参数 A→B 更新真正进入 SDK 请求模�
     await svc.init();
     const exactBefore = svc.resolveExecutable('anthropic', 'claude-sonnet-4-5');
     assert.ok(exactBefore?.executable && exactBefore.model);
-    assert.equal(exactBefore.model.contextWindow, 1000000);
+    assert.equal(exactBefore.model.contextWindow, 200000, '固定1.3官方条目的基准；在线400k更新仍须覆盖且保原模板');
     assert.deepEqual(exactBefore.model.compat, { supportsStrictTools: true });
     // 注入同源同 id 的参数变化（模拟在线 maxTokens/contextWindow 更新）
     const updated = sanitizeCatalogModel('anthropic', {

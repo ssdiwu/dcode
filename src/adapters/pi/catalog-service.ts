@@ -275,10 +275,11 @@ export class ProviderCatalogService {
       if (signal.aborted || this.#closed || generation !== this.#generation) return;
       const cached = this.#state.record.catalog[preset.id];
       // 跨源不得复用旧源 ETag：新源请求不带 if-none-match，避免把旧源 304 当新源成功的依据
-      const etag = cached && cached.models.length > 0 && cached.sourceBaseUrl === baseUrl ? cached.etag : undefined;
+      const etag = !preset.catalogProviderId && cached && cached.models.length > 0 && cached.sourceBaseUrl === baseUrl ? cached.etag : undefined;
       let outcome;
       try {
-        outcome = await fetchOne({ baseUrl, providerId: preset.id, etag, signal });
+        // 旧 Azure 缓存仍归原来源，远端资源改名不能借旧 ETag 得到假 304。
+        outcome = await fetchOne({ baseUrl, providerId: preset.id, remoteProviderId: preset.catalogProviderId, etag, signal });
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
         outcome = { kind: "failed" as const, message: "catalog-network-failed" };

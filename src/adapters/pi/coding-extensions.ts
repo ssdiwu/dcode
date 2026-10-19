@@ -124,7 +124,8 @@ function toolResult(value: unknown): ToolExecutionResult {
   // 写正式结果前与投影接收同一图片合同，非法图片不能先污染历史、再使会话读取失败。
   parseWorkImages((result.content as Record<string, unknown>[]).filter(part=>part.type==='image').map(part=>({type:'image',data:part.data,mimeType:part.mimeType})));
   if (result.isError !== undefined && typeof result.isError !== 'boolean') throw new CodingResourcesUnavailable();
-  return { content: result.content as NonNullable<ToolExecutionResult['content']>,
+  // coding-agent 的 content 合同不变，只在进入 Durable 1.3 时投影为 output。
+  return { output: result.content as NonNullable<ToolExecutionResult['output']>,
     ...(result.isError === undefined ? {} : { isError: result.isError as boolean }),
     ...((result.details === undefined && result.structuredContent === undefined) ? {} : { details: { ...(result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details as JsonObject : {}), ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent as JsonValue }) } }) };
 }
@@ -198,7 +199,7 @@ export class CodingExtensions {
         // 内层是扩展真正发起的调用，不伪造模型 assistant；正式工具记录仍写入同一 Session。
         await tx.appendEntry(ToolResultEntry, runtime.conversationId, {
           model: [{ role: 'toolResult', toolName: input.call.name, toolCallId: input.call.id,
-            content: result.content ?? [], isError: result.isError ?? false, timestamp: Date.now(),
+            content: result.output ?? [], isError: result.isError ?? false, timestamp: Date.now(),
             ...(result.details === undefined ? {} : { details: result.details }), ...(result.usage ? {usage:result.usage} : {}) }], data: { diagnostics: json([...(result.diagnostics ?? [])]) },
         });
         if (result.usage) {
@@ -218,13 +219,20 @@ export class CodingExtensions {
       }, ctx);
     };
     this.#nestedTask = defineTask<NestedInput, { phase: 'call' | 'execute' }, ToolExecutionResult, ToolHooks>({
-      name: 'dcode.extension-tool', version: 1, initial: () => ({ phase: 'call' }),
+      name: 'dcode.extension-tool', version: 2,
+      // v1 的 call/execute 认领不变；已执行阶段仍按中断收束，不能借升级重放副作用。
+      migrate(input, checkpoint, fromVersion) {
+        if (fromVersion !== 1 || !input || typeof input !== 'object' || Array.isArray(input)
+          || !checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)
+          || !['call','execute'].includes(String(checkpoint.phase))) throw new CodingResourcesUnavailable();
+        return { input: input as unknown as NestedInput, checkpoint: checkpoint as { phase: 'call' | 'execute' } };
+      }, initial: () => ({ phase: 'call' }),
       phases: {
         call: async (task, runtime, ctx) => {
           const registered = runtime.registry.tools().find(({ tool }) => tool.name === task.input.call.name)?.tool;
           const descriptor = this.#tools.find(tool => tool.name === task.input.call.name);
           if (!registered || descriptor?.exposure === 'hidden' || descriptor?.exposure === 'model-only' || ((descriptor?.exposure ?? 'direct') === 'direct' && !this.#active.includes(task.input.call.name))) {
-            await settle(task.input, runtime, { content: [{ type: 'text', text: '工具不在本次可调用范围内' }], isError: true }, 'completed', ctx); return;
+            await settle(task.input, runtime, { output: [{ type: 'text', text: '工具不在本次可调用范围内' }], isError: true }, 'completed', ctx); return;
           }
           // 与直接工具同一参数校验、Runner 前后拦截及正式环境；只有认领后才执行副作用。
           let result: ToolExecutionResult;
@@ -240,7 +248,7 @@ export class CodingExtensions {
             });
             const before = { block: block !== undefined, reason: block };
             args = validateToolArguments(registered, { ...task.input.call, arguments: args });
-            if (before.block) result = { content: [{ type: 'text', text: before.reason ?? '扩展拒绝本次工具调用' }], isError: true };
+            if (before.block) result = { output: [{ type: 'text', text: before.reason ?? '扩展拒绝本次工具调用' }], isError: true };
             else {
               await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'execute' } }), ctx);
               const invocation = await taskToolApi(runtime, task.input.call.id, ctx);
@@ -250,13 +258,13 @@ export class CodingExtensions {
             await runtime.hooks.each('afterTool', async handler => { result = await handler({ ...task.input.call, arguments: args }, result, runtime, ctx) ?? result; });
           } catch (error) {
             if (runtime.signal.aborted) throw error;
-            result = { content: [{ type: 'text', text: '扩展工具调用失败' }], isError: true };
+            result = { output: [{ type: 'text', text: '扩展工具调用失败' }], isError: true };
           }
           await settle(task.input, runtime, result, 'completed', ctx);
         },
-        execute: async (task, runtime, ctx) => settle(task.input, runtime, { content: [{ type: 'text', text: '内部工具曾被中断，可能已产生部分作用；不会自动重放' }], isError: true }, 'failed', ctx),
+        execute: async (task, runtime, ctx) => settle(task.input, runtime, { output: [{ type: 'text', text: '内部工具曾被中断，可能已产生部分作用；不会自动重放' }], isError: true }, 'failed', ctx),
       },
-      abort: async (task, runtime, ctx) => settle(task.input, runtime, { content: [{ type: 'text', text: '内部工具已取消，可能存在部分作用' }], isError: true }, 'aborted', ctx),
+      abort: async (task, runtime, ctx) => settle(task.input, runtime, { output: [{ type: 'text', text: '内部工具已取消，可能存在部分作用' }], isError: true }, 'aborted', ctx),
     });
     this.#modelTask = defineTask<ModelInput, { phase: 'call' | 'execute' }, JsonObject>({
       name: 'dcode.extension-model', version: 1, initial: () => ({ phase: 'call' }),
@@ -581,11 +589,14 @@ export class CodingExtensions {
           const usage = spend ? sumUsage(Object.values(spend.usages) as unknown as Usage[]) : undefined;
           const actual = usage ? {...result,usage} : result;
           try {
-            const after = await this.#event('after', { ...call, result: { ...actual, content: actual.content ?? [] } }, api, ctx) as Record<string, unknown>;
-            return after.content ? { ...toolResult({ ...actual, ...after }), ...(actual.usage ? {usage:actual.usage} : {}) } : actual;
+            // 两边的正文只投影一次；并存 output/content 会把同一大图序列化两遍而冲破原16MiB封套。
+            const { output, ...metadata } = actual;
+            const ordinary = { ...metadata, content: output ?? [] };
+            const after = await this.#event('after', { ...call, result: ordinary }, api, ctx) as Record<string, unknown>;
+            return after.content ? { ...actual, ...toolResult({ ...ordinary, ...after }), ...(actual.usage ? {usage:actual.usage} : {}) } : actual;
           } catch (error) {
             if (ctx.abortSignal?.aborted) throw error;
-            return {...actual,isError:true,content:[{type:'text',text:'扩展结果处理失败，已完成的模型作用与用量仍保留'}]};
+            return {...actual,isError:true,output:[{type:'text',text:'扩展结果处理失败，已完成的模型作用与用量仍保留'}]};
           }
         },
       })),
@@ -829,7 +840,7 @@ export class CodingExtensions {
     } else if (message.type === 'progress') {
       const caller = this.#calls.get(String(message.scope));
       if (caller && !caller.context.abortSignal?.aborted) {
-        try { const result = toolResult(message.value); if (result.content?.length) caller.api.output(result.content.filter(part => part.type === 'text').map(part => part.text).join('\n'));
+        try { const result = toolResult(message.value); if (result.output?.length) caller.api.output(result.output.filter(part => part.type === 'text').map(part => part.text).join('\n'));
           if (result.details !== undefined) void caller.api.details(result.details, caller.context).catch(() => {}); } catch { this.#fail(); }
       }
     } else if (message.type === 'host') {
@@ -909,7 +920,10 @@ export class CodingExtensions {
       const child = await caller.api.createTask(this.#nestedTask, { caller: callId, call }, { ownership: { kind: 'task', taskId: caller.api.taskId } }, caller.context);
       const settled = await caller.api.waitForTask(child, caller.context);
       const outcome = settled.state.outcome;
-      const result = outcome && 'result' in outcome && outcome.result ? outcome.result : { content: [{ type: 'text' as const, text: '内部工具未完成' }], isError: true };
+      const native = outcome && 'result' in outcome && outcome.result ? outcome.result : { output: [{ type: 'text' as const, text: '内部工具未完成' }], isError: true };
+      // 已结束的 dcode.extension-tool v1 不会再被调度迁移；仅在读取旧回执时兼容 content，绝不重新调用。
+      const { output, content: legacyContent, ...rest } = native as ToolExecutionResult & { content?: ToolExecutionResult['output'] };
+      const result = { ...rest, content: output ?? legacyContent ?? [] };
       caller.nested.push(bounded({ toolCall: call, result, taskId: child },RESULT_ENVELOPE_BYTES) as JsonValue);
       const details = result.details && typeof result.details === 'object' && !Array.isArray(result.details) ? result.details as JsonObject : {};
       return { toolCall: call, result: { ...result, ...(details.structuredContent === undefined ? {} : { structuredContent: details.structuredContent }) }, isError: result.isError ?? false };
