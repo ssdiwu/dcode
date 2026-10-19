@@ -468,5 +468,3 @@ sequenceDiagram
 ```
 
 原Session已封住或存储失败时，有限回执在同进程原调用持有；停机维护失败须阻止正常关闭与认领释放。崩溃前尚未持久提交的内存回执不承诺无损。缺usage保持未知，坏图保真实费用；本地拒绝不推导HTTP。模型原responseId只保核对材料，逐次事实仍按operation＋原child/action requestId去重，不写chat actual或另建累计账。
-
-
