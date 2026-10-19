@@ -1,103 +1,65 @@
 # D Code
 
-D Code 的重新设计工作区。目标是在 macOS 上成为能够持续承接开发、沟通与项目工作的智能体开发环境。
+D Code 是面向 macOS 的智能体开发环境，目标是持续承接开发、沟通与项目工作。当前为 `package.json` 声明的 **0.1.0-dev** 开发版，尚未正式发布；当前实现、验收与未推送边界统一见 [PROGRESS](PROGRESS.md)。
 
 ## 打开当前开发版
 
-当前迭代为 **0.1.0 开发版**，工程版本来自 `package.json` 的 `0.1.0-dev`，尚未发布正式版。
-
-2026-10-09开发基线已整合到本地及 GitHub 的 `main`；随后已验增量及时本地提交，最新提交与未推送边界以 [PROGRESS](PROGRESS.md) 为准，不把本地新能力视为已同步远端。后续接手从本地主线开始，协作树未通过验收的候选不属于主线。整合与检查依据见 [2026-10-09 主线整合记录](doc/阶段记录/2026-10-09-新版主线整合.md)。
-
-- 双击项目根目录的 [启动 D Code.command](启动%20D%20Code.command)。该入口只从当前主目录构建并启动，不从 Archives 或协作工作树挑选版本。
-- 终端等价入口：在本目录运行 `npm run desktop`。
-- 工作数据固定保存在 `~/Library/Application Support/D Code Development/`，更新代码不清空该目录。已有实例运行时不会再开一份或在其后改写构建；先退出原窗口，再打开入口即可载入新代码。
-- 首次开发从侧栏「新建工作空间」选择真实工作文件夹并确认名称，保存成立后在该空间草稿发送；Home和已有运行目录保持。绑定保存、模型配置、实际请求和验收分别判定，本片验收范围与边界见 [工作文件夹绑定记录](doc/验证记录/工作文件夹绑定-2026-10-14/README.md)。
-- 空间行的“＋”区分“新工作草稿”和“新建长期任务”：前者首次发送时建立工作，后者先保存名称并进入主会话。长期任务行的“＋”打开属于它的短期工作草稿；点任务名进入主会话，箭头单独展开子任务／成员。
-- 正常入口不注入演示模型或示例任务。设置 → 模型可添加服务商协议、显示名、模型 ID、Base URL 和 API 密钥；保存后回到会话发送。配置保存与服务商认证成功分别判定；当前完成情况统一见 [PROGRESS](PROGRESS.md)。
-- 项目已有 `.pi` 扩展或 MCP 配置时，可在设置 →「项目扩展与 MCP」保存开启意图；下一次发送／明确继续才加载。资源代码不是操作系统沙箱，查看历史和只读重开不执行它。实现、普通路径已验结果及剩余边界见 [普通扩展与 MCP 记录](doc/验证记录/普通扩展与MCP-2026-10-14/README.md)。
-
-日常迭代只认这个入口与主目录当前构建。协作分支用于隔离开发，验证后回到主目录；历史审查编号和备份留在记录中，不作为另一套产品版本。功能与修复记入 [CHANGELOG](CHANGELOG.md)，正式版本号按实际交付递增，不把内部复核次数当发版。
-
-## 产品与实现边界
-
-- UI／UX 以 ZCode 为主要参考，采用 D Code 的工作空间 → 任务 → 会话模型；首条完整路径是开发任务。现行要求见 [工作台信息架构](spec/工作台信息架构.md) 与 [开发任务路径](spec/开发任务路径.md)。
-- Pi 接入以 Durable 为智能体正式执行、输入、历史与恢复的唯一底座，pi-ai 提供底层模型能力；ModelRuntime、指令／Skills／模板、扩展事件和注册命令等继续按需复用 coding-agent。首版按现行 spec 的完整产品路径验收，不以全部非 UI API 兼容或零 coding-agent 依赖为标准。当前职责、read／MCP候选及后续复核触发见 [Pi能力复用与演进](doc/Pi能力复用与演进.md)，具体模块边界见 [架构约定](doc/架构约定.md#pi-coding-agent-能力复用基准)。
-- Mac客户端采用Electron＋React＋Tailwind，普通编码、项目资源、扩展／MCP沿同一Durable正式通路。当前Pi依赖、迁移与证据入口见[Pi版本与升级](doc/Pi版本与升级.md)；实现进度、有效验收与具体缺口只在[PROGRESS](PROGRESS.md)维护，各轮原始证据从[文档导航](doc/README.md)进入。受控SDK、真实账户、桌面运行与人工接受分别判定。
-- 暂停、重开只读与显式继续遵守 [任务暂停与恢复](spec/任务暂停与恢复.md)；模型选择与用量要求分别在 [模型选择与自动切换](spec/模型选择与自动切换.md)、[用量与账户额度](spec/用量与账户额度.md)。配置保存、当次模型准入、实际服务商调用和用户接受分别判定，当前支持与证据以PROGRESS为准。
-- 首版工作台采用单时间线、可隐藏的任务信息区域与按需检查器；桌面和手机的具体布局以对应规格为准。成员协作、手动终端与远端等已确认要求没有因当前缺少实现而取消。
-- 中文与英文共同设计和验证，共用字号、主题、密度与控件规则见 [DESIGN](DESIGN.md)。用户视觉接受与自动检查分别成立。
-- 旧版实现已封档，只作历史参考；不自动继承其能力、术语和验收。当前推进、待办、分支与验证摘要统一见 [PROGRESS](PROGRESS.md)，详细证据和历史由 doc 导航。
+- 双击根目录[启动 D Code.command](启动%20D%20Code.command)，或在本目录运行 `npm run desktop`。入口构建当前主目录，不从 Archives 或协作树挑版本，不注入演示模型、示例任务或测试环境开关。
+- 数据固定保存在 `~/Library/Application Support/D Code Development/`，更新代码不清空它。同源实例已运行时不重复构建或启动；载入新代码前先正常退出原窗口。
+- 首次使用在侧栏「新建工作空间」选真实文件夹、确认名称，保存后从空间草稿发送。Home与原运行目录保持；具体行为见[文件夹绑定](spec/工作台信息架构.md#普通客户端首次绑定工作文件夹)。
+- 空间“＋”可开新工作草稿或命名长期任务；长期任务“＋”开所属短期草稿，任务名进入主会话，箭头展开成员／子任务。草稿首次发送与命名任务先保存的区别见[开发任务路径](spec/开发任务路径.md)。
+- 在设置 → 模型填写协议、显示名、模型ID、Base URL及密钥，保存后回会话发送；配置保存不代表认证或实际请求成功。
+- 已有项目扩展／MCP可在设置 →「项目扩展与 MCP」保存启用意图，下一次发送／明确继续才加载；只读重开不执行资源代码，启用也不是操作系统沙箱。行为与安全边界见[项目扩展与MCP规格](spec/开发任务路径.md#项目扩展与-mcp)。
 
 ## 阅读入口
 
-| 入口 | 何时阅读 |
-|---|---|
-| [PROGRESS.md](PROGRESS.md) | 续办时：当前阶段、完成依据、剩余事项、依赖与下一动作 |
-| [AGENTS.md](AGENTS.md) | 开展工作前：基线、变更、协作及验证规则 |
-| [DESIGN.md](DESIGN.md) | 修改界面时：共用体验、视觉与组件规则 |
-| [品牌资源](resources/brand/README.md) | 使用已选定的猫头鹰母版，核对 D／代码识别、来源及派生资源 |
-| [GLOSSARY.md](GLOSSARY.md) | 核对产品对象及容易混淆的用词 |
-| [spec/](spec/README.md) | 确定具体功能行为、状态边界与验收条件 |
-| [doc/](doc/README.md) | 查参考依据、架构、长期规划与协作记录 |
+技术栈为 Electron＋React＋Tailwind。Durable是智能体执行、输入、历史与恢复的唯一底座，pi-ai提供底层模型，coding-agent按需复用；首版按完整产品路径验收，不以全部非UI API兼容或零依赖为目标。
 
+| 要做的事 | 入口 |
+| --- | --- |
+| 接续工作、查当前结果和具体缺口 | [PROGRESS](PROGRESS.md)、[CHANGELOG](CHANGELOG.md) |
+| 开工、分工、交接和独立接收 | [AGENTS](AGENTS.md)、[协作约定](doc/协作约定.md) |
+| 确定产品行为与验收 | [spec](spec/README.md)；暂停／模型／用量／成员／终端／远端等已确认要求不因未实现退出 |
+| 修改界面、词义或品牌 | [DESIGN](DESIGN.md)、[GLOSSARY](GLOSSARY.md)、[品牌资源](resources/brand/README.md)；中英文共同设计和验证 |
+| 查模块、公开接口及Pi职责 | [架构约定](doc/架构约定.md)、[Pi能力复用与演进](doc/Pi能力复用与演进.md) |
+| 查固定版本、参考与实际验证 | [Pi版本与升级](doc/Pi版本与升级.md)、[文档导航](doc/README.md)；历史和候选不替当前验收 |
 
 ## 工程准备与检查入口
 
-当前工具运行环境：Node.js 22.19.0 或更新版本、npm（本轮实测 Node 22.22.3）；依赖由 package-lock.json 固定。首次使用运行 `npm ci --ignore-scripts`，再运行 `node node_modules/electron/install.js` 安装锁定版本的 Electron 运行文件。以下命令均从本工作树根目录运行：
+要求 Node.js **≥22.19.0** 和 npm，依赖由 `package-lock.json` 固定。首次运行 `npm ci --ignore-scripts`，再用 `node node_modules/electron/install.js` 安装锁定的 Electron 运行文件。以下命令从工作树根目录运行，以 [package.json](package.json) 和实际脚本为准。
 
-| 用途 | 命令 | 当前状态 |
-|---|---|---|
-| 固定桌面入口 | `npm run desktop` 或双击 `启动 D Code.command` | 正常装配，固定开发数据目录，启动前构建当前源码；不继承测试环境开关 |
-| 客户端开发 / 构建 / 底层预览 | `npm run dev` / `npm run build` / `npm start` | 工程入口；日常打开客户端优先使用上面的固定入口 |
-| 客户端完整门槛 | `npm run verify` | 架构、类型、Lint、Pi 运行、契约和全部界面端到端；界面用例串行 |
-| 界面 / 契约验证 | `npm run test:e2e` / `npm run test:contracts` | 前者先构建并在后台启动隔离 Electron；后者无窗口 |
-| 架构检查完整门槛 | `npm run verify:architecture` | 检查器正反样例 + 当前源码检查 |
-| 只检查当前源码 | `npm run architecture:check` | 依据 architecture-policy.json，只读运行 |
-| 验证检查器 | `npm run architecture:test` | 使用隔离样例，临时文件运行后清理 |
-| Pi 运行演示 | `npm run demo:pi` | 真实 SDK 与文件工具、受控模型、隔离数据；可观察暂停、重开查询和接续 |
-| 运行切片完整门槛 | `npm run verify:runtime` | 架构正反样例及源码、全量类型、Lint、全部运行集成测试 |
-| 类型 / Lint / 运行测试 | `npm run typecheck` / `npm run lint` / `npm run test:runtime` | 本主树配置的完整范围；具体覆盖见 [运行验证](test/runtime/README.md) |
+| 用途 | 命令与范围 |
+| --- | --- |
+| 日常桌面入口 | `npm run desktop` 或 `启动 D Code.command`：构建后正常启动，固定数据目录 |
+| 开发／构建／底层预览 | `npm run dev`／`npm run build`／`npm start`；日常打开优先用固定桌面入口 |
+| 客户端完整门槛 | `npm run verify`：运行切片、契约、全部界面端到端 |
+| 运行切片完整门槛 | `npm run verify:runtime`：架构正反／源码、全类型、Lint、全部运行测试 |
+| 架构完整门槛 | `npm run verify:architecture`：检查器正反样例及当前源码 |
+| 架构源码／检查器 | `npm run architecture:check`／`npm run architecture:test`，依据 [机器策略](architecture-policy.json)，[检查器](tools/architecture/check.mjs)不属于应用运行代码 |
+| 全类型／Lint／运行测试 | `npm run typecheck`／`npm run lint`／`npm run test:runtime`；运行测试串行，范围见[运行验证](test/runtime/README.md) |
+| 界面／契约 | `npm run test:e2e` 先构建并串行运行隔离Electron；`npm run test:contracts` 无窗口 |
+| Pi运行演示 | `npm run demo:pi`：真实SDK、受控模型与隔离文件，观察暂停、重开查询和接续 |
 
-runtime 全量测试固定串行：连续全量以四文件并发运行时，不同用例出现随机超时／取消，而同一491条用例串行全量通过。现保留所有原断言与期限，只调整文件执行并发；这不是产品超时或重试策略。并发全量的实际失败记录仍保留，不能当作正式全量通过。
+界面测试默认隐藏、不进Dock、不可聚焦，保留绘制与计时并使用隔离状态；普通连续场景复用窗口，生命周期才重开。定位只跑相关场景，例如先构建，再运行 `node --test --test-name-pattern='滚动边界四组合' test/e2e/scroll.test.mjs`。只有507明确要求可见验收或约定时段，才用 `DCODE_E2E_VISIBLE=1 npm run test:e2e`；后台失败不能自动转前台，授权边界见[协作约定](doc/协作约定.md)。
 
-界面自动测试默认不显示窗口、不进入 Dock，也不能获得系统焦点；使用专用隔离状态，隐藏时保留绘制与计时。日常定位只执行相关场景，例如先构建，再运行 `node --test --test-name-pattern='滚动边界四组合' test/e2e/scroll.test.mjs`。同一场景内的语言／字号组合复用窗口；正常重开与崩溃场景仍保留各自的生命周期验证。
+证据默认写入被忽略的 `test/e2e/evidence/runs/<运行标识>/`；`DCODE_EVIDENCE_RUN` 固定标识，`DCODE_EVIDENCE_ROOT` 重定向根。测试拒绝直接写 `doc/验证记录/`，归档前先核当次结果和来源，再由交付者复制到带日期记录，不能覆盖旧截图或JSON。
 
-界面证据默认写入被忽略的 `test/e2e/evidence/runs/<运行标识>/`（`DCODE_EVIDENCE_RUN` 可固定目录名，`DCODE_EVIDENCE_ROOT` 可整体重定向）。`doc/验证记录/` 是只读历史归档：测试默认拒绝写入，复跑不会覆盖既有截图与 JSON；需要归档当次结果时，先跑进隔离根，确认后由交付者复制进对应带日期的验证记录并在 README 说明来源。
-
-只有 507 要求可见验收或已约定时段时，才使用 `DCODE_E2E_VISIBLE=1 npm run test:e2e`。后台失败不能自动改为可见重跑。隐藏验证不替代 macOS 原生前台焦点、系统拖选和用户视觉接受；本轮不抢焦点的证据见 [无干扰测试记录](doc/验证记录/客户端集成-2026-10-06/README.md)。
-
-受控 Pi 只用于明确的隔离验证。需要检查该链路时，单独指定 `DCODE_VALIDATION_ASSEMBLY=pi-controlled`、独立 `DCODE_STATE_DIR`，按需设置 `DCODE_VALIDATION_SAMPLE=1` 并运行 `npm start`。它不等于真实服务商，也不是上面的日常入口；演示文件只写专用隔离目录。隐式的旧 `DCODE_EXECUTION=pi` 启动方式不再作为当前入口。普通页面不显示这些工程装配信息，设置也不再用保存标签冒充真实模型配置。
-
-| 入口 | 职责 |
-|---|---|
-| [架构约定](doc/架构约定.md) | 起步阶段模块归属、验证边界和工程验收 |
-| [协作与工作树入口](doc/协作约定.md) | 当前主目录由协调者接管单写与集成，独立几何树及历史候选的归属、冻结与恢复依据 |
-| [architecture-policy.json](architecture-policy.json) | 模块依赖、公开入口与外部包许可清单的机器规则 |
-| [tools/architecture/](tools/architecture/check.mjs) | 只读检查器与其正反样例；不属于应用运行代码 |
-| [执行合同](src/contracts/index.ts) / [应用端口](src/application/index.ts) | 请求校验、接收回执及只读结果；宿主核对归属与授权后调用 |
-| [Pi 适配器](src/adapters/pi/index.ts) | 单会话独占记录、真实接收、暂停和显式恢复；不依赖 Electron UI |
-| [运行验证](test/runtime/README.md) | 可复验命令、测试范围与未覆盖边界 |
+受控链路只用于明确的隔离验证：显式设置 `DCODE_VALIDATION_ASSEMBLY=pi-controlled` 与独立 `DCODE_STATE_DIR`，按需加 `DCODE_VALIDATION_SAMPLE=1` 后运行 `npm start`。它不是普通入口或真实服务商，演示只写专用目录，工程装配信息不进入普通产品界面。
 
 ## 检查覆盖与证据
 
-本表说明已有入口能证明什么；命令仍以[工程准备与检查入口](#工程准备与检查入口)及实际配置为准。
-
-| 要验证的要求 | 正式入口或证据 | 覆盖边界 |
-|---|---|---|
-| 模块依赖、公开入口、循环与包引用 | [架构策略](architecture-policy.json)、[检查合同](doc/架构约定.md#自动检查的合同) | 结构检查不证明运行时校验、授权、暂停或界面可用 |
-| 类型及 Promise 使用 | [类型配置](tsconfig.json)、[Lint 配置](eslint.config.mjs) | 静态结果不证明所有文件／网络操作都非阻塞；异步 IO 还须核源码及相关运行路径 |
-| 正式接收、未知回执、暂停、恢复与历史读取 | [运行验证](test/runtime/README.md) | 真实 Pi 配受控模型的本地切片；不等于界面、真实服务商或远端通过 |
-| 界面输入、键盘、导航与结果展示 | 本目录 `test/e2e/` 与 [客户端集成记录](doc/验证记录/客户端集成-2026-10-06/README.md) | 分开记录模拟场景与真实 Pi 配受控模型场景；真实服务商、手机和远端不在此范围 |
-| 颜色、焦点、字号与窄窗口 | [DESIGN](DESIGN.md)、[共享样式核对](doc/验证记录/共享样式核对-2026-10-06.md) | 分开记录声明值计算、浏览器布局测量、真实控件操作及视觉检查；局部证据不代替全矩阵 |
+| 要核的内容 | 入口与能证明的范围 | 不能据此推定 |
+| --- | --- | --- |
+| 模块、公开入口、依赖与循环 | [机器策略](architecture-policy.json)、[架构检查合同](doc/架构约定.md#自动检查的合同) | 消息语义、授权、生命周期或界面可用 |
+| 类型、Promise与异步IO | [类型配置](tsconfig.json)、[Lint配置](eslint.config.mjs)，另核源码及实际响应 | 所有文件／网络操作均非阻塞 |
+| 接收、未知回执、暂停与恢复 | [运行验证](test/runtime/README.md)：真实SDK配受控模型 | 界面、真实服务商或远端已通过 |
+| 输入、导航、键盘与结果展示 | `test/e2e/` 与[验证记录](doc/README.md#验证记录)，区分模拟与真实SDK | 手机、远端、真实账户或507人工接受 |
+| 字号、颜色、焦点与窄窗 | [DESIGN](DESIGN.md)及[样式核对](doc/验证记录/共享样式核对-2026-10-06.md)；分声明值、布局、真实操作与视觉检查 | 局部结果等于完整矩阵；隐藏窗口等于原生焦点／拖选验收 |
 
 ## 历史与参考
 
-重设计沿用当前仓库，新版以 `0.1.0` 系列为起点；旧封档与既有版本标签保留，不重新指向新版。这个起点是已确认的编号方向，不表示已有 `0.1.0` 发布；实际版本以之后的 manifest、标签及发布记录为准。主线整合进度见 [PROGRESS](PROGRESS.md)。
+新版沿用仓库，以 `0.1.0` 系列为编号起点；旧标签保持原指向，不代表新版继承其能力或验收。主线整合与旧树恢复见[历史摘要](doc/阶段记录/2026-10-09-新版主线整合.md)。
 
-- [0.0.37 封档快照](https://github.com/ssdiwu/dcode/tree/7c97a7526ba5bca4527c98db85375dc4403edd9c)：包含当时源码、验证材料、未完成边界及后续规划。
-- [ZCode 固定研究版本](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)：UI／UX 与开发规则参考。
-- [Pi SDK 1.3.0](https://github.com/earendil-works/pi/tree/v1.3.0)：当前授权适配的固定版本，实际迁移状态与每日检查见[Pi版本与升级](doc/Pi版本与升级.md)；旧1.0证据保持原身份。
-
-旧版封档不代表新项目已继承其功能或验收。应用数据、凭据和其他旧工作树不属于本轮客户端集成范围。
-
-原创内容的权利声明沿用 [LICENSE](LICENSE)；采用外部代码或资产时分别登记其来源与适用许可。
+- [0.0.37封档](https://github.com/ssdiwu/dcode/tree/7c97a7526ba5bca4527c98db85375dc4403edd9c)：当时源码、证据及未完成。
+- [ZCode固定参考](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)：UI／UX与开发规则；[Pi固定版本与来源](doc/Pi版本与升级.md)只承担对应版本依据。
+- 原创内容遵循 [LICENSE](LICENSE)，外部代码／资产按[第三方声明](THIRD_PARTY_NOTICES.md)登记来源与许可。
