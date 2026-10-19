@@ -14,100 +14,117 @@ const invocation = new AsyncLocalStorage();
 const scopeOf = () => invocation.getStore()?.id;
 const { syncBuiltinESMExports } = require('node:module');
 let runner, sdk, sessionView, streamFactory, closed = false, state = { systemPrompt: '', model: undefined };
-const calls = new Map(), replies = new Map(), children = new Set(), closings = new Set(), transports = new Set();
+const calls = new Map(), replies = new Map(), transports = new Set();
 const modelPending = new Map(), sealedModelScopes = new Set(), modelStreams = new Map(), executions = new Set();
 const virtualModels = new Map(), virtualHandles = new Map();
 const providerHandles = new Map();
 let serial = 0, activated = new Set(), active = [], builtins = [], errors = [];
 let lastStateRequest = 0;
 const actionsByScope = new Map();
-const childProcessesByScope = new Map();
 const closingScopes = new Set();
-// 与 Pi 1.0.0 waitForChildProcess 的安静输出管道边界保持一致。
-const commandExitStdioGraceMs = 100;
-const nativeSpawn = cp.spawn;
-const isDurableInvocationScope = scope => typeof scope === 'string' && /^(tool|input|event)\//.test(scope);
-const ownsInvocationCommand = args => {
-  const options = args.length >= 3 ? args[2] : args[1];
-  return options?.shell === false && Array.isArray(options?.stdio)
-    && options.stdio[0] === 'ignore' && options.stdio[1] === 'pipe' && options.stdio[2] === 'pipe';
-};
-cp.spawn = (...args) => {
-  if (closed) throw new Error('Resource session closed');
-  const own = invocation.getStore(), scope = own?.id;
-  const commandProcess = ownsInvocationCommand(args);
-  const controller = commandProcess && isDurableInvocationScope(scope) ? calls.get(scope) : undefined;
-  if (commandProcess && (own?.pure || !isDurableInvocationScope(scope) || !controller || controller.signal.aborted)) {
-    throw new Error('Extension command requires an active Worker invocation');
-  }
-  const child = nativeSpawn(...args); children.add(child);
-  let resolveDone;
-  const done = new Promise(resolve => { resolveDone = resolve; });
-  let abortChild, escalation, postExitTimer, exited = false, settled = false;
-  let stdoutEnded = child.stdout === null, stderrEnded = child.stderr === null;
-  const settleChild = () => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(postExitTimer); clearTimeout(escalation);
-    child.removeListener('error', onError); child.removeListener('exit', onExit); child.removeListener('close', onClose);
-    child.stdout?.removeListener('data', onOutput); child.stderr?.removeListener('data', onOutput);
-    child.stdout?.removeListener('end', onStdoutEnd); child.stderr?.removeListener('end', onStderrEnd);
-    children.delete(child); closings.delete(done);
-    if (controller) {
-      controller.signal.removeEventListener('abort', abortChild);
-      const ownChildren = childProcessesByScope.get(scope);
-      ownChildren?.delete(done);
-      if (ownChildren && ownChildren.size === 0 && childProcessesByScope.get(scope) === ownChildren) childProcessesByScope.delete(scope);
+// 同一资源线程只建立这一份进程事实；派发器只读取等待快照并请求关闭，不直接维护进程集合。
+function createProcessLifecycle({ nativeSpawn, invocation, controllers, isClosed }) {
+  const children = new Set(), closings = new Set(), childProcessesByScope = new Map();
+  // 与 Pi 1.0.0 waitForChildProcess 的安静输出管道边界保持一致。
+  const commandExitStdioGraceMs = 100;
+  const isDurableInvocationScope = scope => typeof scope === 'string' && /^(tool|input|event)\//.test(scope);
+  const ownsInvocationCommand = args => {
+    const options = args.length >= 3 ? args[2] : args[1];
+    return options?.shell === false && Array.isArray(options?.stdio)
+      && options.stdio[0] === 'ignore' && options.stdio[1] === 'pipe' && options.stdio[2] === 'pipe';
+  };
+  const spawn = (...args) => {
+    if (isClosed()) throw new Error('Resource session closed');
+    const own = invocation.getStore(), scope = own?.id;
+    const commandProcess = ownsInvocationCommand(args);
+    const controller = commandProcess && isDurableInvocationScope(scope) ? controllers.get(scope) : undefined;
+    if (commandProcess && (own?.pure || !isDurableInvocationScope(scope) || !controller || controller.signal.aborted)) {
+      throw new Error('Extension command requires an active Worker invocation');
     }
-    resolveDone();
-  };
-  const allOutputEnded = () => stdoutEnded && stderrEnded;
-  const finalizeAfterExit = () => {
-    if (exited && allOutputEnded()) settleChild();
-  };
-  const armPostExitIdle = () => {
-    if (!exited || settled) return;
-    clearTimeout(postExitTimer);
-    postExitTimer = setTimeout(settleChild, commandExitStdioGraceMs);
-  };
-  const onOutput = () => armPostExitIdle();
-  const onStdoutEnd = () => { stdoutEnded = true; finalizeAfterExit(); };
-  const onStderrEnd = () => { stderrEnded = true; finalizeAfterExit(); };
-  const onError = error => {
-    // Node 也会用 error 报告 kill 失败；它不能代替实际退出或 SDK 的输出静默边界。
-    void error;
-  };
-  const onExit = () => { exited = true; finalizeAfterExit(); if (!settled) armPostExitIdle(); };
-  const onClose = () => settleChild();
-  // kill 失败可能在 SIGTERM 与后续 SIGKILL 各发一次 error；直到真实 close/SDK 静默前都需留监听和归属。
-  child.on('error', onError); child.once('exit', onExit); child.once('close', onClose);
-  // 先让 SDK 安装 stdout/stderr 消费者；额外监听只对齐它的 idle 收束，不能抢走首段输出。
-  queueMicrotask(() => {
-    if (settled) return;
-    child.stdout?.on('data', onOutput); child.stderr?.on('data', onOutput);
-    child.stdout?.once('end', onStdoutEnd); child.stderr?.once('end', onStderrEnd);
-    if (exited) { finalizeAfterExit(); if (!settled) armPostExitIdle(); }
-  });
-  closings.add(done);
-  if (controller) {
-    let ownChildren = childProcessesByScope.get(scope);
-    if (!ownChildren) { ownChildren = new Set(); childProcessesByScope.set(scope, ownChildren); }
-    ownChildren.add(done);
-    abortChild = () => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      try { child.kill('SIGTERM'); } catch { /* the close join reports the actual child state */ }
-      // 与 Pi 1.0.0 execCommand 的 AbortSignal 收束一致；即使扩展未传自己的 signal，也不能让失主进程永久悬挂。
-      escalation = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) {
-          try { child.kill('SIGKILL'); } catch { /* close remains the authoritative completion signal */ }
-        }
-      }, 5000);
+    const child = nativeSpawn(...args); children.add(child);
+    let resolveDone;
+    const done = new Promise(resolve => { resolveDone = resolve; });
+    let abortChild, escalation, postExitTimer, exited = false, settled = false;
+    let stdoutEnded = child.stdout === null, stderrEnded = child.stderr === null;
+    const settleChild = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(postExitTimer); clearTimeout(escalation);
+      child.removeListener('error', onError); child.removeListener('exit', onExit); child.removeListener('close', onClose);
+      child.stdout?.removeListener('data', onOutput); child.stderr?.removeListener('data', onOutput);
+      child.stdout?.removeListener('end', onStdoutEnd); child.stderr?.removeListener('end', onStderrEnd);
+      children.delete(child); closings.delete(done);
+      if (controller) {
+        controller.signal.removeEventListener('abort', abortChild);
+        const ownChildren = childProcessesByScope.get(scope);
+        ownChildren?.delete(done);
+        if (ownChildren && ownChildren.size === 0 && childProcessesByScope.get(scope) === ownChildren) childProcessesByScope.delete(scope);
+      }
+      resolveDone();
     };
-    if (controller.signal.aborted) abortChild();
-    else controller.signal.addEventListener('abort', abortChild, { once: true });
-  }
-  return child;
-};
+    const allOutputEnded = () => stdoutEnded && stderrEnded;
+    const finalizeAfterExit = () => {
+      if (exited && allOutputEnded()) settleChild();
+    };
+    const armPostExitIdle = () => {
+      if (!exited || settled) return;
+      clearTimeout(postExitTimer);
+      postExitTimer = setTimeout(settleChild, commandExitStdioGraceMs);
+    };
+    const onOutput = () => armPostExitIdle();
+    const onStdoutEnd = () => { stdoutEnded = true; finalizeAfterExit(); };
+    const onStderrEnd = () => { stderrEnded = true; finalizeAfterExit(); };
+    const onError = error => {
+      // Node 也会用 error 报告 kill 失败；它不能代替实际退出或 SDK 的输出静默边界。
+      void error;
+    };
+    const onExit = () => { exited = true; finalizeAfterExit(); if (!settled) armPostExitIdle(); };
+    const onClose = () => settleChild();
+    // kill 失败可能在 SIGTERM 与后续 SIGKILL 各发一次 error；直到真实 close/SDK 静默前都需留监听和归属。
+    child.on('error', onError); child.once('exit', onExit); child.once('close', onClose);
+    // 先让 SDK 安装 stdout/stderr 消费者；额外监听只对齐它的 idle 收束，不能抢走首段输出。
+    queueMicrotask(() => {
+      if (settled) return;
+      child.stdout?.on('data', onOutput); child.stderr?.on('data', onOutput);
+      child.stdout?.once('end', onStdoutEnd); child.stderr?.once('end', onStderrEnd);
+      if (exited) { finalizeAfterExit(); if (!settled) armPostExitIdle(); }
+    });
+    closings.add(done);
+    if (controller) {
+      let ownChildren = childProcessesByScope.get(scope);
+      if (!ownChildren) { ownChildren = new Set(); childProcessesByScope.set(scope, ownChildren); }
+      ownChildren.add(done);
+      abortChild = () => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        try { child.kill('SIGTERM'); } catch { /* the close join reports the actual child state */ }
+        // 与 Pi 1.0.0 execCommand 的 AbortSignal 收束一致；即使扩展未传自己的 signal，也不能让失主进程永久悬挂。
+        escalation = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            try { child.kill('SIGKILL'); } catch { /* close remains the authoritative completion signal */ }
+          }
+        }, 5000);
+      };
+      if (controller.signal.aborted) abortChild();
+      else controller.signal.addEventListener('abort', abortChild, { once: true });
+    }
+    return child;
+  };
+  return {
+    spawn,
+    hasPending: scope => (childProcessesByScope.get(scope)?.size ?? 0) > 0,
+    pending: scope => [...(childProcessesByScope.get(scope) ?? [])],
+    async close() {
+      let failed = false, failure;
+      const rememberFailure = error => { if (!failed) { failed = true; failure = error; } };
+      // 只收束本线程实际认领的子进程；kill错误仍等待真实close/输出边界，不能冒充退出。
+      for (const child of children) if (child.exitCode === null) { try { child.kill(); } catch (error) { rememberFailure(error); } }
+      for (const outcome of await Promise.allSettled([...closings])) if (outcome.status === 'rejected') rememberFailure(outcome.reason);
+      if (failed) throw failure;
+    },
+  };
+}
+const processLifecycle = createProcessLifecycle({ nativeSpawn: cp.spawn, invocation, controllers: calls, isClosed: () => closed });
+cp.spawn = processLifecycle.spawn;
 syncBuiltinESMExports();
 const safe = value => JSON.parse(JSON.stringify(value));
 const finiteDefinition = value => {
@@ -150,7 +167,7 @@ const flush = async () => {
   // 动作归属于创建它的 invocation；普通工具的 finally 不能取走另一会话事件的关闭批次。
   const scope=scopeOf();
   let failed = false, failure;
-  while (actionsByScope.get(scope)?.size || childProcessesByScope.get(scope)?.size) {
+  while (actionsByScope.get(scope)?.size || processLifecycle.hasPending(scope)) {
     const current=[...(actionsByScope.get(scope) ?? [])];
     if (current.length) {
       const outcomes = await Promise.allSettled(current);
@@ -159,7 +176,7 @@ const flush = async () => {
       if (failed && closingScopes.has(scope)) break;
       forgetActions(scope,current);
     }
-    const childProcesses = [...(childProcessesByScope.get(scope) ?? [])];
+    const childProcesses = processLifecycle.pending(scope);
     if (childProcesses.length) await Promise.all(childProcesses);
   }
   if (failed) throw failure;
@@ -884,9 +901,8 @@ async function request(message) {
     await settleAll([...transports].map(transport=>Promise.resolve().then(()=>transport.close())));
     // MCP调用可依赖transport关闭才结束；先发起真实close，再join，不让新流桥反锁既有MCP收束。
     await settleAll(finishing); await settleAll(settling);
-    // 原生 SDK 关闭后，仍由本线程持有的实际子进程也必须终止；不按旧 PID 文本清理别人的进程。
-    for (const child of children) if (child.exitCode === null) { try { child.kill(); } catch (error) { rememberFailure(error); } }
-    await settleAll([...closings]);
+    // 原生 SDK 关闭后，实际子进程由同一进程生命周期所有者终止并join；错误仍由本次close统一返回。
+    await settleAll([processLifecycle.close()]);
     if (runner) { try { runner.invalidate(); } catch (error) { rememberFailure(error); } }
     forgetActions(scope,[...(actionsByScope.get(scope)??[])]);closingScopes.delete(scope);
     if (failed) throw failure;
