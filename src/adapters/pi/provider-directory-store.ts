@@ -13,8 +13,6 @@ import type { CreateModelsOptions } from "@earendil-works/pi-ai/models";
 import type {
   CatalogCacheEntry,
   CurrentModelSelection,
-  ModelSetupIO,
-  ModelSetupRecord,
   PersistedCatalogModel,
   ProviderDirectoryIO,
   ProviderDirectoryRecord,
@@ -476,25 +474,4 @@ export class ProviderDirectoryStore implements ProviderDirectoryIO {
       delete: del as PiCredentialStore["delete"],
     };
   }
-}
-
-/** 旧 model-setup.json 的兼容 IO：提供给装配/迁移路径的只读接口保持不变。 */
-export function legacyModelSetupIO(stateDir: string): ModelSetupIO {
-  const target = join(stateDir, LEGACY_FILE);
-  return {
-    async read(): Promise<ModelSetupRecord | null> {
-      try {
-        const raw = await readFile(target, "utf8");
-        const parsed = JSON.parse(raw) as unknown;
-        const r = parsed as Record<string, unknown>;
-        if (r.format !== 1) throw new Error("model-setup-record-corrupt");
-        return parsed as ModelSetupRecord;
-      } catch (err) {
-        if (isErr(err, "ENOENT")) return null;
-        throw err;
-      }
-    },
-    async write(): Promise<void> { throw new Error("legacy-model-setup-readonly"); },
-    async remove(): Promise<void> { throw new Error("legacy-model-setup-readonly"); },
-  };
 }

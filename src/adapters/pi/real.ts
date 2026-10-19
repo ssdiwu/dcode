@@ -21,6 +21,7 @@ import { credentialAccountKey } from "./quota-port";
 import type { ExecutionBackend, SessionExecutionContext, SdkRequestAdmission, SdkRequestAdmissionGate, SdkRequestTarget } from "@/application";
 import type { ModelSetupInput } from "@/contracts";
 import { PiExecutionSession } from "./session";
+import type { PiSessionOptions } from "./session";
 import { ModelSetupStore, type CredentialCipher } from "./model-setup-store";
 import type { ProviderDirectoryStore } from "./provider-directory-store";
 import type { RegisteredPresetProvider } from "./preset-providers";
@@ -443,6 +444,80 @@ function deniedEvent(request: { sourceId: string; modelId: string }, reason: str
 /** 自定义接入在 Pi 侧的 provider 标识；与目录记录、凭据存储同源。 */
 export const CUSTOM_PROVIDER_ID = "user-defined";
 
+type BuiltSessionModels = { client: SessionModelsClient; providerHeaders: CodingProviderHeaders };
+type SessionAssemblyOptions = {
+  sourceOptions: Pick<RealPiBackendOptions, 'stateDir' | 'observeQuota' | 'diagnose' | 'baseUrlOverrides' | 'admitRequest'>;
+  providerId: string;
+  registered: RegisteredModels;
+  credentials: ProviderStreamOptions['credentials'];
+  modelName: string;
+  updateAdditionalSources: (sources: readonly ConfiguredSourceModels[] | undefined) => void;
+  buildForSession: (sessionId: string) => Promise<BuiltSessionModels>;
+  initialAgent: (context: SessionExecutionContext) => PiSessionOptions['agent'];
+};
+
+/** 两种供应商共用客户端刷新与会话装配，保同一失败顺序、项目权限和只读重开；认证构造仍由各工厂持有。 */
+function createConfiguredSessionBackend(options: SessionAssemblyOptions): ExecutionBackend {
+  const { sourceOptions, providerId, registered, credentials } = options;
+  /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
+  // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
+  // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
+  const openedClients: { client: SessionModelsClient; sessionId: string; providerHeaders: CodingProviderHeaders }[] = [];
+
+  return {
+    kind: "pi",
+    /**
+     * 按**当次**配置重新登记已配置来源：认证提交之后，已打开的 modelsClient 也要同步。
+     * 只通知目录而不动实际客户端，新增来源仍然解析不到身份——动态元数据查询不等于客户端同步。
+     */
+    async refreshAdditionalSources(sources: readonly ConfiguredSourceModels[] | undefined): Promise<void> {
+      options.updateAdditionalSources(sources);
+      const failures: unknown[] = [];
+      // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
+      for (const opened of openedClients) {
+        try {
+          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...sourceOptions, sessionRef: { current: opened.sessionId }, registered, credentials });
+          opened.providerHeaders.refresh(replaced);
+        } catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw failures[0];
+    },
+    modelName: options.modelName,
+    async open(context: SessionExecutionContext): Promise<PiExecutionSession> {
+      const cwd = await initialWorkingDirectory(context, sourceOptions.stateDir);
+      const directory = join(sourceOptions.stateDir, "runtime", context.target.sessionId);
+      // 每条会话自带一份模型客户端：准入身份随端口创建，不会被后打开的会话改写
+      const built = await options.buildForSession(context.target.sessionId);
+      const modelsClient = built.client;
+      const coding = context.projectAccess === 'task-owner' ? createCodingTools(join(sourceOptions.stateDir, 'coding-resources')) : null;
+      const registry = createRegistry(); if (coding) registry.install(coding);
+      openedClients.push({
+        client: modelsClient,
+        sessionId: context.target.sessionId,
+        providerHeaders: built.providerHeaders,
+      });
+      const preparation = codingPreparation(coding, join(sourceOptions.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
+      const { bindSession, ...sessionPreparation } = preparation;
+      const session = await PiExecutionSession.open({
+        target: context.target,
+        directory,
+        cwd,
+        initialize: context.initialize,
+        reuseStoredCwd: true,
+        registry,
+        ...sessionPreparation,
+        settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
+        agent: options.initialAgent(context),
+        // 宿主的 Node 测试子进程标记不能传给项目命令，否则真实测试可能沿嵌套协议返回 0。
+        env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd, shellEnv: { NODE_TEST_CONTEXT: undefined } }),
+      });
+      bindSession(session);
+      // 重开只读取原配置；发送／明确继续前由应用层权威应用本次模型。
+      return session;
+    },
+  };
+}
+
 export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?: (event: string, cause: unknown) => void }): ExecutionBackend {
   const credStore = options.credentialSource ? options.credentialSource.asPiCredentialStore() : options.store.asPiCredentialStore();
   const providerId = CUSTOM_PROVIDER_ID;
@@ -514,67 +589,17 @@ export function createRealPiBackend(options: RealPiBackendOptions & { diagnose?:
   return { client, providerHeaders: new CodingProviderHeaders(client, [...registered.keys()]) };
   };
 
-  /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
-  // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
-  // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; providerHeaders: CodingProviderHeaders }[] = [];
-
-  return {
-    kind: "pi",
-    /**
-     * 按**当次**配置重新登记已配置来源：认证提交之后，已打开的 modelsClient 也要同步。
-     * 只通知目录而不动实际客户端，新增来源仍然解析不到身份——动态元数据查询不等于客户端同步。
-     */
-    async refreshAdditionalSources(sources: readonly ConfiguredSourceModels[] | undefined): Promise<void> {
-      additionalSources = sources;
-      const failures: unknown[] = [];
-      // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
-      for (const opened of openedClients) {
-        try {
-          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, credentials: credStore });
-          opened.providerHeaders.refresh(replaced);
-        } catch (error) { failures.push(error); }
-      }
-      if (failures.length) throw failures[0];
-    },
+  return createConfiguredSessionBackend({
+    sourceOptions: options, providerId, registered, credentials: credStore,
     modelName: options.config.label,
-    async open(context: SessionExecutionContext): Promise<PiExecutionSession> {
-      const cwd = await initialWorkingDirectory(context, options.stateDir);
-      const directory = join(options.stateDir, "runtime", context.target.sessionId);
-      // 每条会话自带一份模型客户端：准入身份随端口创建，不会被后打开的会话改写
-      const built = await buildForSession(context.target.sessionId);
-      const modelsClient = built.client;
-      const coding = context.projectAccess === 'task-owner' ? createCodingTools(join(options.stateDir, 'coding-resources')) : null;
-      const registry = createRegistry(); if (coding) registry.install(coding);
-      openedClients.push({
-        client: modelsClient,
-        sessionId: context.target.sessionId,
-        providerHeaders: built.providerHeaders,
-      });
-      const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
-      const { bindSession, ...sessionPreparation } = preparation;
-      const session = await PiExecutionSession.open({
-        target: context.target,
-        directory,
-        cwd,
-        initialize: context.initialize,
-        reuseStoredCwd: true,
-        registry,
-        ...sessionPreparation,
-        settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
-        agent: {
-          extensions: [],
-          model: { provider: context.model?.sourceId ?? providerId, modelId: context.model?.modelId ?? options.config.modelId },
-          ...(context.model ? { thinkingLevel: (context.model.thinkingLevel ?? undefined) as never } : {}),
-        },
-        // 宿主的 Node 测试子进程标记不能传给项目命令，否则真实测试可能沿嵌套协议返回 0。
-        env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd, shellEnv: { NODE_TEST_CONTEXT: undefined } }),
-      });
-      bindSession(session);
-      // 重开只读取原配置；发送／明确继续前由应用层权威应用本次模型。
-      return session;
-    },
-  };
+    updateAdditionalSources: sources => { additionalSources = sources; },
+    buildForSession,
+    initialAgent: context => ({
+      extensions: [],
+      model: { provider: context.model?.sourceId ?? providerId, modelId: context.model?.modelId ?? options.config.modelId },
+      ...(context.model ? { thinkingLevel: (context.model.thinkingLevel ?? undefined) as never } : {}),
+    }),
+  });
 }
 
 // ---------- 预设供应商后端（builtin 身份 + 目录模型） ----------
@@ -918,69 +943,17 @@ export function createPresetPiBackend(options: PresetBackendOptions): ExecutionB
   return { client: modelsClient, providerHeaders: new CodingProviderHeaders(modelsClient, [...registered.keys()]) };
   };
 
-  /** 已打开端口的模型客户端：认证提交后要把新增来源同步进去。 */
-  // 显式记录「哪个客户端属于哪条会话」：类型强转**不会**生成运行时字段，
-  // 之前把 client 直接当带 sessionId 的对象压进来，refresh 时读到的 sessionId 是 undefined。
-  const openedClients: { client: SessionModelsClient; sessionId: string; providerHeaders: CodingProviderHeaders }[] = [];
-
-  return {
-    kind: "pi",
-    /**
-     * 按**当次**配置重新登记已配置来源：认证提交之后，已打开的 modelsClient 也要同步。
-     * 只通知目录而不动实际客户端，新增来源仍然解析不到身份——动态元数据查询不等于客户端同步。
-     *
-     * 同时**记住这份新列表**：每条会话的客户端是在 open 时现造的，只补已打开的客户端，
-     // 刷新之后新开的会话仍会拿到旧列表，新模型照样解析不到。
-     */
-    async refreshAdditionalSources(sources: readonly ConfiguredSourceModels[] | undefined): Promise<void> {
-      additionalSources = sources;
-      const failures: unknown[] = [];
-      // 来源已正式刷新；某会话声明与新base不兼容时保留其失效，不能截断其余活客户端的同步。
-      for (const opened of openedClients) {
-        try {
-          const replaced = registerAdditionalSources(opened.client, sources, providerId, { ...options, sessionRef: { current: opened.sessionId }, registered, credentials: credStore });
-          opened.providerHeaders.refresh(replaced);
-        } catch (error) { failures.push(error); }
-      }
-      if (failures.length) throw failures[0];
-    },
+  return createConfiguredSessionBackend({
+    sourceOptions: options, providerId, registered, credentials: credStore,
     modelName: `${options.preset.name} / ${options.info.name}`,
-    async open(context: SessionExecutionContext): Promise<PiExecutionSession> {
-      const cwd = await initialWorkingDirectory(context, options.stateDir);
-      const directory = join(options.stateDir, "runtime", context.target.sessionId);
-      // 每条会话自带一份模型客户端：准入身份随端口创建，不会被后打开的会话改写
-      const built = await buildForSession(context.target.sessionId);
-      const modelsClient = built.client;
-      const coding = context.projectAccess === 'task-owner' ? createCodingTools(join(options.stateDir, 'coding-resources')) : null;
-      const registry = createRegistry(); if (coding) registry.install(coding);
-      openedClients.push({
-        client: modelsClient,
-        sessionId: context.target.sessionId,
-        providerHeaders: built.providerHeaders,
-      });
-      const preparation = codingPreparation(coding, join(options.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
-      const { bindSession, ...sessionPreparation } = preparation;
-      const session = await PiExecutionSession.open({
-        target: context.target,
-        directory,
-        cwd,
-        initialize: context.initialize,
-        reuseStoredCwd: true,
-        registry,
-        ...sessionPreparation,
-        settings: { retry: { maxRetries: 0 }, toolExecution: 'sequential' },
-        agent: {
-          extensions: [],
-          model: { provider: context.model?.sourceId ?? providerId, modelId: context.model?.modelId ?? modelId },
-          thinkingLevel: context.model?.thinkingLevel as never,
-        },
-        env: target => new NodeExecutionEnv({ cwd: target.cwd ?? cwd, shellEnv: { NODE_TEST_CONTEXT: undefined } }),
-      });
-      bindSession(session);
-      // 模型应用只发生在正式发送／继续；只读回查不能顺带配置旧运行。
-      return session;
-    },
-  };
+    updateAdditionalSources: sources => { additionalSources = sources; },
+    buildForSession,
+    initialAgent: context => ({
+      extensions: [],
+      model: { provider: context.model?.sourceId ?? providerId, modelId: context.model?.modelId ?? modelId },
+      thinkingLevel: context.model?.thinkingLevel as never,
+    }),
+  });
 }
 
 // ---------- 统一装配工厂（custom / preset 双路径） ----------

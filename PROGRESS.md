@@ -4,16 +4,16 @@
 
 ## 当前阶段与入口
 
-507已批准文档归并和 Pi 适配器行为不变清理。本轮基线为干净 main `36a26048d55591ed38dc9e323d11a226fcd6651c`；其中产品代码仍承接已验 Pi 1.3 迁移 `e023a80556d013f550caa398975161a83b35e36b`。不升级依赖、不叠新功能，不实施 read 替换或 MCP 直连。
+507已批准文档归并和 Pi 适配器行为不变清理。文档片由`e178467`保存、`a5bad1e`另清末尾空行，当前代码清理基线为干净main `a5bad1edaf40ba3506e1702ccbc52922f7c85092`；其中产品代码仍承接已验 Pi 1.3 迁移 `e023a80556d013f550caa398975161a83b35e36b`。不升级依赖、不叠新功能，不实施 read 替换或 MCP 直连。
 
 | 顺序 | 当前工作 | 接收条件与下一步 |
 | --- | --- | --- |
 | 1 | **文档归并独立三项通过**：README恢复稳定入口，进度只留当前快照，更新spec导航状态；清理doc历史重复，拆分架构职责。 | doc由71份归并为47份，保具体要求、独有失败／授权／验收身份与证据入口；当前Markdown的本地链接／锚点检查通过。主会话安排的最终独立Standards／Spec／CodeQuality三项PASS；容量合同及最终证据定位两处P2在后续修复关闭，不回填首次通过。本地提交事实见Git及交付回执。普通文档片不跑工程或窗口测试。 |
-| 2 | `real.ts` 共享会话装配，尚未改码。 | 合并两类后端重复的openedClients／refresh和open／工具／资源准备，保认证与模型构造差异、每会话身份、失败仍同步其他客户端及只读重开；保公开工厂签名。 |
+| 2 | `real.ts` 共享会话装配已实施；必要检查与定向25项通过，独立规范／要求／质量三项PASS。 | 合并两类后端重复的openedClients／refresh和open／工具／资源准备，保认证与模型构造差异、每会话身份、失败仍同步其他客户端及只读重开；保公开工厂签名。 |
 | 3 | `coding-extensions.ts` 按协议校验、模型任务／费用结果、宿主调度清理，尚未改码。 | 保唯一Harness／资源代次／关闭认领及持久化kind／version／operation，不增状态所有者或接收队列。 |
 | 4 | 扩展Worker按加载、调用协议、MCP／命令生命周期整理，尚未改码。 | 原String.raw及真实测试消费者、打包入口先核再改；相称定向及集成门槛后独立审查、本地提交。文档片完成不等于本轮完成。 |
 
-`loadCodingInstructions`有真实测试消费者，保留；`legacyModelSetupIO`须核范围外装配和迁移消费者，未核清不删导出。AGENTS／GLOSSARY／DESIGN主体保留，只在需要时同步导航。原始日志、图片和恢复数据不删不改；Git基线可恢复，不另造整树档案。
+`loadCodingInstructions`有真实测试消费者，保留；`legacyModelSetupIO`已核仓内入口／直接及动态装配／测试和构建配置，无消费者且非Pi公开入口，本片只删孤立helper与专用type导入；ProviderDirectoryStore实际旧格式迁移原样保留，原迁移及并发首读反例均通过。AGENTS／GLOSSARY／DESIGN主体保留，只在需要时同步导航。原始日志、图片和恢复数据不删不改；Git基线可恢复，不另造整树档案。
 
 日常打开主目录[启动 D Code.command](启动%20D%20Code.command)或 `npm run desktop`；数据保存在 `~/Library/Application Support/D Code Development/`。已有窗口先正常退出再载入新构建，不把后台隔离检查当用户窗口已更新。模型配置保存与实际认证成功分别判定。
 
