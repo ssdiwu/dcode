@@ -20,13 +20,13 @@ import { evidenceDir } from "./evidence-root.mjs";
 const EVIDENCE = evidenceDir("composer-geometry");
 mkdirSync(EVIDENCE, { recursive: true });
 
-/** 等紧凑判定稳定下来：连续若干次读到同一个 tight 才算收束（判定由 ResizeObserver 触发）。 */
-const settleTight = async (area) => {
+/** 等紧凑判定稳定下来：连续若干次读到同一形态才算收束（判定由 ResizeObserver 触发）。 */
+const settleCompact = async (area) => {
   let last = null;
   let stable = 0;
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    const now = await area.evaluate((el) => el.closest(".input-surface")?.dataset.tight ?? null);
+    const now = await area.evaluate((el) => el.closest(".input-surface")?.classList.contains("composer-compact") ?? false);
     stable = now === last ? stable + 1 : 0;
     last = now;
     if (stable >= 3) return now;
@@ -88,7 +88,7 @@ const installGeoTrace = (page) =>
         max: Math.round(s.scrollHeight - s.clientHeight),
         dockH: Math.round(dock.getBoundingClientRect().height),
         areaH: Math.round(area.clientHeight),
-        tight: surface?.dataset.tight ?? null,
+        compact: surface?.classList.contains("composer-compact") ?? false,
       });
     record("init");
     const onScroll = () => record("scroll");
@@ -719,7 +719,7 @@ test("紧凑判定稳定：临界折行文本在卡片全宽与并排宽度之�
           window.__heightProbeStop = () => { mo.disconnect(); ro.disconnect(); };
           return { viewport: [window.innerWidth, window.innerHeight], cardWidth: shell.clientWidth,
             editWidth: area.clientWidth, expectedEditWidth, footerWidth, height: area.clientHeight, demand,
-            compact: singleAtFullWidth, tight: shell.dataset.tight };
+            compact: singleAtFullWidth };
         } finally { probeArea.remove(); }
       }, { viewport, inspector, draft }, { timeout: 5_000 }).catch(async error => {
         observations.push({ label, preconditionFailed: true, last: await page.evaluate(() => window.__compactPreflight ?? null) });
@@ -805,33 +805,25 @@ test("单行垂直居中在窄窗与检查器打开时同样成立：编辑区�
     });
     observations.push({ case: "narrow-inspector", ...m, diag });
     console.log("[diag-narrow]", JSON.stringify(diag));
-    // 预算诊断（只作取证不作通过条件）：记录实测两态固有预算与滚动条槽，供两种滚动条
+    // 预算诊断（只作取证不作通过条件）：记录实测操作行固有预算与滚动条槽，供两种滚动条
     // 模式（经典占槽 / 叠加为 0）跨环境比对；单行形态要求不随预算波动——见下方断言。
     const budget = await page.locator("textarea").evaluate((el) => {
       const shell = el.closest(".input-surface");
       const shellStyle = getComputedStyle(shell);
       const footer = shell.querySelector('[data-slot="input-group-addon"]');
-      const label = shell.querySelector('[data-slot="model-entry-label"]');
       const scroller = el.closest(".overflow-y-auto");
       const cw = shell.clientWidth - parseFloat(shellStyle.paddingLeft) - parseFloat(shellStyle.paddingRight);
-      // 两态预算与当前显示态/形态无关：摘 data-tight、max-content 贯穿两次读数（与组件内测量同一资格）
-      const prevTight = shell.dataset.tight ?? null;
-      if (prevTight !== null) delete shell.dataset.tight;
+      // 操作行固有预算：max-content 一次读数后恢复原宽（模型入口已移出卡片，操作行不再有可收起标签）
       const prevW = footer.style.width;
       footer.style.width = "max-content";
       const footerFull = footer.offsetWidth;
-      const prevD = label.style.display;
-      label.style.display = "none";
-      const footerTight = footer.offsetWidth;
-      label.style.display = prevD ?? "";
       footer.style.width = prevW ?? "";
-      if (prevTight !== null) shell.dataset.tight = prevTight;
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       const s = getComputedStyle(el);
       ctx.font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize}/${s.lineHeight} ${s.fontFamily}`;
       const textWidth = ctx.measureText((el.value ?? "").replace(/\s+/g, " ")).width;
-      return { cw, footerFull, footerTight, textWidth: Math.round(textWidth), scrollerGutter: scroller.offsetWidth - scroller.clientWidth };
+      return { cw, footerFull, textWidth: Math.round(textWidth), scrollerGutter: scroller.offsetWidth - scroller.clientWidth };
     });
     observations.push({ case: "narrow-inspector-budget", ...budget });
     // DESIGN 会话输入几何与开发任务路径行为图：一行→输入行与操作行并排、垂直居中，
@@ -907,293 +899,94 @@ test("C06 状态说明变长时保持完整可读，且不扰动输入区的排�
     try { await handle.close(); } finally { await killApp(handle); cleanup(handle.stateDir); }
   }
 });
-
 /**
- * 反例：宽窗里空间充足时，C07 要求第一层显示当前来源、模型与条件参数——
- * 收起只能因为**完整预算真的放不下**，不能只看收起后放得下。
- *
- * 走真实渲染：宽窗 → 720 + 检查器打开 → 回到宽窗，逐步核对模型名标签的可见性。
+ * 2026-10-21（507 要求）：来源与模型入口移出输入框，改放会话标题带／草稿标题行。
+ * 这组用例守这条新口径：
+ *  · 入口不在输入卡片内，卡片工具行只剩引用、主按钮与用途三类入口；
+ *  · 窄窗＋检查器打开时入口仍完整可辨，编辑区不被压成零宽；
+ *  · 真实改选后标题带里的摘要同步更新，且不改正草稿、不改视口、不改字号。
  */
-test("模型名只在完整预算放不下时收起：宽窗→窄窗+检查器→宽窗 始终可辨", async () => {
-  const handle = await launchApp();
-  const { app, page } = handle;
-  const seen = [];
-  try {
-    await ready(page);
-    await assertValidationModel(page);
-    const label = page.locator('[data-slot="model-entry-label"]');
-    const state = async (where) => {
-      const probe = await label.evaluate((el) => {
-        const shell = el.closest(".input-surface");
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        const area = shell?.querySelector("textarea");
-        const shellStyle = shell ? getComputedStyle(shell) : null;
-        // 独立复算两态预算：不复用组件内部的判定，只量真实几何。
-        // 完整宽必须先摘掉 data-tight 呈现态再量；两态都取固有预算——max-content
-        // 贯穿两次读数后一并恢复：先恢复原宽度再读收起宽，堆叠形态下会拿到容器宽。
-        const footer = shell?.querySelector('[data-slot="input-group-addon"]');
-        const prevTight = shell?.dataset.tight ?? null;
-        if (shell && prevTight !== null) delete shell.dataset.tight;
-        const prev = footer?.style.width ?? null;
-        let footerFull = 0;
-        let footerTight = 0;
-        if (footer) {
-          footer.style.width = "max-content";
-          footerFull = footer.offsetWidth;
-          const prevLabel = el.style.display;
-          el.style.display = "none";
-          footerTight = footer.offsetWidth;
-          el.style.display = prevLabel ?? "";
-          footer.style.width = prev ?? "";
-        }
-        if (shell && prevTight !== null) shell.dataset.tight = prevTight;
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if (ctx && area) ctx.font = `${getComputedStyle(area).fontStyle} ${getComputedStyle(area).fontWeight} ${getComputedStyle(area).fontSize}/${getComputedStyle(area).lineHeight} ${getComputedStyle(area).fontFamily}`;
-        const textWidth = ctx && area ? ctx.measureText((area.value ?? "").replace(/\s+/g, " ")).width : 0;
-        const contentWidth = shell ? shell.clientWidth - parseFloat(shellStyle.paddingLeft) - parseFloat(shellStyle.paddingRight) : 0;
-        return {
-          tight: shell?.dataset.tight ?? null,
-          display: style.display,
-          visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0,
-          text: (el.textContent ?? "").trim(),
-          contentWidth: Math.round(contentWidth),
-          footerFull,
-          footerTight,
-          textWidth: Math.round(textWidth),
-          draftLength: area?.value?.length ?? 0,
-        };
-      });
-      seen.push({ where, ...probe });
-      return probe;
-    };
-
-    // 先跑一轮：跟随后续输入的占位符（"追问、补充或纠正…"）才存在
-    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
-
-    // 宽窗 + 短稿：空间充足，模型名必须可见
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
-    await page.getByPlaceholder("追问、补充或纠正…").fill("短");
-    await settleTight(page.locator("textarea"));
-    const wide = await state("宽窗 1440×900 · 短稿");
-    assert.equal(wide.tight, "false", `宽窗短稿不应判定为紧凑（实得 tight=${wide.tight}）`);
-    assert.equal(wide.visible, true, "宽窗空间充足时必须显示当前模型名");
-    assert.ok(wide.text.length > 0, "模型名标签有可读内容");
-
-    // 空稿同样如此：没有内容要占行，不代表可以隐藏模型名
-    await page.getByPlaceholder("追问、补充或纠正…").fill("");
-    await settleTight(page.locator("textarea"));
-    const empty = await state("宽窗 1440×900 · 空稿");
-    assert.equal(empty.tight, "false", `宽窗空稿不应判定为紧凑（实得 tight=${empty.tight}）`);
-    assert.equal(empty.visible, true, "空稿时也必须显示当前模型名");
-
-    // 窄窗 + 检查器打开：草稿足量、卡片变窄，完整预算真的放不下时才收起
-    await page.getByPlaceholder("追问、补充或纠正…").fill("这一条草稿足够长，长到在窄卡片里连模型名标签都放不下，只能收成图标形态才腾得出编辑区与主按钮的位置");
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(720, 480));
-    await page.getByRole("button", { name: /本轮改动/ }).first().waitFor();
-    await page.getByRole("button", { name: /本轮改动/ }).first().click();
-    await page.locator("aside .overflow-y-auto").waitFor();
-    await settleTight(page.locator("textarea"));
-    const narrow = await state("窄窗 720×480 + 检查器打开 · 长稿");
-    // 判定式本身：只在「完整预算放不下**且**收起预算放得下」时收起。
-    // 这里独立复算两态预算（不复用组件内部判定），避免把实现写死成硬编码期望。
-    const fullMisses = narrow.footerFull + narrow.textWidth > narrow.contentWidth;
-    const collapsedFits = narrow.footerTight + narrow.textWidth <= narrow.contentWidth;
-    assert.equal(
-      narrow.tight,
-      String(fullMisses && collapsedFits),
-      `窄窗判定应等于「完整预算放不下且收起放得下」（完整 ${narrow.footerFull}+${narrow.textWidth} vs ${narrow.contentWidth}；收起 ${narrow.footerTight}+${narrow.textWidth}）`,
-    );
-    if (!(fullMisses && collapsedFits)) {
-      // 连收起也放不下：收起帮不上忙，就不该隐藏模型名——宁可长高也不裁内容
-      assert.equal(narrow.visible, true, "收起也放不下时不应隐藏当前模型名");
-    }
-
-    // 回到宽窗：必须恢复显示，不能停在收起态（草稿同时回到短稿）
-    await page.getByRole("button", { name: "关闭检查器" }).click();
-    await page.getByPlaceholder("追问、补充或纠正…").fill("短");
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
-    await settleTight(page.locator("textarea"));
-    const back = await state("回到宽窗 1440×900");
-    assert.equal(back.footerFull + back.textWidth <= back.contentWidth, true,
-      `回到宽窗后完整预算应放得下（${back.footerFull}+${back.textWidth} vs ${back.contentWidth}）`);
-    assert.equal(back.tight, "false", `回到宽窗后应退出紧凑（实得 tight=${back.tight}）`);
-    assert.equal(back.visible, true, "回到宽窗后当前模型名必须重新可见");
-    assert.ok(back.text.length > 0, "恢复后标签仍有可读内容");
-  } finally {
-    writeFileSync(join(EVIDENCE, "model-label-visibility.json"), JSON.stringify(seen, null, 2));
-    try { await handle.close(); } finally { await killApp(handle); cleanup(handle.stateDir); }
-  }
-});
-
-/**
- * 反例（预审第 4 项的临界区间）：「收起后恰好放得下、完整标签放不下」。
- * 完整预算的测量若继承当前 data-tight 隐藏态，两态预算会互相矛盾，判定在
- * 收起/完整间无限翻转；两态固有预算必须与当前显示态独立。本用例按实测
- * 宽度构造临界草稿，断言：确实命中区间、真正进入收起态、连续帧不翻转；
- * 宽窗模型名恢复可见；长稿在窄卡仍可编辑（且收起也放不下时不收起）。
- */
-/** 量两态固有预算与滚动条槽（诊断/前置自证用）；与组件内测量同一资格：
- *  摘 data-tight、max-content 贯穿两次读数，预算不依赖当前显示态/形态。 */
-const measureBudgets = (page) =>
+const modelEntryPlacement = (page) =>
   page.evaluate(() => {
-    const area = document.querySelector("main textarea");
-    const shell = area.closest(".input-surface");
-    const footer = shell.querySelector('[data-slot="input-group-addon"]');
-    const label = shell.querySelector('[data-slot="model-entry-label"]');
-    if (!footer || !label) return { error: "structure-missing", footerFound: !!footer, labelFound: !!label };
-    const scroller = area.closest(".overflow-y-auto");
-    const shellStyle = getComputedStyle(shell);
-    const cw = shell.clientWidth - parseFloat(shellStyle.paddingLeft) - parseFloat(shellStyle.paddingRight);
-    const prevTight = shell.dataset.tight ?? null;
-    if (prevTight !== null) delete shell.dataset.tight;
-    const prevW = footer.style.width;
-    footer.style.width = "max-content";
-    const footerFull = footer.offsetWidth;
-    const prevD = label.style.display;
-    label.style.display = "none";
-    const footerTight = footer.offsetWidth;
-    label.style.display = prevD ?? "";
-    footer.style.width = prevW ?? "";
-    if (prevTight !== null) shell.dataset.tight = prevTight;
-    if (!footer || !label) {
-      // 结构缺失时返回可读诊断（不抛 TypeError），由前置断言带上下文失败
-      return {
-        error: "structure-missing",
-        areaPlaceholder: area?.getAttribute("placeholder"),
-        hasShell: !!shell,
-        footerFound: !!footer,
-        labelFound: !!label,
-        mainTextareas: document.querySelectorAll("main textarea").length,
-      };
-    }
+    const trigger = document.querySelector('[data-testid="model-entry-trigger"]');
+    const card = document.querySelector(".input-surface");
+    if (!trigger || !card) return null;
+    const rect = trigger.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
     return {
-      cw,
-      footerFull,
-      footerTight,
-      labelText: (label.textContent ?? "").trim(),
-      // 草稿页 composer 外层没有滚动容器（产品侧同Nullable），无槽记 null
-      scrollerGutter: scroller ? scroller.offsetWidth - scroller.clientWidth : null,
+      inCard: !!trigger.closest(".input-surface"),
+      inFooter: !!trigger.closest('[data-slot="input-group-addon"]'),
+      aboveCard: rect.bottom <= cardRect.top + 1,
+      visible: rect.width > 0 && rect.height > 0,
+      label: trigger.getAttribute("aria-label") ?? "",
+      text: (trigger.textContent ?? "").trim(),
     };
   });
 
-/** 连续 count 个 rAF 帧采样收起判定与标签可见性。 */
-const sampleTightFrames = (page, count) =>
-  page.evaluate(
-    (frames) =>
-      new Promise((resolve) => {
-        const surface = document.querySelector(".input-surface");
-        const label = document.querySelector('[data-slot="model-entry-label"]');
-        const out = [];
-        const step = () => {
-          out.push({
-            t: Math.round(performance.now()),
-            tight: surface.dataset.tight ?? null,
-            labelShown: getComputedStyle(label).display !== "none",
-          });
-          if (out.length >= frames) resolve(out);
-          else requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      }),
-    count,
-  );
+test("模型入口在输入卡片之外：草稿标题行可点可展开，卡片工具行内不再有模型入口", async () => {
+  const handle = await launchApp();
+  try {
+    const { page } = handle;
+    await ready(page);
+    await page.getByTestId("model-entry-trigger").waitFor({ state: "visible" });
+    const placement = await modelEntryPlacement(page);
+    assert.ok(placement, "草稿态应有模型入口");
+    assert.equal(placement.inCard, false, "模型入口不得在输入卡片内（507：放到输入框以外）");
+    assert.equal(placement.inFooter, false, "输入卡片工具行内不得再有模型入口");
+    assert.equal(placement.aboveCard, true, "模型入口应在输入卡片上方（草稿标题行）");
+    assert.equal(placement.visible, true, "模型入口必须可见");
+    assert.ok(placement.label.length > 0, "模型入口须有可访问名称");
+    // 展开仍是两级浏览：打开不执行工作，只列来源与模型
+    await page.getByTestId("model-entry-trigger").click();
+    await page.getByTestId("model-search").waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+  } finally {
+    await handle.close();
+  }
+});
 
-/** 等收起判定到达给定值（5s 内未到达返回 false，由调用方断言）。 */
-const waitForTight = (page, value) =>
-  page
-    .waitForFunction(
-      (v) => document.querySelector(".input-surface")?.dataset.tight === v,
-      value,
-      { timeout: 5000 },
-    )
-    .then(() => true, () => false);
-
-test("窄卡临界宽度：完整操作行保不住最小编辑宽、收起后保得住 → 进入收起且连续帧不翻转；放宽恢复、长稿不收起可编辑、堆叠起点同宽一致", async () => {
+test("会话标题带的模型入口：窄窗＋检查器打开时仍可辨，编辑区不被压成零宽", async () => {
   const handle = await launchApp();
   const { app, page } = handle;
-  const seen = [];
   try {
     await ready(page);
-    await assertValidationModel(page);
-    await page.getByRole("button", { name: /字号步进器与默认值/ }).click();
-    await page.getByPlaceholder("追问、补充或纠正…").waitFor();
+    const session = await page.evaluate(async () => {
+      const snap = await window.dcode.getSnapshot();
+      return window.dcode.createSession({ taskId: snap.tasks[0].id });
+    });
+    assert.ok(session?.id, "前置：应能建立会话");
+    await gotoSession(page, session.id);
+    await page.locator("main textarea").waitFor();
+    await page.getByTestId("model-entry-trigger").waitFor({ state: "visible" });
+    const placement = await modelEntryPlacement(page);
+    assert.ok(placement, "会话态应有模型入口");
+    assert.equal(placement.inCard, false, "会话态的模型入口同样不得在输入卡片内");
+    assert.equal(placement.visible, true, "会话态的模型入口必须可见");
+
+    // 窄窗＋检查器：入口仍在标题带且可读，编辑区仍有可用宽度
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(720, 480));
-    await page.waitForFunction(() => window.innerWidth === 720 && window.innerHeight <= 482);
-    await page.getByRole("button", { name: /本轮改动/ }).first().click();
+    await page.waitForFunction(() => window.innerWidth === 720);
+    await page.getByRole("button", { name: /本轮改动|files changed/ }).first().waitFor();
+    await page.getByRole("button", { name: /本轮改动|files changed/ }).first().click();
     await page.locator("aside .overflow-y-auto").waitFor();
-
-    // 阶段一（窄卡临界宽度区间 [footerTight+24, footerFull+24)）：单行短稿下完整操作行
-    // 保不住最小编辑宽、收起后保得住——这正是标签收起的设计触发点；测量若继承隐藏态
-    // （完整宽读到收起宽），两档地板互相矛盾，判定会在收起/完整间持续翻转。
-    await page.getByPlaceholder("追问、补充或纠正…").fill("单行");
-    const budget = await measureBudgets(page);
-    seen.push({ step: "narrow-budget", ...budget });
-    assert.ok(
-      budget.footerFull + 24 > budget.cw && budget.footerTight + 24 <= budget.cw,
-      `前置：窄卡须落在临界宽度区间（完整 ${budget.footerFull}+24 > ${budget.cw}；收起 ${budget.footerTight}+24 ≤ ${budget.cw}；滚动条槽 ${budget.scrollerGutter}）`,
-    );
-    const entered = await waitForTight(page, "true");
-    assert.equal(entered, true, "临界宽度下单行短稿必须真正进入收起态");
-
-    const frames = await sampleTightFrames(page, 16);
-    seen.push({ step: "frames", samples: frames });
-    const distinct = [...new Set(frames.map((f) => f.tight))];
-    assert.equal(distinct.length, 1, `临界宽度连续 16 帧判定须稳定（实测取值 ${JSON.stringify(distinct)}，前几帧 ${JSON.stringify(frames.slice(0, 6))}）`);
-    assert.equal(frames[0].tight, "true", "临界宽度的稳定判定必须是收起态");
-    assert.ok(frames.every((f) => !f.labelShown), "收起态下模型名标签不可见（可访问名称仍在触发器 aria-label 上）");
-
-    // 阶段二（放宽恢复）：关检查器放宽卡片，标签必须重新可见，不能停在收起态
-    await page.getByRole("button", { name: "关闭检查器" }).click();
-    const restored = await settleTight(page.locator("textarea"));
-    assert.equal(restored, "false", "放宽后应退出收起（完整操作行重新保得住最小编辑宽）");
-    const labelVisibleAgain = await page.locator('[data-slot="model-entry-label"]').evaluate((el) => getComputedStyle(el).display !== "none" && el.getBoundingClientRect().width > 0);
-    assert.equal(labelVisibleAgain, true, "放宽后当前模型名必须重新可见");
-
-    // 阶段三（长稿）：多行堆叠时操作行独占一行，收起换不回编辑宽 → 不收起、仍可编辑。
-    // 键入可达草稿即证可编辑：光标位置由 click/End 既有语义决定，不把「追加在末尾」当断言对象。
-    await page.getByPlaceholder("追问、补充或纠正…").fill("长".repeat(400));
-    const longSettled = await settleTight(page.locator("textarea"));
-    assert.equal(longSettled, "false", "多行长稿不得进入收起态（堆叠时操作行独占一行，收起换不回编辑宽）");
-    const area = page.locator("textarea");
-    await area.click();
-    await area.press("End");
-    await area.pressSequentially("tail9", { delay: 20 });
-    const value = await area.inputValue();
-    assert.ok(value.includes("tail9") && value.length === 405, `长稿仍可编辑（实际长度 ${value.length}，含 tail9=${value.includes("tail9")}）`);
-    seen.push({ step: "long-draft-editable", valueLength: value.length, typedReached: value.includes("tail9") });
-
-    // 阶段四（同宽堆叠起点）：同一窄宽度下从堆叠长稿直接换回短稿，固有预算不依赖起点形态
-    // （收起宽读到容器宽的旧缺陷会随形态给出不同判定），判定须与阶段一一致。
-    await page.getByRole("button", { name: /本轮改动/ }).first().click();
-    await page.locator("aside .overflow-y-auto").waitFor();
-    const budget4 = await measureBudgets(page);
-    seen.push({ step: "stacked-start-budget", ...budget4 });
-    assert.ok(
-      budget4.footerFull + 24 > budget4.cw && budget4.footerTight + 24 <= budget4.cw,
-      `阶段四卡宽须仍在临界区间（${JSON.stringify(budget4)}）`,
-    );
-    await page.getByPlaceholder("追问、补充或纠正…").fill("单行");
-    const entered2 = await waitForTight(page, "true");
-    assert.equal(entered2, true, "堆叠起点换短稿后须同样进入收起态");
-    const frames2 = await sampleTightFrames(page, 16);
-    const distinct2 = [...new Set(frames2.map((f) => f.tight))];
-    assert.equal(distinct2.length, 1, `堆叠起点的连续 16 帧判定须稳定（${JSON.stringify(distinct2)}）`);
-    assert.equal(frames2[0].tight, "true", "堆叠起点的稳定判定必须是收起态");
-    seen.push({ step: "stacked-start-narrow", distinct: distinct2 });
+    await page.waitForTimeout(300);
+    const narrow = await modelEntryPlacement(page);
+    assert.ok(narrow, "窄窗下仍应有模型入口");
+    assert.equal(narrow.visible, true, "窄窗＋检查器下模型入口仍须可见");
+    assert.equal(narrow.inCard, false, "窄窗下模型入口仍不得回到输入卡片内");
+    assert.ok(narrow.label.length > 0, "窄窗下模型入口的可访问名称仍须完整");
+    const editWidth = await page.locator("main textarea").evaluate((el) => el.clientWidth);
+    assert.ok(editWidth > 0, `窄窗下编辑区不得被压成零宽（实得 ${editWidth}px）`);
   } finally {
-    writeFileSync(join(EVIDENCE, "critical-band-observations.json"), JSON.stringify(seen, null, 2));
     try { await handle.close(); } finally { await killApp(handle); cleanup(handle.stateDir); }
   }
 });
 
 /**
  * F2 反例（普通装配 + loopback 受控目录；验证装配无模型目录，走不了真实改选）：
- * 收起态下标签盒宽 0→0，仅靠盒尺寸观察捕不到内容变化——真实改选把摘要换成更短
- * （完整操作行重新保得住最小编辑宽）时必须自动恢复标签可见；草稿、视口、字号全程不变。
+ * 真实改选后标题带里的摘要必须同步更新，且草稿、视口、字号全程不变。
  */
-test("收起态真实改选更短摘要：完整预算重新放得下时标签自动恢复可见（草稿/视口/字号不变）", async () => {
+test("真实改选后标题带的模型摘要同步更新（草稿/视口/字号不变，输入卡片内仍无模型入口）", async () => {
   const seen = [];
   const catalog = await new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -1210,7 +1003,7 @@ test("收起态真实改选更短摘要：完整预算重新放得下时标签�
       resolve({ origin: `http://127.0.0.1:${port}`, close: () => new Promise((r) => server.close(r)) });
     });
   });
-  const stateDir = mkdtempSync(join(tmpdir(), "dcode-e2e-tight-reselect-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "dcode-e2e-model-outside-card-"));
   let handle = null;
   try {
     handle = await launchApp(stateDir, {
@@ -1220,9 +1013,8 @@ test("收起态真实改选更短摘要：完整预算重新放得下时标签�
       DCODE_E2E: "1",
       DCODE_VALIDATION_ASSEMBLY: "",
     }, ".");
-    const { app, page } = handle;
+    const { page } = handle;
     await ready(page);
-    // 建会话并真实进入（侧栏 treeitem 点击）；空会话走草稿页 Composer（同样按 sessionId 归属）
     const session = await page.evaluate(async () => {
       const snap = await window.dcode.getSnapshot();
       return window.dcode.createSession({ taskId: snap.tasks[0].id });
@@ -1231,119 +1023,56 @@ test("收起态真实改选更短摘要：完整预算重新放得下时标签�
     await gotoSession(page, session.id);
     await page.locator("main textarea").waitFor();
     const area = page.locator("main textarea");
+    await area.fill("保持这行草稿");
 
-    // 真实改选长名模型（第二层文本最长的条目），让第一层标签成为长摘要
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
-    await page.waitForFunction(() => window.innerWidth === 1440);
+    const before = await page.evaluate(() => ({
+      draft: document.querySelector("main textarea").value,
+      vp: `${window.innerWidth}x${window.innerHeight}`,
+      font: getComputedStyle(document.body).fontSize,
+      label: (document.querySelector('[data-testid="model-entry-trigger"]')?.textContent ?? "").trim(),
+    }));
+    assert.equal(before.label.length > 0, true, "前置：标题带的模型入口须有摘要文字");
+
+    // 真实改选：两级浏览（先选来源，再点模型）落在标题带的入口上
     await page.getByTestId("model-entry-trigger").click();
     await page.getByTestId("model-search").waitFor({ state: "visible", timeout: 15_000 });
-    // 两级浏览：先选来源，再列该来源的模型（2026-10-21 507 确认）
     const sources = page.locator('[data-testid^="model-source-"]');
-    await sources.first().waitFor({ state: 'visible', timeout: 15_000 });
+    await sources.first().waitFor({ state: "visible", timeout: 15_000 });
     await sources.first().click();
     await page.waitForTimeout(150);
     const items = page.locator('[data-testid^="model-item-"]');
     const itemCount = await items.count();
     assert.ok(itemCount > 0, "前置：选中来源后第二层应列出可选模型");
-    let longestIdx = 0;
-    let longestText = "";
-    for (let i = 0; i < itemCount; i += 1) {
-      const text = await items.nth(i).innerText();
-      if (text.length > longestText.length) {
-        longestText = text;
-        longestIdx = i;
-      }
-    }
-    await items.nth(longestIdx).click();
+    await items.first().click();
     await page.keyboard.press("Escape");
     await waitForSnapshot(
       page,
       (snap) => Object.values(snap.sessionModels ?? {}).some((s) => s?.choice?.mode === "explicit"),
       undefined,
-      "改选长名模型后应落成显式选择",
+      "改选模型后应落成显式选择",
     );
-    await page.waitForFunction(() => (document.querySelector('[data-slot="model-entry-label"]')?.textContent ?? "").includes("·"));
-
-    // 目标卡宽：完整操作行（长标签）保不住最小编辑宽、改回「auto」短标签后保得住——
-    // 两档地板之间标签长度决定可见性。自适应调窗命中区间中点（映射近似线性，逐步收敛）。
-    const longBudget = await measureBudgets(page);
-    const autoW = await page.evaluate(() => {
-      const label = document.querySelector('[data-slot="model-entry-label"]');
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      const s = getComputedStyle(label);
-      ctx.font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize}/${s.lineHeight} ${s.fontFamily}`;
-      return ctx.measureText("auto").width;
-    });
-    const fullFloorLong = longBudget.footerFull + 24;
-    const fullFloorAuto = longBudget.footerTight + autoW + 24 + 2;
-    seen.push({ step: "long-budget", ...longBudget, autoW: Math.round(autoW), fullFloorLong, fullFloorAuto });
-    assert.ok(
-      fullFloorAuto < fullFloorLong - 8,
-      `前置：长短两档完整地板须拉开差距（auto ${Math.round(fullFloorAuto)} vs long ${fullFloorLong}）`,
-    );
-    const target = Math.round((fullFloorAuto + fullFloorLong) / 2);
-    // 正常桌面最小宽720，草稿页没有检查器；缩到更小的窗口会被宿主钳回720，
-    // 无法命中窄卡预算。此反例只控制卡片边界，保真实普通装配与改选通路；
-    // 实际窄窗+检查器的强居中路径由前面的完整用例验证，不降低宿主最小窗口约束。
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(720, 480));
-    await page.waitForFunction(() => window.innerWidth === 720 && window.innerHeight === 480);
-    await page.locator(".input-surface").evaluate((shell, contentWidth) => {
-      const style = getComputedStyle(shell);
-      const outerWidth = contentWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
-        + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
-      shell.style.width = `${outerWidth}px`;
-      shell.style.maxWidth = `${outerWidth}px`;
-    }, target);
-    const narrowBudget = await measureBudgets(page);
-    seen.push({ step: "narrow-budget", ...narrowBudget });
-    assert.ok(
-      !narrowBudget.error && narrowBudget.footerFull + 24 > narrowBudget.cw && narrowBudget.footerTight + autoW + 24 + 2 <= narrowBudget.cw,
-      `前置：目标卡宽须使长标签保不住、auto 标签保得住最小编辑宽（${JSON.stringify({ ...narrowBudget, autoW: Math.round(autoW), target })}）`,
+    await page.waitForFunction(
+      () => (document.querySelector('[data-testid="model-entry-trigger"]')?.textContent ?? "").includes("·"),
+      undefined,
+      { timeout: 5000 },
     );
 
-    // 单行短稿 → 长标签下真实进入收起态，确认标签隐藏；记录此后不得变化的不变量
-    await area.fill("单行");
-    const entered = await waitForTight(page, "true");
-    assert.equal(entered, true, "长标签窄卡下单行短稿须真实进入收起态");
-    const hiddenBefore = await page.locator('[data-slot="model-entry-label"]').evaluate((el) => getComputedStyle(el).display === "none" || el.getBoundingClientRect().width === 0);
-    assert.equal(hiddenBefore, true, "前置：收起态下标签不可见");
-    const before = await page.evaluate(() => ({
-      draft: document.querySelector("main textarea").value,
-      vp: `${window.innerWidth}x${window.innerHeight}`,
-      font: getComputedStyle(document.body).fontSize,
-    }));
-
-    // 真实改选回「自动」：摘要变短；此后不再动草稿/视口/字号。
-    // 收起态标签盒宽 0→0、无盒尺寸 RO 通知；内容变化必须仍触发重测并恢复可见。
-    await page.getByTestId("model-entry-trigger").click();
-    await page.getByTestId("model-choice-auto").waitFor({ state: "visible", timeout: 15_000 });
-    await page.getByTestId("model-choice-auto").click();
-    await page.keyboard.press("Escape");
-    const restoredVisible = await page
-      .waitForFunction(
-        () => {
-          const label = document.querySelector('[data-slot="model-entry-label"]');
-          return !!label && getComputedStyle(label).display !== "none" && label.getBoundingClientRect().width > 0;
-        },
-        undefined,
-        { timeout: 5000 },
-      )
-      .then(() => true, () => false);
-    assert.equal(restoredVisible, true, "改选更短摘要后标签须自动恢复可见（收起态内容变化也要重测）");
     const after = await page.evaluate(() => ({
       draft: document.querySelector("main textarea").value,
       vp: `${window.innerWidth}x${window.innerHeight}`,
       font: getComputedStyle(document.body).fontSize,
-      tight: document.querySelector(".input-surface")?.dataset.tight ?? null,
+      label: (document.querySelector('[data-testid="model-entry-trigger"]')?.textContent ?? "").trim(),
     }));
     assert.equal(after.draft, before.draft, "改选不得改写草稿");
     assert.equal(after.vp, before.vp, "改选期间视口不变");
     assert.equal(after.font, before.font, "改选期间字号不变");
-    assert.equal(after.tight, "false", "短摘要放得下后不得再判定收起");
-    seen.push({ step: "re-selected-auto", ...after });
+    assert.notEqual(after.label, before.label, "改选后标题带的模型摘要必须同步更新");
+    assert.ok(after.label.includes("·"), `改选后摘要应显示来源与模型（实得 ${JSON.stringify(after.label)}）`);
+    const placement = await modelEntryPlacement(page);
+    assert.equal(placement.inCard, false, "改选后模型入口仍在输入卡片之外");
+    seen.push({ step: "re-selected", before: before.label, after: after.label });
   } finally {
-    writeFileSync(join(EVIDENCE, "tight-reselect-observations.json"), JSON.stringify(seen, null, 2));
+    writeFileSync(join(EVIDENCE, "model-outside-card-observations.json"), JSON.stringify(seen, null, 2));
     try {
       await handle?.close();
     } finally {
