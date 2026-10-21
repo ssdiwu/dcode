@@ -7,7 +7,7 @@
 // （不按 openai-completions 协议冒认为 OpenAI 账户）；迁移前旧文件整体备份为 model-setup.backup-<ts>.json，
 // 迁移本身经同一条原子提交通路，失败保留旧文件原状。
 
-import { chmod, mkdir, readFile, rename, unlink, writeFile, copyFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile, copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CreateModelsOptions } from "@earendil-works/pi-ai/models";
 import type {
@@ -143,6 +143,19 @@ export class ProviderDirectoryStore implements ProviderDirectoryIO {
   /** 单一写入队列：read/migrate/modify/commit* 共用——迁移首次 read 也在这条队里，不并发双写覆盖。 */
   #line: Promise<unknown> = Promise.resolve();
   #initPromise: Promise<ProviderDirectoryRecord | null> | null = null;
+  /**
+   * 已解析记录缓存。目录文件含全部供应商及其模型（可达数百 KB），而 SDK 的
+   * checkAuth / getAuthenticatedProviders 会**逐个供应商**读取凭据；每次都重新
+   * 读盘并解析会让同一份内容堆积成大量副本，直至主进程内存耗尽。
+   * 缓存以文件 stat（mtime+size）校验：内容不变只解析一次，文件被别处改动即失效。
+   * 这是同一份记录的读缓存，不是第二份来源；写入方始终是本类的原子提交通路。
+   * 注意：缓存命中时各调用方拿到的是**同一个记录对象**。现有消费者一律用展开写新对象
+   * （catalog-service 的 modify 回调、装配处都不改字段），因此当前无实际危害；
+   * 将来若有调用方原地改这份记录，会污染缓存——那时应改成发拷贝，而不是改缓存语义。
+   */
+  #cached: { mtimeNs: bigint; size: bigint; record: ProviderDirectoryRecord } | null = null;
+  /** 同一时刻只有一次读盘解析；并发读取共用这次结果。 */
+  #inflightRead: Promise<ProviderDirectoryRecord | null> | null = null;
 
   constructor(
     private readonly paths: { stateDir: string },
@@ -187,15 +200,38 @@ export class ProviderDirectoryStore implements ProviderDirectoryIO {
   }
 
   async #readUnlocked(): Promise<ProviderDirectoryRecord | null> {
-    try {
-      const raw = await readFile(this.#target(), "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isValidRecord(parsed)) throw new Error("provider-directory-record-corrupt");
-      return parsed;
-    } catch (err) {
-      if (!isErr(err, "ENOENT")) throw err;
+    const inflight = this.#inflightRead;
+    if (inflight) return inflight;
+    const flight = this.#readOnce();
+    this.#inflightRead = flight;
+    try { return await flight; }
+    finally { if (this.#inflightRead === flight) this.#inflightRead = null; }
+  }
+
+  /** 单次读盘：stat 命中缓存则直接复用；读盘期间文件被改写时不缓存。 */
+  async #readOnce(): Promise<ProviderDirectoryRecord | null> {
+    const target = this.#target();
+    const before = await stat(target, { bigint: true }).catch((err) => {
+      if (isErr(err, "ENOENT")) return null;
+      throw err;
+    });
+    if (before === null) {
+      this.#cached = null;
       return this.#ensureInitializedUnlocked();
     }
+    const cached = this.#cached;
+    if (cached && cached.mtimeNs === before.mtimeNs && cached.size === before.size) return cached.record;
+    const raw = await readFile(target, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidRecord(parsed)) throw new Error("provider-directory-record-corrupt");
+    // 读盘期间文件被改写：这次结果不写缓存，下一轮按新 stat 重新读。
+    const after = await stat(target, { bigint: true }).catch(() => null);
+    if (after && after.mtimeNs === before.mtimeNs && after.size === before.size) {
+      this.#cached = { mtimeNs: after.mtimeNs, size: after.size, record: parsed };
+    } else {
+      this.#cached = null;
+    }
+    return parsed;
   }
 
   /** 串行段内/外都可调用：迁移逻辑直接执行并缓存 Promise，不再嵌套 #serialize（否则 modify 内自死锁）。
@@ -297,6 +333,8 @@ export class ProviderDirectoryStore implements ProviderDirectoryIO {
     }
     // rename 已提交；chmod 失败不致 stale（同步静态导入，不开第二门禁后的异步窗口）
     await chmod(target, 0o600).catch(() => undefined);
+    // 写后失效读缓存：文件已换内容，旧 stat 命中会让下一次读拿到上一代记录。
+    this.#cached = null;
   }
 
   async write(record: ProviderDirectoryRecord): Promise<void> {
@@ -306,6 +344,7 @@ export class ProviderDirectoryStore implements ProviderDirectoryIO {
   async remove(): Promise<void> {
     try { await unlink(this.#target()); }
     catch (err) { if (!isErr(err, "ENOENT")) throw err; }
+    this.#cached = null;
   }
 
   /** 串行 RMW：所有跨字段合并写都从这里走。fn 可返回 undefined 表示不改动。

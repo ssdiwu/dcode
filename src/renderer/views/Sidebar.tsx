@@ -203,8 +203,9 @@ export function Sidebar({
             {task.isDefault ? t("nav.defaultTask") : task.title}
           </span>
           {run && <span className="size-1.5 rounded-full bg-success shrink-0" aria-label={t("nav.running")} />}
-          {/* 悬停或行/子控件持焦时可见：display:none 时 Tab 不可达，group-focus-within 补足键盘路径 */}
-          <span className="hidden group-hover:flex group-focus-within:flex items-center shrink-0">
+          {/* 悬停或行/子控件持焦时可见：display:none 时 Tab 不可达，group-focus-within 补足键盘路径
+              菜单打开时（data-menu-open）保持显形，否则指针离开后触发点失去盒子，浮层会跳到窗口左上角 */}
+          <span className="hidden group-hover:flex group-focus-within:flex has-[[data-menu-open]]:flex items-center shrink-0">
             {/* 任务类型显式声明：只有长期任务可再建短期子任务 */}
             {task.kind === "long" && (
               <IconButton
@@ -295,7 +296,7 @@ export function Sidebar({
           <FolderClosed className="size-3.5 shrink-0 text-subtle" />
           <span className="flex-1 truncate text-ui-sm font-medium">{workspace.name}</span>
           {workspace.builtinHome && <Badge>{t("nav.defaultBadge")}</Badge>}
-          <span className="hidden group-hover:flex group-focus-within:flex shrink-0">
+          <span className="hidden group-hover:flex group-focus-within:flex has-[[data-menu-open]]:flex shrink-0">
             <Menu
               trigger={<IconButton icon={Plus} label={t("nav.newTaskHere")} size={6} />}
               items={[

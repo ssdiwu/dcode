@@ -19,6 +19,7 @@ import { useT, type CopyKey } from "../i18n";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { SegmentedControl, SettingsRow, Stepper } from "../components/Controls";
+import { ModelSourceBrowser } from "../components/ModelSourceBrowser";
 
 type Section = "appearance" | "startup" | "model" | "resources" | "about";
 
@@ -291,6 +292,9 @@ function CandidatePanel({ snapshot }: { snapshot: AppSnapshot }) {
   const [sources, setSources] = useState<ModelSourcesView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // 两级浏览的第一级：当前展开的来源；搜索词由共享组件持有
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -328,37 +332,33 @@ function CandidatePanel({ snapshot }: { snapshot: AppSnapshot }) {
       {sources && sources.sources.length === 0 && (
         <p data-testid="settings-candidates-empty" className="mt-2 text-ui-xs text-subtle">{t("settings.candidates.empty")}</p>
       )}
-      <ul className="mt-2 space-y-1">
-        {(sources?.sources ?? []).map((source) => (
-          <li key={source.sourceId}>
-            <p className="text-ui-xs text-subtle">
-              {source.sourceLabel}
-              {!source.configured && ` · ${t("settings.candidates.unconfigured")}`}
-            </p>
-            <ul className="mt-0.5 space-y-0.5">
-              {source.models.map((model) => {
-                const key = `${source.sourceId}\u0000${model.modelId}`;
-                const checked = chosen.has(key);
-                return (
-                  <li key={key}>
-                    <label className="flex cursor-default items-center gap-2 text-ui-xs">
-                      <input
-                        type="checkbox"
-                        data-testid={`candidate-${source.sourceId}-${model.modelId}`}
-                        checked={checked}
-                        disabled={saving}
-                        onChange={() => void toggle(source.sourceId, model.modelId)}
-                      />
-                      <span>{model.modelLabel}</span>
-                      <span className="text-subtle">{model.modelId}</span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          </li>
-        ))}
-      </ul>
+      <ModelSourceBrowser
+        sources={sources?.sources ?? []}
+        query={query}
+        onQueryChange={setQuery}
+        activeSourceId={activeSourceId}
+        onActiveSourceChange={setActiveSourceId}
+        emptyText="settings.candidates.noMatch"
+        searchPlaceholder="settings.candidates.search"
+        unconfiguredText="settings.candidates.unconfigured"
+        renderModel={(source, model) => {
+          const key = `${source.sourceId}\u0000${model.modelId}`;
+          const checked = chosen.has(key);
+          return (
+            <label key={key} className="flex cursor-default items-center gap-2 px-2 py-0.5 text-ui-xs">
+              <input
+                type="checkbox"
+                data-testid={`candidate-${source.sourceId}-${model.modelId}`}
+                checked={checked}
+                disabled={saving}
+                onChange={() => void toggle(source.sourceId, model.modelId)}
+              />
+              <span>{model.modelLabel}</span>
+              <span className="text-subtle">{model.modelId}</span>
+            </label>
+          );
+        }}
+      />
       <p data-testid="settings-candidates-count" className="mt-2 text-ui-xs text-subtle">
         {t("settings.candidates.count", { n: snapshot.settings.modelCandidates.length })}
       </p>

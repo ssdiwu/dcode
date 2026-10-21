@@ -15,6 +15,7 @@ import { Message, MessageContent, MessageResponse } from "../components/ai/messa
 import { ToolCallBlock } from "../components/ToolCallBlock";
 import { ChangeSummaryCard } from "../components/ChangeSummaryCard";
 import { Composer } from "../components/Composer";
+import { ModelEntry } from "../components/ModelEntry";
 import { useT } from "../i18n";
 
 export function Timeline({
@@ -264,6 +265,14 @@ export function Timeline({
             {t(`issue.${run.errorNote}`)}
           </span>
         )}
+        {/* C07：来源与模型入口在会话标题带，不在输入框内（2026-10-21 507 要求）。
+            模型是会话级事实：入口与这条会话同处一行，选择只作用于后续请求。 */}
+        <ModelEntry
+          target={{ kind: "session", sessionId: session.id }}
+          state={snapshot.sessionModels[session.id] ?? null}
+          defaultChoice={snapshot.settings.newSessionModelChoice}
+          taskUsage={snapshot.taskUsage[session.taskId] ?? null}
+        />
         <Button size="sm" variant="ghost" className="shrink-0" onClick={onNewSession}>
           <Plus className="size-3.5" />
           {t("timeline.newSession")}
@@ -333,8 +342,6 @@ export function Timeline({
               mode={mode}
               onModeChange={onModeChange}
               collapsed={scrolling}
-              sessionModelState={snapshot.sessionModels[session.id] ?? null}
-              taskUsageSummary={snapshot.taskUsage[session.taskId] ?? null}
             />
           </div>
         </div>

@@ -37,7 +37,7 @@ import * as anthropicMessagesApi from "@earendil-works/pi-ai/api/anthropic-messa
 
 /** 只为新运行选择目录；已有运行由正式绑定保留原 cwd，查询不创建目录。 */
 // 模板缓存只属本实例的执行准备；已有输入按正式回执查回，不以新模板重写历史。
-function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, agentDir: string, enabled: () => boolean, registry: ReturnType<typeof createRegistry>, models: ModelRuntime, sessionId: string, providerHeaders: CodingProviderHeaders) {
+function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, agentDir: string, enabled: () => boolean, registry: ReturnType<typeof createRegistry>, models: ModelRuntime, sessionId: string, providerHeaders: CodingProviderHeaders, diagnose?: (event: string, cause: unknown) => void) {
   let prompts: CodingPromptTemplate[] = [];
   let session: PiExecutionSession | undefined;
   const extensions = coding ? new CodingExtensions(coding.tools ?? [], agentDir, enabled, models, sessionId, providerHeaders) : null;
@@ -48,6 +48,15 @@ function codingPreparation(coding: ReturnType<typeof createCodingTools> | null, 
       // 扩展开启时由同一次 Loader 独占目录，基础扫描只保项目指令，不能绕过筛选或重复技能。
       const useExtensions = enabled();
       const resources = await loadCodingResources(cwd, agentDir, { instructionsOnly: useExtensions });
+      // 被跳过的资源如实记一笔，不静默丢项：
+      //  · 越出工作目录范围的条目（指向目录外的符号链接）
+      //  · 自动发现到但解析不出来、未纳入的技能
+      if (resources.skippedOutOfScope) {
+        diagnose?.('coding-resource-out-of-scope-skipped', new Error(`skipped ${resources.skippedOutOfScope}`));
+      }
+      if (resources.unavailableNames?.length) {
+        diagnose?.('coding-skill-unavailable-skipped', new Error(`skipped ${resources.unavailableNames.join(', ')}`));
+      }
       const prepared = await extensions!.prepare(cwd, useExtensions, sessionStartReason, owner, ownerContext);
       const packageResources = extensions!.packageResources;
       prompts = [...resources.prompts, ...packageResources.prompts.filter(prompt => !resources.prompts.some(previous => previous.name === prompt.name))];
@@ -496,7 +505,7 @@ function createConfiguredSessionBackend(options: SessionAssemblyOptions): Execut
         sessionId: context.target.sessionId,
         providerHeaders: built.providerHeaders,
       });
-      const preparation = codingPreparation(coding, join(sourceOptions.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders);
+      const preparation = codingPreparation(coding, join(sourceOptions.stateDir, 'coding-resources'), () => context.projectExtensionsEnabled?.() === true, registry, modelsClient, context.target.sessionId, built.providerHeaders, sourceOptions.diagnose);
       const { bindSession, ...sessionPreparation } = preparation;
       const session = await PiExecutionSession.open({
         target: context.target,

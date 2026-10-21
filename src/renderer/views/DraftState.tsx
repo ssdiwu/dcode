@@ -5,6 +5,7 @@
 import { ArrowRight, Clock, Settings as SettingsIcon, Sparkles } from "lucide-react";
 import type { AppSnapshot, SendMode , WorkReference} from "@/contracts";
 import { Composer } from "../components/Composer";
+import { ModelEntry } from "../components/ModelEntry";
 import { useT, type CopyKey } from "../i18n";
 import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
@@ -28,6 +29,7 @@ export function DraftState({
   onSend,
   referenceScope,
   sessionModelState,
+  newSessionChoice,
   references,
   onReferencesChange,
   pendingSendText,
@@ -53,6 +55,8 @@ export function DraftState({
   referenceScope?: { sessionId?: string; taskId?: string } | null;
   /** 该会话的模型状态（C07 第一层事实来源）；新任务草稿为 null，入口如实不可用 */
   sessionModelState?: import("@/contracts").SessionModelState | null;
+  /** 新会话起点（设置项） */
+  newSessionChoice?: import("@/contracts").SessionModelChoice;
   references?: readonly WorkReference[];
   onReferencesChange?: (update: (current: readonly WorkReference[]) => readonly WorkReference[]) => void;
   pendingSendText: string | null;
@@ -93,13 +97,22 @@ export function DraftState({
         {/* 标题保留屏幕身份（也是 E2E 与读屏的稳定锚点），但压到区块标题档：
             视觉主角是下面的输入卡片，问候与工作位置只作为一行辅助说明。
             标题在前是为了读屏与 Tab 顺序先拿到「这是哪里」，不是靠字号抢注意力。 */}
-        <div className="space-y-1">
-          <h1 className="text-ui-lg font-semibold tracking-tight">{t("draft.title")}</h1>
-          <div className="flex items-baseline gap-2">
-            <p className="truncate text-ui-sm text-subtle">{locationLabel}</p>
-            <p className="shrink-0 text-ui-sm text-subtlest" aria-hidden="true">·</p>
-            <p className="shrink-0 text-ui-sm text-subtlest">{t(greetingKey())}</p>
+        <div className="flex items-start justify-between gap-4 space-y-1">
+          <div className="space-y-1">
+            <h1 className="text-ui-lg font-semibold tracking-tight">{t("draft.title")}</h1>
+            <div className="flex items-baseline gap-2">
+              <p className="truncate text-ui-sm text-subtle">{locationLabel}</p>
+              <p className="shrink-0 text-ui-sm text-subtlest" aria-hidden="true">·</p>
+              <p className="shrink-0 text-ui-sm text-subtlest">{t(greetingKey())}</p>
+            </div>
           </div>
+          {/* C07：来源与模型入口在草稿标题行，不在输入框内（2026-10-21 507 要求）。
+              作用对象：已有会话（含空时间线会话）是这条会话，新任务草稿是「新会话起点」这个设置项。 */}
+          <ModelEntry
+            target={referenceScope?.sessionId ? { kind: "session", sessionId: referenceScope.sessionId } : { kind: "new-session" }}
+            state={sessionModelState ?? null}
+            defaultChoice={newSessionChoice ?? { mode: "auto" }}
+          />
         </div>
 
         {/* D02：缺配置不是一句提示就结束，给出到真实配置位置的入口；草稿保持可编辑 */}
@@ -133,8 +146,6 @@ export function DraftState({
           unknownSendText={unknownSendText}
           mode={mode}
           onModeChange={onModeChange}
-          // D 片 C07：空会话同样按 sessionId 归属，模型入口在草稿页也可用（选模型不发送、不启动执行）
-          sessionModelState={sessionModelState ?? null}
         />
 
         {hasHistory ? (

@@ -35,7 +35,6 @@ import {
   DropdownMenuRadioItem,
 } from "./ui/dropdown-menu";
 import { ReferenceChips, ReferencePicker } from "./ReferencePicker";
-import { ModelEntry } from "./ModelEntry";
 import { useT } from "../i18n";
 import type { CopyKey } from "../i18n";
 
@@ -103,8 +102,6 @@ export function Composer({
   mode,
   onModeChange,
   collapsed = false,
-  sessionModelState = null,
-  taskUsageSummary = null,
 }: {
   draft: string;
   onDraftChange: (text: string) => void;
@@ -136,10 +133,6 @@ export function Composer({
   onModeChange: (mode: SendMode) => void;
   /** 会话正在真实滚动：收起展开部分，保留可继续输入的形态（几何变化，不是状态变化） */
   collapsed?: boolean;
-  /** 该会话的模型状态（C07 第一层的事实来源）；无会话时为 null，入口如实不可用 */
-  sessionModelState?: import("@/contracts").SessionModelState | null;
-  /** 本任务的只读用量汇总（真实请求记录聚合）：查看不改变执行、不发输入、不解除暂停 */
-  taskUsageSummary?: import("@/contracts").TaskUsageSummary | null;
 }) {
   const t = useT();
   const [composing, setComposing] = useState(false);
@@ -255,49 +248,23 @@ export function Composer({
       // 以及输入区自己需要的宽度。改用当前宽度判定会被自身收窄的宽度立即逆转——
       // 一行变两行、判定翻转、外壳高度变化又触发 ResizeObserver，形成来回抖动。
       const footer = shell.querySelector<HTMLElement>('[data-slot="input-group-addon"]');
-      const entryLabel = shell.querySelector<HTMLElement>('[data-slot="model-entry-label"]');
-      // 完整预算必须在完整形态下量：先摘掉 data-tight 呈现态再读——tight 态下 CSS 已隐藏
-      // 模型标签，直接量会把「收起宽度」错当「完整宽度」，两预算随之互相矛盾，
-      // 在「收起放得下、完整放不下」的临界区间无限翻转。摘除只发生在同步测量内，
-      // 量完由下方判定统一写回同一值，不产生中间绘制。
-      const previousTight = shell.dataset.tight ?? null;
-      if (previousTight !== null) delete shell.dataset.tight;
-      // 两态都取**固有**预算：max-content 贯穿两次读数后一并恢复。堆叠形态下操作行被
-      // 容器约束占满卡宽，若先恢复原宽度再读收起宽，读到的是容器宽——随当前形态变，
-      // 不是收起后的固有宽，收起判定会依赖起点形态。
+      // 操作行的固有预算：max-content 一次读数后恢复原宽。
+      // （模型入口已移出输入卡片，操作行不再含可收起的标签，两态预算合并为一种。）
       const previousFooterWidth = footer?.style.width ?? null;
       let footerWidth = 0;
-      let tightFooterWidth = 0;
       if (footer) {
         footer.style.width = "max-content";
         footerWidth = footer.offsetWidth;
-        if (entryLabel) {
-          const shown = entryLabel.style.display;
-          entryLabel.style.display = "none";
-          tightFooterWidth = footer.offsetWidth;
-          entryLabel.style.display = shown ?? "";
-        } else {
-          tightFooterWidth = footerWidth;
-        }
         footer.style.width = previousFooterWidth ?? "";
       }
       // 单行并排没有窄窗/检查器/滚动条模式例外（DESIGN 会话输入几何与开发任务路径行为图：
-      // 一行→输入行与操作行并排居中；折行按内容向上长高）。据此定两件事：
-      //  · 标签收起（C07 窄卡片图标形态，styles 同名规则）只在它能换回编辑宽时发生：
-      //    单行形态下操作行与输入行同行，完整操作行连最小可用编辑宽都保不住、收起后保得住
-      //    才收；多行（堆叠）时操作行独占一行，收起换不回编辑宽，不收。草稿多宽不参与——
-      //    装不下就折行，不是隐藏模型名的理由。
-      //  · 并排的底线是最小可用编辑宽（heightAt 的同一 24px 地板）：剩余宽装不下整段草稿时
-      //    按内容折行、卡片向上长高（见下方 neededNow 按当前真实宽度重测，宁可长高也不裁
-      //    内容），只有操作行本身挤掉底线才退堆叠——那是物理放不下，不是预算例外。
-      // 两态固有预算与当前显示态/形态无关（上方测量），收起只影响呈现、不参与判定。
+      // 一行→输入行与操作行并排居中；折行按内容向上长高）。据此定一件事：
+      //  并排的底线是最小可用编辑宽（heightAt 的同一 24px 地板）：剩余宽装不下整段草稿时
+      //  按内容折行、卡片向上长高（见下方 neededNow 按当前真实宽度重测，宁可长高也不裁
+      //  内容），只有操作行本身挤掉底线才退堆叠——那是物理放不下，不是预算例外。
       const minEditWidth = 24;
       const singleLineForm = neededFull <= singleLine;
-      const tight = singleLineForm
-        ? footerWidth + minEditWidth > fullWidth && tightFooterWidth + minEditWidth <= fullWidth
-        : false;
-      if (shell.dataset.tight !== String(tight)) shell.dataset.tight = String(tight);
-      const roomy = fullWidth >= (tight ? tightFooterWidth : footerWidth) + minEditWidth;
+      const roomy = fullWidth >= footerWidth + minEditWidth;
       const nextCompact = singleLineForm && roomy;
       setCompact(nextCompact);
       // 改形态时 React 尚未提交对应的编辑宽，不用旧形态宽度提前写目标高度；
@@ -342,23 +309,13 @@ export function Composer({
     ro.observe(el);
     const footer = el.parentElement?.querySelector<HTMLElement>('[data-slot="input-group-addon"]');
     if (footer) ro.observe(footer);
-    // 模型标签的内容异步到达（会话模型状态解析后才有文字），文字出现会改变它自身的盒宽；
-    // 堆叠形态下操作行盒宽被容器约束不动，只观察操作行捕捉不到这一路，
-    // 完整预算会停留在「标签为空」时的旧判定。
-    const entryLabel = shell.querySelector<HTMLElement>('[data-slot="model-entry-label"]');
-    if (entryLabel) ro.observe(entryLabel);
-    // 隐藏态文字变短仍是0→0，异步资料也可能只更新子组件。直接观察实际摘要正文，
-    // 不依赖整份会话状态的轮询对象；仅观察正文，不观察测量过程中临时修改的样式。
-    const labelContentObserver = new MutationObserver(measure);
-    if (entryLabel) labelContentObserver.observe(entryLabel, { childList: true, characterData: true, subtree: true });
     window.addEventListener("resize", measure);
     return () => {
       ro.disconnect();
-      labelContentObserver.disconnect();
       window.removeEventListener("resize", measure);
       measureArea.remove();
     };
-  }, [draft, collapsed, compact, placeholder, note, sessionModelState?.sessionId]);
+  }, [draft, collapsed, compact, placeholder, note]);
 
   const primary = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!enabled) return;
@@ -432,9 +389,6 @@ export function Composer({
         <PromptInputTools>
           {/* C05 引用入口：次级入口、向上展开；打开/查看/移除都不发送、不执行、不安装 */}
           <ReferencePicker scope={referenceScope ?? null} onAdd={addReference} />
-          {/* C07 来源与模型入口：第一层显示选择方式与实际采用，第二层展开按来源分组搜索。
-              打开、展开、搜索、查看都不执行工作；选择只作用于后续请求，不中断当前输出、不重投、不解除暂停。 */}
-          <ModelEntry scope={referenceScope ?? null} state={sessionModelState} taskUsage={taskUsageSummary ?? null} />
           {/* 唯一主运行按钮（C01）：发送／暂停／继续互斥呈现，位置、可访问名称和提示随状态同步变化。
               type="button" 是硬要求：本按钮位于 <form> 内，若按宿主默认成为 submit，
               点「继续执行」会连带触发表单提交，把新草稿一起发出去（spec C01「不顺带提交新草稿」）。

@@ -492,6 +492,7 @@ export default function App() {
             mode={sendMode}
             onModeChange={setSendMode}
             sessionModelState={ui.selectedSessionId ? snapshot.sessionModels[ui.selectedSessionId] ?? null : null}
+            newSessionChoice={snapshot.settings.newSessionModelChoice}
             onPickRecent={handleSelectSession}
             onPickRecommended={(text) => {
               if (draftKey) patch({ drafts: { ...ui.drafts, [draftKey]: text } });

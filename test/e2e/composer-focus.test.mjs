@@ -84,8 +84,9 @@ test("正常草稿点击与 Tab：文本输入只由圆角容器反馈焦点，�
         assert.match(click.outerShadow, /2px inset/, "圆角外壳必须保留清晰焦点反馈");
         assert.ok(parseFloat(click.outerRadius) > 0);
 
-        // 操作行顺序（C05 起）：引用入口 → 发送钮 → 输入选项菜单。模型未配置时发送钮禁用、不可聚焦，
-        // 所以从输入框 Tab 会先落在引用入口，再落在输入选项菜单——两站都要有可辨焦点。
+        // 操作行顺序（C05 起）：引用入口 → 模型入口 → 发送钮 → 输入选项菜单。
+        // 模型未配置时发送钮禁用、不可聚焦；模型入口是可用的真控件（改「新会话起点」），
+        // 所以从输入框 Tab 依次落在引用入口、模型入口、输入选项菜单——三站都要有可辨焦点。
         await page.keyboard.press("Tab");
         const entry = await page.getByRole("button", { name: "添加文件与技能引用" }).evaluate(el => ({
           active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), shadow: getComputedStyle(el).boxShadow,
@@ -94,13 +95,22 @@ test("正常草稿点击与 Tab：文本输入只由圆角容器反馈焦点，�
         assert.equal(entry.focusVisible, true, "键盘 Tab 到达的次级入口须命中 :focus-visible");
         assert.match(entry.shadow, /2px inset/, "容器内次级入口仍须各自具备键盘焦点反馈");
         await page.keyboard.press("Tab");
+        const modelEntry = await page.getByTestId("model-entry-trigger").evaluate(el => ({
+          active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), shadow: getComputedStyle(el).boxShadow,
+        }));
+        assert.equal(modelEntry.active, true, "Tab 第二站应是模型入口");
+        assert.equal(modelEntry.focusVisible, true, "模型入口须能被键盘到达并命中 :focus-visible");
+        assert.match(modelEntry.shadow, /2px inset/, "模型入口须有键盘焦点反馈");
+        await page.keyboard.press("Tab");
         const menu = await page.getByRole("button", { name: "输入选项" }).evaluate(el => ({
           active: document.activeElement === el, focusVisible: el.matches(":focus-visible"), shadow: getComputedStyle(el).boxShadow,
         }));
         assert.equal(menu.active, true, "模型未配置时发送禁用，Tab 仍可达输入菜单");
         assert.equal(menu.focusVisible, true);
         assert.match(menu.shadow, /2px inset/, "容器内按钮仍须各自具备键盘焦点反馈");
-        // 反向也要逐站走回：菜单 → 引用入口 → 输入框
+        // 反向也要逐站走回：菜单 → 模型入口 → 引用入口 → 输入框
+        await page.keyboard.press("Shift+Tab");
+        assert.equal(await page.getByTestId("model-entry-trigger").evaluate((el) => document.activeElement === el), true, "Shift+Tab 应回到模型入口");
         await page.keyboard.press("Shift+Tab");
         assert.equal(await page.getByRole("button", { name: "添加文件与技能引用" }).evaluate((el) => document.activeElement === el), true, "Shift+Tab 应回到引用入口");
         await page.keyboard.press("Shift+Tab");

@@ -28,21 +28,51 @@ await test('自动项目资源只读显式项目和应用目录，不枚举祖�
   assert.equal(instructions.includes('PARENT_OUTSIDE_RESOURCE_CANARY'), false, '任务目录之外的祖先不是自动读取授权');
 });
 
-for (const kind of ['skill-directory', 'skill-file', 'project-instructions'] as const) await test(`越界资源符号链接 ${kind} 在读取前拒绝`, async t => {
+for (const kind of ['skill-directory', 'skill-file'] as const) await test(`越界技能候选 ${kind} 不读取该条目，也不拖垮整个工作目录`, async t => {
   const f = await fixture(t); const outside = join(f.root, 'outside'); await mkdir(outside);
   await writeFile(join(outside, 'SKILL.md'), '---\nname: outside\ndescription: OUTSIDE_RESOURCE_CANARY\n---\nbody');
   const skills = join(f.project, '.pi/skills'); await mkdir(skills, { recursive: true });
   if (kind === 'skill-directory') await symlink(outside, join(skills, 'escape'));
-  else if (kind === 'skill-file') await symlink(join(outside, 'SKILL.md'), join(skills, 'SKILL.md'));
-  else await symlink(join(outside, 'SKILL.md'), join(f.project, 'AGENTS.md'));
+  else await symlink(join(outside, 'SKILL.md'), join(skills, 'SKILL.md'));
+  const resources = await loadCodingResources(f.project, f.app);
+  assert.equal(resources.instructions.includes('OUTSIDE_RESOURCE_CANARY'), false, '越界资源没有被读取');
+  assert.ok((resources.skippedOutOfScope ?? 0) >= 1, '越界条目如实报出');
+});
+
+await test('越界资源符号链接 project-instructions 在读取前拒绝', async t => {
+  const f = await fixture(t); const outside = join(f.root, 'outside'); await mkdir(outside);
+  await writeFile(join(outside, 'SKILL.md'), '---\nname: outside\ndescription: OUTSIDE_RESOURCE_CANARY\n---\nbody');
+  await symlink(join(outside, 'SKILL.md'), join(f.project, 'AGENTS.md'));
   await assert.rejects(loadCodingInstructions(f.project, f.app), CodingResourcesUnavailable);
 });
 
-await test('已声明但不能解析的技能不静默丢弃后冒称资源已就绪', async t => {
+await test('自动发现但未纳入的技能跳过并如实报出，不冒称资源已就绪', async t => {
   const f = await fixture(t); const skills = join(f.project, '.agents/skills/broken');
   await mkdir(skills, { recursive: true });
   await writeFile(join(skills, 'SKILL.md'), '---\nname: missing-description\n---\nbody');
-  await assert.rejects(loadCodingInstructions(f.project, f.app), CodingResourcesUnavailable);
+  const resources = await loadCodingResources(f.project, f.app);
+  assert.equal(resources.instructions.includes('missing-description'), false, '未纳入的技能没有进入指令');
+  assert.ok(resources.unavailableNames?.some(name => name.includes('broken')), '未纳入的技能如实报出');
+});
+
+await test('家目录工作空间：越界链接与同名碰撞不阻断工作目录，正常技能照常可用', async t => {
+  const f = await fixture(t);
+  const home = join(f.root, 'home'); await mkdir(home, { recursive: true });
+  const skills = join(home, '.agents/skills'); await mkdir(skills, { recursive: true });
+  const outside = join(f.root, 'outside-home'); await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, 'SKILL.md'), '---\nname: outside-home\ndescription: HOME_OUTSIDE_CANARY\n---\nbody');
+  // 家目录里真实存在的两种坏条目：指向目录外的链接，以及同一技能名的重复副本。
+  await symlink(outside, join(skills, 'ego-browser'));
+  const nested = join(skills, 'plugin'); await mkdir(nested, { recursive: true });
+  await mkdir(join(nested, 'good'), { recursive: true });
+  await writeFile(join(nested, 'good', 'SKILL.md'), '---\nname: good\ndescription: HOME_GOOD_CANARY\n---\nbody');
+  const duplicate = join(skills, 'good'); await mkdir(duplicate, { recursive: true });
+  await writeFile(join(duplicate, 'SKILL.md'), '---\nname: good\ndescription: HOME_GOOD_CANARY\n---\nbody');
+  const resources = await loadCodingResources(home, f.app);
+  assert.equal(resources.instructions.includes('HOME_OUTSIDE_CANARY'), false, '越界技能没有被读取');
+  assert.equal(resources.instructions.includes('HOME_GOOD_CANARY'), true, '正常技能照常进入指令');
+  assert.ok((resources.skippedOutOfScope ?? 0) >= 1, '越界条目如实报出');
+  assert.ok(resources.unavailableNames?.some(name => name.includes('good')), '同名碰撞取舍如实报出');
 });
 
 for (const kind of ['skill', 'instructions'] as const) await test(`已存在的断链 ${kind} 不能当作可选资源缺席`, async t => {

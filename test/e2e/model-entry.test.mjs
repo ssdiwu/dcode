@@ -58,15 +58,22 @@ async function assertGroupedAndSearchable(page) {
   const actual = await page.getByTestId("model-actual").innerText();
   assert.match(actual, /本次实际采用|尚未确定实际使用的模型/);
 
-  // 第二层：分组标题按来源渲染
+  // 第二层：先列来源，再按所选来源列模型（2026-10-21 507 确认的两级浏览）
   const groups = page.locator('[data-testid^="model-group-"]');
   await groups.first().waitFor({ state: "visible", timeout: 20_000 });
   const groupCount = await groups.count();
-  assert.ok(groupCount >= 1, "第二层应按来源分组列出模型");
+  assert.ok(groupCount >= 1, "第二层应先按来源分组列出");
 
-  // 搜索：先搜一个真实存在的来源名，收窄后条目数不应增加
+  // 未选来源时不铺开全部模型：几十家来源的模型一次铺开无法浏览
+  const beforePick = await page.locator('[data-testid^="model-item-"]').count();
+  assert.equal(beforePick, 0, "未选来源时不应铺开全部模型条目");
+
+  const firstSource = page.locator('[data-testid^="model-source-"]').first();
+  await firstSource.waitFor({ state: "visible", timeout: 20_000 });
+  await firstSource.click();
+  await page.waitForTimeout(150);
   const allItems = await page.locator('[data-testid^="model-item-"]').count();
-  assert.ok(allItems > 0, "第二层应列出具体模型条目");
+  assert.ok(allItems > 0, "选中来源后应列出该来源的具体模型条目");
   await page.getByTestId("model-search").fill("anthropic");
   await page.waitForTimeout(150);
   const filtered = await page.locator('[data-testid^="model-item-"]').count();
@@ -137,7 +144,8 @@ test("D 片：两层模型入口按来源分组可搜索、条件参数只用逐
     // 3) 条件参数只列该来源该模型**逐档核实为支持**的档位；未核实的档位不出现
     if (hasOpus) {
       await openModelEntry(page);
-      const levelItems = page.locator('[data-testid^="model-level-"]');
+      // 说明块（model-level-note）与档位组并存，按前缀取会把说明也算成档位——排除它
+      const levelItems = page.locator('[data-testid^="model-level-"]:not([data-testid="model-level-note"])');
       const levelCount = await levelItems.count();
       assert.ok(levelCount >= 1, "已逐档核实的模型应出现条件参数档位");
       const allowed = new Set(["none", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -218,5 +226,86 @@ test("D 片：两层模型入口按来源分组可搜索、条件参数只用逐
     if (handle) await handle.close().catch(() => undefined);
     catalog.close();
     cleanup(stateDir);
+  }
+});
+
+/**
+ * 2026-10-21 507 报障：草稿态的模型入口只给一句不可点的说明文字，
+ * 点它毫无反应（没有会话就没有入口），而「新会话起点」这个设置项在界面上没有入口。
+ * 这里钉住：草稿态的入口可点、打开后能点名到模型，并改到新会话起点。
+ */
+test("草稿态的模型入口可点并改「新会话起点」，不再是不可点的说明文字", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "dcode-e2e-model-draft-"));
+  const catalog = await startCatalogLoop();
+  let handle = null;
+  try {
+    handle = await launchApp(stateDir, {
+      DCODE_CATALOG_BASE_URL: catalog.origin,
+      DCODE_E2E_PRESET_BASE_URLS: PRESET_LOOPBACK,
+      DCODE_E2E_STATE_ROOT: tmpdir(),
+      DCODE_E2E: "1",
+      DCODE_VALIDATION_ASSEMBLY: "",
+    }, ".");
+    const { page } = handle;
+    await ready(page);
+
+    // 草稿态：没有选中会话，模型入口作用在「新会话起点」上
+    const disabled = await page.getByTestId("model-entry-disabled").count();
+    assert.equal(disabled, 0, "草稿态不应只给不可点的说明文字");
+
+    const trigger = page.getByTestId("model-entry-trigger");
+    await trigger.waitFor({ state: "visible", timeout: 30_000 });
+    assert.equal(await trigger.isDisabled(), false, "草稿态的模型入口应可点");
+    await trigger.click();
+    await page.getByTestId("model-search").waitFor({ state: "visible", timeout: 15_000 });
+
+    // 两级浏览：先选来源，再点名模型
+    const source = page.locator('[data-testid^="model-source-"]').first();
+    await source.waitFor({ state: "visible", timeout: 20_000 });
+    await source.click();
+    await page.waitForTimeout(150);
+    const items = page.locator('[data-testid^="model-item-"]');
+    const count = await items.count();
+    assert.ok(count > 0, "选中来源后应能点名到具体模型");
+
+    const before = await page.getByTestId("model-entry-trigger").innerText();
+    await items.first().click();
+    await page.waitForTimeout(300);
+    const after = await page.getByTestId("model-entry-trigger").innerText();
+    assert.notEqual(after, before, "选点模型后入口文字应随之改变");
+
+    // 改的是「新会话起点」这个设置项，不动任何已存在会话
+    const snap = await page.evaluate(() => window.dcode.getSnapshot());
+    assert.equal(snap.settings.newSessionModelChoice.mode, "explicit", "新会话起点应被这次选择改写");
+    assert.equal(snap.sessions.length, 0, "草稿态选择不应创建会话");
+
+    // 已有会话时用草稿态入口：那条会话自己的选择不能被带动
+    const existing = await page.evaluate(async () => {
+      const s = await window.dcode.getSnapshot();
+      return window.dcode.createSession({ taskId: s.tasks[0].id });
+    });
+    const sessionModelsBefore = await page.evaluate((id) => {
+      const map = window.dcode.getSnapshot().sessionModels ?? {};
+      // 断言要有约束：那条会话确实有模型状态，且之后一个字节都没变。
+      assert.ok(Object.keys(map).length > 0, "快照应带有会话模型状态");
+      assert.ok(map[id], "新建的那条会话应有模型状态");
+      return JSON.stringify(map);
+    }, existing.id);
+    // 仍在草稿态：直接用入口改「新会话起点」
+    const draftTrigger = page.getByTestId("model-entry-trigger");
+    await draftTrigger.waitFor({ state: "visible", timeout: 15_000 });
+    await draftTrigger.click();
+    await page.getByTestId("model-search").waitFor({ state: "visible", timeout: 15_000 });
+    await page.getByTestId("model-search").fill("claude-opus-4-6");
+    await page.waitForTimeout(400);
+    const picked = page.locator('[data-testid^="model-item-"]').first();
+    if (await picked.count()) { await picked.click(); await page.waitForTimeout(400); }
+    await page.keyboard.press("Escape");
+    const sessionModelsAfter = await page.evaluate(() => JSON.stringify(window.dcode.getSnapshot().sessionModels ?? {}));
+    assert.equal(sessionModelsAfter, sessionModelsBefore, "草稿态入口只改新会话起点，不应带动已有会话的选择");
+  } finally {
+    if (handle) await handle.close();
+    await cleanup(stateDir);
+    await catalog.close();
   }
 });

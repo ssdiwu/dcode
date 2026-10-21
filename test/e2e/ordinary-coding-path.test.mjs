@@ -90,6 +90,9 @@ for (const [template, search, followup] of [[false, false, false], [true, false,
     assert.equal(server.requests.length, 0, '配置保存不是模型探针');
     // 已知可使用工具的受控模型由真实候选配置入口登记，不放宽必需能力未知的政策。
     await page.keyboard.press('Escape'); await settings().click(); await modelSection().click();
+    // 候选面板是两级浏览：先选来源，再点该来源下的模型（2026-10-21 507 确认）
+    await page.getByTestId('model-source-user-defined').click();
+    await page.waitForTimeout(150);
     const candidate = page.getByTestId(`candidate-user-defined-${codingModel}`);
     assert.equal(await candidate.isChecked(), false, '隔离配置尚未登记 Auto 候选');
     // 此控件按正式保存快照显示 checked；点击后不要求异步保存立即变色。

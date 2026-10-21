@@ -17,6 +17,7 @@
 // 把 `contextWindow > 0 && maxTokens > 0` 当成 `code-edit = true` 是本片明确修掉的旧错。
 // 同样，`tool-use` 也不能因为目录没写就一律填 `false`——那把「没有依据」说成了「确定不行」。
 
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { Model, Api } from "@earendil-works/pi-ai";
 import type {
   CapabilityPort,
@@ -120,7 +121,16 @@ function verifiedThinkingLevels(model: Model<Api>): { levels: readonly ThinkingL
     return { levels: [], note: "该来源资料标明此模型不支持思考" };
   }
   if (typeof map !== "object" || map === null) {
-    return { levels: [], note: "该来源未提供逐档核实资料，暂不显示思考档位" };
+    // 来源只标明「支持思考」而没给逐档资料：按 Pi 自己的标准档位给出，并如实标明未逐档核实。
+    // 2026-10-21 507 确认：缺逐档资料不再等于「不显示档位」——
+    // 那会让「来源要求必须开思考」的模型在 D Code 里完全不可用。
+    // 档位集合取 Pi 的 getSupportedThinkingLevels（该来源该模型实际支持的那些）：
+    // 自己列全七档会把 xhigh/max 也摆出来，而 Pi 会把它们静默降级成 high，
+    // 用户选到的与实际发出的不是一回事。
+    return {
+      levels: getSupportedThinkingLevels(model).filter((level): level is ThinkingLevel => (THINKING_LEVELS as readonly string[]).includes(level)),
+      note: "该来源未逐档给出，按该来源该 API 的标准档位提供（未逐档核实）",
+    };
   }
   const levels = THINKING_LEVELS.filter((level) => typeof map[level] === "string");
   const unsupportedLevels = THINKING_LEVELS.filter((level) => map[level] === null);

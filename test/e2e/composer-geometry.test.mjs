@@ -1237,9 +1237,14 @@ test("收起态真实改选更短摘要：完整预算重新放得下时标签�
     await page.waitForFunction(() => window.innerWidth === 1440);
     await page.getByTestId("model-entry-trigger").click();
     await page.getByTestId("model-search").waitFor({ state: "visible", timeout: 15_000 });
+    // 两级浏览：先选来源，再列该来源的模型（2026-10-21 507 确认）
+    const sources = page.locator('[data-testid^="model-source-"]');
+    await sources.first().waitFor({ state: 'visible', timeout: 15_000 });
+    await sources.first().click();
+    await page.waitForTimeout(150);
     const items = page.locator('[data-testid^="model-item-"]');
     const itemCount = await items.count();
-    assert.ok(itemCount > 0, "前置：普通装配第二层应列出可选模型");
+    assert.ok(itemCount > 0, "前置：选中来源后第二层应列出可选模型");
     let longestIdx = 0;
     let longestText = "";
     for (let i = 0; i < itemCount; i += 1) {

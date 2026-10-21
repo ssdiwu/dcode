@@ -35,8 +35,13 @@ async function openSettingsModelSection(page) {
   await page.getByTestId("settings-candidates").waitFor({ state: "visible", timeout: 15_000 });
 }
 
-/** 勾选一个候选（真实点复选框），返回当前已勾选数量（读界面上的计数文本）。 */
+/** 勾选一个候选（真实点复选框），返回当前已勾选数量（读界面上的计数文本）。
+ *  候选面板是两级浏览：先选来源，再点该来源下的模型复选框（2026-10-21 507 确认）。 */
 async function toggleCandidate(page, sourceId, modelId) {
+  const source = page.getByTestId(`model-source-${sourceId}`);
+  await source.waitFor({ state: "visible", timeout: 15_000 });
+  await source.click();
+  await page.waitForTimeout(150);
   const box = page.getByTestId(`candidate-${sourceId}-${modelId}`);
   await box.waitFor({ state: "visible", timeout: 15_000 });
   await box.click();
@@ -105,6 +110,9 @@ await test("D 片运行中改选：下一次真实 SDK 请求就用新来源", a
 
     // 显式选定来源 A 并发第一条输入：第 0 次真实请求归 A，随后 Pi 的工具回合请求被门控挂起
     await openModelEntry(page);
+    // 两级浏览：先选来源，再点名该来源下的模型（2026-10-21 507 确认）
+    await page.getByTestId("model-source-dcode-test").click();
+    await page.waitForTimeout(150);
     await page.locator('[data-testid="model-item-dcode-test-fixture"]').first().click();
     await page.waitForTimeout(200);
     const composer = page.getByPlaceholder(/交代需求、提问或粘贴内容|写下需求|追问、补充或纠正/).first();

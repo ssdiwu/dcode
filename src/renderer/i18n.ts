@@ -97,7 +97,7 @@ const DICT = {
   // C07 来源与模型入口：选择方式、实际采用、条件参数与额度事实分别表达；
   // 「未读取／未核实／未知／暂不支持／已耗尽／可用」各有各的说法，不合并成一个状态。
   "model.entry.label": ["模型", "Model"],
-  "model.entry.noSession": ["新建会话后可选择模型", "Choose a model after the session exists"],
+  "model.entry.newSessionLabel": ["新会话默认", "New session default"],
   "model.entry.auto": ["自动选择", "Automatic"],
   "model.entry.actual": ["本次实际采用", "Actually used"],
   "model.entry.notAdopted": ["尚未确定实际使用的模型", "No model adopted yet"],
@@ -187,6 +187,8 @@ const DICT = {
   "settings.candidates.empty": ["当前没有可配置的模型来源", "There is no configurable model source"],
   "settings.candidates.unconfigured": ["未配置凭据", "No credential yet"],
   "settings.candidates.count": ["已勾选 {n} 个候选", "{n} candidate(s) selected"],
+  "settings.candidates.search": ["搜索来源或模型", "Search source or model"],
+  "settings.candidates.noMatch": ["没有匹配的来源或模型", "No matching source or model"],
   "receipt.reason.model-unavailable": ["当前模型条件不成立，工作已保留，尚未接收", "Model conditions are not met; the work is kept and this input was not accepted"],
   "receipt.reason.execution-unavailable": ["原工作目录或项目资源无法载入，本次输入尚未接收", "The original working directory or project resources could not be loaded; this input was not accepted"],
   "tool.exitCode": ["退出码 {n}", "Exit code {n}"],

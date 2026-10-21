@@ -560,7 +560,7 @@ void describe("条件参数：只用逐档核实的档位", () => {
     assert.ok(verified > 0, "应有带逐档资料的内置模型可核对");
   });
 
-  void it("推理布尔为真但无逐档资料时，不显示任何档位（不按布尔猜六档）", async () => {
+  void it("推理布尔为真但无逐档资料时，按该 API 的标准档位给出并标明未逐档核实（2026-10-21 507 修订口径）", async () => {
     const presets = registerPresetProviders();
     const port = new PiCapabilityPort({ presets });
     const provider = {
@@ -589,8 +589,13 @@ void describe("条件参数：只用逐档核实的档位", () => {
     });
     const second = await withProvider.read({ sourceId: presets[0]!.id, modelId: "m" });
     assert.ok(second);
-    assert.deepEqual([...second.thinkingLevels], []);
-    assert.match(second.thinkingNote ?? "", /未提供逐档核实资料/);
+    // 2026-10-21 507 修订：缺逐档资料不再等于「不显示档位」——
+    // 按该来源该 API 的标准档位给出，并如实标明未逐档核实；
+    // 逐档明确不支持仍以该来源的逐档资料为准（由上一条用例覆盖）。
+    // 档位集合取 Pi 自己的 getSupportedThinkingLevels：xhigh/max 在来源未给逐档资料时
+    // 不受支持，列出来只会被 Pi 静默降级成 high（用户所选与实际发出的不是一回事）。
+    assert.deepEqual([...second.thinkingLevels], ["off", "minimal", "low", "medium", "high"]);
+    assert.match(second.thinkingNote ?? "", /未逐档给出.*标准档位.*未逐档核实/);
   });
 });
 

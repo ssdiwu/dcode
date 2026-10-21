@@ -3,7 +3,7 @@
 // - Esc／点击外部只关闭当前浮层，不做其他动作；关闭会把焦点还回触发点（原实现一致）。
 // - 触发点在树行等容器内时，点击冒泡止步于行内按钮，不得被父行当作选中或展开。
 
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,10 +45,14 @@ export function Menu({
   side?: "down" | "up";
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
+  // 菜单打开时标记触发点：触发点若在「悬停才显形」的容器里，指针离开后容器会收起，
+  // 触发点一旦失去盒子，浮层锚点归零就会被定位到窗口左上角（盖住窗口按钮）。
+  // 标记让容器在菜单打开期间保持显形，浮层留在触发点旁。
+  const [open, setOpen] = useState(false);
 
   return (
-    <DropdownMenu modal={false}>
-      <span ref={triggerRef} className="inline-flex">
+    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+      <span ref={triggerRef} className="inline-flex" data-menu-open={open ? "" : undefined}>
         {/* 触发点击阻止冒泡：树行/列表项内的菜单开启不得被父行当作选中或展开（E2E 复现后修复） */}
         <DropdownMenuTrigger asChild onClick={(event) => event.stopPropagation()}>
           {trigger}
